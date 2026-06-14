@@ -107,7 +107,7 @@ class MainActivity : ComponentActivity() {
 }
 
 enum class SortColumn {
-    NAME, STATUS, DEBT, SCOOTER_NAME, SCOOTER_NUMBER
+    NAME, START_TIME, STATUS, DEBT, SCOOTER_NAME, SCOOTER_NUMBER
 }
 
 enum class SortDirection {
@@ -358,9 +358,10 @@ fun MainScreen(
                     }
                     
                     Row(modifier = Modifier.weight(1f), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween) {
-                        SortableHeader("Mijoz", 1.5f, SortColumn.NAME, sortColumn, sortDirection, onSort)
-                        SortableHeader("Holat", 1f, SortColumn.STATUS, sortColumn, sortDirection, onSort)
-                        SortableHeader("Qarz", 1f, SortColumn.DEBT, sortColumn, sortDirection, onSort)
+                        SortableHeader("Mijoz", 1.4f, SortColumn.NAME, sortColumn, sortDirection, onSort)
+                        SortableHeader("Ijara muddati", 1.5f, SortColumn.START_TIME, sortColumn, sortDirection, onSort)
+                        SortableHeader("Holat", 0.8f, SortColumn.STATUS, sortColumn, sortDirection, onSort)
+                        SortableHeader("Qarz", 0.8f, SortColumn.DEBT, sortColumn, sortDirection, onSort)
                         Text("Amallar", modifier = Modifier.weight(0.5f), style = MaterialTheme.typography.labelMedium, color = ClaudeTextSecondary, fontWeight = FontWeight.Bold, textAlign = TextAlign.End)
                     }
                 }
@@ -393,6 +394,7 @@ fun MainScreen(
                 }.sortedWith { a, b ->
                     val result = when (sortColumn) {
                         SortColumn.NAME -> a.name.compareTo(b.name, ignoreCase = true)
+                        SortColumn.START_TIME -> a.rentStartDateTimestamp.compareTo(b.rentStartDateTimestamp)
                         SortColumn.STATUS -> {
                             val timeA = a.rentStartDateTimestamp + (a.rentDurationDays * 24L * 60 * 60 * 1000)
                             val timeB = b.rentStartDateTimestamp + (b.rentDurationDays * 24L * 60 * 60 * 1000)
@@ -681,7 +683,7 @@ fun RenterCardItem(
             
             Spacer(modifier = Modifier.width(16.dp))
             
-            Column(modifier = Modifier.weight(1.5f)) {
+            Column(modifier = Modifier.weight(1.4f)) {
                 Text(renter.name, style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Bold, color = ClaudeText)
                 Spacer(modifier = Modifier.height(2.dp))
                 Text(renter.phoneNumber, style = MaterialTheme.typography.bodySmall, color = ClaudeTextSecondary)
@@ -689,7 +691,26 @@ fun RenterCardItem(
                 Text("Skuter: ${renter.scooterName ?: "-"}", style = MaterialTheme.typography.bodySmall, color = ClaudeTextSecondary)
             }
             
-            Column(modifier = Modifier.weight(1f)) {
+            Column(modifier = Modifier.weight(1.5f)) {
+                val sdf = remember { java.text.SimpleDateFormat("dd.MM.yyyy HH:mm", java.util.Locale.getDefault()) }
+                val startDateStr = sdf.format(java.util.Date(renter.rentStartDateTimestamp))
+                val expiryTime = renter.rentStartDateTimestamp + (renter.rentDurationDays * 24L * 60 * 60 * 1000)
+                val endDateStr = sdf.format(java.util.Date(expiryTime))
+                
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Box(modifier = Modifier.size(6.dp).background(Color(0xFF8E8E93), CircleShape))
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text(text = "Bos.: $startDateStr", style = MaterialTheme.typography.bodySmall, color = ClaudeText, maxLines = 1)
+                }
+                Spacer(modifier = Modifier.height(6.dp))
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Box(modifier = Modifier.size(6.dp).background(ClaudeText, CircleShape))
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text(text = "Tug.: $endDateStr", style = MaterialTheme.typography.bodySmall, color = ClaudeText, maxLines = 1)
+                }
+            }
+            
+            Column(modifier = Modifier.weight(0.8f)) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Box(modifier = Modifier.size(6.dp).background(if (isActive) Color(0xFF34C759) else ClaudeTextSecondary, CircleShape))
                     Spacer(modifier = Modifier.width(6.dp))
