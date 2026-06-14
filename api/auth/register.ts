@@ -7,9 +7,9 @@
  *     Первый зарегистрированный пользователь автоматически становится admin.
  */
 import bcrypt from 'bcryptjs';
-import { getSql } from '../../lib/db.js';
-import { signToken } from '../../lib/auth.js';
-import { withCors, jsonResponse, errorResponse } from '../../lib/cors.js';
+import { getSql } from '../lib/db.js';
+import { signToken } from '../lib/auth.js';
+import { withCors, jsonResponse, errorResponse } from '../lib/cors.js';
 
 interface RegisterBody {
   email: string;

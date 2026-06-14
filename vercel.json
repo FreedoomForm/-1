@@ -3,7 +3,7 @@
   "version": 2,
   "builds": [
     {
-      "src": "backend/api/**/*.ts",
+      "src": "api/**/*.ts",
       "use": "@vercel/node",
       "config": {
         "maxDuration": 10

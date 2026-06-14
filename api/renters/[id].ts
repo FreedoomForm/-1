@@ -6,9 +6,9 @@
  * Все три проверяют, что арендатор принадлежит текущему пользователю
  * (multi-tenant scope) — иначе 404 (намеренно скрываем существование).
  */
-import { getSql } from '../../lib/db.js';
-import { getAuth } from '../../lib/auth.js';
-import { withCors, jsonResponse, errorResponse } from '../../lib/cors.js';
+import { getSql } from '../lib/db.js';
+import { getAuth } from '../lib/auth.js';
+import { withCors, jsonResponse, errorResponse } from '../lib/cors.js';
 
 interface UpdateRenterBody {
   name?: string;

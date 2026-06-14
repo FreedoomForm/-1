@@ -2,9 +2,9 @@
  * GET  /api/scooters        — список скутеров текущего пользователя
  * POST /api/scooters        — создать скутер
  */
-import { getSql } from '../../lib/db.js';
-import { getAuth } from '../../lib/auth.js';
-import { withCors, jsonResponse, errorResponse } from '../../lib/cors.js';
+import { getSql } from '../lib/db.js';
+import { getAuth } from '../lib/auth.js';
+import { withCors, jsonResponse, errorResponse } from '../lib/cors.js';
 
 interface CreateScooterBody {
   name: string;
