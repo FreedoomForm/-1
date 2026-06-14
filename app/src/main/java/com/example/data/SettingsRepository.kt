@@ -19,17 +19,21 @@ class SettingsRepository(context: Context) {
         get() = prefs.getFloat("monthly_price", 0f).toDouble()
         set(value) = prefs.edit().putFloat("monthly_price", value.toFloat()).apply()
 
-    /** Пароль старшего админа (по умолчанию «admin»). */
+    /** URL бэкенда Vercel, например https://my-app.vercel.app. */
+    var apiBaseUrl: String
+        get() = prefs.getString("api_base_url", "") ?: ""
+        set(value) = prefs.edit().putString("api_base_url", value).apply()
+
+    /** Локальный пароль senior admin (fallback, если backend недоступен). */
     var adminPassword: String
         get() = prefs.getString("admin_password", "admin") ?: "admin"
         set(value) = prefs.edit().putString("admin_password", value).apply()
 
-    /** Пароль младшего админа (только просмотр, по умолчанию «viewer»). */
+    /** Локальный пароль junior admin (fallback). */
     var viewerPassword: String
         get() = prefs.getString("viewer_password", "viewer") ?: "viewer"
         set(value) = prefs.edit().putString("viewer_password", value).apply()
 
-    /** Сохранённая роль текущей сессии (сбрасывается при выходе). */
     var currentRole: String?
         get() = prefs.getString("current_role", null)
         set(value) = prefs.edit().putString("current_role", value).apply()

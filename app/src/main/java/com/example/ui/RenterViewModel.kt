@@ -8,10 +8,13 @@ import androidx.work.WorkManager
 import androidx.work.workDataOf
 import com.example.data.AppDatabase
 import com.example.data.ContractHistoryEntry
-import com.example.data.ContractHistoryRepository
 import com.example.data.Renter
 import com.example.data.RenterRepository
 import com.example.data.SettingsRepository
+import com.example.data.remote.SyncManager
+import com.example.data.remote.toCreateDto
+import com.example.data.remote.toEntity
+import com.example.data.remote.toUpdateDto
 import com.example.worker.PaymentCheckWorker
 import com.example.worker.SmsWorker
 import kotlinx.coroutines.flow.SharingStarted
@@ -21,14 +24,17 @@ import kotlinx.coroutines.launch
 
 class RenterViewModel(application: Application) : AndroidViewModel(application) {
     private val repository: RenterRepository
-    private val historyRepository: ContractHistoryRepository
+    private val historyRepository: com.example.data.ContractHistoryRepository
+    private val sync: SyncManager
     val rentersList: StateFlow<List<Renter>>
 
     init {
         val database = AppDatabase.getDatabase(application)
         repository = RenterRepository(database.renterDao())
-        historyRepository = ContractHistoryRepository(database.contractHistoryDao())
-
+        historyRepository = com.example.data.ContractHistoryRepository(
+            database.contractHistoryDao()
+        )
+        sync = SyncManager(application)
         rentersList = repository.allRenters.stateIn(
             scope = viewModelScope,
             started = SharingStarted.WhileSubscribed(5000),
@@ -36,6 +42,11 @@ class RenterViewModel(application: Application) : AndroidViewModel(application) 
         )
     }
 
+    /**
+     * Создать арендатора.
+     * Сначала шлём на API → получаем server id → пишем в Room с этим id.
+     * Если API недоступен — пишем только локально (id=0, автогенерация Room).
+     */
     fun addRenter(
         name: String,
         phone: String,
@@ -50,10 +61,24 @@ class RenterViewModel(application: Application) : AndroidViewModel(application) 
             val now = System.currentTimeMillis()
             val expiryTime = startTimestamp + duration * 24L * 60 * 60 * 1000
             val isOverdueAtCreation = expiryTime < now
-
             val finalDebt = if (isOverdueAtCreation) weeklyPrice else debt
 
-            val newId = repository.insert(
+            // Пробуем сначала API — получим server-assigned id.
+            val serverId = if (isOverdueAtCreation || debt > 0 || true) {
+                val provisional = Renter(
+                    name = name,
+                    phoneNumber = phone,
+                    debtAmount = finalDebt,
+                    rentDurationDays = duration,
+                    rentStartDateTimestamp = startTimestamp,
+                    scooterId = scooterId,
+                    scooterName = scooterName,
+                    balance = 0.0
+                )
+                sync.pushRenter(provisional)
+            } else null
+
+            val newId = serverId ?: repository.insert(
                 Renter(
                     name = name,
                     phoneNumber = phone,
@@ -62,14 +87,22 @@ class RenterViewModel(application: Application) : AndroidViewModel(application) 
                     rentStartDateTimestamp = startTimestamp,
                     scooterId = scooterId,
                     scooterName = scooterName,
-                    isOverdueSmsSent = false,
                     balance = 0.0
                 )
-            )
+            ).toInt()
 
             historyRepository.insert(
                 ContractHistoryEntry(
-                    renterId = newId.toInt(),
+                    renterId = newId,
+                    timestamp = now,
+                    type = ContractHistoryEntry.TYPE_CREATED,
+                    amount = weeklyPrice,
+                    notes = if (isOverdueAtCreation) "Kechikkan holda yaratildi" else "Yaratildi"
+                )
+            )
+            sync.pushContractHistory(
+                ContractHistoryEntry(
+                    renterId = newId,
                     timestamp = now,
                     type = ContractHistoryEntry.TYPE_CREATED,
                     amount = weeklyPrice,
@@ -79,11 +112,10 @@ class RenterViewModel(application: Application) : AndroidViewModel(application) 
 
             if (isOverdueAtCreation) {
                 val wm = WorkManager.getInstance(getApplication())
-
                 val notifWork = OneTimeWorkRequestBuilder<PaymentCheckWorker>()
                     .setInputData(
                         workDataOf(
-                            PaymentCheckWorker.KEY_RENTER_ID to newId.toInt(),
+                            PaymentCheckWorker.KEY_RENTER_ID to newId,
                             PaymentCheckWorker.KEY_ONE_TIME to true
                         )
                     )
@@ -92,7 +124,7 @@ class RenterViewModel(application: Application) : AndroidViewModel(application) 
 
                 val smsWork = OneTimeWorkRequestBuilder<SmsWorker>().build()
                 wm.enqueueUniqueWork(
-                    "immediate_sms_${newId}",
+                    "immediate_sms_$newId",
                     androidx.work.ExistingWorkPolicy.REPLACE,
                     smsWork
                 )
@@ -103,23 +135,23 @@ class RenterViewModel(application: Application) : AndroidViewModel(application) 
     fun updateRenter(renter: Renter) {
         viewModelScope.launch {
             repository.update(renter)
+            sync.pushRenterUpdate(renter)
         }
     }
 
     fun deleteRenter(id: Int) {
         viewModelScope.launch {
             repository.delete(id)
+            sync.pushRenterDelete(id)
         }
     }
 
-    /** «Оплатить за неделю» для одного арендатора. */
     fun markPaymentReceived(renter: Renter) {
         viewModelScope.launch {
             applyWeeklyPayment(renter, "Bitta to'lov")
         }
     }
 
-    /** Bulk: «Оплатить за неделю» для нескольких арендаторов сразу. */
     fun payWeeklyForRenters(renterIds: Set<Int>) {
         viewModelScope.launch {
             val weeklyPrice = SettingsRepository(getApplication()).weeklyPrice
@@ -130,7 +162,6 @@ class RenterViewModel(application: Application) : AndroidViewModel(application) 
         }
     }
 
-    /** Bulk: «Прекратить контракт» для нескольких арендаторов. */
     fun terminateRenters(renterIds: Set<Int>) {
         viewModelScope.launch {
             val weeklyPrice = SettingsRepository(getApplication()).weeklyPrice
@@ -149,43 +180,45 @@ class RenterViewModel(application: Application) : AndroidViewModel(application) 
         val weeklyPrice = weeklyPriceOverride
             ?: SettingsRepository(getApplication()).weeklyPrice
         val newDebt = maxOf(0.0, renter.debtAmount - weeklyPrice)
-        repository.update(
-            renter.copy(
-                debtAmount = newDebt,
-                balance = renter.balance + weeklyPrice,
-                lastPaymentTimestamp = System.currentTimeMillis(),
-                isOverdueSmsSent = false
-            )
+        val updated = renter.copy(
+            debtAmount = newDebt,
+            balance = renter.balance + weeklyPrice,
+            lastPaymentTimestamp = System.currentTimeMillis(),
+            isOverdueSmsSent = false
         )
-        historyRepository.insert(
-            ContractHistoryEntry(
-                renterId = renter.id,
-                timestamp = System.currentTimeMillis(),
-                type = ContractHistoryEntry.TYPE_PAYMENT,
-                amount = weeklyPrice,
-                notes = notes
-            )
+        repository.update(updated)
+        sync.pushRenterUpdate(updated)
+
+        val entry = ContractHistoryEntry(
+            renterId = renter.id,
+            timestamp = System.currentTimeMillis(),
+            type = ContractHistoryEntry.TYPE_PAYMENT,
+            amount = weeklyPrice,
+            notes = notes
         )
+        historyRepository.insert(entry)
+        sync.pushContractHistory(entry)
     }
 
     private suspend fun applyTermination(renter: Renter, weeklyPrice: Double) {
-        repository.update(
-            renter.copy(
-                debtAmount = maxOf(0.0, renter.debtAmount - weeklyPrice),
-                balance = renter.balance + weeklyPrice,
-                isReturned = true,
-                lastPaymentTimestamp = System.currentTimeMillis(),
-                isOverdueSmsSent = false
-            )
+        val updated = renter.copy(
+            debtAmount = maxOf(0.0, renter.debtAmount - weeklyPrice),
+            balance = renter.balance + weeklyPrice,
+            isReturned = true,
+            lastPaymentTimestamp = System.currentTimeMillis(),
+            isOverdueSmsSent = false
         )
-        historyRepository.insert(
-            ContractHistoryEntry(
-                renterId = renter.id,
-                timestamp = System.currentTimeMillis(),
-                type = ContractHistoryEntry.TYPE_TERMINATED,
-                amount = weeklyPrice,
-                notes = "Kontrakt tugatildi"
-            )
+        repository.update(updated)
+        sync.pushRenterUpdate(updated)
+
+        val entry = ContractHistoryEntry(
+            renterId = renter.id,
+            timestamp = System.currentTimeMillis(),
+            type = ContractHistoryEntry.TYPE_TERMINATED,
+            amount = weeklyPrice,
+            notes = "Kontrakt tugatildi"
         )
+        historyRepository.insert(entry)
+        sync.pushContractHistory(entry)
     }
 }

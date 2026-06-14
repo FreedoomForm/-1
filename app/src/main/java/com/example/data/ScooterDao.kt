@@ -14,11 +14,14 @@ interface ScooterDao {
     fun getAllScooters(): Flow<List<Scooter>>
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
-    suspend fun insertScooter(scooter: Scooter)
+    suspend fun insertScooter(scooter: Scooter): Long
 
     @Update
     suspend fun updateScooter(scooter: Scooter)
 
     @Delete
     suspend fun deleteScooter(scooter: Scooter)
+
+    @Query("DELETE FROM scooters")
+    suspend fun deleteAll()
 }

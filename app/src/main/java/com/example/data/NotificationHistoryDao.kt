@@ -15,4 +15,7 @@ interface NotificationHistoryDao {
 
     @Query("DELETE FROM notification_history")
     suspend fun clear()
+
+    @Query("DELETE FROM notification_history")
+    suspend fun deleteAll()
 }

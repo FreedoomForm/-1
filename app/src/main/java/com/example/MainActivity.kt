@@ -118,10 +118,18 @@ class MainActivity : ComponentActivity() {
 
                 val loginViewModel: LoginViewModel = viewModel()
                 val role by loginViewModel.role.collectAsStateWithLifecycle()
+                val loginState by loginViewModel.state.collectAsStateWithLifecycle()
 
                 when (role) {
                     UserRole.NONE -> LoginScreen(
-                        onLogin = { password -> loginViewModel.login(password) }
+                        state = loginState,
+                        onLogin = { url, email, pwd ->
+                            loginViewModel.login(url, email, pwd)
+                        },
+                        onRegister = { url, email, pwd ->
+                            loginViewModel.register(url, email, pwd)
+                        },
+                        onErrorShown = { loginViewModel.resetError() }
                     )
                     else -> MainScreen(
                         userRole = role,
@@ -650,6 +658,10 @@ fun MainScreen(
                     settingsViewModel.updateTemplate(newTemplate)
                     settingsViewModel.updatePrices(newWeekly, newMonthly)
                     showSettings = false
+                },
+                onLogout = {
+                    showSettings = false
+                    loginViewModel.logout()
                 }
             )
         }
@@ -1261,7 +1273,8 @@ fun SettingsDialog(
     currentWeeklyPrice: Double,
     currentMonthlyPrice: Double,
     onDismiss: () -> Unit,
-    onSave: (String, Double, Double) -> Unit
+    onSave: (String, Double, Double) -> Unit,
+    onLogout: () -> Unit = {}
 ) {
     var template by remember { mutableStateOf(currentTemplate) }
     var weekly by remember {
@@ -1318,6 +1331,21 @@ fun SettingsDialog(
                             unfocusedBorderColor = ClaudeDivider,
                             focusedBorderColor = ClaudeTextSecondary
                         )
+                    )
+                }
+
+                HorizontalDivider()
+
+                OutlinedButton(
+                    onClick = { onLogout() },
+                    modifier = Modifier.fillMaxWidth(),
+                    border = BorderStroke(1.dp, Color(0xFFE05B44)),
+                    shape = RoundedCornerShape(8.dp)
+                ) {
+                    Text(
+                        "Chiqish (boshqa akkauntga o'tish)",
+                        color = Color(0xFFE05B44),
+                        style = MaterialTheme.typography.labelMedium
                     )
                 }
             }
@@ -1612,10 +1640,18 @@ fun ScooterFormDialog(
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun LoginScreen(onLogin: (String) -> UserRole) {
-    var password by remember { mutableStateOf("") }
-    var error by remember { mutableStateOf<String?>(null) }
+fun LoginScreen(
+    state: LoginState,
+    onLogin: (String, String, String) -> Unit,
+    onRegister: (String, String, String) -> Unit,
+    onErrorShown: () -> Unit
+) {
     val context = LocalContext.current
+    val settingsRepo = remember { com.example.data.SettingsRepository(context.applicationContext) }
+    var serverUrl by remember { mutableStateOf(settingsRepo.apiBaseUrl) }
+    var email by remember { mutableStateOf("") }
+    var password by remember { mutableStateOf("") }
+    var registerMode by remember { mutableStateOf(false) }
 
     Box(
         modifier = Modifier
@@ -1634,7 +1670,7 @@ fun LoginScreen(onLogin: (String) -> UserRole) {
             Column(
                 modifier = Modifier.padding(24.dp),
                 horizontalAlignment = Alignment.CenterHorizontally,
-                verticalArrangement = Arrangement.spacedBy(16.dp)
+                verticalArrangement = Arrangement.spacedBy(12.dp)
             ) {
                 Icon(
                     Icons.Default.DirectionsBike,
@@ -1649,42 +1685,99 @@ fun LoginScreen(onLogin: (String) -> UserRole) {
                     fontWeight = FontWeight.Bold
                 )
                 Text(
-                    "Tizimga kirish",
+                    if (registerMode) "Ro'yxatdan o'tish" else "Tizimga kirish",
                     style = MaterialTheme.typography.bodyMedium,
                     color = ClaudeTextSecondary
                 )
                 OutlinedTextField(
-                    value = password,
-                    onValueChange = { password = it; error = null },
-                    label = { Text("Parol") },
-                    placeholder = { Text("admin yoki viewer") },
-                    visualTransformation = androidx.compose.ui.text.input.PasswordVisualTransformation(),
-                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
+                    value = serverUrl,
+                    onValueChange = {
+                        serverUrl = it
+                        settingsRepo.apiBaseUrl = it.trim()
+                        onErrorShown()
+                    },
+                    label = { Text("Server URL") },
+                    placeholder = { Text("https://my-app.vercel.app") },
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri),
+                    singleLine = true,
                     modifier = Modifier.fillMaxWidth(),
                     shape = RoundedCornerShape(8.dp)
                 )
-                if (error != null) {
-                    Text(
-                        "Noto'g'ri parol",
-                        color = Color(0xFFE05B44),
-                        style = MaterialTheme.typography.bodySmall
-                    )
-                }
+                OutlinedTextField(
+                    value = email,
+                    onValueChange = {
+                        email = it
+                        onErrorShown()
+                    },
+                    label = { Text("Email") },
+                    placeholder = { Text("admin@example.com") },
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Email),
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(8.dp)
+                )
+                OutlinedTextField(
+                    value = password,
+                    onValueChange = {
+                        password = it
+                        onErrorShown()
+                    },
+                    label = { Text("Parol") },
+                    visualTransformation = androidx.compose.ui.text.input.PasswordVisualTransformation(),
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(8.dp)
+                )
+
+                val isLoading = state is LoginState.Loading
                 Button(
                     onClick = {
-                        val role = onLogin(password)
-                        if (role == UserRole.NONE) {
-                            error = "wrong"
+                        if (serverUrl.isBlank() || email.isBlank() || password.isBlank()) return@Button
+                        if (registerMode) {
+                            onRegister(serverUrl.trim(), email.trim(), password)
+                        } else {
+                            onLogin(serverUrl.trim(), email.trim(), password)
                         }
                     },
+                    enabled = !isLoading &&
+                        serverUrl.isNotBlank() && email.isNotBlank() && password.isNotBlank(),
                     modifier = Modifier.fillMaxWidth(),
                     colors = ButtonDefaults.buttonColors(containerColor = ClaudeAccent),
                     shape = RoundedCornerShape(8.dp)
                 ) {
-                    Text("Kirish", color = Color.White)
+                    if (isLoading) {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(20.dp),
+                            color = Color.White,
+                            strokeWidth = 2.dp
+                        )
+                    } else {
+                        Text(if (registerMode) "Ro'yxatdan o'tish" else "Kirish", color = Color.White)
+                    }
                 }
+
+                if (state is LoginState.Error) {
+                    Text(
+                        state.message,
+                        color = Color(0xFFE05B44),
+                        style = MaterialTheme.typography.bodySmall
+                    )
+                }
+
+                TextButton(
+                    onClick = { registerMode = !registerMode; onErrorShown() }
+                ) {
+                    Text(
+                        if (registerMode) "Kirishga o'tish"
+                        else "Akkauntingiz yo'qmi? Ro'yxatdan o'ting",
+                        color = ClaudeAccent,
+                        style = MaterialTheme.typography.labelMedium
+                    )
+                }
+
                 Text(
-                    "Standart: admin / admin (to'liq huquq) yoki viewer / viewer (faqat ko'rish)",
+                    "Birinchi ro'yxatdan o'tgan foydalanuvchi admin bo'ladi.",
                     style = MaterialTheme.typography.labelSmall,
                     color = ClaudeTextSecondary
                 )

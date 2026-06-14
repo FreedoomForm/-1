@@ -27,4 +27,7 @@ interface RenterDao {
 
     @Query("DELETE FROM renters WHERE id = :id")
     suspend fun deleteRenter(id: Int)
+
+    @Query("DELETE FROM renters")
+    suspend fun deleteAll()
 }

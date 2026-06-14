@@ -18,4 +18,7 @@ interface ContractHistoryDao {
 
     @Query("DELETE FROM contract_history")
     suspend fun clear()
+
+    @Query("DELETE FROM contract_history")
+    suspend fun deleteAll()
 }
