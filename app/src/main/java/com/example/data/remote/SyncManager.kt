@@ -73,20 +73,17 @@ class SyncManager(
             // ── 1. Push scooters ──────────────────────────────
             val localScooters = db.scooterDao().getAllScootersOnce()
             for (s in localScooters) {
-                val ok = try {
+                try {
                     api.createScooter(s.toCreateDto())
                     result.scootersPushed++
-                    true
                 } catch (e: Exception) {
                     // Maybe already exists — try update
                     try {
                         api.updateScooter(s.id, s.toUpdateDto())
                         result.scootersPushed++
-                        true
                     } catch (e2: Exception) {
                         Log.w(TAG, "pushScooter failed for #${s.id}", e2)
                         result.scootersFailed++
-                        false
                     }
                 }
             }
@@ -94,19 +91,16 @@ class SyncManager(
             // ── 2. Push renters ──────────────────────────────
             val localRenters = db.renterDao().getAllRentersOnce()
             for (r in localRenters) {
-                val ok = try {
+                try {
                     api.createRenter(r.toCreateDto())
                     result.rentersPushed++
-                    true
                 } catch (e: Exception) {
                     try {
                         api.updateRenter(r.id, r.toUpdateDto())
                         result.rentersPushed++
-                        true
                     } catch (e2: Exception) {
                         Log.w(TAG, "pushRenter failed for #${r.id}", e2)
                         result.rentersFailed++
-                        false
                     }
                 }
             }
@@ -114,28 +108,24 @@ class SyncManager(
             // ── 3. Push contract history ──────────────────────
             val localHistory = db.contractHistoryDao().getAllOnce()
             for (h in localHistory) {
-                val ok = try {
+                try {
                     api.createContractHistory(h.toCreateDto())
                     result.historyPushed++
-                    true
                 } catch (e: Exception) {
                     Log.w(TAG, "pushContractHistory failed", e)
                     result.historyFailed++
-                    false
                 }
             }
 
             // ── 4. Push notifications ─────────────────────────
             val localNotifs = db.notificationHistoryDao().getAllOnce()
             for (n in localNotifs) {
-                val ok = try {
+                try {
                     api.createNotification(n.toCreateDto())
                     result.notificationsPushed++
-                    true
                 } catch (e: Exception) {
                     Log.w(TAG, "pushNotification failed", e)
                     result.notificationsFailed++
-                    false
                 }
             }
 

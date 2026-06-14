@@ -1,9 +1,5 @@
 name: Build Debug APK
 
-# Срабатывает на:
-#   - push в main
-#   - pull request в main
-#   - ручной запуск через вкладку Actions
 on:
   push:
     branches: [main]
@@ -12,7 +8,7 @@ on:
   workflow_dispatch:
     inputs:
       run_tests:
-        description: "Запустить юнит-тесты перед сборкой"
+        description: "Run unit tests before building"
         type: boolean
         default: false
 
@@ -30,53 +26,38 @@ jobs:
     timeout-minutes: 45
 
     steps:
-      # 1. Забираем исходники
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
           fetch-depth: 1
 
-      # 2. JDK 17 — минимум для AGP 9.x (Kotlin 2.2 + Compose)
-      - name: Set up JDK 17
+      - name: Set up JDK 21
         uses: actions/setup-java@v4
         with:
           distribution: temurin
-          java-version: '17'
+          java-version: '21'
 
-      # 3. Ставим Gradle 9.5.1 (последний стабильный; AGP 9.1.1 совместим с Gradle 9.x).
-      #    Gradle 9.1 не существует (пропущен в релизах), поэтому берём 9.5.1.
-      - name: Set up Gradle 9.5.1
+      - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '9.5.1'
           cache-disabled: false
 
-      # 4. Android SDK: нужен platform 36 и build-tools 36.
-      #    ⚠️ setup-android@v3 в src/main.ts делает packages.split(' ')
-      #    (только по пробелу!). Запятая/перенос строки → один «пакет».
-      #    Также cmdline-tools action ставит самостоятельно (16.0), поэтому
-      #    его в списке НЕ указываем.
       - name: Set up Android SDK
         uses: android-actions/setup-android@v3
         with:
           packages: 'platform-tools platforms;android-36 build-tools;36.0.0'
           accept-android-sdk-licenses: true
 
-      # 5. В репозитории нет gradlew — генерируем wrapper
-      #    (создаёт gradlew, gradlew.bat, gradle/wrapper/*)
       - name: Generate Gradle wrapper
         run: gradle wrapper --gradle-version 9.5.1 --distribution-type bin
 
       - name: Make gradlew executable
         run: chmod +x gradlew
 
-      # 6. Плагин secrets читает .env во время конфигурации Gradle.
-      #    Копируем .env.example, чтобы сборка не падала.
       - name: Prepare .env from example
         run: cp .env.example .env
 
-      # 7. В app/build.gradle.kts debug-сборка ссылается на ${rootDir}/debug.keystore,
-      #    которого нет в репозитории (он в .gitignore). Генерируем его.
       - name: Generate debug keystore
         run: |
           keytool -genkeypair \
@@ -89,31 +70,27 @@ jobs:
             -validity 10000 \
             -dname "CN=Android Debug,O=Android,C=US"
 
-      # 8. Опциональные юнит-тесты
       - name: Run unit tests
         if: ${{ github.event_name == 'workflow_dispatch' && inputs.run_tests }}
         run: ./gradlew testDebugUnitTest --no-daemon --stacktrace
         continue-on-error: true
 
-      # 9. Главная сборка — debug APK
       - name: Assemble debug APK
         run: ./gradlew assembleDebug --no-daemon --stacktrace
 
-      # 10. Находим путь к готовому APK
       - name: Locate built APK
         id: locate_apk
         run: |
           APK_PATH=$(find app/build/outputs/apk/debug -maxdepth 2 -name "*.apk" -type f | head -n 1)
           if [ -z "$APK_PATH" ]; then
-            echo "❌ APK не найден в app/build/outputs/apk/debug"
+            echo "APK not found in app/build/outputs/apk/debug"
             ls -la app/build/outputs/ 2>/dev/null || true
             exit 1
           fi
           echo "apk_path=$APK_PATH" >> "$GITHUB_OUTPUT"
-          echo "✅ Найден APK: $APK_PATH"
-          echo "📦 Размер: $(du -h "$APK_PATH" | cut -f1)"
+          echo "Found APK: $APK_PATH"
+          echo "Size: $(du -h "$APK_PATH" | cut -f1)"
 
-      # 11. Публикуем APK как артефакт (можно скачать из раздела Actions)
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
         with:
@@ -122,7 +99,6 @@ jobs:
           if-no-files-found: error
           retention-days: 30
 
-      # 12. Логи и отчёты — для отладки при падении
       - name: Upload build logs
         if: always()
         uses: actions/upload-artifact@v4
