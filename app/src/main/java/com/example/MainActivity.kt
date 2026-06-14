@@ -113,7 +113,18 @@ class MainActivity : ComponentActivity() {
                     }
                 }
 
-                MainScreen()
+                val loginViewModel: LoginViewModel = viewModel()
+                val role by loginViewModel.role.collectAsStateWithLifecycle()
+
+                when (role) {
+                    UserRole.NONE -> LoginScreen(
+                        onLogin = { password -> loginViewModel.login(password) }
+                    )
+                    else -> MainScreen(
+                        userRole = role,
+                        loginViewModel = loginViewModel
+                    )
+                }
             }
         }
     }
@@ -154,10 +165,13 @@ private fun statusLabel(s: RenterStatus): String = when (s) {
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun MainScreen(
+    userRole: UserRole,
+    loginViewModel: LoginViewModel,
     viewModel: RenterViewModel = viewModel(),
     settingsViewModel: SettingsViewModel = viewModel(),
     scooterViewModel: ScooterViewModel = viewModel(),
-    historyViewModel: NotificationHistoryViewModel = viewModel()
+    historyViewModel: NotificationHistoryViewModel = viewModel(),
+    contractHistoryViewModel: ContractHistoryViewModel = viewModel()
 ) {
     var currentTab by remember { mutableStateOf(0) }
     var showSettings by remember { mutableStateOf(false) }
@@ -171,6 +185,7 @@ fun MainScreen(
     var showDateRangePicker by remember { mutableStateOf(false) }
     val dateRangePickerState = rememberDateRangePickerState()
     var showHistoryDialog by remember { mutableStateOf(false) }
+    var showContractHistoryDialog by remember { mutableStateOf(false) }
 
     var sortColumn by remember { mutableStateOf(SortColumn.STATUS) }
     var sortDirection by remember { mutableStateOf(SortDirection.ASC) }
@@ -182,6 +197,7 @@ fun MainScreen(
 
     val renters by viewModel.rentersList.collectAsStateWithLifecycle()
     val history by historyViewModel.history.collectAsStateWithLifecycle()
+    val contractHistory by contractHistoryViewModel.history.collectAsStateWithLifecycle()
 
     Scaffold(
         modifier = Modifier.fillMaxSize(),
@@ -200,7 +216,7 @@ fun MainScreen(
                     actionIconContentColor = ClaudeText
                 ),
                 actions = {
-                    // Колокольчик открывает ВНУТРИ приложения диалог со списком уведомлений
+                    // Колокольчик — история уведомлений
                     IconButton(
                         onClick = { showHistoryDialog = true },
                         modifier = Modifier
@@ -232,6 +248,21 @@ fun MainScreen(
                             }
                         }
                     }
+                    // 📜 Контрактлар тарихи (рядом с ⚙️)
+                    IconButton(
+                        onClick = { showContractHistoryDialog = true },
+                        modifier = Modifier
+                            .padding(end = 4.dp, start = 4.dp)
+                            .size(40.dp)
+                            .background(Color.White, CircleShape)
+                            .border(1.dp, ClaudeDivider, CircleShape)
+                    ) {
+                        Icon(
+                            Icons.Default.DateRange,
+                            contentDescription = "Kontraktlar tarixi",
+                            modifier = Modifier.size(20.dp)
+                        )
+                    }
                     IconButton(
                         onClick = { showSettings = true },
                         modifier = Modifier
@@ -250,21 +281,23 @@ fun MainScreen(
             )
         },
         floatingActionButton = {
-            FloatingActionButton(
-                onClick = {
-                    if (currentTab == 0) showAddDialog = true
-                    else showAddScooterDialog = true
-                },
-                containerColor = ClaudeAccent,
-                contentColor = Color.White,
-                shape = RoundedCornerShape(18.dp),
-                modifier = Modifier.size(64.dp)
-            ) {
-                Icon(
-                    Icons.Default.Add,
-                    contentDescription = if (currentTab == 0) "Ijarachi qo'shish" else "Skuter qo'shish",
-                    modifier = Modifier.size(32.dp)
-                )
+            if (userRole == UserRole.ADMIN) {
+                FloatingActionButton(
+                    onClick = {
+                        if (currentTab == 0) showAddDialog = true
+                        else showAddScooterDialog = true
+                    },
+                    containerColor = ClaudeAccent,
+                    contentColor = Color.White,
+                    shape = RoundedCornerShape(18.dp),
+                    modifier = Modifier.size(64.dp)
+                ) {
+                    Icon(
+                        Icons.Default.Add,
+                        contentDescription = if (currentTab == 0) "Ijarachi qo'shish" else "Skuter qo'shish",
+                        modifier = Modifier.size(32.dp)
+                    )
+                }
             }
         },
         bottomBar = {
@@ -338,31 +371,43 @@ fun MainScreen(
                     singleLine = true
                 )
 
-                if (selectedRenters.isNotEmpty()) {
+                if (selectedRenters.isNotEmpty() && userRole == UserRole.ADMIN) {
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
                             .padding(horizontal = 16.dp, vertical = 8.dp),
-                        horizontalArrangement = Arrangement.spacedBy(12.dp)
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
                         Button(
                             onClick = {
-                                selectedRenters.forEach { id ->
-                                    renters.find { it.id == id }?.let { r ->
-                                        viewModel.markReturned(r)
-                                    }
-                                }
+                                viewModel.payWeeklyForRenters(selectedRenters)
+                                Toast.makeText(context, "To'lov qabul qilindi", Toast.LENGTH_SHORT).show()
+                                selectedRenters = emptySet()
+                            },
+                            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF34C759)),
+                            shape = RoundedCornerShape(12.dp),
+                            modifier = Modifier.weight(1.4f).height(48.dp),
+                            contentPadding = PaddingValues(horizontal = 4.dp)
+                        ) {
+                            Text(
+                                "1 hafta to'lov",
+                                color = Color.White,
+                                style = MaterialTheme.typography.labelMedium
+                            )
+                        }
+                        Button(
+                            onClick = {
+                                viewModel.terminateRenters(selectedRenters)
+                                Toast.makeText(context, "Kontrakt tugatildi", Toast.LENGTH_SHORT).show()
                                 selectedRenters = emptySet()
                             },
                             colors = ButtonDefaults.buttonColors(containerColor = ClaudeAccent),
                             shape = RoundedCornerShape(12.dp),
-                            modifier = Modifier
-                                .weight(1.5f)
-                                .height(48.dp),
+                            modifier = Modifier.weight(1.4f).height(48.dp),
                             contentPadding = PaddingValues(horizontal = 4.dp)
                         ) {
                             Text(
-                                "Qaytarilgan deb belgilash",
+                                "Kontraktni uzish",
                                 color = Color.White,
                                 style = MaterialTheme.typography.labelMedium
                             )
@@ -375,21 +420,14 @@ fun MainScreen(
                             colors = ButtonDefaults.buttonColors(containerColor = Color.White),
                             border = BorderStroke(1.dp, ClaudeDivider),
                             shape = RoundedCornerShape(12.dp),
-                            modifier = Modifier
-                                .weight(1f)
-                                .height(48.dp)
+                            modifier = Modifier.height(48.dp),
+                            contentPadding = PaddingValues(horizontal = 8.dp)
                         ) {
                             Icon(
                                 Icons.Default.Delete,
                                 contentDescription = null,
                                 tint = ClaudeTextSecondary,
                                 modifier = Modifier.size(18.dp)
-                            )
-                            Spacer(Modifier.width(6.dp))
-                            Text(
-                                "O'chirish",
-                                color = ClaudeTextSecondary,
-                                style = MaterialTheme.typography.labelMedium
                             )
                         }
                     }
@@ -580,11 +618,15 @@ fun MainScreen(
                     showAddScooterDialog = false
                     scooterToEdit = null
                 },
-                onSave = { name ->
+                onSave = { name, docNum ->
                     if (isEditScooter) {
-                        scooterToEdit?.let { scooterViewModel.updateScooter(it.copy(name = name)) }
+                        scooterToEdit?.let {
+                            scooterViewModel.updateScooter(
+                                it.copy(name = name, documentedNumber = docNum)
+                            )
+                        }
                     } else {
-                        scooterViewModel.addScooter(name)
+                        scooterViewModel.addScooter(name, docNum)
                     }
                     showAddScooterDialog = false
                     scooterToEdit = null
@@ -638,6 +680,19 @@ fun MainScreen(
                 onDismiss = { showHistoryDialog = false },
                 onClear = {
                     historyViewModel.clear()
+                    Toast.makeText(context, "Tozalandi", Toast.LENGTH_SHORT).show()
+                }
+            )
+        }
+
+        // Окно истории контрактов
+        if (showContractHistoryDialog) {
+            ContractHistoryDialog(
+                history = contractHistory,
+                renters = renters,
+                onDismiss = { showContractHistoryDialog = false },
+                onClear = {
+                    contractHistoryViewModel.clear()
                     Toast.makeText(context, "Tozalandi", Toast.LENGTH_SHORT).show()
                 }
             )
@@ -1057,24 +1112,11 @@ fun RenterFormDialog(
                 }
 
                 if (isEdit) {
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(vertical = 4.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.SpaceBetween
-                    ) {
-                        Text("Mijoz holati:", style = MaterialTheme.typography.bodyLarge)
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Text(
-                                if (isActive) "Ijarada" else "Qaytarilgan",
-                                style = MaterialTheme.typography.bodyMedium,
-                                color = ClaudeTextSecondary
-                            )
-                            Spacer(modifier = Modifier.width(8.dp))
-                            Switch(checked = isActive, onCheckedChange = { isActive = it })
-                        }
-                    }
+                    Text(
+                        "Holat: ${if (initialRenter?.isReturned == true) "Qaytarilgan" else "Faol"}",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = ClaudeTextSecondary
+                    )
                 }
 
                 ExposedDropdownMenuBox(
@@ -1486,10 +1528,8 @@ fun ScooterFormDialog(
     initialScooter: Scooter?,
     existingScooters: List<Scooter>,
     onDismiss: () -> Unit,
-    onSave: (String) -> Unit
+    onSave: (String, String?) -> Unit
 ) {
-    // Следующий номер в формате BC-NNN, исходя из уже существующих имён.
-    // Если редактируем — используем текущее имя как стартовое значение.
     val initialName = remember(initialScooter, existingScooters) {
         if (initialScooter != null) {
             initialScooter.name
@@ -1501,6 +1541,9 @@ fun ScooterFormDialog(
         }
     }
     var name by remember { mutableStateOf(initialName) }
+    var documentedNumber by remember {
+        mutableStateOf(initialScooter?.documentedNumber ?: "")
+    }
 
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -1531,11 +1574,21 @@ fun ScooterFormDialog(
                         }
                     }
                 )
+                OutlinedTextField(
+                    value = documentedNumber,
+                    onValueChange = { documentedNumber = it },
+                    label = { Text("Hujjatlashtirilgan raqami (ixtiyoriy)") },
+                    placeholder = { Text("Masalan: 01-234 ABC") },
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(8.dp)
+                )
             }
         },
         confirmButton = {
             Button(
-                onClick = { if (name.isNotBlank()) onSave(name) },
+                onClick = {
+                    if (name.isNotBlank()) onSave(name, documentedNumber.takeIf { it.isNotBlank() })
+                },
                 colors = ButtonDefaults.buttonColors(containerColor = ClaudeText),
                 shape = RoundedCornerShape(8.dp)
             ) {
@@ -1545,6 +1598,212 @@ fun ScooterFormDialog(
         dismissButton = {
             TextButton(onClick = onDismiss) {
                 Text("Bekor qilish", color = ClaudeTextSecondary)
+            }
+        }
+    )
+}
+
+/* ============================================================================
+   ЛОГИН-ЭКРАН
+   ============================================================================ */
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun LoginScreen(onLogin: (String) -> UserRole) {
+    var password by remember { mutableStateOf("") }
+    var error by remember { mutableStateOf<String?>(null) }
+    val context = LocalContext.current
+
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(ClaudeBackground),
+        contentAlignment = Alignment.Center
+    ) {
+        Card(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(24.dp),
+            shape = RoundedCornerShape(16.dp),
+            colors = CardDefaults.cardColors(containerColor = ClaudeCard),
+            elevation = CardDefaults.cardElevation(defaultElevation = 4.dp)
+        ) {
+            Column(
+                modifier = Modifier.padding(24.dp),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.spacedBy(16.dp)
+            ) {
+                Icon(
+                    Icons.Default.DirectionsBike,
+                    contentDescription = null,
+                    tint = ClaudeAccent,
+                    modifier = Modifier.size(56.dp)
+                )
+                Text(
+                    "Skuter Ijarasi",
+                    style = MaterialTheme.typography.headlineSmall,
+                    color = ClaudeText,
+                    fontWeight = FontWeight.Bold
+                )
+                Text(
+                    "Tizimga kirish",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = ClaudeTextSecondary
+                )
+                OutlinedTextField(
+                    value = password,
+                    onValueChange = { password = it; error = null },
+                    label = { Text("Parol") },
+                    placeholder = { Text("admin yoki viewer") },
+                    visualTransformation = androidx.compose.ui.text.input.PasswordVisualTransformation(),
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(8.dp)
+                )
+                if (error != null) {
+                    Text(
+                        "Noto'g'ri parol",
+                        color = Color(0xFFE05B44),
+                        style = MaterialTheme.typography.bodySmall
+                    )
+                }
+                Button(
+                    onClick = {
+                        val role = onLogin(password)
+                        if (role == UserRole.NONE) {
+                            error = "wrong"
+                        }
+                    },
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = ButtonDefaults.buttonColors(containerColor = ClaudeAccent),
+                    shape = RoundedCornerShape(8.dp)
+                ) {
+                    Text("Kirish", color = Color.White)
+                }
+                Text(
+                    "Standart: admin / admin (to'liq huquq) yoki viewer / viewer (faqat ko'rish)",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = ClaudeTextSecondary
+                )
+            }
+        }
+    }
+}
+
+/* ============================================================================
+   ДИАЛОГ ИСТОРИИ КОНТРАКТОВ
+   ============================================================================ */
+
+@Composable
+fun ContractHistoryDialog(
+    history: List<com.example.data.ContractHistoryEntry>,
+    renters: List<Renter>,
+    onDismiss: () -> Unit,
+    onClear: () -> Unit
+) {
+    val dateFmt = remember { SimpleDateFormat("dd.MM.yyyy HH:mm", Locale.getDefault()) }
+    val renterNames = remember(renters) { renters.associate { it.id to it.name } }
+
+    fun typeLabel(t: String) = when (t) {
+        "CREATED" -> "Yaratildi"
+        "PAYMENT" -> "To'lov"
+        "AUTO_RENEW" -> "Avtomatik yangilanish"
+        "TERMINATED" -> "Tugatildi"
+        "RETURNED" -> "Qaytarildi"
+        else -> t
+    }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(
+                    Icons.Default.DateRange,
+                    contentDescription = null,
+                    tint = ClaudeAccent
+                )
+                Spacer(modifier = Modifier.width(8.dp))
+                Text("Kontraktlar tarixi", style = MaterialTheme.typography.titleLarge)
+            }
+        },
+        containerColor = ClaudeCard,
+        text = {
+            if (history.isEmpty()) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(vertical = 24.dp),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text(
+                        "Tarix bo'sh",
+                        color = ClaudeTextSecondary,
+                        style = MaterialTheme.typography.bodyMedium
+                    )
+                }
+            } else {
+                LazyColumn(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .heightIn(max = 480.dp)
+                ) {
+                    items(history, key = { it.id }) { entry ->
+                        Card(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(vertical = 4.dp),
+                            shape = RoundedCornerShape(10.dp),
+                            colors = CardDefaults.cardColors(containerColor = Color.White),
+                            elevation = CardDefaults.cardElevation(defaultElevation = 1.dp)
+                        ) {
+                            Column(modifier = Modifier.padding(12.dp)) {
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.SpaceBetween
+                                ) {
+                                    Text(
+                                        "${renterNames[entry.renterId] ?: "Mijoz #${entry.renterId}"} — ${typeLabel(entry.type)}",
+                                        style = MaterialTheme.typography.titleSmall,
+                                        color = ClaudeText,
+                                        fontWeight = FontWeight.Bold
+                                    )
+                                    Text(
+                                        dateFmt.format(Date(entry.timestamp)),
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = ClaudeTextSecondary
+                                    )
+                                }
+                                if (entry.amount > 0.0) {
+                                    Spacer(modifier = Modifier.height(2.dp))
+                                    Text(
+                                        "${entry.amount.toBigDecimal().stripTrailingZeros().toPlainString()} UZS",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = ClaudeText
+                                    )
+                                }
+                                if (!entry.notes.isNullOrBlank()) {
+                                    Text(
+                                        entry.notes,
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = ClaudeTextSecondary
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            Row {
+                if (history.isNotEmpty()) {
+                    TextButton(onClick = onClear) {
+                        Text("Tozalash", color = ClaudeTextSecondary)
+                    }
+                }
+                TextButton(onClick = onDismiss) {
+                    Text("Yopish", color = ClaudeAccent)
+                }
             }
         }
     )

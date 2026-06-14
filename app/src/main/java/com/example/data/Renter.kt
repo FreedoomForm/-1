@@ -15,5 +15,7 @@ data class Renter(
     val isOverdueSmsSent: Boolean = false,
     val scooterId: Int? = null,
     val scooterName: String? = null,
-    val lastPaymentTimestamp: Long? = null
+    val lastPaymentTimestamp: Long? = null,
+    /** Баланс арендатора: < 0 — должен нам, > 0 — аванс. */
+    val balance: Double = 0.0
 )

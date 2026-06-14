@@ -7,6 +7,8 @@ import androidx.work.OneTimeWorkRequestBuilder
 import androidx.work.WorkManager
 import androidx.work.workDataOf
 import com.example.data.AppDatabase
+import com.example.data.ContractHistoryEntry
+import com.example.data.ContractHistoryRepository
 import com.example.data.Renter
 import com.example.data.RenterRepository
 import com.example.data.SettingsRepository
@@ -19,11 +21,13 @@ import kotlinx.coroutines.launch
 
 class RenterViewModel(application: Application) : AndroidViewModel(application) {
     private val repository: RenterRepository
+    private val historyRepository: ContractHistoryRepository
     val rentersList: StateFlow<List<Renter>>
 
     init {
         val database = AppDatabase.getDatabase(application)
         repository = RenterRepository(database.renterDao())
+        historyRepository = ContractHistoryRepository(database.contractHistoryDao())
 
         rentersList = repository.allRenters.stateIn(
             scope = viewModelScope,
@@ -32,14 +36,6 @@ class RenterViewModel(application: Application) : AndroidViewModel(application) 
         )
     }
 
-    /**
-     * Создать арендатора.
-     *  • Если аренда уже просрочена на момент создания:
-     *      — долг = недельный тариф;
-     *      — сразу же уходит локальное уведомление;
-     *      — сразу же пытаемся отправить SMS (через SmsWorker).
-     *  • Если аренда ещё активна — обычное сохранение без уведомлений.
-     */
     fun addRenter(
         name: String,
         phone: String,
@@ -66,17 +62,24 @@ class RenterViewModel(application: Application) : AndroidViewModel(application) 
                     rentStartDateTimestamp = startTimestamp,
                     scooterId = scooterId,
                     scooterName = scooterName,
-                    // Не помечаем заранее — пусть SmsWorker сам поставит true,
-                    // когда успешно отправит SMS (или PaymentCheckWorker,
-                    // когда пришлёт уведомление).
-                    isOverdueSmsSent = false
+                    isOverdueSmsSent = false,
+                    balance = 0.0
+                )
+            )
+
+            historyRepository.insert(
+                ContractHistoryEntry(
+                    renterId = newId.toInt(),
+                    timestamp = now,
+                    type = ContractHistoryEntry.TYPE_CREATED,
+                    amount = weeklyPrice,
+                    notes = if (isOverdueAtCreation) "Kechikkan holda yaratildi" else "Yaratildi"
                 )
             )
 
             if (isOverdueAtCreation) {
                 val wm = WorkManager.getInstance(getApplication())
 
-                // Локальное уведомление прямо сейчас
                 val notifWork = OneTimeWorkRequestBuilder<PaymentCheckWorker>()
                     .setInputData(
                         workDataOf(
@@ -87,7 +90,6 @@ class RenterViewModel(application: Application) : AndroidViewModel(application) 
                     .build()
                 wm.enqueue(notifWork)
 
-                // SMS прямо сейчас (без ожидания периодического 4-часового тика)
                 val smsWork = OneTimeWorkRequestBuilder<SmsWorker>().build()
                 wm.enqueueUniqueWork(
                     "immediate_sms_${newId}",
@@ -95,12 +97,6 @@ class RenterViewModel(application: Application) : AndroidViewModel(application) 
                     smsWork
                 )
             }
-        }
-    }
-
-    fun markReturned(renter: Renter) {
-        viewModelScope.launch {
-            repository.update(renter.copy(isReturned = true))
         }
     }
 
@@ -116,16 +112,80 @@ class RenterViewModel(application: Application) : AndroidViewModel(application) 
         }
     }
 
+    /** «Оплатить за неделю» для одного арендатора. */
     fun markPaymentReceived(renter: Renter) {
         viewModelScope.launch {
-            val weeklyPrice = SettingsRepository(getApplication()).weeklyPrice
-            repository.update(
-                renter.copy(
-                    debtAmount = maxOf(0.0, renter.debtAmount - weeklyPrice),
-                    lastPaymentTimestamp = System.currentTimeMillis(),
-                    isOverdueSmsSent = false
-                )
-            )
+            applyWeeklyPayment(renter, "Bitta to'lov")
         }
+    }
+
+    /** Bulk: «Оплатить за неделю» для нескольких арендаторов сразу. */
+    fun payWeeklyForRenters(renterIds: Set<Int>) {
+        viewModelScope.launch {
+            val weeklyPrice = SettingsRepository(getApplication()).weeklyPrice
+            renterIds.forEach { id ->
+                val renter = repository.getById(id) ?: return@forEach
+                applyWeeklyPayment(renter, "Ommaviy to'lov", weeklyPrice)
+            }
+        }
+    }
+
+    /** Bulk: «Прекратить контракт» для нескольких арендаторов. */
+    fun terminateRenters(renterIds: Set<Int>) {
+        viewModelScope.launch {
+            val weeklyPrice = SettingsRepository(getApplication()).weeklyPrice
+            renterIds.forEach { id ->
+                val renter = repository.getById(id) ?: return@forEach
+                applyTermination(renter, weeklyPrice)
+            }
+        }
+    }
+
+    private suspend fun applyWeeklyPayment(
+        renter: Renter,
+        notes: String,
+        weeklyPriceOverride: Double? = null
+    ) {
+        val weeklyPrice = weeklyPriceOverride
+            ?: SettingsRepository(getApplication()).weeklyPrice
+        val newDebt = maxOf(0.0, renter.debtAmount - weeklyPrice)
+        repository.update(
+            renter.copy(
+                debtAmount = newDebt,
+                balance = renter.balance + weeklyPrice,
+                lastPaymentTimestamp = System.currentTimeMillis(),
+                isOverdueSmsSent = false
+            )
+        )
+        historyRepository.insert(
+            ContractHistoryEntry(
+                renterId = renter.id,
+                timestamp = System.currentTimeMillis(),
+                type = ContractHistoryEntry.TYPE_PAYMENT,
+                amount = weeklyPrice,
+                notes = notes
+            )
+        )
+    }
+
+    private suspend fun applyTermination(renter: Renter, weeklyPrice: Double) {
+        repository.update(
+            renter.copy(
+                debtAmount = maxOf(0.0, renter.debtAmount - weeklyPrice),
+                balance = renter.balance + weeklyPrice,
+                isReturned = true,
+                lastPaymentTimestamp = System.currentTimeMillis(),
+                isOverdueSmsSent = false
+            )
+        )
+        historyRepository.insert(
+            ContractHistoryEntry(
+                renterId = renter.id,
+                timestamp = System.currentTimeMillis(),
+                type = ContractHistoryEntry.TYPE_TERMINATED,
+                amount = weeklyPrice,
+                notes = "Kontrakt tugatildi"
+            )
+        )
     }
 }
