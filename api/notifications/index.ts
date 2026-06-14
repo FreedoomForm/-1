@@ -1,6 +1,7 @@
 /**
- * GET  /api/notifications — последние уведомления
- * POST /api/notifications — записать отправленное уведомление
+ * GET    /api/notifications — последние уведомления
+ * POST   /api/notifications — записать отправленное уведомление
+ * DELETE /api/notifications — удалить все уведомления пользователя
  */
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 import { getSql } from '../_lib/db.js';
@@ -46,6 +47,14 @@ export default withCors(async (req: VercelRequest, res: VercelResponse) => {
       RETURNING id
     `) as any[];
     jsonRes(res, { id: rows[0].id }, 201);
+    return;
+  }
+
+  if (req.method === 'DELETE') {
+    const result = (await sql`
+      DELETE FROM notification_history WHERE user_id = ${auth.sub} RETURNING id
+    `) as any[];
+    jsonRes(res, { deleted: result.length });
     return;
   }
 

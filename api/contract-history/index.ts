@@ -1,6 +1,7 @@
 /**
- * GET  /api/contract-history — список событий (новые сверху)
- * POST /api/contract-history — добавить событие
+ * GET    /api/contract-history — список событий (новые сверху)
+ * POST   /api/contract-history — добавить событие
+ * DELETE /api/contract-history — удалить все события пользователя
  *
  * Используется Android-клиентом для синхронизации истории
  * (CREATED / PAYMENT / AUTO_RENEW / TERMINATED / RETURNED).
@@ -56,6 +57,15 @@ export default withCors(async (req: VercelRequest, res: VercelResponse) => {
       RETURNING id
     `) as any[];
     jsonRes(res, { id: rows[0].id }, 201);
+    return;
+  }
+
+  if (req.method === 'DELETE') {
+    if (auth.role !== 'admin') { errorRes(res, 'Admin only', 403, 'FORBIDDEN'); return; }
+    const result = (await sql`
+      DELETE FROM contract_history WHERE user_id = ${auth.sub} RETURNING id
+    `) as any[];
+    jsonRes(res, { deleted: result.length });
     return;
   }
 
