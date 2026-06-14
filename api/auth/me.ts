@@ -1,6 +1,6 @@
-import { getSql } from '../lib/db.js';
-import { getAuth } from '../lib/auth.js';
-import { withCors, jsonResponse, errorResponse } from '../lib/cors.js';
+import { getSql } from '../_lib/db.js';
+import { getAuth } from '../_lib/auth.js';
+import { withCors, jsonResponse, errorResponse } from '../_lib/cors.js';
 
 export default withCors(async (req: Request) => {
   if (req.method !== 'GET') return errorResponse('Use GET', 405);

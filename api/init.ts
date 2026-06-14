@@ -28,7 +28,7 @@ export default withCors(async (req: Request) => {
   const path = await import('node:path');
 
   const __dirname = path.dirname(fileURLToPath(import.meta.url));
-  const schemaPath = path.join(__dirname, '..', 'lib', 'schema.sql');
+  const schemaPath = path.join(__dirname, '_lib', 'schema.sql');
   const schemaSql = readFileSync(schemaPath, 'utf-8');
 
   const sql = getSql();

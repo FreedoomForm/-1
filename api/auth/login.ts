@@ -4,9 +4,9 @@
  * Проверяет email + пароль и возвращает JWT.
  */
 import bcrypt from 'bcryptjs';
-import { getSql } from '../lib/db.js';
-import { signToken } from '../lib/auth.js';
-import { withCors, jsonResponse, errorResponse } from '../lib/cors.js';
+import { getSql } from '../_lib/db.js';
+import { signToken } from '../_lib/auth.js';
+import { withCors, jsonResponse, errorResponse } from '../_lib/cors.js';
 
 interface LoginBody {
   email: string;
