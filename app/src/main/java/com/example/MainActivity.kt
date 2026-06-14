@@ -81,6 +81,7 @@ import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 import java.util.concurrent.TimeUnit
+import kotlinx.coroutines.launch
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -208,6 +209,7 @@ fun MainScreen(
     var scooterSortDirection by remember { mutableStateOf(SortDirection.ASC) }
     var isSyncing by remember { mutableStateOf(false) }
     var syncResult by remember { mutableStateOf<SyncResult?>(null) }
+    val coroutineScope = rememberCoroutineScope()
 
     val scooters by scooterViewModel.scootersList.collectAsStateWithLifecycle()
     val context = LocalContext.current
@@ -673,7 +675,7 @@ fun MainScreen(
                 onSync = {
                     if (!isSyncing) {
                         isSyncing = true
-                        kotlinx.coroutines.MainScope().launch {
+                        coroutineScope.launch {
                             val sync = SyncManager(context)
                             syncResult = sync.syncAll()
                             isSyncing = false
