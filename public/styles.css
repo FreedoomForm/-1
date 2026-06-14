@@ -480,12 +480,21 @@ input, select, textarea { font-family: inherit; font-size: inherit; }
   white-space: nowrap;
 }
 
-.renter-debt {
+.renter-balance {
   font-size: 14px;
   font-weight: 700;
   color: var(--text);
   text-align: right;
   padding: 0 4px;
+  white-space: nowrap;
+}
+
+.balance-negative {
+  color: var(--red);
+}
+
+.balance-positive {
+  color: var(--green);
 }
 
 /* Row actions (edit/delete) */
@@ -880,6 +889,36 @@ input, select, textarea { font-family: inherit; font-size: inherit; }
 }
 
 .batch-row .count { font-weight: 600; }
+
+/* ─── Overdue banner ────────────────────────────────── */
+.overdue-banner {
+  background: #fee2e2;
+  color: var(--red);
+  padding: 8px 12px;
+  border-radius: 8px;
+  font-size: 13px;
+  font-weight: 600;
+  margin-bottom: 12px;
+  text-align: center;
+}
+
+/* ─── Renter detail rows in modal ───────────────────── */
+.renter-detail-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 4px 0;
+  font-size: 13px;
+  border-bottom: 1px solid var(--divider);
+}
+
+.renter-detail-row:last-child { border-bottom: none; }
+
+.renter-detail-row span { color: var(--text-secondary); }
+
+/* ─── Text colors ──────────────────────────────────── */
+.text-red { color: var(--red); }
+.text-green { color: var(--green); }
 
 /* ─── Scrollbar ───────────────────────────────────────── */
 .table-wrapper::-webkit-scrollbar { height: 4px; }

@@ -2,6 +2,12 @@
  * Skuter Ijarasi — Full-featured Web UI matching Android app.
  * Plain JS, no build step. Custom CSS (no Tailwind).
  * API lives at the same origin under /api/...
+ *
+ * BALANCE LOGIC:
+ *   totalOwed  = weeks_elapsed × weekly_price  (for active, non-returned renters)
+ *   balance    = total amount paid by renter (stored in DB)
+ *   displayBalance = balance - totalOwed  (negative = owes money, positive = credit)
+ *   debt_amount in DB = max(0, totalOwed - balance)  (kept in sync for Android)
  */
 
 // ─── State ──────────────────────────────────────────────
@@ -35,16 +41,14 @@ const state = {
   view: 'login',
   selectedTab: 'renters',
   isAdmin: () => STORAGE.role === 'admin',
-  // Sorting
-  sortColumn: 'name',   // 'name' | 'start' | 'status' | 'debt'
-  sortDir: 'asc',       // 'asc' | 'desc'
+  sortColumn: 'name',
+  sortDir: 'asc',
   scooterSortDir: 'asc',
-  // Bulk selection
   selectedRenterIds: new Set(),
   selectedScooterIds: new Set(),
-  // Date range filter
   dateFrom: null,
-  dateTo: null
+  dateTo: null,
+  overdueChecked: false
 };
 
 // ─── API client ─────────────────────────────────────────
@@ -94,12 +98,42 @@ function closeModal() { document.getElementById('modal-host').innerHTML = ''; }
 const fmtDate = ts => new Date(ts).toLocaleDateString('uz-UZ', { day: '2-digit', month: '2-digit', year: 'numeric' });
 const fmtDateTime = ts => new Date(ts).toLocaleString('uz-UZ', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' });
 
+// ─── Balance calculation ────────────────────────────────
+function calcRenterFinances(r) {
+  const weeklyPrice = parseInt(STORAGE.weeklyPrice, 10) || 350000;
+  if (r.is_returned) {
+    return {
+      weeksElapsed: 0,
+      totalOwed: 0,
+      balancePaid: r.balance || 0,
+      displayBalance: r.balance || 0,
+      debtAmount: 0,
+      isOverdue: false
+    };
+  }
+  const now = Date.now();
+  const startDate = r.rent_start_date_timestamp;
+  const msElapsed = now - startDate;
+  const daysElapsed = Math.max(0, Math.floor(msElapsed / 86400000));
+  const weeksElapsed = Math.max(1, Math.ceil(daysElapsed / 7));
+  const totalOwed = weeksElapsed * weeklyPrice;
+  const balancePaid = r.balance || 0;
+  const displayBalance = balancePaid - totalOwed;
+  const debtAmount = Math.max(0, totalOwed - balancePaid);
+  const expiryDate = startDate + r.rent_duration_days * 86400000;
+  const isOverdue = now > expiryDate && debtAmount > 0;
+
+  return { weeksElapsed, totalOwed, balancePaid, displayBalance, debtAmount, isOverdue, expiryDate };
+}
+
 // ─── Status helpers ─────────────────────────────────────
 function renterStatus(r) {
+  const fin = calcRenterFinances(r);
   if (r.is_returned) return { key: 'returned', label: 'Qaytgan', color: 'var(--text-secondary)', cssClass: 'status-returned' };
-  if (r.debt_amount > 0) return { key: 'overdue', label: 'Qarzdor', color: 'var(--red)', cssClass: 'status-overdue' };
+  if (fin.isOverdue || fin.displayBalance < 0) return { key: 'overdue', label: 'Qarzdor', color: 'var(--red)', cssClass: 'status-overdue' };
   return { key: 'ok', label: 'Faol', color: 'var(--green)', cssClass: 'status-ok' };
 }
+
 function scooterStatus(scooterId, renters) {
   const active = renters.some(r => r.scooter_id === scooterId && !r.is_returned);
   return active
@@ -114,6 +148,7 @@ function friendlyError(msg) {
   if (msg.includes('409') || msg.includes('EMAIL_TAKEN')) return 'Bu email bilan akkaunt mavjud';
   if (msg.includes('Failed to fetch') || msg.includes('NetworkError'))
     return 'Serverga ulanib bo\'lmadi. URL va internetni tekshiring.';
+  if (msg.includes('403')) return 'Ruxsat yo\'q. Faqat admin uchun.';
   return msg.length > 200 ? msg.slice(0, 200) + '...' : msg;
 }
 
@@ -125,6 +160,11 @@ function escapeHtml(s) {
 function formatNum(n) {
   if (n == null) return '0';
   return Number(n).toLocaleString('uz-UZ');
+}
+function formatBalance(n) {
+  const num = Number(n);
+  if (num < 0) return '-' + formatNum(Math.abs(num));
+  return formatNum(num);
 }
 function toDateInput(ts) {
   const d = new Date(ts);
@@ -149,6 +189,57 @@ function formatPhone(phone) {
 function sortArrow(column, currentColumn, currentDir) {
   if (column !== currentColumn) return '<span class="sort-arrow muted">&#8597;</span>';
   return currentDir === 'asc' ? '<span class="sort-arrow active">&#8593;</span>' : '<span class="sort-arrow active">&#8595;</span>';
+}
+
+// ─── Overdue check & notification creation ─────────────
+async function checkAndNotifyOverdue() {
+  if (state.overdueChecked) return;
+  state.overdueChecked = true;
+  const admin = state.isAdmin();
+  if (!admin) return;
+
+  const weeklyPrice = parseInt(STORAGE.weeklyPrice, 10) || 350000;
+
+  for (const r of state.renters) {
+    if (r.is_returned) continue;
+    const fin = calcRenterFinances(r);
+    if (!fin.isOverdue) continue;
+
+    // Sync debt_amount in DB if it doesn't match calculated value
+    if (r.debt_amount !== fin.debtAmount) {
+      try {
+        await api(`/renters/${r.id}`, {
+          method: 'PUT',
+          body: {
+            debt_amount: fin.debtAmount,
+            is_overdue_sms_sent: false
+          }
+        });
+      } catch (e) { console.warn('Failed to sync debt for renter', r.id, e); }
+    }
+  }
+
+  // Count overdue for notification badge
+  const overdueCount = state.renters.filter(r => !r.is_returned && calcRenterFinances(r).isOverdue).length;
+  if (overdueCount > 0) {
+    // Check if we already notified about this today
+    const today = new Date().toDateString();
+    const lastNotified = localStorage.getItem('skuter:overdue_notified_date');
+    if (lastNotified !== today) {
+      try {
+        await api('/notifications', {
+          method: 'POST',
+          body: {
+            timestamp: Date.now(),
+            renter_id: null,
+            title: 'Qarzdorlik eslatmasi',
+            message: `${overdueCount} ta ijarachi qarzdorlikda. To'lovlarni tekshiring.`
+          }
+        });
+        localStorage.setItem('skuter:overdue_notified_date', today);
+      } catch (e) { console.warn('Failed to create overdue notification', e); }
+    }
+  }
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -254,7 +345,13 @@ async function onLoginSubmit(e) {
     STORAGE.token = resp.token;
     STORAGE.role = resp.user.role;
     STORAGE.email = resp.user.email;
+    state.overdueChecked = false;
     await loadAll();
+    await checkAndNotifyOverdue();
+    // Reload notifications after creating new ones
+    if (state.isAdmin()) {
+      state.notifications = await api('/notifications').catch(() => state.notifications);
+    }
     renderMain();
   } catch (err) {
     errEl.textContent = friendlyError(err.message);
@@ -278,6 +375,7 @@ async function onRegisterSubmit(e) {
     STORAGE.role = resp.user.role;
     STORAGE.email = resp.user.email;
     toast('Akkaunt yaratildi', 'success');
+    state.overdueChecked = false;
     await loadAll();
     renderMain();
   } catch (err) {
@@ -304,7 +402,7 @@ async function loadAll() {
 }
 
 // ═══════════════════════════════════════════════════════════
-// MAIN SCREEN (TopAppBar + Content + BottomNav)
+// MAIN SCREEN
 // ═══════════════════════════════════════════════════════════
 function renderMain() {
   const admin = state.isAdmin();
@@ -312,7 +410,6 @@ function renderMain() {
 
   document.getElementById('root').innerHTML = `
     <div class="main-screen">
-      <!-- Top App Bar -->
       <header class="topbar">
         <div class="topbar-title">Skuter Ijarasi</div>
         <div class="topbar-actions">
@@ -332,13 +429,10 @@ function renderMain() {
         </div>
       </header>
 
-      <!-- Content -->
       <main class="content" id="main-content"></main>
 
-      <!-- FAB (admin only) -->
       ${admin ? `<button class="fab" id="fab-add"><span class="material-icons">add</span></button>` : ''}
 
-      <!-- Bottom Navigation -->
       <nav class="bottomnav">
         <button class="nav-tab ${state.selectedTab === 'renters' ? 'active' : ''}" data-tab="renters">
           <span class="material-icons">list</span>
@@ -352,7 +446,6 @@ function renderMain() {
     </div>
   `;
 
-  // Bind events
   document.querySelectorAll('.nav-tab').forEach(tab => {
     tab.addEventListener('click', () => {
       state.selectedTab = tab.dataset.tab;
@@ -391,6 +484,7 @@ function doLogout() {
   state.renters = state.scooters = state.history = state.notifications = [];
   state.selectedRenterIds.clear();
   state.selectedScooterIds.clear();
+  state.overdueChecked = false;
   renderLogin();
 }
 
@@ -399,6 +493,8 @@ function doLogout() {
 // ═══════════════════════════════════════════════════════════
 function renderRentersTab() {
   const content = document.getElementById('main-content');
+  const overdueCount = state.renters.filter(r => !r.is_returned && calcRenterFinances(r).isOverdue).length;
+
   content.innerHTML = `
     <div class="search-bar">
       <span class="material-icons">search</span>
@@ -413,8 +509,10 @@ function renderRentersTab() {
         <option value="overdue">Qarzdor</option>
         <option value="returned">Qaytgan</option>
       </select>
-      ${state.dateFrom || state.dateTo ? '<button class="btn-secondary" id="clear-date-filter" style="font-size:12px;padding:4px 10px">Sana filtri: o\'chirish</button>' : ''}
+      ${state.dateFrom || state.dateTo ? '<button class="btn-secondary" id="clear-date-filter" style="font-size:12px;padding:4px 10px">Sana: o\'chirish</button>' : ''}
     </div>
+
+    ${overdueCount > 0 ? `<div class="overdue-banner">${overdueCount} ta ijarachi qarzdorlikda!</div>` : ''}
 
     <div id="renter-batch-bar"></div>
     <div class="table-wrapper" id="renters-table-wrapper"></div>
@@ -444,11 +542,11 @@ function filterRenters() {
       const hay = `${r.name} ${r.phone_number} ${r.scooter_name || ''}`.toLowerCase();
       if (!hay.includes(q)) return false;
     }
-    if (filter === 'active' && r.is_returned) return false;
-    if (filter === 'overdue' && !(r.debt_amount > 0 && !r.is_returned)) return false;
+    const fin = calcRenterFinances(r);
+    if (filter === 'active' && (r.is_returned || fin.displayBalance < 0)) return false;
+    if (filter === 'overdue' && !(fin.displayBalance < 0 && !r.is_returned)) return false;
     if (filter === 'returned' && !r.is_returned) return false;
 
-    // Date range filter (by expiry date)
     if (state.dateFrom || state.dateTo) {
       const expiry = r.rent_start_date_timestamp + r.rent_duration_days * 86400000;
       const expiryDate = new Date(expiry);
@@ -472,7 +570,10 @@ function filterRenters() {
       const order = { overdue: 0, ok: 1, returned: 2 };
       cmp = (order[sa] ?? 2) - (order[sb] ?? 2);
     }
-    else if (col === 'debt') cmp = (a.debt_amount || 0) - (b.debt_amount || 0);
+    else if (col === 'balance') {
+      const fa = calcRenterFinances(a), fb = calcRenterFinances(b);
+      cmp = fa.displayBalance - fb.displayBalance;
+    }
     return state.sortDir === 'desc' ? -cmp : cmp;
   });
 
@@ -493,13 +594,15 @@ function buildRentersTable(rows) {
       <div class="th hide-xs">Skuter</div>
       <div class="th sortable" data-sort="start">Bosh. ${sortArrow('start', sc, sd)}</div>
       <div class="th hide-xs">Tug.</div>
-      <div class="th sortable th-right" data-sort="debt">Qarz ${sortArrow('debt', sc, sd)}</div>
+      <div class="th sortable th-right" data-sort="balance">Balans ${sortArrow('balance', sc, sd)}</div>
     </div>
     <div class="table-rows">
       ${rows.map(r => {
         const s = renterStatus(r);
+        const fin = calcRenterFinances(r);
         const expiry = r.rent_start_date_timestamp + r.rent_duration_days * 86400000;
         const selected = state.selectedRenterIds.has(r.id);
+        const balanceClass = fin.displayBalance < 0 ? 'balance-negative' : fin.displayBalance > 0 ? 'balance-positive' : '';
         return `
           <div class="renter-row ${s.cssClass} ${selected ? 'selected' : ''}" data-id="${r.id}">
             <div class="renter-name">
@@ -512,7 +615,7 @@ function buildRentersTable(rows) {
             <div class="renter-scooter hide-xs">${escapeHtml(r.scooter_name || '—')}</div>
             <div class="renter-date">${fmtDate(r.rent_start_date_timestamp)}</div>
             <div class="renter-date hide-xs">${fmtDate(expiry)}</div>
-            <div class="renter-debt">${formatNum(r.debt_amount)}</div>
+            <div class="renter-balance ${balanceClass}">${formatBalance(fin.displayBalance)}</div>
             ${admin ? `
               <div class="row-actions">
                 <button class="row-action-btn edit-btn" data-act="edit" data-id="${r.id}" title="Tahrirlash">
@@ -547,10 +650,9 @@ function attachRenterRowActions() {
     });
   });
 
-  // Row click -> edit (for all users) or toggle selection
+  // Row click -> edit or toggle selection
   document.querySelectorAll('.renter-row').forEach(row => {
     row.addEventListener('click', e => {
-      // If clicking checkbox, toggle selection
       if (e.target.classList.contains('renter-checkbox')) {
         const id = parseInt(e.target.dataset.id, 10);
         if (e.target.checked) state.selectedRenterIds.add(id);
@@ -559,9 +661,7 @@ function attachRenterRowActions() {
         row.classList.toggle('selected', e.target.checked);
         return;
       }
-      // If clicking action button, don't open form
       if (e.target.closest('.row-action-btn')) return;
-      // Otherwise open edit form
       const id = parseInt(row.dataset.id, 10);
       openRenterForm(id);
     });
@@ -583,7 +683,6 @@ function attachRenterRowActions() {
     row.addEventListener('mouseleave', () => clearTimeout(longPressTimer));
   });
 
-  // Edit/Delete buttons (admin only)
   if (admin) {
     document.querySelectorAll('[data-act="edit"]').forEach(b =>
       b.addEventListener('click', e => {
@@ -607,13 +706,14 @@ function updateBatchBar() {
     bar.innerHTML = '';
     return;
   }
+  const wp = parseInt(STORAGE.weeklyPrice, 10) || 350000;
   bar.innerHTML = `
     <div class="batch-row">
       <span class="count">${count} ta tanlandi</span>
       ${admin ? `
         <button class="btn-secondary" id="batch-pay-weekly">
           <span class="material-icons" style="font-size:16px">payments</span>
-          1 hafta to'lov
+          To'lov (${formatNum(wp)} so'm)
         </button>
         <button class="btn-secondary" id="batch-terminate">
           <span class="material-icons" style="font-size:16px">block</span>
@@ -644,20 +744,25 @@ function updateBatchBar() {
 }
 
 async function batchPayWeekly() {
-  const price = parseInt(STORAGE.weeklyPrice, 10) || 350000;
+  const weeklyPrice = parseInt(STORAGE.weeklyPrice, 10) || 350000;
   const ids = [...state.selectedRenterIds];
   let successCount = 0;
+
   for (const id of ids) {
     const r = state.renters.find(x => x.id === id);
     if (!r || r.is_returned) continue;
     try {
-      const newDebt = Math.max(0, (r.debt_amount || 0) - price);
-      const newBalance = (r.balance || 0) + price;
+      // Increase balance by weekly price
+      const newBalance = (r.balance || 0) + weeklyPrice;
+      // Recalculate debt after payment
+      const fin = calcRenterFinances(r);
+      const newDebt = Math.max(0, fin.totalOwed - newBalance);
+
       await api(`/renters/${id}`, {
         method: 'PUT',
         body: {
-          debt_amount: newDebt,
           balance: newBalance,
+          debt_amount: newDebt,
           last_payment_timestamp: Date.now()
         }
       });
@@ -668,35 +773,44 @@ async function batchPayWeekly() {
           renter_id: id,
           timestamp: Date.now(),
           type: 'PAYMENT',
-          amount: price,
-          notes: `Haftalik to'lov: ${formatNum(price)} UZS`
+          amount: weeklyPrice,
+          notes: `Haftalik to'lov: ${formatNum(weeklyPrice)} UZS`
         }
       });
       successCount++;
-    } catch (err) { console.error('Pay weekly error for', id, err); }
+    } catch (err) {
+      console.error('Pay weekly error for', id, err);
+      toast(`Xatolik: ${friendlyError(err.message)}`, 'error');
+    }
   }
-  toast(`${successCount} ta ijarachiga to'lov qo'llandi`, 'success');
+  if (successCount > 0) {
+    toast(`${successCount} ta ijarachiga ${formatNum(weeklyPrice)} so'm to'lov qo'llandi`, 'success');
+  }
   state.selectedRenterIds.clear();
   await loadAll();
   renderCurrentTab();
 }
 
 async function batchTerminate() {
-  const price = parseInt(STORAGE.weeklyPrice, 10) || 350000;
+  const weeklyPrice = parseInt(STORAGE.weeklyPrice, 10) || 350000;
   const ids = [...state.selectedRenterIds];
   let successCount = 0;
+
   for (const id of ids) {
     const r = state.renters.find(x => x.id === id);
     if (!r || r.is_returned) continue;
     try {
-      const newDebt = Math.max(0, (r.debt_amount || 0) - price);
-      const newBalance = (r.balance || 0) + price;
+      // Calculate current debt, add weekly price for final payment
+      const fin = calcRenterFinances(r);
+      const newBalance = (r.balance || 0) + weeklyPrice;
+      const newDebt = Math.max(0, fin.totalOwed - newBalance);
+
       await api(`/renters/${id}`, {
         method: 'PUT',
         body: {
           is_returned: true,
-          debt_amount: newDebt,
-          balance: newBalance
+          balance: newBalance,
+          debt_amount: newDebt
         }
       });
       await api('/contract-history', {
@@ -705,14 +819,19 @@ async function batchTerminate() {
           renter_id: id,
           timestamp: Date.now(),
           type: 'TERMINATED',
-          amount: price,
+          amount: weeklyPrice,
           notes: 'Kontrakt uzildi'
         }
       });
       successCount++;
-    } catch (err) { console.error('Terminate error for', id, err); }
+    } catch (err) {
+      console.error('Terminate error for', id, err);
+      toast(`Xatolik: ${friendlyError(err.message)}`, 'error');
+    }
   }
-  toast(`${successCount} ta kontrakt uzildi`, 'success');
+  if (successCount > 0) {
+    toast(`${successCount} ta kontrakt uzildi`, 'success');
+  }
   state.selectedRenterIds.clear();
   await loadAll();
   renderCurrentTab();
@@ -726,7 +845,10 @@ async function batchDeleteRenters() {
     try {
       await api(`/renters/${id}`, { method: 'DELETE' });
       successCount++;
-    } catch (err) { console.error('Delete error for', id, err); }
+    } catch (err) {
+      console.error('Delete error for', id, err);
+      toast(`O'chirish xatoligi: ${friendlyError(err.message)}`, 'error');
+    }
   }
   toast(`${successCount} ta ijarachi o'chirildi`, 'success');
   state.selectedRenterIds.clear();
@@ -850,7 +972,6 @@ function buildScootersTable(rows) {
 function attachScooterRowActions() {
   const admin = state.isAdmin();
 
-  // Sort header
   document.querySelectorAll('.sortable[data-scooter-sort]').forEach(th => {
     th.style.cursor = 'pointer';
     th.addEventListener('click', () => {
@@ -859,7 +980,6 @@ function attachScooterRowActions() {
     });
   });
 
-  // Row click -> edit or toggle selection
   document.querySelectorAll('.scooter-row').forEach(row => {
     row.addEventListener('click', e => {
       if (e.target.classList.contains('scooter-checkbox')) {
@@ -939,7 +1059,6 @@ function openRenterForm(id) {
   const editing = id ? state.renters.find(r => r.id === id) : null;
   if (id && !editing) return;
   const admin = state.isAdmin();
-  // Only admin can create, everyone can view/edit
   if (!admin && !editing) return;
 
   const startTs = editing ? editing.rent_start_date_timestamp : Date.now();
@@ -947,11 +1066,20 @@ function openRenterForm(id) {
     .map(s => `<option value="${s.id}" ${editing?.scooter_id === s.id ? 'selected' : ''}>${escapeHtml(s.name)}</option>`)
     .join('');
 
-  const statusLabel = editing ? (editing.is_returned ? 'Qaytarilgan' : 'Faol') : '';
+  const fin = editing ? calcRenterFinances(editing) : null;
+  const statusLabel = editing ? (editing.is_returned ? 'Qaytarilgan' : fin.isOverdue ? 'Qarzdor' : 'Faol') : '';
+
+  const weeklyPrice = parseInt(STORAGE.weeklyPrice, 10) || 350000;
 
   showModal(`
     <div class="modal-title">${editing ? 'Ijarachini tahrirlash' : 'Yangi ijarachi'}</div>
-    ${editing ? `<div style="font-size:12px;color:var(--text-secondary);margin-bottom:8px">Holat: ${statusLabel}</div>` : ''}
+    ${editing ? `<div style="margin-bottom:12px">
+      <div class="renter-detail-row"><span>Holat:</span> <strong>${statusLabel}</strong></div>
+      <div class="renter-detail-row"><span>O'tgan haftalar:</span> <strong>${fin ? fin.weeksElapsed : 0}</strong></div>
+      <div class="renter-detail-row"><span>Umumiy qarz (${formatNum(weeklyPrice)} × ${fin ? fin.weeksElapsed : 0}):</span> <strong>${fin ? formatNum(fin.totalOwed) : 0} so'm</strong></div>
+      <div class="renter-detail-row"><span>To'langan:</span> <strong>${fin ? formatNum(fin.balancePaid) : 0} so'm</strong></div>
+      <div class="renter-detail-row"><span>Balans:</span> <strong class="${fin && fin.displayBalance < 0 ? 'text-red' : 'text-green'}">${fin ? formatBalance(fin.displayBalance) : 0} so'm</strong></div>
+    </div>` : ''}
     <form id="renter-form" class="modal-form">
       <div class="field">
         <label class="field-label">To'liq ism</label>
@@ -984,8 +1112,9 @@ function openRenterForm(id) {
           </select>
         </div>
         <div class="field">
-          <label class="field-label">Qarz miqdori (UZS)</label>
+          <label class="field-label">Boshlang'ich qarz (UZS)</label>
           <input class="field-input" name="debt" type="number" min="0" step="1000" value="${editing?.debt_amount ?? 0}" ${!admin ? 'readonly' : ''} />
+          <div class="field-hint">Agar shartnoma o'tgan sanada boshlangan bo'lsa, qarz avtomatik hisoblanadi</div>
         </div>
       </div>
       ${admin && editing ? `
@@ -1005,14 +1134,28 @@ function openRenterForm(id) {
     document.getElementById('renter-form').addEventListener('submit', async e => {
       e.preventDefault();
       const fd = new FormData(e.target);
+      const startDate = parseDateInput(fd.get('start_date'));
+      const duration = parseInt(fd.get('duration'), 10);
+      const scooterId = fd.get('scooter_id') ? parseInt(fd.get('scooter_id'), 10) : null;
+      const manualDebt = parseFloat(fd.get('debt') || '0');
+
+      // Calculate auto debt based on elapsed time
+      const now = Date.now();
+      const daysElapsed = Math.max(0, Math.floor((now - startDate) / 86400000));
+      const weeksElapsed = Math.max(1, Math.ceil(daysElapsed / 7));
+      const weeklyPrice = parseInt(STORAGE.weeklyPrice, 10) || 350000;
+      const autoDebt = weeksElapsed * weeklyPrice;
+      // Use the greater of manual debt or auto-calculated debt
+      const finalDebt = Math.max(manualDebt, autoDebt);
+
       const body = {
         name: fd.get('name').trim(),
         phone_number: fd.get('phone').trim(),
-        rent_start_date_timestamp: parseDateInput(fd.get('start_date')),
-        rent_duration_days: parseInt(fd.get('duration'), 10),
-        scooter_id: fd.get('scooter_id') ? parseInt(fd.get('scooter_id'), 10) : null,
-        scooter_name: state.scooters.find(s => s.id === parseInt(fd.get('scooter_id') || '0', 10))?.name || null,
-        debt_amount: parseFloat(fd.get('debt') || '0'),
+        rent_start_date_timestamp: startDate,
+        rent_duration_days: duration,
+        scooter_id: scooterId,
+        scooter_name: state.scooters.find(s => s.id === scooterId)?.name || null,
+        debt_amount: editing ? Math.max(manualDebt, editing.is_returned ? 0 : autoDebt) : (editing ? manualDebt : finalDebt),
         is_returned: !!fd.get('returned'),
         is_overdue_sms_sent: false,
         balance: editing?.balance ?? 0,
@@ -1107,7 +1250,7 @@ async function deleteScooter(id) {
 }
 
 // ═══════════════════════════════════════════════════════════
-// HISTORY MODAL (from top bar)
+// HISTORY MODAL
 // ═══════════════════════════════════════════════════════════
 function openHistoryModal() {
   const renterMap = Object.fromEntries(state.renters.map(r => [r.id, r.name]));
@@ -1195,7 +1338,7 @@ function openHistoryModal() {
 }
 
 // ═══════════════════════════════════════════════════════════
-// NOTIFICATIONS MODAL (from top bar)
+// NOTIFICATIONS MODAL
 // ═══════════════════════════════════════════════════════════
 function openNotificationsModal() {
   const renterMap = Object.fromEntries(state.renters.map(r => [r.id, r.name]));
@@ -1248,7 +1391,7 @@ function openNotificationsModal() {
 }
 
 // ═══════════════════════════════════════════════════════════
-// SETTINGS MODAL (from top bar — ALL USERS)
+// SETTINGS MODAL
 // ═══════════════════════════════════════════════════════════
 async function openSettings() {
   let serverInfo = null;
@@ -1309,6 +1452,7 @@ Call center: 71 200 55 56.`;
             <input class="field-input" id="setting-monthly-price" type="number" value="${STORAGE.monthlyPrice}" />
           </div>
         </div>
+        <div class="field-hint" style="margin-top:6px">Balans avtomatik hisoblanadi: haftalar soni × haftalik narx</div>
       </div>
     </div>
 
@@ -1342,6 +1486,10 @@ Call center: 71 200 55 56.`;
           <span class="label">Bildirishnomalar</span>
           <span class="value">${state.notifications.length}</span>
         </div>
+        <div class="settings-info-row">
+          <span class="label">Qarzdorlar</span>
+          <span class="value text-red">${state.renters.filter(r => !r.is_returned && calcRenterFinances(r).displayBalance < 0).length}</span>
+        </div>
       </div>
     </div>
 
@@ -1365,7 +1513,10 @@ Call center: 71 200 55 56.`;
     btn.disabled = true;
     btn.innerHTML = '<span class="spinner"></span> Yuklanmoqda...';
     try {
+      state.overdueChecked = false;
       await loadAll();
+      await checkAndNotifyOverdue();
+      state.notifications = await api('/notifications').catch(() => state.notifications);
       toast('Ma\'lumotlar yangilandi', 'success');
       closeModal();
       renderMain();
@@ -1391,6 +1542,8 @@ Call center: 71 200 55 56.`;
       STORAGE.smsTemplate = sms;
       toast('Sozlamalar saqlandi', 'success');
       closeModal();
+      // Re-render to update balances
+      renderCurrentTab();
     });
   }
 }
@@ -1402,6 +1555,11 @@ Call center: 71 200 55 56.`;
   if (STORAGE.token) {
     try {
       await loadAll();
+      await checkAndNotifyOverdue();
+      // Reload notifications after creating overdue ones
+      if (state.isAdmin()) {
+        state.notifications = await api('/notifications').catch(() => state.notifications);
+      }
       renderMain();
     } catch (err) {
       STORAGE.clear();
