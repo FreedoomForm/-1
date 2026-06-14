@@ -15,6 +15,9 @@ interface RenterDao {
     @Query("SELECT * FROM renters WHERE isReturned = 0")
     suspend fun getActiveRenters(): List<Renter>
 
+    @Query("SELECT * FROM renters WHERE id = :id LIMIT 1")
+    suspend fun getRenterById(id: Int): Renter?
+
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertRenter(renter: Renter)
 

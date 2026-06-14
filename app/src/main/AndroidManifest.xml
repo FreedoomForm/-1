@@ -2,6 +2,9 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:tools="http://schemas.android.com/tools">
 
+    <!-- Локальные уведомления о сроке оплаты (Android 13+ требует runtime-разрешения) -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <!-- Оставлено: SMS-рассылка просроченным арендаторам (SmsWorker) -->
     <uses-permission android:name="android.permission.SEND_SMS" />
 
     <application

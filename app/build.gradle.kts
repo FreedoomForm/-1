@@ -4,7 +4,6 @@ plugins {
   alias(libs.plugins.google.devtools.ksp)
   alias(libs.plugins.roborazzi)
   alias(libs.plugins.secrets)
-  alias(libs.plugins.google.services)
 }
 
 android {
@@ -70,7 +69,6 @@ secrets {
 // This makes it easy to add them back in the future if needed.
 dependencies {
   implementation(platform(libs.androidx.compose.bom))
-  implementation(platform(libs.firebase.bom))
   // implementation(libs.accompanist.permissions)
   implementation(libs.androidx.activity.compose)
   // implementation(libs.androidx.camera.camera2)
@@ -95,10 +93,6 @@ dependencies {
   implementation("androidx.compose.material:material-icons-extended:1.7.0")
   // implementation(libs.coil.compose)
   implementation(libs.converter.moshi)
-  // implementation(libs.firebase.ai)
-  implementation(libs.firebase.auth)
-  implementation(libs.firebase.firestore)
-  implementation(libs.play.services.auth)
   implementation(libs.kotlinx.coroutines.android)
   implementation(libs.kotlinx.coroutines.core)
   implementation(libs.logging.interceptor)
