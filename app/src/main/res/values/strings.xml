@@ -1,0 +1,16 @@
+<resources>
+    <string name="app_name">Scooter Rent</string>
+    <string name="add_renter">Add Renter</string>
+    <string name="name_hint">Name</string>
+    <string name="phone_hint">Phone Number</string>
+    <string name="debt_hint">Debt Amount ($)</string>
+    <string name="days_hint">Rent Duration (Days)</string>
+    <string name="add">Add</string>
+    <string name="cancel">Cancel</string>
+    <string name="days_left">%d days left</string>
+    <string name="overdue">Overdue by %d days</string>
+    <string name="today_last_day">Today is the last day!</string>
+    <string name="returned">Returned</string>
+    <string name="mark_returned">Mark Returned</string>
+    <string name="delete">Delete</string>
+</resources>
