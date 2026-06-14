@@ -26,6 +26,7 @@ import androidx.compose.material.icons.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.List
 import androidx.compose.material.icons.filled.DirectionsBike
 import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.filled.Sync
 import androidx.compose.foundation.border
 import androidx.compose.material.icons.filled.DateRange
 import androidx.compose.material.icons.filled.Notifications
@@ -56,6 +57,8 @@ import androidx.work.WorkManager
 import com.example.data.NotificationHistoryEntity
 import com.example.data.Renter
 import com.example.data.Scooter
+import com.example.data.remote.SyncManager
+import com.example.data.remote.SyncResult
 import com.example.ui.ContractHistoryViewModel
 import com.example.ui.LoginState
 import com.example.ui.LoginViewModel
@@ -203,6 +206,8 @@ fun MainScreen(
     var sortDirection by remember { mutableStateOf(SortDirection.ASC) }
     var scooterSortColumn by remember { mutableStateOf(SortColumn.NAME) }
     var scooterSortDirection by remember { mutableStateOf(SortDirection.ASC) }
+    var isSyncing by remember { mutableStateOf(false) }
+    var syncResult by remember { mutableStateOf<SyncResult?>(null) }
 
     val scooters by scooterViewModel.scootersList.collectAsStateWithLifecycle()
     val context = LocalContext.current
@@ -654,6 +659,7 @@ fun MainScreen(
                 currentTemplate = template,
                 currentWeeklyPrice = weekly,
                 currentMonthlyPrice = monthly,
+                isSyncing = isSyncing,
                 onDismiss = { showSettings = false },
                 onSave = { newTemplate, newWeekly, newMonthly ->
                     settingsViewModel.updateTemplate(newTemplate)
@@ -663,7 +669,24 @@ fun MainScreen(
                 onLogout = {
                     showSettings = false
                     loginViewModel.logout()
+                },
+                onSync = {
+                    if (!isSyncing) {
+                        isSyncing = true
+                        kotlinx.coroutines.MainScope().launch {
+                            val sync = SyncManager(context)
+                            syncResult = sync.syncAll()
+                            isSyncing = false
+                        }
+                    }
                 }
+            )
+        }
+
+        if (syncResult != null) {
+            SyncResultDialog(
+                result = syncResult!!,
+                onDismiss = { syncResult = null }
             )
         }
 
@@ -1273,9 +1296,11 @@ fun SettingsDialog(
     currentTemplate: String,
     currentWeeklyPrice: Double,
     currentMonthlyPrice: Double,
+    isSyncing: Boolean = false,
     onDismiss: () -> Unit,
     onSave: (String, Double, Double) -> Unit,
-    onLogout: () -> Unit = {}
+    onLogout: () -> Unit = {},
+    onSync: () -> Unit = {}
 ) {
     var template by remember { mutableStateOf(currentTemplate) }
     var weekly by remember {
@@ -1337,6 +1362,52 @@ fun SettingsDialog(
 
                 HorizontalDivider()
 
+                // ── Sync button ──────────────────────────────
+                Column {
+                    Text(
+                        "Ma'lumotlarni sinxronizatsiya",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = ClaudeText
+                    )
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Text(
+                        "Offline ma'lumotlarni serverga yuborish va serverdan yuklab olish",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = ClaudeTextSecondary
+                    )
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Button(
+                        onClick = onSync,
+                        enabled = !isSyncing,
+                        modifier = Modifier.fillMaxWidth(),
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = ClaudeAccent,
+                            disabledContainerColor = ClaudeTextSecondary
+                        ),
+                        shape = RoundedCornerShape(8.dp)
+                    ) {
+                        if (isSyncing) {
+                            CircularProgressIndicator(
+                                modifier = Modifier.size(18.dp),
+                                color = Color.White,
+                                strokeWidth = 2.dp
+                            )
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text("Sinxronizatsiya...", color = Color.White)
+                        } else {
+                            Icon(
+                                Icons.Default.Sync,
+                                contentDescription = null,
+                                modifier = Modifier.size(18.dp)
+                            )
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text("Sinxronizatsiya", color = Color.White)
+                        }
+                    }
+                }
+
+                HorizontalDivider()
+
                 OutlinedButton(
                     onClick = { onLogout() },
                     modifier = Modifier.fillMaxWidth(),
@@ -1370,6 +1441,88 @@ fun SettingsDialog(
                 colors = ButtonDefaults.textButtonColors(contentColor = ClaudeTextSecondary)
             ) {
                 Text("Bekor qilish")
+            }
+        }
+    )
+}
+
+@Composable
+fun SyncResultDialog(
+    result: SyncResult,
+    onDismiss: () -> Unit
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = {
+            Text(
+                if (result.isFullSuccess) "Sinxronizatsiya muvaffaqiyatli"
+                else if (result.success) "Sinxronizatsiya tugadi"
+                else "Sinxronizatsiya xatosi",
+                style = MaterialTheme.typography.titleLarge
+            )
+        },
+        containerColor = ClaudeCard,
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                if (result.errorMessage != null) {
+                    Text(
+                        result.errorMessage!!,
+                        color = Color(0xFFE05B44),
+                        style = MaterialTheme.typography.bodyMedium
+                    )
+                }
+                Text(
+                    "Yuborilgan: ${result.totalPushed} ta yozuv",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = ClaudeText
+                )
+                if (result.totalFailed > 0) {
+                    Text(
+                        "Xatolik: ${result.totalFailed} ta yozuv",
+                        color = Color(0xFFE05B44),
+                        style = MaterialTheme.typography.bodyMedium
+                    )
+                }
+                HorizontalDivider()
+                Text(
+                    "Skuterlar: ${result.scootersPushed} yuborildi" +
+                            if (result.scootersFailed > 0) ", ${result.scootersFailed} xato" else "",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = ClaudeTextSecondary
+                )
+                Text(
+                    "Ijarachilar: ${result.rentersPushed} yuborildi" +
+                            if (result.rentersFailed > 0) ", ${result.rentersFailed} xato" else "",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = ClaudeTextSecondary
+                )
+                Text(
+                    "Kontraktlar: ${result.historyPushed} yuborildi" +
+                            if (result.historyFailed > 0) ", ${result.historyFailed} xato" else "",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = ClaudeTextSecondary
+                )
+                Text(
+                    "Bildirishnomalar: ${result.notificationsPushed} yuborildi" +
+                            if (result.notificationsFailed > 0) ", ${result.notificationsFailed} xato" else "",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = ClaudeTextSecondary
+                )
+                HorizontalDivider()
+                Text(
+                    if (result.pullSuccess) "Serverdan ma'lumotlar yuklandi" else "Serverdan yuklash xatosi",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = if (result.pullSuccess) Color(0xFF34C759) else Color(0xFFE05B44)
+                )
+            }
+        },
+        confirmButton = {
+            Button(
+                onClick = onDismiss,
+                colors = ButtonDefaults.buttonColors(containerColor = ClaudeText),
+                shape = RoundedCornerShape(8.dp)
+            ) {
+                Text("OK", color = ClaudeCard)
             }
         }
     )

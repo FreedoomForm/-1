@@ -10,6 +10,9 @@ interface NotificationHistoryDao {
     @Query("SELECT * FROM notification_history ORDER BY timestamp DESC")
     fun getAll(): Flow<List<NotificationHistoryEntity>>
 
+    @Query("SELECT * FROM notification_history ORDER BY timestamp DESC")
+    suspend fun getAllOnce(): List<NotificationHistoryEntity>
+
     @Insert
     suspend fun insert(entity: NotificationHistoryEntity)
 

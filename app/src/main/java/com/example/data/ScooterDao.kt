@@ -1,7 +1,6 @@
 package com.example.data
 
 import androidx.room.Dao
-import androidx.room.Delete
 import androidx.room.Insert
 import androidx.room.OnConflictStrategy
 import androidx.room.Query
@@ -13,13 +12,20 @@ interface ScooterDao {
     @Query("SELECT * FROM scooters ORDER BY id ASC")
     fun getAllScooters(): Flow<List<Scooter>>
 
+    @Query("SELECT * FROM scooters ORDER BY id ASC")
+    suspend fun getAllScootersOnce(): List<Scooter>
+
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertScooter(scooter: Scooter): Long
 
     @Update
     suspend fun updateScooter(scooter: Scooter)
 
-    @Delete
+    suspend fun update(scooter: Scooter) = updateScooter(scooter)
+
+    suspend fun delete(scooter: Scooter) = deleteScooter(scooter)
+
+    @androidx.room.Delete
     suspend fun deleteScooter(scooter: Scooter)
 
     @Query("DELETE FROM scooters")

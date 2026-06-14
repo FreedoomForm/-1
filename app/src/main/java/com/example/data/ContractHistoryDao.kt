@@ -10,6 +10,9 @@ interface ContractHistoryDao {
     @Query("SELECT * FROM contract_history ORDER BY timestamp DESC")
     fun getAll(): Flow<List<ContractHistoryEntry>>
 
+    @Query("SELECT * FROM contract_history ORDER BY timestamp DESC")
+    suspend fun getAllOnce(): List<ContractHistoryEntry>
+
     @Query("SELECT * FROM contract_history WHERE renterId = :renterId ORDER BY timestamp DESC")
     suspend fun getForRenter(renterId: Int): List<ContractHistoryEntry>
 

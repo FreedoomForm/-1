@@ -12,6 +12,9 @@ interface RenterDao {
     @Query("SELECT * FROM renters ORDER BY isReturned ASC, rentStartDateTimestamp DESC")
     fun getAllRenters(): Flow<List<Renter>>
 
+    @Query("SELECT * FROM renters ORDER BY isReturned ASC, rentStartDateTimestamp DESC")
+    suspend fun getAllRentersOnce(): List<Renter>
+
     @Query("SELECT * FROM renters WHERE isReturned = 0")
     suspend fun getActiveRenters(): List<Renter>
 
@@ -22,11 +25,17 @@ interface RenterDao {
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertRenter(renter: Renter): Long
 
+    suspend fun insert(renter: Renter): Long = insertRenter(renter)
+
     @Update
     suspend fun updateRenter(renter: Renter)
 
+    suspend fun update(renter: Renter) = updateRenter(renter)
+
     @Query("DELETE FROM renters WHERE id = :id")
     suspend fun deleteRenter(id: Int)
+
+    suspend fun delete(id: Int) = deleteRenter(id)
 
     @Query("DELETE FROM renters")
     suspend fun deleteAll()

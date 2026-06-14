@@ -19,6 +19,9 @@ import kotlinx.coroutines.withContext
  *                     данными с сервера (источник истины).
  *  • push*()        — после локального изменения шлёт запись на сервер.
  *                     Возвращает серверный id (для создания).
+ *  • syncAll()      — полная двусторонняя синхронизация:
+ *                     1) Push — отправляет все локальные данные на сервер
+ *                     2) Pull — забирает данные с сервера (источник истины)
  *  • При недоступности сервера — локальные изменения остаются,
  *    но в лог пишется warning. Следующий pull перезатрёт их.
  */
@@ -54,6 +57,110 @@ class SyncManager(
             Log.e(TAG, "pullAll failed", e)
             false
         }
+    }
+
+    /**
+     * Полная синхронизация: push всех локальных данных → pull с сервера.
+     *
+     * Возвращает SyncResult с деталями — сколько записей отправлено/получено.
+     * Используется кнопкой «Sinxronizatsiya» в настройках.
+     */
+    suspend fun syncAll(): SyncResult = withContext(Dispatchers.IO) {
+        val result = SyncResult()
+        try {
+            Log.d(TAG, "syncAll: starting push phase")
+
+            // ── 1. Push scooters ──────────────────────────────
+            val localScooters = db.scooterDao().getAllScootersOnce()
+            for (s in localScooters) {
+                val ok = try {
+                    api.createScooter(s.toCreateDto())
+                    result.scootersPushed++
+                    true
+                } catch (e: Exception) {
+                    // Maybe already exists — try update
+                    try {
+                        api.updateScooter(s.id, s.toUpdateDto())
+                        result.scootersPushed++
+                        true
+                    } catch (e2: Exception) {
+                        Log.w(TAG, "pushScooter failed for #${s.id}", e2)
+                        result.scootersFailed++
+                        false
+                    }
+                }
+            }
+
+            // ── 2. Push renters ──────────────────────────────
+            val localRenters = db.renterDao().getAllRentersOnce()
+            for (r in localRenters) {
+                val ok = try {
+                    api.createRenter(r.toCreateDto())
+                    result.rentersPushed++
+                    true
+                } catch (e: Exception) {
+                    try {
+                        api.updateRenter(r.id, r.toUpdateDto())
+                        result.rentersPushed++
+                        true
+                    } catch (e2: Exception) {
+                        Log.w(TAG, "pushRenter failed for #${r.id}", e2)
+                        result.rentersFailed++
+                        false
+                    }
+                }
+            }
+
+            // ── 3. Push contract history ──────────────────────
+            val localHistory = db.contractHistoryDao().getAllOnce()
+            for (h in localHistory) {
+                val ok = try {
+                    api.createContractHistory(h.toCreateDto())
+                    result.historyPushed++
+                    true
+                } catch (e: Exception) {
+                    Log.w(TAG, "pushContractHistory failed", e)
+                    result.historyFailed++
+                    false
+                }
+            }
+
+            // ── 4. Push notifications ─────────────────────────
+            val localNotifs = db.notificationHistoryDao().getAllOnce()
+            for (n in localNotifs) {
+                val ok = try {
+                    api.createNotification(n.toCreateDto())
+                    result.notificationsPushed++
+                    true
+                } catch (e: Exception) {
+                    Log.w(TAG, "pushNotification failed", e)
+                    result.notificationsFailed++
+                    false
+                }
+            }
+
+            Log.d(TAG, "syncAll: push done (scooters=${result.scootersPushed}, " +
+                "renters=${result.rentersPushed}, history=${result.historyPushed}, " +
+                "notifs=${result.notificationsPushed})")
+
+            // ── 5. Pull — сервер = источник истины ────────────
+            Log.d(TAG, "syncAll: starting pull phase")
+            val pullOk = pullAll()
+            if (pullOk) {
+                result.pullSuccess = true
+                Log.d(TAG, "syncAll: complete — pull ok")
+            } else {
+                result.pullSuccess = false
+                Log.w(TAG, "syncAll: push ok but pull failed")
+            }
+
+            result.success = true
+        } catch (e: Exception) {
+            Log.e(TAG, "syncAll failed", e)
+            result.success = false
+            result.errorMessage = e.message ?: "Noma'lum xato"
+        }
+        result
     }
 
     suspend fun pushRenter(r: Renter): Int? = withContext(Dispatchers.IO) {
@@ -111,4 +218,26 @@ class SyncManager(
     companion object {
         private const val TAG = "SyncManager"
     }
+}
+
+/**
+ * Результат полной синхронизации.
+ * Используется для отображения в UI (диалог с деталями).
+ */
+data class SyncResult(
+    var success: Boolean = false,
+    var scootersPushed: Int = 0,
+    var scootersFailed: Int = 0,
+    var rentersPushed: Int = 0,
+    var rentersFailed: Int = 0,
+    var historyPushed: Int = 0,
+    var historyFailed: Int = 0,
+    var notificationsPushed: Int = 0,
+    var notificationsFailed: Int = 0,
+    var pullSuccess: Boolean = false,
+    var errorMessage: String? = null
+) {
+    val totalPushed: Int get() = scootersPushed + rentersPushed + historyPushed + notificationsPushed
+    val totalFailed: Int get() = scootersFailed + rentersFailed + historyFailed + notificationsFailed
+    val isFullSuccess: Boolean get() = success && totalFailed == 0 && pullSuccess
 }
