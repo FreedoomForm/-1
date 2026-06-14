@@ -9,13 +9,14 @@ echo "  Scooter Rent — локальная сборка debug APK"
 echo "================================================="
 
 # 1. Проверяем, что есть Gradle и keytool
-command -v gradle >/dev/null 2>&1 || { echo "❌ gradle не найден. Установите Gradle 9.1."; exit 1; }
+command -v gradle >/dev/null 2>&1 || { echo "❌ gradle не найден. Установите Gradle 9.5.1 (или совместимую 9.x)."; exit 1; }
 command -v keytool >/dev/null 2>&1 || { echo "❌ keytool не найден. Установите JDK 17."; exit 1; }
 
 # 2. Генерируем wrapper, если его нет
 if [ ! -x ./gradlew ]; then
   echo "→ gradlew отсутствует, генерирую..."
-  gradle wrapper --gradle-version 9.1 --distribution-type bin
+  # Gradle 9.5.1 — последний стабильный релиз (Gradle 9.1 пропущен).
+  gradle wrapper --gradle-version 9.5.1 --distribution-type bin
   chmod +x gradlew
 fi
 

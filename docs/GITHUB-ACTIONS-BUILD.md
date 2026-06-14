@@ -9,7 +9,7 @@
 
 1. Клонирует код из ветки `main`
 2. Ставит **JDK 17** (минимум для AGP 9.1.1)
-3. Ставит **Gradle 9.1** с кэшированием сборок
+3. Ставит **Gradle 9.5.1** с кэшированием сборок (latest stable; AGP 9.1.1 совместим с Gradle 9.x — конкретно версия 9.1 пропущена в релизах Gradle, поэтому берём ближайшую существующую)
 4. Устанавливает **Android SDK** (API 36 + build-tools 36.0.0)
 5. **Генерирует `gradlew`** (в репозитории его нет — это особенность AI Studio шаблона)
 6. Копирует `.env.example → .env` (нужно для плагина `secrets`)
@@ -66,7 +66,7 @@
 | `applicationId` | `com.aistudio.scooterrent.xyzab` |
 | AGP | 9.1.1 |
 | Kotlin | 2.2.10 |
-| Gradle | 9.1 |
+| Gradle | 9.5.1 (latest stable; 9.1 был пропущен в релизах) |
 | JDK | 17 |
 | Время первой сборки | ~5–10 мин |
 | Время повторных | ~2–3 мин (Gradle Build Cache) |
@@ -79,12 +79,12 @@
 проект на своей машине, нужно сгенерировать wrapper один раз:
 
 ```bash
-# 1. Поставьте Gradle 9.1 (например, через SDKMAN)
-sdk install gradle 9.1
+# 1. Поставьте Gradle 9.5.1 (например, через SDKMAN)
+sdk install gradle 9.5.1
 
 # 2. Сгенерируйте wrapper
 cd /path/to/-1
-gradle wrapper --gradle-version 9.1 --distribution-type bin
+gradle wrapper --gradle-version 9.5.1 --distribution-type bin
 
 # 3. Создайте debug.keystore (если его нет)
 keytool -genkeypair -keystore debug.keystore \
@@ -126,9 +126,8 @@ accept-android-sdk-licenses: true
 sdk.dir=/path/to/Android/sdk
 ```
 
-### Не генерируется `gradlew`
-Убедитесь, что установлена именно версия Gradle **9.1**, а ваша версия AGP —
-**9.1.1**. Старые версии Gradle не смогут скомпилировать этот проект.
+### Не генерируется `gradlew` или ошибка `Gradle version X does not exist`
+Версия **Gradle 9.1 была пропущена** в релизах Gradle (сразу после 9.0 идёт 9.4). Используйте **9.5.1** (latest stable). AGP 9.1.1 совместим со всем семейством Gradle 9.x.
 
 ---
 

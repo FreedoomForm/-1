@@ -43,11 +43,12 @@ jobs:
           distribution: temurin
           java-version: '17'
 
-      # 3. Ставим Gradle 9.1 (под AGP 9.1.1) и включаем кэш сборок
-      - name: Set up Gradle 9.1
+      # 3. Ставим Gradle 9.5.1 (последний стабильный; AGP 9.1.1 совместим с Gradle 9.x).
+      #    Gradle 9.1 не существует (пропущен в релизах), поэтому берём 9.5.1.
+      - name: Set up Gradle 9.5.1
         uses: gradle/actions/setup-gradle@v4
         with:
-          gradle-version: '9.1'
+          gradle-version: '9.5.1'
           cache-disabled: false
 
       # 4. Android SDK: нужен platform 36 и build-tools 36
@@ -63,7 +64,7 @@ jobs:
       # 5. В репозитории нет gradlew — генерируем wrapper
       #    (создаёт gradlew, gradlew.bat, gradle/wrapper/*)
       - name: Generate Gradle wrapper
-        run: gradle wrapper --gradle-version 9.1 --distribution-type bin
+        run: gradle wrapper --gradle-version 9.5.1 --distribution-type bin
 
       - name: Make gradlew executable
         run: chmod +x gradlew
