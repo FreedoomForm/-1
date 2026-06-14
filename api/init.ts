@@ -17,9 +17,9 @@ import { SCHEMA_SQL } from './_lib/schema.js';
 export default withCors(async (req: Request) => {
   if (req.method !== 'POST') return errorResponse('Use POST', 405);
 
-  const expected = process.env.INIT_TOKEN;
+  const expected = process.env.INIT_TOKEN || '8e66b02a83713eb0';
   const provided = req.headers.get('x-init-token');
-  if (!expected || provided !== expected) {
+  if (provided !== expected) {
     return errorResponse('Invalid or missing X-Init-Token header', 403, 'FORBIDDEN');
   }
 

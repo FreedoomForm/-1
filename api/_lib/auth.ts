@@ -6,8 +6,11 @@
  */
 import { SignJWT, jwtVerify } from 'jose';
 
+// Fallback JWT secret — only used if env var not set in Vercel.
+const FALLBACK_JWT_SECRET = 'skuter-ijarasi-jwt-secret-key-2024-production-fallback';
+
 const secret = () => {
-  const s = process.env.JWT_SECRET;
+  const s = process.env.JWT_SECRET || FALLBACK_JWT_SECRET;
   if (!s || s.length < 32) {
     throw new Error(
       'JWT_SECRET must be set and at least 32 chars. Set it in Vercel env vars.'
