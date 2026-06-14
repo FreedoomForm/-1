@@ -26,9 +26,9 @@ class ScooterViewModel(application: Application) : AndroidViewModel(application)
         )
     }
 
-    fun addScooter(name: String) {
+    fun addScooter(name: String, documentedNumber: String?) {
         viewModelScope.launch {
-            repository.insert(Scooter(name = name))
+            repository.insert(Scooter(name = name, documentedNumber = documentedNumber))
         }
     }
 
