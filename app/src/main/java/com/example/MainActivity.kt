@@ -56,10 +56,13 @@ import androidx.work.WorkManager
 import com.example.data.NotificationHistoryEntity
 import com.example.data.Renter
 import com.example.data.Scooter
+import com.example.ui.ContractHistoryViewModel
+import com.example.ui.LoginViewModel
 import com.example.ui.NotificationHistoryViewModel
 import com.example.ui.RenterViewModel
 import com.example.ui.SettingsViewModel
 import com.example.ui.ScooterViewModel
+import com.example.ui.UserRole
 import com.example.ui.theme.ClaudeAccent
 import com.example.ui.theme.ClaudeBackground
 import com.example.ui.theme.ClaudeCard

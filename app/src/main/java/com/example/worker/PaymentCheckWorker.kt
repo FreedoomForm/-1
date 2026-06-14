@@ -72,7 +72,7 @@ class PaymentCheckWorker(
         }
     }
 
-    private fun autoRenew(
+    private suspend fun autoRenew(
         db: AppDatabase,
         renter: com.example.data.Renter,
         now: Long
