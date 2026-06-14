@@ -34,10 +34,14 @@ const state = {
 async function api(path, opts = {}) {
   const headers = { 'Content-Type': 'application/json', ...(opts.headers || {}) };
   if (STORAGE.token) headers['Authorization'] = `Bearer ${STORAGE.token}`;
-  const res = await fetch(`${STORAGE.base}/api${path}`, {
-    ...opts, headers,
-    body: opts.body ? JSON.stringify(opts.body) : undefined
-  });
+  const method = opts.method || (opts.body ? 'POST' : 'GET');
+  const fetchOpts = { ...opts, method, headers };
+  if (opts.body && method !== 'GET' && method !== 'HEAD') {
+    fetchOpts.body = JSON.stringify(opts.body);
+  } else {
+    delete fetchOpts.body;
+  }
+  const res = await fetch(`${STORAGE.base}/api${path}`, fetchOpts);
   if (!res.ok) {
     let msg = `HTTP ${res.status}`;
     try { const j = await res.json(); msg = j.error || JSON.stringify(j); } catch {}
