@@ -3,20 +3,21 @@
  * PUT    /api/scooters/[id]
  * DELETE /api/scooters/[id]
  */
+import type { VercelRequest, VercelResponse } from '@vercel/node';
 import { getSql } from '../_lib/db.js';
 import { getAuth } from '../_lib/auth.js';
-import { withCors, jsonResponse, errorResponse } from '../_lib/cors.js';
+import { withCors, jsonRes, errorRes } from '../_lib/cors.js';
 
 interface UpdateScooterBody {
   name?: string;
   documented_number?: string | null;
 }
 
-export default withCors(async (req: Request) => {
+export default withCors(async (req: VercelRequest, res: VercelResponse) => {
   const auth = await getAuth(req);
-  if (!auth) return errorResponse('Unauthorized', 401);
-  const id = Number((req as any).params?.id);
-  if (!Number.isInteger(id) || id <= 0) return errorResponse('Invalid id', 422);
+  if (!auth) { errorRes(res, 'Unauthorized', 401); return; }
+  const id = Number(req.query?.id);
+  if (!Number.isInteger(id) || id <= 0) { errorRes(res, 'Invalid id', 422); return; }
   const sql = getSql();
 
   if (req.method === 'GET') {
@@ -28,15 +29,15 @@ export default withCors(async (req: Request) => {
       LIMIT 1
     `) as any[];
     const s = rows[0];
-    if (!s) return errorResponse('Not found', 404);
-    return jsonResponse(s);
+    if (!s) { errorRes(res, 'Not found', 404); return; }
+    jsonRes(res, s);
+    return;
   }
 
   if (req.method === 'PUT') {
-    if (auth.role !== 'admin') return errorResponse('Admin only', 403, 'FORBIDDEN');
-    let body: UpdateScooterBody;
-    try { body = await req.json(); }
-    catch { return errorResponse('Invalid JSON body'); }
+    if (auth.role !== 'admin') { errorRes(res, 'Admin only', 403, 'FORBIDDEN'); return; }
+    const body = req.body as UpdateScooterBody;
+    if (!body) { errorRes(res, 'Invalid JSON body'); return; }
 
     const result = (await sql`
       UPDATE scooters SET
@@ -45,18 +46,20 @@ export default withCors(async (req: Request) => {
       WHERE id = ${id} AND user_id = ${auth.sub}
       RETURNING id
     `) as any[];
-    if (result.length === 0) return errorResponse('Not found', 404);
-    return jsonResponse({ id });
+    if (result.length === 0) { errorRes(res, 'Not found', 404); return; }
+    jsonRes(res, { id });
+    return;
   }
 
   if (req.method === 'DELETE') {
-    if (auth.role !== 'admin') return errorResponse('Admin only', 403, 'FORBIDDEN');
+    if (auth.role !== 'admin') { errorRes(res, 'Admin only', 403, 'FORBIDDEN'); return; }
     const result = (await sql`
       DELETE FROM scooters WHERE id = ${id} AND user_id = ${auth.sub} RETURNING id
     `) as any[];
-    if (result.length === 0) return errorResponse('Not found', 404);
-    return jsonResponse({ deleted: id });
+    if (result.length === 0) { errorRes(res, 'Not found', 404); return; }
+    jsonRes(res, { deleted: id });
+    return;
   }
 
-  return errorResponse('Method not allowed', 405);
+  errorRes(res, 'Method not allowed', 405);
 });

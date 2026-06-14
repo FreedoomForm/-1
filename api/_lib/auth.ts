@@ -4,6 +4,7 @@
  * Алгоритм: HS256, секрет из env JWT_SECRET, TTL 30 дней.
  * В payload кладём { sub: userId, role } — никакой PII.
  */
+import type { VercelRequest } from '@vercel/node';
 import { SignJWT, jwtVerify } from 'jose';
 
 // Fallback JWT secret — only used if env var not set in Vercel.
@@ -45,9 +46,9 @@ export async function verifyToken(token: string): Promise<AuthPayload> {
  * Возвращает auth-context или null, если заголовок отсутствует /
  * токен невалиден. Использовать в каждом защищённом эндпоинте.
  */
-export async function getAuth(req: Request): Promise<AuthPayload | null> {
-  const header = req.headers.get('authorization');
-  if (!header?.startsWith('Bearer ')) return null;
+export async function getAuth(req: VercelRequest): Promise<AuthPayload | null> {
+  const header = req.headers['authorization'];
+  if (!header || !header.startsWith('Bearer ')) return null;
   const token = header.slice(7).trim();
   if (!token) return null;
   try {

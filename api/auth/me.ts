@@ -1,12 +1,13 @@
+import type { VercelRequest, VercelResponse } from '@vercel/node';
 import { getSql } from '../_lib/db.js';
 import { getAuth } from '../_lib/auth.js';
-import { withCors, jsonResponse, errorResponse } from '../_lib/cors.js';
+import { withCors, jsonRes, errorRes } from '../_lib/cors.js';
 
-export default withCors(async (req: Request) => {
-  if (req.method !== 'GET') return errorResponse('Use GET', 405);
+export default withCors(async (req: VercelRequest, res: VercelResponse) => {
+  if (req.method !== 'GET') { errorRes(res, 'Use GET', 405); return; }
 
   const auth = await getAuth(req);
-  if (!auth) return errorResponse('Unauthorized', 401);
+  if (!auth) { errorRes(res, 'Unauthorized', 401); return; }
 
   const rows = (await getSql()`
     SELECT id, email, role,
@@ -15,9 +16,9 @@ export default withCors(async (req: Request) => {
   `) as any[];
 
   const user = rows[0];
-  if (!user) return errorResponse('User not found', 404);
+  if (!user) { errorRes(res, 'User not found', 404); return; }
 
-  return jsonResponse({
+  jsonRes(res, {
     id: user.id,
     email: user.email,
     role: user.role,

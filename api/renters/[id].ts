@@ -6,9 +6,10 @@
  * Все три проверяют, что арендатор принадлежит текущему пользователю
  * (multi-tenant scope) — иначе 404 (намеренно скрываем существование).
  */
+import type { VercelRequest, VercelResponse } from '@vercel/node';
 import { getSql } from '../_lib/db.js';
 import { getAuth } from '../_lib/auth.js';
-import { withCors, jsonResponse, errorResponse } from '../_lib/cors.js';
+import { withCors, jsonRes, errorRes } from '../_lib/cors.js';
 
 interface UpdateRenterBody {
   name?: string;
@@ -24,13 +25,13 @@ interface UpdateRenterBody {
   balance?: number;
 }
 
-export default withCors(async (req: Request) => {
+export default withCors(async (req: VercelRequest, res: VercelResponse) => {
   const auth = await getAuth(req);
-  if (!auth) return errorResponse('Unauthorized', 401);
+  if (!auth) { errorRes(res, 'Unauthorized', 401); return; }
 
-  const idParam = (req as any).params?.id;
+  const idParam = req.query?.id as string | undefined;
   const id = Number(idParam);
-  if (!Number.isInteger(id) || id <= 0) return errorResponse('Invalid id', 422);
+  if (!Number.isInteger(id) || id <= 0) { errorRes(res, 'Invalid id', 422); return; }
 
   const sql = getSql();
 
@@ -45,21 +46,21 @@ export default withCors(async (req: Request) => {
       LIMIT 1
     `) as any[];
     const r = rows[0];
-    if (!r) return errorResponse('Not found', 404);
-    return jsonResponse({
+    if (!r) { errorRes(res, 'Not found', 404); return; }
+    jsonRes(res, {
       ...r,
       debt_amount: Number(r.debt_amount),
       balance: Number(r.balance),
       is_returned: !!r.is_returned,
       is_overdue_sms_sent: !!r.is_overdue_sms_sent
     });
+    return;
   }
 
   if (req.method === 'PUT') {
-    if (auth.role !== 'admin') return errorResponse('Admin only', 403, 'FORBIDDEN');
-    let body: UpdateRenterBody;
-    try { body = await req.json(); }
-    catch { return errorResponse('Invalid JSON body'); }
+    if (auth.role !== 'admin') { errorRes(res, 'Admin only', 403, 'FORBIDDEN'); return; }
+    const body = req.body as UpdateRenterBody;
+    if (!body) { errorRes(res, 'Invalid JSON body'); return; }
 
     const result = (await sql`
       UPDATE renters SET
@@ -77,18 +78,20 @@ export default withCors(async (req: Request) => {
       WHERE id = ${id} AND user_id = ${auth.sub}
       RETURNING id
     `) as any[];
-    if (result.length === 0) return errorResponse('Not found', 404);
-    return jsonResponse({ id });
+    if (result.length === 0) { errorRes(res, 'Not found', 404); return; }
+    jsonRes(res, { id });
+    return;
   }
 
   if (req.method === 'DELETE') {
-    if (auth.role !== 'admin') return errorResponse('Admin only', 403, 'FORBIDDEN');
+    if (auth.role !== 'admin') { errorRes(res, 'Admin only', 403, 'FORBIDDEN'); return; }
     const result = (await sql`
       DELETE FROM renters WHERE id = ${id} AND user_id = ${auth.sub} RETURNING id
     `) as any[];
-    if (result.length === 0) return errorResponse('Not found', 404);
-    return jsonResponse({ deleted: id });
+    if (result.length === 0) { errorRes(res, 'Not found', 404); return; }
+    jsonRes(res, { deleted: id });
+    return;
   }
 
-  return errorResponse('Method not allowed', 405);
+  errorRes(res, 'Method not allowed', 405);
 });

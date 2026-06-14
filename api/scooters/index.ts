@@ -2,18 +2,19 @@
  * GET  /api/scooters        — список скутеров текущего пользователя
  * POST /api/scooters        — создать скутер
  */
+import type { VercelRequest, VercelResponse } from '@vercel/node';
 import { getSql } from '../_lib/db.js';
 import { getAuth } from '../_lib/auth.js';
-import { withCors, jsonResponse, errorResponse } from '../_lib/cors.js';
+import { withCors, jsonRes, errorRes } from '../_lib/cors.js';
 
 interface CreateScooterBody {
   name: string;
   documented_number?: string | null;
 }
 
-export default withCors(async (req: Request) => {
+export default withCors(async (req: VercelRequest, res: VercelResponse) => {
   const auth = await getAuth(req);
-  if (!auth) return errorResponse('Unauthorized', 401);
+  if (!auth) { errorRes(res, 'Unauthorized', 401); return; }
   const sql = getSql();
 
   if (req.method === 'GET') {
@@ -24,24 +25,25 @@ export default withCors(async (req: Request) => {
       WHERE user_id = ${auth.sub}
       ORDER BY name ASC
     `) as any[];
-    return jsonResponse(rows);
+    jsonRes(res, rows);
+    return;
   }
 
   if (req.method === 'POST') {
-    if (auth.role !== 'admin') return errorResponse('Admin only', 403, 'FORBIDDEN');
-    let body: CreateScooterBody;
-    try { body = await req.json(); }
-    catch { return errorResponse('Invalid JSON body'); }
+    if (auth.role !== 'admin') { errorRes(res, 'Admin only', 403, 'FORBIDDEN'); return; }
+    const body = req.body as CreateScooterBody;
+    if (!body) { errorRes(res, 'Invalid JSON body'); return; }
 
-    if (!body.name?.trim()) return errorResponse('name required', 422);
+    if (!body.name?.trim()) { errorRes(res, 'name required', 422); return; }
 
     const rows = (await sql`
       INSERT INTO scooters (user_id, name, documented_number)
       VALUES (${auth.sub}, ${body.name.trim()}, ${body.documented_number ?? null})
       RETURNING id
     `) as any[];
-    return jsonResponse({ id: rows[0].id }, 201);
+    jsonRes(res, { id: rows[0].id }, 201);
+    return;
   }
 
-  return errorResponse('Method not allowed', 405);
+  errorRes(res, 'Method not allowed', 405);
 });

@@ -6,10 +6,11 @@
  *     регистрировать новых (это защита от открытой регистрации).
  *     Первый зарегистрированный пользователь автоматически становится admin.
  */
+import type { VercelRequest, VercelResponse } from '@vercel/node';
 import bcrypt from 'bcryptjs';
 import { getSql } from '../_lib/db.js';
 import { signToken } from '../_lib/auth.js';
-import { withCors, jsonResponse, errorResponse } from '../_lib/cors.js';
+import { withCors, jsonRes, errorRes } from '../_lib/cors.js';
 
 interface RegisterBody {
   email: string;
@@ -18,18 +19,18 @@ interface RegisterBody {
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
-export default withCors(async (req: Request) => {
-  if (req.method !== 'POST') return errorResponse('Use POST', 405);
+export default withCors(async (req: VercelRequest, res: VercelResponse) => {
+  if (req.method !== 'POST') { errorRes(res, 'Use POST', 405); return; }
 
-  let body: RegisterBody;
-  try { body = await req.json(); }
-  catch { return errorResponse('Invalid JSON body'); }
+  const body = req.body as RegisterBody;
+  if (!body) { errorRes(res, 'Invalid JSON body'); return; }
 
   const email = body.email?.trim().toLowerCase();
   const password = body.password;
-  if (!email || !EMAIL_RE.test(email)) return errorResponse('Invalid email', 422);
+  if (!email || !EMAIL_RE.test(email)) { errorRes(res, 'Invalid email', 422); return; }
   if (!password || password.length < 6) {
-    return errorResponse('Password must be at least 6 characters', 422);
+    errorRes(res, 'Password must be at least 6 characters', 422);
+    return;
   }
 
   const sql = getSql();
@@ -51,11 +52,12 @@ export default withCors(async (req: Request) => {
     user = rows[0];
   } catch (err: any) {
     if (err?.message?.includes('unique') || err?.code === '23505') {
-      return errorResponse('Email already registered', 409, 'EMAIL_TAKEN');
+      errorRes(res, 'Email already registered', 409, 'EMAIL_TAKEN');
+      return;
     }
     throw err;
   }
 
   const token = await signToken({ sub: user.id, role: user.role });
-  return jsonResponse({ token, user: { id: user.id, email: user.email, role: user.role } }, 201);
+  jsonRes(res, { token, user: { id: user.id, email: user.email, role: user.role } }, 201);
 });

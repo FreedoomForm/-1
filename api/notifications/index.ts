@@ -2,9 +2,10 @@
  * GET  /api/notifications — последние уведомления
  * POST /api/notifications — записать отправленное уведомление
  */
+import type { VercelRequest, VercelResponse } from '@vercel/node';
 import { getSql } from '../_lib/db.js';
 import { getAuth } from '../_lib/auth.js';
-import { withCors, jsonResponse, errorResponse } from '../_lib/cors.js';
+import { withCors, jsonRes, errorRes } from '../_lib/cors.js';
 
 interface CreateNotificationBody {
   timestamp: number;
@@ -13,9 +14,9 @@ interface CreateNotificationBody {
   message: string;
 }
 
-export default withCors(async (req: Request) => {
+export default withCors(async (req: VercelRequest, res: VercelResponse) => {
   const auth = await getAuth(req);
-  if (!auth) return errorResponse('Unauthorized', 401);
+  if (!auth) { errorRes(res, 'Unauthorized', 401); return; }
   const sql = getSql();
 
   if (req.method === 'GET') {
@@ -26,17 +27,17 @@ export default withCors(async (req: Request) => {
       ORDER BY timestamp DESC
       LIMIT 500
     `) as any[];
-    return jsonResponse(rows);
+    jsonRes(res, rows);
+    return;
   }
 
   if (req.method === 'POST') {
-    let body: CreateNotificationBody;
-    try { body = await req.json(); }
-    catch { return errorResponse('Invalid JSON body'); }
+    const body = req.body as CreateNotificationBody;
+    if (!body) { errorRes(res, 'Invalid JSON body'); return; }
 
-    if (!body.timestamp) return errorResponse('timestamp required', 422);
-    if (!body.title?.trim()) return errorResponse('title required', 422);
-    if (!body.message?.trim()) return errorResponse('message required', 422);
+    if (!body.timestamp) { errorRes(res, 'timestamp required', 422); return; }
+    if (!body.title?.trim()) { errorRes(res, 'title required', 422); return; }
+    if (!body.message?.trim()) { errorRes(res, 'message required', 422); return; }
 
     const rows = (await sql`
       INSERT INTO notification_history (user_id, timestamp, renter_id, title, message)
@@ -44,8 +45,9 @@ export default withCors(async (req: Request) => {
               ${body.title.trim()}, ${body.message.trim()})
       RETURNING id
     `) as any[];
-    return jsonResponse({ id: rows[0].id }, 201);
+    jsonRes(res, { id: rows[0].id }, 201);
+    return;
   }
 
-  return errorResponse('Method not allowed', 405);
+  errorRes(res, 'Method not allowed', 405);
 });

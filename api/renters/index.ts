@@ -2,16 +2,17 @@
  * GET  /api/renters        — список арендаторов текущего пользователя
  * POST /api/renters        — создать арендатора
  */
+import type { VercelRequest, VercelResponse } from '@vercel/node';
 import { getSql } from '../_lib/db.js';
 import { getAuth } from '../_lib/auth.js';
-import { withCors, jsonResponse, errorResponse } from '../_lib/cors.js';
+import { withCors, jsonRes, errorRes } from '../_lib/cors.js';
 
 interface CreateRenterBody {
   name: string;
   phone_number: string;
   debt_amount?: number;
   rent_duration_days: number;
-  rent_start_date_timestamp: number;
+  rent_start_date_timestamp?: number;
   is_returned?: boolean;
   is_overdue_sms_sent?: boolean;
   scooter_id?: number | null;
@@ -20,9 +21,9 @@ interface CreateRenterBody {
   balance?: number;
 }
 
-export default withCors(async (req: Request) => {
+export default withCors(async (req: VercelRequest, res: VercelResponse) => {
   const auth = await getAuth(req);
-  if (!auth) return errorResponse('Unauthorized', 401);
+  if (!auth) { errorRes(res, 'Unauthorized', 401); return; }
 
   const sql = getSql();
 
@@ -36,25 +37,26 @@ export default withCors(async (req: Request) => {
       WHERE user_id = ${auth.sub}
       ORDER BY is_returned ASC, rent_start_date_timestamp DESC
     `) as any[];
-    return jsonResponse(rows.map(r => ({
+    jsonRes(res, rows.map(r => ({
       ...r,
       debt_amount: Number(r.debt_amount),
       balance: Number(r.balance),
       is_returned: !!r.is_returned,
       is_overdue_sms_sent: !!r.is_overdue_sms_sent
     })));
+    return;
   }
 
   if (req.method === 'POST') {
-    if (auth.role !== 'admin') return errorResponse('Admin only', 403, 'FORBIDDEN');
-    let body: CreateRenterBody;
-    try { body = await req.json(); }
-    catch { return errorResponse('Invalid JSON body'); }
+    if (auth.role !== 'admin') { errorRes(res, 'Admin only', 403, 'FORBIDDEN'); return; }
+    const body = req.body as CreateRenterBody;
+    if (!body) { errorRes(res, 'Invalid JSON body'); return; }
 
-    if (!body.name?.trim()) return errorResponse('name required', 422);
-    if (!body.phone_number?.trim()) return errorResponse('phone_number required', 422);
+    if (!body.name?.trim()) { errorRes(res, 'name required', 422); return; }
+    if (!body.phone_number?.trim()) { errorRes(res, 'phone_number required', 422); return; }
     if (!body.rent_duration_days || body.rent_duration_days < 1) {
-      return errorResponse('rent_duration_days must be > 0', 422);
+      errorRes(res, 'rent_duration_days must be > 0', 422);
+      return;
     }
 
     const rows = (await sql`
@@ -78,8 +80,9 @@ export default withCors(async (req: Request) => {
       )
       RETURNING id
     `) as any[];
-    return jsonResponse({ id: rows[0].id }, 201);
+    jsonRes(res, { id: rows[0].id }, 201);
+    return;
   }
 
-  return errorResponse('Method not allowed', 405);
+  errorRes(res, 'Method not allowed', 405);
 });

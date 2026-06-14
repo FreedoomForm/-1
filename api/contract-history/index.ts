@@ -5,9 +5,10 @@
  * Используется Android-клиентом для синхронизации истории
  * (CREATED / PAYMENT / AUTO_RENEW / TERMINATED / RETURNED).
  */
+import type { VercelRequest, VercelResponse } from '@vercel/node';
 import { getSql } from '../_lib/db.js';
 import { getAuth } from '../_lib/auth.js';
-import { withCors, jsonResponse, errorResponse } from '../_lib/cors.js';
+import { withCors, jsonRes, errorRes } from '../_lib/cors.js';
 
 interface CreateEntryBody {
   renter_id: number;
@@ -19,9 +20,9 @@ interface CreateEntryBody {
 
 const ALLOWED_TYPES = new Set(['CREATED', 'PAYMENT', 'AUTO_RENEW', 'TERMINATED', 'RETURNED']);
 
-export default withCors(async (req: Request) => {
+export default withCors(async (req: VercelRequest, res: VercelResponse) => {
   const auth = await getAuth(req);
-  if (!auth) return errorResponse('Unauthorized', 401);
+  if (!auth) { errorRes(res, 'Unauthorized', 401); return; }
   const sql = getSql();
 
   if (req.method === 'GET') {
@@ -32,19 +33,20 @@ export default withCors(async (req: Request) => {
       ORDER BY timestamp DESC
       LIMIT 500
     `) as any[];
-    return jsonResponse(rows.map(r => ({ ...r, amount: Number(r.amount) })));
+    jsonRes(res, rows.map(r => ({ ...r, amount: Number(r.amount) })));
+    return;
   }
 
   if (req.method === 'POST') {
-    if (auth.role !== 'admin') return errorResponse('Admin only', 403, 'FORBIDDEN');
-    let body: CreateEntryBody;
-    try { body = await req.json(); }
-    catch { return errorResponse('Invalid JSON body'); }
+    if (auth.role !== 'admin') { errorRes(res, 'Admin only', 403, 'FORBIDDEN'); return; }
+    const body = req.body as CreateEntryBody;
+    if (!body) { errorRes(res, 'Invalid JSON body'); return; }
 
-    if (!body.renter_id) return errorResponse('renter_id required', 422);
-    if (!body.timestamp) return errorResponse('timestamp required', 422);
+    if (!body.renter_id) { errorRes(res, 'renter_id required', 422); return; }
+    if (!body.timestamp) { errorRes(res, 'timestamp required', 422); return; }
     if (!body.type || !ALLOWED_TYPES.has(body.type)) {
-      return errorResponse(`type must be one of: ${[...ALLOWED_TYPES].join(', ')}`, 422);
+      errorRes(res, `type must be one of: ${[...ALLOWED_TYPES].join(', ')}`, 422);
+      return;
     }
 
     const rows = (await sql`
@@ -53,8 +55,9 @@ export default withCors(async (req: Request) => {
               ${body.amount ?? 0}, ${body.notes ?? null})
       RETURNING id
     `) as any[];
-    return jsonResponse({ id: rows[0].id }, 201);
+    jsonRes(res, { id: rows[0].id }, 201);
+    return;
   }
 
-  return errorResponse('Method not allowed', 405);
+  errorRes(res, 'Method not allowed', 405);
 });
