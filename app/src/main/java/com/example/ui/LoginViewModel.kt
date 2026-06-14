@@ -4,6 +4,7 @@ import android.app.Application
 import android.util.Log
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import androidx.room.withTransaction
 import com.example.data.AppDatabase
 import com.example.data.remote.ApiClient
 import com.example.data.remote.LoginRequest

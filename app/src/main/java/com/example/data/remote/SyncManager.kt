@@ -2,7 +2,12 @@ package com.example.data.remote
 
 import android.content.Context
 import android.util.Log
+import androidx.room.withTransaction
 import com.example.data.AppDatabase
+import com.example.data.ContractHistoryEntry
+import com.example.data.NotificationHistoryEntity
+import com.example.data.Renter
+import com.example.data.Scooter
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
