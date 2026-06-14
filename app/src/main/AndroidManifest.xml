@@ -2,9 +2,7 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:tools="http://schemas.android.com/tools">
 
-    <!-- Локальные уведомления о сроке оплаты (Android 13+ требует runtime-разрешения) -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
-    <!-- Оставлено: SMS-рассылка просроченным арендаторам (SmsWorker) -->
     <uses-permission android:name="android.permission.SEND_SMS" />
 
     <application
@@ -16,6 +14,7 @@
         android:roundIcon="@mipmap/ic_launcher_round"
         android:supportsRtl="true"
         android:theme="@style/Theme.MyApplication">
+
         <activity
             android:name=".MainActivity"
             android:exported="true"
@@ -23,10 +22,17 @@
             android:theme="@style/Theme.MyApplication">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
-
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+
+        <!-- Получатель action-кнопок из уведомлений. Срабатывает даже
+             когда приложение закрыто. Не exported — принимает только
+             наши PendingIntents. -->
+        <receiver
+            android:name=".worker.NotificationActionReceiver"
+            android:exported="false" />
+
     </application>
 
 </manifest>

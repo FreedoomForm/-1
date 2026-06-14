@@ -1,11 +1,8 @@
 package com.example
 
 import android.Manifest
-import android.app.NotificationManager
-import android.content.Intent
 import android.os.Build
 import android.os.Bundle
-import android.provider.Settings
 import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -24,18 +21,13 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.ArrowDropDown
 import androidx.compose.material.icons.filled.ArrowDropUp
-import androidx.compose.material.icons.filled.Edit
-import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.List
 import androidx.compose.material.icons.filled.DirectionsBike
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.foundation.border
 import androidx.compose.material.icons.filled.DateRange
-import androidx.compose.material.icons.filled.KeyboardArrowRight
-import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Notifications
-import androidx.compose.material.icons.filled.NotificationsActive
 import androidx.compose.material.icons.outlined.Notifications
 import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.foundation.ExperimentalFoundationApi
@@ -55,14 +47,15 @@ import androidx.compose.ui.text.input.OffsetMapping
 import androidx.compose.ui.text.input.TransformedText
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
-import androidx.core.content.getSystemService
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.work.ExistingPeriodicWorkPolicy
 import androidx.work.PeriodicWorkRequestBuilder
 import androidx.work.WorkManager
+import com.example.data.NotificationHistoryEntity
 import com.example.data.Renter
 import com.example.data.Scooter
+import com.example.ui.NotificationHistoryViewModel
 import com.example.ui.RenterViewModel
 import com.example.ui.SettingsViewModel
 import com.example.ui.ScooterViewModel
@@ -86,10 +79,9 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
 
-        // Создаём канал уведомлений при старте приложения.
         NotificationHelper.createChannel(applicationContext)
 
-        // Существующий SMS-воркер для просроченных арендаторов — оставляем как есть.
+        // SMS-воркер для просроченных (как раньше)
         val smsWorkRequest = PeriodicWorkRequestBuilder<SmsWorker>(4, TimeUnit.HOURS).build()
         WorkManager.getInstance(applicationContext).enqueueUniquePeriodicWork(
             "OverdueSmsWork",
@@ -97,8 +89,7 @@ class MainActivity : ComponentActivity() {
             smsWorkRequest
         )
 
-        // Новый воркер: каждый час проверяет, не наступил ли срок оплаты,
-        // и шлёт локальное уведомление.
+        // Периодическая проверка наступления срока оплаты (раз в час)
         val paymentCheckRequest =
             PeriodicWorkRequestBuilder<PaymentCheckWorker>(1, TimeUnit.HOURS).build()
         WorkManager.getInstance(applicationContext).enqueueUniquePeriodicWork(
@@ -109,14 +100,11 @@ class MainActivity : ComponentActivity() {
 
         setContent {
             MyApplicationTheme {
-                var hasSmsPermission by remember { mutableStateOf(false) }
                 val permissionLauncher = rememberLauncherForActivityResult(
                     contract = ActivityResultContracts.RequestPermission()
-                ) { isGranted ->
-                    hasSmsPermission = isGranted
-                }
+                ) { /* результат не важен — мы запрашиваем автоматически */ }
 
-                // Запрашиваем SMS и (на Android 13+) разрешение на уведомления.
+                // Авто-запрос SMS + POST_NOTIFICATIONS (Android 13+) при первом старте.
                 LaunchedEffect(Unit) {
                     permissionLauncher.launch(Manifest.permission.SEND_SMS)
                     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
@@ -131,11 +119,35 @@ class MainActivity : ComponentActivity() {
 }
 
 enum class SortColumn {
-    NAME, START_TIME, STATUS, DEBT, SCOOTER_NAME
+    NAME, START_TIME, STATUS, DEBT
 }
 
-enum class SortDirection {
-    ASC, DESC
+enum class SortDirection { ASC, DESC }
+
+/**
+ * Цвет статус-индикатора:
+ *   • серый  — арендатор вернул скутер
+ *   • красный — есть долг (просрочена оплата)
+ *   • зелёный — активный, оплачено в срок
+ */
+private enum class RenterStatus { RETURNED, OVERDUE, OK }
+
+private fun statusOf(renter: Renter): RenterStatus = when {
+    renter.isReturned -> RenterStatus.RETURNED
+    renter.debtAmount > 0.0 -> RenterStatus.OVERDUE
+    else -> RenterStatus.OK
+}
+
+private fun statusColor(s: RenterStatus): Color = when (s) {
+    RenterStatus.RETURNED -> Color(0xFF8E8E93) // серый
+    RenterStatus.OVERDUE  -> Color(0xFFE05B44) // красный
+    RenterStatus.OK       -> Color(0xFF34C759) // зелёный
+}
+
+private fun statusLabel(s: RenterStatus): String = when (s) {
+    RenterStatus.RETURNED -> "Qaytgan"
+    RenterStatus.OVERDUE  -> "Qarzdor"
+    RenterStatus.OK       -> "Faol"
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -143,7 +155,8 @@ enum class SortDirection {
 fun MainScreen(
     viewModel: RenterViewModel = viewModel(),
     settingsViewModel: SettingsViewModel = viewModel(),
-    scooterViewModel: ScooterViewModel = viewModel()
+    scooterViewModel: ScooterViewModel = viewModel(),
+    historyViewModel: NotificationHistoryViewModel = viewModel()
 ) {
     var currentTab by remember { mutableStateOf(0) }
     var showSettings by remember { mutableStateOf(false) }
@@ -156,17 +169,18 @@ fun MainScreen(
     var searchQuery by remember { mutableStateOf("") }
     var showDateRangePicker by remember { mutableStateOf(false) }
     val dateRangePickerState = rememberDateRangePickerState()
+    var showHistoryDialog by remember { mutableStateOf(false) }
 
     var sortColumn by remember { mutableStateOf(SortColumn.STATUS) }
     var sortDirection by remember { mutableStateOf(SortDirection.ASC) }
-    var scooterSortColumn by remember { mutableStateOf(SortColumn.SCOOTER_NAME) }
+    var scooterSortColumn by remember { mutableStateOf(SortColumn.NAME) }
     var scooterSortDirection by remember { mutableStateOf(SortDirection.ASC) }
 
     val scooters by scooterViewModel.scootersList.collectAsStateWithLifecycle()
     val context = LocalContext.current
-    val coroutineScope = rememberCoroutineScope()
 
     val renters by viewModel.rentersList.collectAsStateWithLifecycle()
+    val history by historyViewModel.history.collectAsStateWithLifecycle()
 
     Scaffold(
         modifier = Modifier.fillMaxSize(),
@@ -185,23 +199,37 @@ fun MainScreen(
                     actionIconContentColor = ClaudeText
                 ),
                 actions = {
-                    // Кнопка теперь открывает системные настройки уведомлений приложения,
-                    // чтобы пользователь видел, куда приходят напоминания о платежах.
+                    // Колокольчик открывает ВНУТРИ приложения диалог со списком уведомлений
                     IconButton(
-                        onClick = {
-                            openAppNotificationSettings(context)
-                        },
+                        onClick = { showHistoryDialog = true },
                         modifier = Modifier
                             .padding(end = 4.dp)
                             .size(40.dp)
                             .background(Color.White, CircleShape)
                             .border(1.dp, ClaudeDivider, CircleShape)
                     ) {
-                        Icon(
-                            Icons.Outlined.Notifications,
-                            contentDescription = "Bildirishnoma sozlamalari",
-                            modifier = Modifier.size(20.dp)
-                        )
+                        Box {
+                            Icon(
+                                Icons.Outlined.Notifications,
+                                contentDescription = "Bildirishnomalar tarixi",
+                                modifier = Modifier.size(20.dp)
+                            )
+                            if (history.isNotEmpty()) {
+                                Box(
+                                    modifier = Modifier
+                                        .align(Alignment.TopEnd)
+                                        .size(16.dp)
+                                        .background(Color(0xFFE05B44), CircleShape),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    Text(
+                                        history.size.coerceAtMost(99).toString(),
+                                        color = Color.White,
+                                        style = MaterialTheme.typography.labelSmall
+                                    )
+                                }
+                            }
+                        }
                     }
                     IconButton(
                         onClick = { showSettings = true },
@@ -275,7 +303,7 @@ fun MainScreen(
                 .fillMaxSize()
         ) {
             if (currentTab == 0) {
-                // Search field
+                // Поиск
                 OutlinedTextField(
                     value = searchQuery,
                     onValueChange = { searchQuery = it },
@@ -332,25 +360,15 @@ fun MainScreen(
                                 .height(48.dp),
                             contentPadding = PaddingValues(horizontal = 4.dp)
                         ) {
-                            Icon(
-                                Icons.Default.CheckCircle,
-                                contentDescription = null,
-                                tint = Color.White,
-                                modifier = Modifier.size(18.dp)
-                            )
-                            Spacer(Modifier.width(8.dp))
                             Text(
                                 "Qaytarilgan deb belgilash",
                                 color = Color.White,
                                 style = MaterialTheme.typography.labelMedium
                             )
                         }
-
                         Button(
                             onClick = {
-                                selectedRenters.forEach { id ->
-                                    viewModel.deleteRenter(id)
-                                }
+                                selectedRenters.forEach { id -> viewModel.deleteRenter(id) }
                                 selectedRenters = emptySet()
                             },
                             colors = ButtonDefaults.buttonColors(containerColor = Color.White),
@@ -366,7 +384,7 @@ fun MainScreen(
                                 tint = ClaudeTextSecondary,
                                 modifier = Modifier.size(18.dp)
                             )
-                            Spacer(Modifier.width(8.dp))
+                            Spacer(Modifier.width(6.dp))
                             Text(
                                 "O'chirish",
                                 color = ClaudeTextSecondary,
@@ -376,116 +394,58 @@ fun MainScreen(
                     }
                 }
 
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 16.dp, vertical = 12.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Box(
-                        modifier = Modifier
-                            .background(Color.White, RoundedCornerShape(12.dp))
-                            .border(1.dp, ClaudeDivider, RoundedCornerShape(12.dp))
-                            .padding(horizontal = 16.dp, vertical = 8.dp)
-                    ) {
-                        Text(
-                            "Barchasi",
-                            style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold),
-                            color = ClaudeText
-                        )
+                // ===== ТАБЛИЦА АРЕНДАТОРОВ =====
+                val filteredRenters = renters.filter { renter ->
+                    val textMatch = renter.name.contains(searchQuery, ignoreCase = true) ||
+                        renter.phoneNumber.contains(searchQuery) ||
+                        (renter.scooterName != null && renter.scooterName.contains(searchQuery, ignoreCase = true))
+                    val startMillis = dateRangePickerState.selectedStartDateMillis
+                    val endMillis = dateRangePickerState.selectedEndDateMillis
+                    val dateMatch = if (startMillis != null) {
+                        val expiryTime =
+                            renter.rentStartDateTimestamp + (renter.rentDurationDays * 24L * 60 * 60 * 1000)
+                        if (endMillis != null) expiryTime in startMillis..endMillis
+                        else expiryTime >= startMillis
+                    } else true
+                    textMatch && dateMatch
+                }.sortedWith { a, b ->
+                    val result = when (sortColumn) {
+                        SortColumn.NAME -> a.name.compareTo(b.name, ignoreCase = true)
+                        SortColumn.START_TIME -> a.rentStartDateTimestamp.compareTo(b.rentStartDateTimestamp)
+                        SortColumn.STATUS -> {
+                            val timeA = a.rentStartDateTimestamp + (a.rentDurationDays * 24L * 60 * 60 * 1000)
+                            val timeB = b.rentStartDateTimestamp + (b.rentDurationDays * 24L * 60 * 60 * 1000)
+                            timeA.compareTo(timeB)
+                        }
+                        SortColumn.DEBT -> a.debtAmount.compareTo(b.debtAmount)
+                        else -> 0
                     }
-                    Spacer(modifier = Modifier.width(16.dp))
+                    if (sortDirection == SortDirection.ASC) result else -result
+                }
 
-                    val onSort: (SortColumn) -> Unit = { col ->
+                RenterTable(
+                    renters = filteredRenters,
+                    selected = selectedRenters,
+                    sortColumn = sortColumn,
+                    sortDirection = sortDirection,
+                    onSort = { col ->
                         if (sortColumn == col) {
-                            sortDirection = if (sortDirection == SortDirection.ASC) SortDirection.DESC else SortDirection.ASC
+                            sortDirection =
+                                if (sortDirection == SortDirection.ASC) SortDirection.DESC else SortDirection.ASC
                         } else {
                             sortColumn = col
                             sortDirection = SortDirection.ASC
                         }
-                    }
-
-                    Row(
-                        modifier = Modifier.weight(1f),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.SpaceBetween
-                    ) {
-                        SortableHeader("Mijoz", 1.4f, SortColumn.NAME, sortColumn, sortDirection, onSort)
-                        SortableHeader(
-                            "Ijara muddati",
-                            1.5f,
-                            SortColumn.START_TIME,
-                            sortColumn,
-                            sortDirection,
-                            onSort
-                        )
-                        SortableHeader("Holat", 0.8f, SortColumn.STATUS, sortColumn, sortDirection, onSort)
-                        SortableHeader("Qarz", 0.8f, SortColumn.DEBT, sortColumn, sortDirection, onSort)
-                        Text(
-                            "Amallar",
-                            modifier = Modifier.weight(0.5f),
-                            style = MaterialTheme.typography.labelMedium,
-                            color = ClaudeTextSecondary,
-                            fontWeight = FontWeight.Bold,
-                            textAlign = TextAlign.End
-                        )
-                    }
-                }
-
-                LazyColumn(
-                    modifier = Modifier.fillMaxSize(),
-                    contentPadding = PaddingValues(0.dp)
-                ) {
-                    val filteredRenters = renters.filter { renter ->
-                        val textMatch = renter.name.contains(searchQuery, ignoreCase = true) ||
-                            renter.phoneNumber.contains(searchQuery) ||
-                            (renter.scooterName != null && renter.scooterName.contains(searchQuery, ignoreCase = true))
-
-                        val startMillis = dateRangePickerState.selectedStartDateMillis
-                        val endMillis = dateRangePickerState.selectedEndDateMillis
-
-                        val dateMatch = if (startMillis != null) {
-                            val expiryTime =
-                                renter.rentStartDateTimestamp + (renter.rentDurationDays * 24L * 60 * 60 * 1000)
-                            if (endMillis != null) {
-                                expiryTime in startMillis..endMillis
-                            } else {
-                                expiryTime >= startMillis
-                            }
-                        } else {
-                            true
-                        }
-
-                        textMatch && dateMatch
-                    }.sortedWith { a, b ->
-                        val result = when (sortColumn) {
-                            SortColumn.NAME -> a.name.compareTo(b.name, ignoreCase = true)
-                            SortColumn.START_TIME -> a.rentStartDateTimestamp.compareTo(b.rentStartDateTimestamp)
-                            SortColumn.STATUS -> {
-                                val timeA = a.rentStartDateTimestamp + (a.rentDurationDays * 24L * 60 * 60 * 1000)
-                                val timeB = b.rentStartDateTimestamp + (b.rentDurationDays * 24L * 60 * 60 * 1000)
-                                timeA.compareTo(timeB)
-                            }
-                            SortColumn.DEBT -> a.debtAmount.compareTo(b.debtAmount)
-                            else -> 0
-                        }
-                        if (sortDirection == SortDirection.ASC) result else -result
-                    }
-
-                    items(filteredRenters, key = { it.id }) { renter ->
-                        RenterCardItem(
-                            renter = renter,
-                            isSelected = selectedRenters.contains(renter.id),
-                            onSelect = { checked ->
-                                val newSet = selectedRenters.toMutableSet()
-                                if (checked) newSet.add(renter.id) else newSet.remove(renter.id)
-                                selectedRenters = newSet
-                            },
-                            onClick = { renterToEdit = renter }
-                        )
-                    }
-                }
+                    },
+                    onSelect = { id, checked ->
+                        val newSet = selectedRenters.toMutableSet()
+                        if (checked) newSet.add(id) else newSet.remove(id)
+                        selectedRenters = newSet
+                    },
+                    onClick = { renterToEdit = it }
+                )
             } else {
+                // Вкладка «Скутеры»
                 OutlinedTextField(
                     value = searchQuery,
                     onValueChange = { searchQuery = it },
@@ -520,73 +480,14 @@ fun MainScreen(
                     }
                 }
 
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 16.dp, vertical = 12.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Box(
-                        modifier = Modifier
-                            .background(Color.White, RoundedCornerShape(12.dp))
-                            .border(1.dp, ClaudeDivider, RoundedCornerShape(12.dp))
-                            .padding(horizontal = 16.dp, vertical = 8.dp)
-                    ) {
-                        Text(
-                            "Barchasi",
-                            style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold),
-                            color = ClaudeText
-                        )
-                    }
-                    Spacer(modifier = Modifier.width(16.dp))
-
-                    val onScooterSort: (SortColumn) -> Unit = { col ->
-                        if (scooterSortColumn == col) {
-                            scooterSortDirection =
-                                if (scooterSortDirection == SortDirection.ASC) SortDirection.DESC else SortDirection.ASC
-                        } else {
-                            scooterSortColumn = col
-                            scooterSortDirection = SortDirection.ASC
-                        }
-                    }
-
-                    Row(
-                        modifier = Modifier.weight(1f),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        SortableHeader(
-                            "Nomi",
-                            1f,
-                            SortColumn.SCOOTER_NAME,
-                            scooterSortColumn,
-                            scooterSortDirection,
-                            onScooterSort
-                        )
-                        Text(
-                            "Amallar",
-                            modifier = Modifier.weight(0.5f),
-                            style = MaterialTheme.typography.labelMedium,
-                            color = ClaudeTextSecondary,
-                            fontWeight = FontWeight.Bold,
-                            textAlign = TextAlign.End
-                        )
-                    }
+                val filteredScooters = scooters.filter {
+                    it.name.contains(searchQuery, ignoreCase = true)
+                }.sortedWith { a, b ->
+                    val r = if (scooterSortColumn == SortColumn.NAME) a.name.compareTo(b.name, true) else 0
+                    if (scooterSortDirection == SortDirection.ASC) r else -r
                 }
 
-                LazyColumn(
-                    modifier = Modifier.fillMaxSize(),
-                    contentPadding = PaddingValues(0.dp)
-                ) {
-                    val filteredScooters = scooters.filter { scooter ->
-                        scooter.name.contains(searchQuery, ignoreCase = true)
-                    }.sortedWith { a, b ->
-                        val result = when (scooterSortColumn) {
-                            SortColumn.SCOOTER_NAME -> a.name.compareTo(b.name, ignoreCase = true)
-                            else -> 0
-                        }
-                        if (scooterSortDirection == SortDirection.ASC) result else -result
-                    }
-
+                LazyColumn {
                     items(filteredScooters, key = { it.id }) { scooter ->
                         ScooterCardItem(
                             scooter = scooter,
@@ -627,11 +528,8 @@ fun MainScreen(
                                 newTimestamp = startTimestamp
                                 returned = false
                             } else if (!it.isReturned && active) {
-                                // При редактировании активного арендатора — обновляем дату старта,
-                                // если её явно изменили в форме.
                                 newTimestamp = startTimestamp
                             }
-
                             viewModel.updateRenter(
                                 it.copy(
                                     name = name,
@@ -647,27 +545,23 @@ fun MainScreen(
                             )
                         }
                     } else {
-                        viewModel.addRenter(name, phone, debt, duration, startTimestamp, scooterId, scooterName)
+                        viewModel.addRenter(
+                            name = name,
+                            phone = phone,
+                            debt = debt,
+                            duration = duration,
+                            startTimestamp = startTimestamp,
+                            scooterId = scooterId,
+                            scooterName = scooterName,
+                            weeklyPrice = weekly
+                        )
                     }
                     showAddDialog = false
                     renterToEdit = null
-                },
-                onPaymentReceived = { renter ->
-                    viewModel.markPaymentReceived(renter)
-                    Toast.makeText(context, "To'lov qabul qilindi", Toast.LENGTH_SHORT).show()
-                },
-                onRemindInOneHour = { renter ->
-                    viewModel.scheduleOneHourReminder(context, renter)
-                    Toast.makeText(
-                        context,
-                        "1 soatdan so'ng eslatma yuboriladi",
-                        Toast.LENGTH_SHORT
-                    ).show()
                 }
             )
         }
 
-        // ===== Диалог создания/редактирования скутера (только имя) =====
         if (showAddScooterDialog || scooterToEdit != null) {
             val isEditScooter = scooterToEdit != null
             ScooterFormDialog(
@@ -678,9 +572,7 @@ fun MainScreen(
                 },
                 onSave = { name ->
                     if (isEditScooter) {
-                        scooterToEdit?.let {
-                            scooterViewModel.updateScooter(it.copy(name = name))
-                        }
+                        scooterToEdit?.let { scooterViewModel.updateScooter(it.copy(name = name)) }
                     } else {
                         scooterViewModel.addScooter(name)
                     }
@@ -711,17 +603,13 @@ fun MainScreen(
             DatePickerDialog(
                 onDismissRequest = { showDateRangePicker = false },
                 confirmButton = {
-                    TextButton(onClick = { showDateRangePicker = false }) {
-                        Text("Tanlash")
-                    }
+                    TextButton(onClick = { showDateRangePicker = false }) { Text("Tanlash") }
                 },
                 dismissButton = {
                     TextButton(onClick = {
                         dateRangePickerState.setSelection(null, null)
                         showDateRangePicker = false
-                    }) {
-                        Text("Tozalash")
-                    }
+                    }) { Text("Tozalash") }
                 }
             ) {
                 DateRangePicker(
@@ -732,200 +620,325 @@ fun MainScreen(
                 )
             }
         }
-    }
-}
 
-/**
- * Открывает системные настройки уведомлений для нашего приложения.
- * Работает на Android 5+. На старых API фолбэк на общие настройки приложения.
- */
-private fun openAppNotificationSettings(context: android.content.Context) {
-    val intent = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-        Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS).apply {
-            putExtra(Settings.EXTRA_APP_PACKAGE, context.packageName)
-        }
-    } else {
-        Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
-            data = android.net.Uri.fromParts("package", context.packageName, null)
-        }
-    }
-    intent.flags = Intent.FLAG_ACTIVITY_NEW_TASK
-    try {
-        context.startActivity(intent)
-    } catch (e: Exception) {
-        Toast.makeText(context, "Sozlamalarni ochib bo'lmadi", Toast.LENGTH_SHORT).show()
-    }
-}
-
-@OptIn(ExperimentalFoundationApi::class)
-@Composable
-fun RenterCardItem(
-    renter: Renter,
-    isSelected: Boolean,
-    onSelect: (Boolean) -> Unit,
-    onClick: () -> Unit
-) {
-    val isActive = !renter.isReturned
-    Card(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(horizontal = 16.dp, vertical = 6.dp)
-            .combinedClickable(
-                onClick = { if (isSelected) onSelect(false) else onClick() },
-                onLongClick = { onSelect(!isSelected) }
-            ),
-        shape = RoundedCornerShape(16.dp),
-        colors = CardDefaults.cardColors(containerColor = if (isSelected) Color(0xFFF3F4F6) else Color.White),
-        elevation = CardDefaults.cardElevation(defaultElevation = if (isSelected) 0.dp else 2.dp)
-    ) {
-        Row(
-            modifier = Modifier.padding(16.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Box(contentAlignment = Alignment.Center) {
-                Box(
-                    modifier = Modifier
-                        .size(48.dp)
-                        .background(Color(0xFFF2F2F7), CircleShape),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Text(
-                        renter.name.take(2).uppercase(),
-                        color = ClaudeTextSecondary,
-                        fontWeight = FontWeight.Medium
-                    )
+        // ===== Диалог истории уведомлений (внутри приложения) =====
+        if (showHistoryDialog) {
+            NotificationHistoryDialog(
+                history = history,
+                onDismiss = { showHistoryDialog = false },
+                onClear = {
+                    historyViewModel.clear()
+                    Toast.makeText(context, "Tozalandi", Toast.LENGTH_SHORT).show()
                 }
-                if (isActive) {
-                    Box(
-                        modifier = Modifier
-                            .align(Alignment.BottomEnd)
-                            .size(14.dp)
-                            .background(Color.White, CircleShape)
-                            .padding(2.dp)
-                    ) {
-                        Box(modifier = Modifier
-                            .fillMaxSize()
-                            .background(Color(0xFF34C759), CircleShape))
-                    }
-                }
-            }
-
-            Spacer(modifier = Modifier.width(16.dp))
-
-            Column(modifier = Modifier.weight(1.4f)) {
-                Text(
-                    renter.name,
-                    style = MaterialTheme.typography.bodyMedium,
-                    fontWeight = FontWeight.Bold,
-                    color = ClaudeText
-                )
-                Spacer(modifier = Modifier.height(2.dp))
-                Text(
-                    renter.phoneNumber,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = ClaudeTextSecondary
-                )
-                Spacer(modifier = Modifier.height(2.dp))
-                Text(
-                    "Skuter: ${renter.scooterName ?: "-"}",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = ClaudeTextSecondary
-                )
-            }
-
-            Column(modifier = Modifier.weight(1.5f)) {
-                val sdf = remember {
-                    SimpleDateFormat("dd.MM.yyyy HH:mm", Locale.getDefault())
-                }
-                val startDateStr = sdf.format(Date(renter.rentStartDateTimestamp))
-                val expiryTime =
-                    renter.rentStartDateTimestamp + (renter.rentDurationDays * 24L * 60 * 60 * 1000)
-                val endDateStr = sdf.format(Date(expiryTime))
-
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Box(modifier = Modifier
-                        .size(6.dp)
-                        .background(Color(0xFF8E8E93), CircleShape))
-                    Spacer(modifier = Modifier.width(6.dp))
-                    Text(
-                        text = "Bos.: $startDateStr",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = ClaudeText,
-                        maxLines = 1
-                    )
-                }
-                Spacer(modifier = Modifier.height(6.dp))
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Box(modifier = Modifier
-                        .size(6.dp)
-                        .background(ClaudeText, CircleShape))
-                    Spacer(modifier = Modifier.width(6.dp))
-                    Text(
-                        text = "Tug.: $endDateStr",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = ClaudeText,
-                        maxLines = 1
-                    )
-                }
-            }
-
-            Column(modifier = Modifier.weight(0.8f)) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Box(modifier = Modifier
-                        .size(6.dp)
-                        .background(
-                            if (isActive) Color(0xFF34C759) else ClaudeTextSecondary,
-                            CircleShape
-                        ))
-                    Spacer(modifier = Modifier.width(6.dp))
-                    Text(
-                        if (isActive) "Faol" else "Qaytgan",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = ClaudeText
-                    )
-                }
-                Spacer(modifier = Modifier.height(8.dp))
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Icon(
-                        Icons.Default.DateRange,
-                        contentDescription = null,
-                        modifier = Modifier.size(12.dp),
-                        tint = ClaudeTextSecondary
-                    )
-                    Spacer(modifier = Modifier.width(4.dp))
-                    Text(
-                        "${renter.rentDurationDays} kun",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = ClaudeTextSecondary
-                    )
-                }
-            }
-
-            Column(modifier = Modifier.weight(0.8f)) {
-                Text(
-                    "Qarz",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = ClaudeTextSecondary
-                )
-                Spacer(modifier = Modifier.height(2.dp))
-                Text(
-                    renter.debtAmount.toString(),
-                    style = MaterialTheme.typography.bodyMedium,
-                    fontWeight = FontWeight.Bold,
-                    color = ClaudeText
-                )
-                Text("UZS", style = MaterialTheme.typography.labelSmall, color = ClaudeTextSecondary)
-            }
-
-            Icon(
-                Icons.Default.KeyboardArrowRight,
-                contentDescription = null,
-                tint = ClaudeTextSecondary,
-                modifier = Modifier.size(20.dp)
             )
         }
     }
 }
+
+/* ============================================================================
+   ТАБЛИЦА АРЕНДАТОРОВ
+   ============================================================================ */
+
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
+@Composable
+fun RenterTable(
+    renters: List<Renter>,
+    selected: Set<Int>,
+    sortColumn: SortColumn,
+    sortDirection: SortDirection,
+    onSort: (SortColumn) -> Unit,
+    onSelect: (Int, Boolean) -> Unit,
+    onClick: (Renter) -> Unit
+) {
+    // Веса колонок подобраны под портретный экран телефона.
+    val wName  = 1.4f
+    val wPhone = 1.2f
+    val wScoot = 1.0f
+    val wStart = 1.1f
+    val wEnd   = 1.1f
+    val wDebt  = 0.7f
+    val wStat  = 0.7f
+
+    val dateFmt = remember { SimpleDateFormat("dd.MM.yyyy", Locale.getDefault()) }
+    val sortIcon: @Composable (SortColumn) -> Unit = { col ->
+        if (sortColumn == col) {
+            Icon(
+                if (sortDirection == SortDirection.ASC) Icons.Default.ArrowDropUp
+                else Icons.Default.ArrowDropDown,
+                contentDescription = null,
+                tint = ClaudeAccent,
+                modifier = Modifier.size(16.dp)
+            )
+        }
+    }
+    val headerCell: @Composable (String, Float, SortColumn) -> Unit = { title, weight, col ->
+        Row(
+            modifier = Modifier
+                .weight(weight)
+                .clickable { onSort(col) }
+                .padding(horizontal = 4.dp, vertical = 6.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(
+                title,
+                style = MaterialTheme.typography.labelSmall,
+                color = ClaudeText,
+                fontWeight = FontWeight.Bold,
+                maxLines = 1
+            )
+            sortIcon(col)
+        }
+    }
+
+    Column(modifier = Modifier.fillMaxSize()) {
+        // Заголовок
+        Surface(
+            color = ClaudeCard,
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 8.dp, vertical = 8.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                headerCell("Mijoz",      wName,  SortColumn.NAME)
+                headerCell("Tel",        wPhone, SortColumn.NAME)
+                headerCell("Skuter",     wScoot, SortColumn.NAME)
+                headerCell("Boshlanish", wStart, SortColumn.START_TIME)
+                headerCell("Tugash",     wEnd,   SortColumn.START_TIME)
+                headerCell("Qarz",       wDebt,  SortColumn.DEBT)
+                Text(
+                    "Holat",
+                    modifier = Modifier
+                        .weight(wStat)
+                        .padding(horizontal = 4.dp),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = ClaudeText,
+                    fontWeight = FontWeight.Bold,
+                    textAlign = TextAlign.Center
+                )
+            }
+        }
+        HorizontalDivider(color = ClaudeDivider)
+
+        if (renters.isEmpty()) {
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(32.dp),
+                contentAlignment = Alignment.Center
+            ) {
+                Text(
+                    "Mijozlar yo'q",
+                    color = ClaudeTextSecondary,
+                    style = MaterialTheme.typography.bodyMedium
+                )
+            }
+            return@Column
+        }
+
+        LazyColumn(modifier = Modifier.fillMaxSize()) {
+            items(renters, key = { it.id }) { renter ->
+                val isSelected = selected.contains(renter.id)
+                val status = statusOf(renter)
+                val sColor = statusColor(status)
+                val sLabel = statusLabel(status)
+
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .background(
+                            if (isSelected) Color(0xFFF3F4F6) else Color.White
+                        )
+                        .combinedClickable(
+                            onClick = { if (isSelected) onSelect(renter.id, false) else onClick(renter) },
+                            onLongClick = { onSelect(renter.id, !isSelected) }
+                        )
+                        .padding(horizontal = 8.dp, vertical = 10.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    // Mijoz
+                    Text(
+                        renter.name,
+                        modifier = Modifier.weight(wName).padding(horizontal = 4.dp),
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = ClaudeText,
+                        fontWeight = FontWeight.SemiBold,
+                        maxLines = 1
+                    )
+                    // Tel
+                    Text(
+                        renter.phoneNumber,
+                        modifier = Modifier.weight(wPhone).padding(horizontal = 4.dp),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = ClaudeTextSecondary,
+                        maxLines = 1
+                    )
+                    // Skuter
+                    Text(
+                        renter.scooterName ?: "—",
+                        modifier = Modifier.weight(wScoot).padding(horizontal = 4.dp),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = ClaudeText,
+                        maxLines = 1
+                    )
+                    // Boshlanish
+                    Text(
+                        dateFmt.format(Date(renter.rentStartDateTimestamp)),
+                        modifier = Modifier.weight(wStart).padding(horizontal = 4.dp),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = ClaudeText,
+                        maxLines = 1
+                    )
+                    // Tugash
+                    val expiry = renter.rentStartDateTimestamp +
+                        (renter.rentDurationDays * 24L * 60 * 60 * 1000)
+                    Text(
+                        dateFmt.format(Date(expiry)),
+                        modifier = Modifier.weight(wEnd).padding(horizontal = 4.dp),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = ClaudeText,
+                        maxLines = 1
+                    )
+                    // Qarz
+                    Text(
+                        renter.debtAmount.toBigDecimal().stripTrailingZeros().toPlainString(),
+                        modifier = Modifier.weight(wDebt).padding(horizontal = 4.dp),
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = ClaudeText,
+                        fontWeight = FontWeight.Bold,
+                        textAlign = TextAlign.End,
+                        maxLines = 1
+                    )
+                    // Holat (кружок + текст)
+                    Row(
+                        modifier = Modifier.weight(wStat).padding(horizontal = 4.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .size(10.dp)
+                                .background(sColor, CircleShape)
+                        )
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text(
+                            sLabel,
+                            style = MaterialTheme.typography.labelSmall,
+                            color = sColor,
+                            fontWeight = FontWeight.Bold,
+                            maxLines = 1
+                        )
+                    }
+                }
+                HorizontalDivider(color = ClaudeDivider.copy(alpha = 0.5f))
+            }
+        }
+    }
+}
+
+/* ============================================================================
+   ДИАЛОГ ИСТОРИИ УВЕДОМЛЕНИЙ
+   ============================================================================ */
+
+@Composable
+fun NotificationHistoryDialog(
+    history: List<NotificationHistoryEntity>,
+    onDismiss: () -> Unit,
+    onClear: () -> Unit
+) {
+    val dateFmt = remember { SimpleDateFormat("dd.MM.yyyy HH:mm", Locale.getDefault()) }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(
+                    Icons.Outlined.Notifications,
+                    contentDescription = null,
+                    tint = ClaudeAccent
+                )
+                Spacer(modifier = Modifier.width(8.dp))
+                Text("Bildirishnomalar tarixi", style = MaterialTheme.typography.titleLarge)
+            }
+        },
+        containerColor = ClaudeCard,
+        text = {
+            if (history.isEmpty()) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(vertical = 24.dp),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text(
+                        "Hech qanday bildirishnoma yo'q",
+                        color = ClaudeTextSecondary,
+                        style = MaterialTheme.typography.bodyMedium
+                    )
+                }
+            } else {
+                LazyColumn(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .heightIn(max = 480.dp)
+                ) {
+                    items(history, key = { it.id }) { entry ->
+                        Card(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(vertical = 4.dp),
+                            shape = RoundedCornerShape(10.dp),
+                            colors = CardDefaults.cardColors(containerColor = Color.White),
+                            elevation = CardDefaults.cardElevation(defaultElevation = 1.dp)
+                        ) {
+                            Column(modifier = Modifier.padding(12.dp)) {
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.SpaceBetween
+                                ) {
+                                    Text(
+                                        entry.title,
+                                        style = MaterialTheme.typography.titleSmall,
+                                        color = ClaudeText,
+                                        fontWeight = FontWeight.Bold
+                                    )
+                                    Text(
+                                        dateFmt.format(Date(entry.timestamp)),
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = ClaudeTextSecondary
+                                    )
+                                }
+                                Spacer(modifier = Modifier.height(4.dp))
+                                Text(
+                                    entry.message,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = ClaudeTextSecondary
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            Row {
+                if (history.isNotEmpty()) {
+                    TextButton(onClick = onClear) {
+                        Text("Tozalash", color = ClaudeTextSecondary)
+                    }
+                }
+                TextButton(onClick = onDismiss) {
+                    Text("Yopish", color = ClaudeAccent)
+                }
+            }
+        }
+    )
+}
+
+/* ============================================================================
+   ФОРМЫ СОЗДАНИЯ / РЕДАКТИРОВАНИЯ
+   ============================================================================ */
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -935,9 +948,7 @@ fun RenterFormDialog(
     monthlyPrice: Double,
     scooters: List<Scooter> = emptyList(),
     onDismiss: () -> Unit,
-    onSave: (String, String, Double, Int, Long, Int?, String?, Boolean) -> Unit,
-    onPaymentReceived: (Renter) -> Unit = {},
-    onRemindInOneHour: (Renter) -> Unit = {}
+    onSave: (String, String, Double, Int, Long, Int?, String?, Boolean) -> Unit
 ) {
     var name by remember { mutableStateOf(initialRenter?.name ?: "") }
     var phone by remember {
@@ -951,7 +962,6 @@ fun RenterFormDialog(
     }
     var isActive by remember { mutableStateOf(initialRenter?.isReturned != true) }
 
-    // Дата начала аренды — пользователь выбирает через DatePicker.
     var startTimestamp by remember {
         mutableStateOf(initialRenter?.rentStartDateTimestamp ?: System.currentTimeMillis())
     }
@@ -961,15 +971,14 @@ fun RenterFormDialog(
     )
 
     val durationOptions = listOf(
-        "1 Hafta" to 7,
-        "2 Hafta" to 14,
-        "3 Hafta" to 21,
-        "1 Oy" to 30,
-        "2 Oy" to 60,
-        "3 Oy" to 90,
-        "4 Oy" to 120
+        "1 Hafta" to 7, "2 Hafta" to 14, "3 Hafta" to 21,
+        "1 Oy" to 30, "2 Oy" to 60, "3 Oy" to 90, "4 Oy" to 120
     )
-    var selectedDurationText by remember { mutableStateOf("1 Hafta") }
+    var selectedDurationText by remember {
+        mutableStateOf(
+            durationOptions.find { it.second.toString() == duration }?.first ?: "1 Hafta"
+        )
+    }
     var expandedDuration by remember { mutableStateOf(false) }
 
     var selectedScooterId by remember { mutableStateOf<Int?>(initialRenter?.scooterId) }
@@ -1014,7 +1023,7 @@ fun RenterFormDialog(
                     shape = RoundedCornerShape(8.dp)
                 )
 
-                // ===== Кнопка выбора даты начала аренды =====
+                // Кнопка выбора даты начала аренды
                 OutlinedCard(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -1028,11 +1037,7 @@ fun RenterFormDialog(
                             .padding(horizontal = 16.dp, vertical = 14.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Icon(
-                            Icons.Default.DateRange,
-                            contentDescription = null,
-                            tint = ClaudeAccent
-                        )
+                        Icon(Icons.Default.DateRange, contentDescription = null, tint = ClaudeAccent)
                         Spacer(modifier = Modifier.width(12.dp))
                         Column(modifier = Modifier.weight(1f)) {
                             Text(
@@ -1066,10 +1071,7 @@ fun RenterFormDialog(
                                 color = ClaudeTextSecondary
                             )
                             Spacer(modifier = Modifier.width(8.dp))
-                            Switch(
-                                checked = isActive,
-                                onCheckedChange = { isActive = it }
-                            )
+                            Switch(checked = isActive, onCheckedChange = { isActive = it })
                         }
                     }
                 }
@@ -1086,21 +1088,19 @@ fun RenterFormDialog(
                         trailingIcon = {
                             ExposedDropdownMenuDefaults.TrailingIcon(expanded = expandedDuration)
                         },
-                        modifier = Modifier
-                            .menuAnchor()
-                            .fillMaxWidth(),
+                        modifier = Modifier.menuAnchor().fillMaxWidth(),
                         shape = RoundedCornerShape(8.dp)
                     )
                     ExposedDropdownMenu(
                         expanded = expandedDuration,
                         onDismissRequest = { expandedDuration = false }
                     ) {
-                        durationOptions.forEach { selectionOption ->
+                        durationOptions.forEach { (label, days) ->
                             DropdownMenuItem(
-                                text = { Text(selectionOption.first) },
+                                text = { Text(label) },
                                 onClick = {
-                                    selectedDurationText = selectionOption.first
-                                    duration = selectionOption.second.toString()
+                                    selectedDurationText = label
+                                    duration = days.toString()
                                     expandedDuration = false
                                 }
                             )
@@ -1123,9 +1123,7 @@ fun RenterFormDialog(
                         trailingIcon = {
                             ExposedDropdownMenuDefaults.TrailingIcon(expanded = expandedScooter)
                         },
-                        modifier = Modifier
-                            .menuAnchor()
-                            .fillMaxWidth(),
+                        modifier = Modifier.menuAnchor().fillMaxWidth(),
                         shape = RoundedCornerShape(8.dp)
                     )
                     ExposedDropdownMenu(
@@ -1159,60 +1157,6 @@ fun RenterFormDialog(
                     modifier = Modifier.fillMaxWidth(),
                     shape = RoundedCornerShape(8.dp)
                 )
-
-                // ===== Кнопки действий только в режиме редактирования =====
-                if (isEdit && initialRenter != null) {
-                    Spacer(modifier = Modifier.height(4.dp))
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
-                        Button(
-                            onClick = {
-                                onPaymentReceived(initialRenter)
-                                onDismiss()
-                            },
-                            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF34C759)),
-                            shape = RoundedCornerShape(8.dp),
-                            modifier = Modifier.weight(1f)
-                        ) {
-                            Icon(
-                                Icons.Default.CheckCircle,
-                                contentDescription = null,
-                                tint = Color.White,
-                                modifier = Modifier.size(18.dp)
-                            )
-                            Spacer(modifier = Modifier.width(6.dp))
-                            Text(
-                                "To'lov qabul qilindi",
-                                color = Color.White,
-                                style = MaterialTheme.typography.labelMedium
-                            )
-                        }
-                        OutlinedButton(
-                            onClick = {
-                                onRemindInOneHour(initialRenter)
-                                onDismiss()
-                            },
-                            border = BorderStroke(1.dp, ClaudeAccent),
-                            shape = RoundedCornerShape(8.dp),
-                            modifier = Modifier.weight(1f)
-                        ) {
-                            Icon(
-                                Icons.Default.NotificationsActive,
-                                contentDescription = null,
-                                tint = ClaudeAccent,
-                                modifier = Modifier.size(18.dp)
-                            )
-                            Spacer(modifier = Modifier.width(6.dp))
-                            Text(
-                                "1 soat eslatma",
-                                color = ClaudeAccent,
-                                style = MaterialTheme.typography.labelMedium
-                            )
-                        }
-                    }
-                }
             }
         },
         confirmButton = {
@@ -1224,14 +1168,8 @@ fun RenterFormDialog(
                     val scooterName = scooters.find { it.id == selectedScooterId }?.name
                     if (name.isNotBlank() && phone.isNotBlank()) {
                         onSave(
-                            name,
-                            phoneToSave,
-                            debtValue,
-                            durationValue,
-                            startTimestamp,
-                            selectedScooterId,
-                            scooterName,
-                            isActive
+                            name, phoneToSave, debtValue, durationValue,
+                            startTimestamp, selectedScooterId, scooterName, isActive
                         )
                     }
                 },
@@ -1251,7 +1189,6 @@ fun RenterFormDialog(
         }
     )
 
-    // ===== DatePicker для даты начала аренды =====
     if (showStartDatePicker) {
         DatePickerDialog(
             onDismissRequest = { showStartDatePicker = false },
@@ -1259,9 +1196,7 @@ fun RenterFormDialog(
                 TextButton(onClick = {
                     startDatePickerState.selectedDateMillis?.let { startTimestamp = it }
                     showStartDatePicker = false
-                }) {
-                    Text("Tanlash")
-                }
+                }) { Text("Tanlash") }
             },
             dismissButton = {
                 TextButton(onClick = { showStartDatePicker = false }) {
@@ -1378,7 +1313,6 @@ class UzPhoneVisualTransformation : VisualTransformation {
             }
             out += trimmed[i]
         }
-
         val phoneNumberOffsetTranslator = object : OffsetMapping {
             override fun originalToTransformed(offset: Int): Int {
                 if (offset <= 0) return 5
@@ -1388,7 +1322,6 @@ class UzPhoneVisualTransformation : VisualTransformation {
                 if (offset <= 9) return 10 + offset
                 return 19
             }
-
             override fun transformedToOriginal(offset: Int): Int {
                 if (offset <= 5) return 0
                 if (offset <= 8) return offset - 6
@@ -1398,7 +1331,6 @@ class UzPhoneVisualTransformation : VisualTransformation {
                 return 9
             }
         }
-
         return TransformedText(AnnotatedString(out), phoneNumberOffsetTranslator)
     }
 }
@@ -1440,7 +1372,6 @@ fun ScooterCardItem(
                     modifier = Modifier.size(24.dp)
                 )
             }
-
             Spacer(modifier = Modifier.width(16.dp))
             Text(
                 scooter.name,
@@ -1449,9 +1380,8 @@ fun ScooterCardItem(
                 fontWeight = FontWeight.Bold,
                 color = ClaudeText
             )
-
             Icon(
-                Icons.Default.KeyboardArrowRight,
+                androidx.compose.material.icons.Icons.Default.KeyboardArrowRight,
                 contentDescription = null,
                 tint = ClaudeTextSecondary,
                 modifier = Modifier.size(20.dp)
@@ -1460,10 +1390,6 @@ fun ScooterCardItem(
     }
 }
 
-/**
- * Диалог создания/редактирования скутера — теперь только поле «Имя».
- * Поле «Номер» удалено по запросу.
- */
 @Composable
 fun ScooterFormDialog(
     initialScooter: Scooter?,
@@ -1496,11 +1422,7 @@ fun ScooterFormDialog(
         },
         confirmButton = {
             Button(
-                onClick = {
-                    if (name.isNotBlank()) {
-                        onSave(name)
-                    }
-                },
+                onClick = { if (name.isNotBlank()) onSave(name) },
                 colors = ButtonDefaults.buttonColors(containerColor = ClaudeText),
                 shape = RoundedCornerShape(8.dp)
             ) {
@@ -1513,37 +1435,4 @@ fun ScooterFormDialog(
             }
         }
     )
-}
-
-@Composable
-fun RowScope.SortableHeader(
-    title: String,
-    weight: Float,
-    column: SortColumn,
-    currentSortColumn: SortColumn,
-    currentSortDirection: SortDirection,
-    onSortClick: (SortColumn) -> Unit
-) {
-    Row(
-        modifier = Modifier
-            .weight(weight)
-            .clickable { onSortClick(column) }
-            .padding(vertical = 4.dp),
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        Text(
-            title,
-            style = MaterialTheme.typography.labelSmall,
-            color = ClaudeTextSecondary,
-            fontWeight = FontWeight.Bold
-        )
-        if (currentSortColumn == column) {
-            Icon(
-                if (currentSortDirection == SortDirection.ASC) Icons.Default.ArrowDropUp else Icons.Default.ArrowDropDown,
-                contentDescription = null,
-                tint = ClaudeTextSecondary,
-                modifier = Modifier.size(16.dp)
-            )
-        }
-    }
 }

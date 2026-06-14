@@ -18,8 +18,9 @@ interface RenterDao {
     @Query("SELECT * FROM renters WHERE id = :id LIMIT 1")
     suspend fun getRenterById(id: Int): Renter?
 
+    /** Возвращает сгенерированный rowId — нужно для немедленного уведомления при создании. */
     @Insert(onConflict = OnConflictStrategy.REPLACE)
-    suspend fun insertRenter(renter: Renter)
+    suspend fun insertRenter(renter: Renter): Long
 
     @Update
     suspend fun updateRenter(renter: Renter)
