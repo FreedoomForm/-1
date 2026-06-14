@@ -22,6 +22,7 @@ import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.ArrowDropDown
 import androidx.compose.material.icons.filled.ArrowDropUp
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.List
 import androidx.compose.material.icons.filled.DirectionsBike
 import androidx.compose.material.icons.filled.Search
@@ -639,6 +640,45 @@ fun MainScreen(
    ТАБЛИЦА АРЕНДАТОРОВ
    ============================================================================ */
 
+/**
+ * Ячейка заголовка таблицы. Должна быть расширением RowScope, чтобы
+ * внутри был доступен `Modifier.weight(...)`.
+ */
+@Composable
+fun RowScope.HeaderCell(
+    title: String,
+    weightValue: Float,
+    col: SortColumn,
+    currentSortColumn: SortColumn,
+    currentSortDirection: SortDirection,
+    onSortClick: (SortColumn) -> Unit
+) {
+    Row(
+        modifier = Modifier
+            .weight(weightValue)
+            .clickable { onSortClick(col) }
+            .padding(horizontal = 4.dp, vertical = 6.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Text(
+            title,
+            style = MaterialTheme.typography.labelSmall,
+            color = ClaudeText,
+            fontWeight = FontWeight.Bold,
+            maxLines = 1
+        )
+        if (currentSortColumn == col) {
+            Icon(
+                if (currentSortDirection == SortDirection.ASC) Icons.Default.ArrowDropUp
+                else Icons.Default.ArrowDropDown,
+                contentDescription = null,
+                tint = ClaudeAccent,
+                modifier = Modifier.size(16.dp)
+            )
+        }
+    }
+}
+
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
 @Composable
 fun RenterTable(
@@ -660,35 +700,6 @@ fun RenterTable(
     val wStat  = 0.7f
 
     val dateFmt = remember { SimpleDateFormat("dd.MM.yyyy", Locale.getDefault()) }
-    val sortIcon: @Composable (SortColumn) -> Unit = { col ->
-        if (sortColumn == col) {
-            Icon(
-                if (sortDirection == SortDirection.ASC) Icons.Default.ArrowDropUp
-                else Icons.Default.ArrowDropDown,
-                contentDescription = null,
-                tint = ClaudeAccent,
-                modifier = Modifier.size(16.dp)
-            )
-        }
-    }
-    val headerCell: @Composable (String, Float, SortColumn) -> Unit = { title, weight, col ->
-        Row(
-            modifier = Modifier
-                .weight(weight)
-                .clickable { onSort(col) }
-                .padding(horizontal = 4.dp, vertical = 6.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Text(
-                title,
-                style = MaterialTheme.typography.labelSmall,
-                color = ClaudeText,
-                fontWeight = FontWeight.Bold,
-                maxLines = 1
-            )
-            sortIcon(col)
-        }
-    }
 
     Column(modifier = Modifier.fillMaxSize()) {
         // Заголовок
@@ -702,12 +713,12 @@ fun RenterTable(
                     .padding(horizontal = 8.dp, vertical = 8.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                headerCell("Mijoz",      wName,  SortColumn.NAME)
-                headerCell("Tel",        wPhone, SortColumn.NAME)
-                headerCell("Skuter",     wScoot, SortColumn.NAME)
-                headerCell("Boshlanish", wStart, SortColumn.START_TIME)
-                headerCell("Tugash",     wEnd,   SortColumn.START_TIME)
-                headerCell("Qarz",       wDebt,  SortColumn.DEBT)
+                HeaderCell("Mijoz",      wName,  SortColumn.NAME,       sortColumn, sortDirection, onSort)
+                HeaderCell("Tel",        wPhone, SortColumn.NAME,       sortColumn, sortDirection, onSort)
+                HeaderCell("Skuter",     wScoot, SortColumn.NAME,       sortColumn, sortDirection, onSort)
+                HeaderCell("Boshlanish", wStart, SortColumn.START_TIME, sortColumn, sortDirection, onSort)
+                HeaderCell("Tugash",     wEnd,   SortColumn.START_TIME, sortColumn, sortDirection, onSort)
+                HeaderCell("Qarz",       wDebt,  SortColumn.DEBT,        sortColumn, sortDirection, onSort)
                 Text(
                     "Holat",
                     modifier = Modifier
@@ -1381,7 +1392,7 @@ fun ScooterCardItem(
                 color = ClaudeText
             )
             Icon(
-                androidx.compose.material.icons.Icons.Default.KeyboardArrowRight,
+                Icons.Default.KeyboardArrowRight,
                 contentDescription = null,
                 tint = ClaudeTextSecondary,
                 modifier = Modifier.size(20.dp)
