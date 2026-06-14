@@ -1,29 +1,37 @@
 /**
  * Подключение к Neon Postgres через serverless-драйвер.
- *
- * Neon HTTP fetch — не WebSocket — корректно работает в Vercel
- * serverless-функциях (cold start + быстрое закрытие соединения).
  */
 import { neon, neonConfig } from '@neondatabase/serverless';
 
-// Кэширование клиента между инвокациями в одном Lambda-контейнере.
 let _sql: ReturnType<typeof neon> | null = null;
 
-// Fallback — используется только если env var не установлен в Vercel.
 const FALLBACK_DB_URL = 'postgresql://neondb_owner:npg_JzxDP5fWS7gb@ep-mute-king-aobpl5tx-pooler.c-2.ap-southeast-1.aws.neon.tech/neondb?sslmode=require';
+
+function cleanDbUrl(url: string): string {
+  // neon() не поддерживает channel_binding — убираем
+  let clean = url.replace(/&?channel_binding=[^&]*/g, '');
+  // Убираем лишний & в начале если sslmode был первым
+  clean = clean.replace(/\?&/, '?');
+  // Убираем trailing & или ?
+  clean = clean.replace(/[&?]$/, '');
+  return clean;
+}
+
+function isValidPostgresUrl(url: string): boolean {
+  return url.startsWith('postgresql://') || url.startsWith('postgres://');
+}
 
 export function getSql() {
   if (_sql) return _sql;
 
-  const url = process.env.DATABASE_URL || FALLBACK_DB_URL;
-  if (!url) {
-    console.error('[db] FATAL: DATABASE_URL is not set.');
-    throw new Error('DATABASE_URL is not set.');
+  const rawUrl = process.env.DATABASE_URL || FALLBACK_DB_URL;
+  if (!rawUrl || !isValidPostgresUrl(rawUrl)) {
+    console.error('[db] DATABASE_URL is missing or invalid, using fallback');
+    _sql = neon(cleanDbUrl(FALLBACK_DB_URL));
+    return _sql;
   }
-  console.log('[db] Connecting to Neon…');
-  _sql = neon(url);
+  _sql = neon(cleanDbUrl(rawUrl));
   return _sql;
 }
 
-// Полезно для логов в продакшене.
 neonConfig.fetchConnectionCache = true;
