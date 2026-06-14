@@ -52,13 +52,14 @@ jobs:
           cache-disabled: false
 
       # 4. Android SDK: нужен platform 36 и build-tools 36.
-      #    Пакеты передаём одной строкой через запятую — setup-android@v3
-      #    корректно их разделяет именно так (с новой строкой воспринимал
-      #    весь блок как одно имя пакета).
+      #    ⚠️ setup-android@v3 в src/main.ts делает packages.split(' ')
+      #    (только по пробелу!). Запятая/перенос строки → один «пакет».
+      #    Также cmdline-tools action ставит самостоятельно (16.0), поэтому
+      #    его в списке НЕ указываем.
       - name: Set up Android SDK
         uses: android-actions/setup-android@v3
         with:
-          packages: 'cmdline-tools;latest,platform-tools,platforms;android-36,build-tools;36.0.0'
+          packages: 'platform-tools platforms;android-36 build-tools;36.0.0'
           accept-android-sdk-licenses: true
 
       # 5. В репозитории нет gradlew — генерируем wrapper
