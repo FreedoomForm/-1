@@ -18,8 +18,14 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
 
 /**
- * Управляет каналом уведомлений, публикует напоминания о сроке оплаты и
- * сохраняет копию каждого уведомления в таблицу `notification_history`.
+ * Публикует уведомления о наступлении срока оплаты и сохраняет
+ * копию каждого в таблицу `notification_history`.
+ *
+ * У уведомления две action-кнопки:
+ *  • «To'lov qabul qilindi» — оплата прошла, но скутер остаётся
+ *    у клиента (isReturned не меняется).
+ *  • «Kontraktni uzish»      — контракт разорван: скутер возвращён
+ *    на базу, оплата тоже прошла.
  */
 object NotificationHelper {
 
@@ -30,13 +36,10 @@ object NotificationHelper {
 
     private val historyScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
-    /** Создать канал уведомлений (идемпотентно). */
     fun createChannel(context: Context) {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             val channel = NotificationChannel(
-                CHANNEL_ID,
-                CHANNEL_NAME,
-                NotificationManager.IMPORTANCE_HIGH
+                CHANNEL_ID, CHANNEL_NAME, NotificationManager.IMPORTANCE_HIGH
             ).apply {
                 description = CHANNEL_DESC
                 enableVibration(true)
@@ -45,18 +48,8 @@ object NotificationHelper {
         }
     }
 
-    /**
-     * Опубликовать уведомление с двумя action-кнопками:
-     *  • «To'lov qabul qilindi» — списывает недельный тариф из долга
-     *    и помечает скутер как возвращённый.
-     *  • «1 soat eslatma»      — ставит напоминание через час.
-     * Действия работают и при закрытом приложении.
-     */
     fun postPaymentDueNotification(
-        context: Context,
-        renterId: Int,
-        name: String,
-        phone: String
+        context: Context, renterId: Int, name: String, phone: String
     ) {
         val title = "To'lov muddati yetdi"
         val body = "Mijoz $name ($phone) bugun to'lov qilishi kerak"
@@ -68,38 +61,30 @@ object NotificationHelper {
             putExtra("renterId", renterId)
         }
         val openPendingIntent = PendingIntent.getActivity(
-            context,
-            renterId,
-            openIntent,
+            context, renterId, openIntent,
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
 
-        // Action 1: Принял оплату
+        // Action 1: Принял оплату (долг уменьшается, скутер остаётся у клиента)
         val paymentIntent = Intent(context, NotificationActionReceiver::class.java).apply {
             action = NotificationActionReceiver.ACTION_PAYMENT_RECEIVED
             putExtra(NotificationActionReceiver.EXTRA_RENTER_ID, renterId)
         }
         val paymentPendingIntent = PendingIntent.getBroadcast(
-            context,
-            renterId * 10 + 0,
-            paymentIntent,
+            context, renterId * 10 + 0, paymentIntent,
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
 
-        // Action 2: Напомнить через час
-        val remindIntent = Intent(context, NotificationActionReceiver::class.java).apply {
-            action = NotificationActionReceiver.ACTION_REMIND_IN_ONE_HOUR
+        // Action 2: Разорвать контракт (долг уменьшается, скутер возвращается)
+        val terminateIntent = Intent(context, NotificationActionReceiver::class.java).apply {
+            action = NotificationActionReceiver.ACTION_TERMINATE_CONTRACT
             putExtra(NotificationActionReceiver.EXTRA_RENTER_ID, renterId)
         }
-        val remindPendingIntent = PendingIntent.getBroadcast(
-            context,
-            renterId * 10 + 1,
-            remindIntent,
+        val terminatePendingIntent = PendingIntent.getBroadcast(
+            context, renterId * 10 + 2, terminateIntent,
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
 
-        // Используем только те иконки, которые точно существуют в android.R.drawable
-        // на всех API-уровнях. checkbox_on_background ранее был проблемой.
         val notification = NotificationCompat.Builder(context, CHANNEL_ID)
             .setSmallIcon(android.R.drawable.stat_notify_chat)
             .setContentTitle(title)
@@ -109,14 +94,14 @@ object NotificationHelper {
             .setAutoCancel(true)
             .setContentIntent(openPendingIntent)
             .addAction(
-                android.R.drawable.ic_menu_save,        // «Сохранить» = принять оплату
+                android.R.drawable.ic_menu_save,
                 "To'lov qabul qilindi",
                 paymentPendingIntent
             )
             .addAction(
-                android.R.drawable.ic_popup_reminder,   // Колокольчик-напоминание
-                "1 soat eslatma",
-                remindPendingIntent
+                android.R.drawable.ic_menu_delete,
+                "Kontraktni uzish",
+                terminatePendingIntent
             )
             .build()
 
@@ -129,12 +114,7 @@ object NotificationHelper {
         }
     }
 
-    private fun saveToHistory(
-        context: Context,
-        renterId: Int,
-        title: String,
-        message: String
-    ) {
+    private fun saveToHistory(context: Context, renterId: Int, title: String, message: String) {
         historyScope.launch {
             try {
                 val db = AppDatabase.getDatabase(context)

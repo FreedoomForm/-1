@@ -1,7 +1,6 @@
 package com.example.ui
 
 import android.app.Application
-import android.content.Context
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import androidx.work.OneTimeWorkRequestBuilder
@@ -10,6 +9,7 @@ import androidx.work.workDataOf
 import com.example.data.AppDatabase
 import com.example.data.Renter
 import com.example.data.RenterRepository
+import com.example.data.SettingsRepository
 import com.example.worker.PaymentCheckWorker
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
@@ -32,11 +32,9 @@ class RenterViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     /**
-     * Создать арендатора. Если на момент создания срок аренды уже истёк
-     * (например, сегодня 11-е, дата выдачи 3-е, длительность 7 дней →
-     *  окончание было 10-го), то:
-     *  • долг автоматически выставляется равным недельному тарифу;
-     *  • сразу же запускается одноразовое уведомление.
+     * Создать арендатора. Если на момент создания срок аренды уже истёк,
+     * долг автоматически = недельный тариф и сразу же уходит уведомление
+     * (без ожидания 01:00 следующего дня).
      */
     fun addRenter(
         name: String,
@@ -63,12 +61,17 @@ class RenterViewModel(application: Application) : AndroidViewModel(application) 
                     rentDurationDays = duration,
                     rentStartDateTimestamp = startTimestamp,
                     scooterId = scooterId,
-                    scooterName = scooterName
+                    scooterName = scooterName,
+                    // Помечаем сразу, чтобы периодический worker не
+                    // дублировал уведомление на 01:00 для уже просроченных
+                    isOverdueSmsSent = isOverdueAtCreation
                 )
             )
 
             if (isOverdueAtCreation) {
-                // Сразу же шлём уведомление по этому арендатору
+                // Моментальная отправка (без ожидания 01:00) — по запросу
+                // пользователя: «если клиент создаётся уже с просроченной
+                // датой, отправка сообщения в момент создания».
                 val immediateWork = OneTimeWorkRequestBuilder<PaymentCheckWorker>()
                     .setInputData(
                         workDataOf(
@@ -100,32 +103,21 @@ class RenterViewModel(application: Application) : AndroidViewModel(application) 
         }
     }
 
+    /**
+     * «Оплатил» через приложение (форма редактирования, если кнопка
+     * когда-либо вернётся). Скутер НЕ возвращается — только долг
+     * уменьшается на недельный тариф.
+     */
     fun markPaymentReceived(renter: Renter) {
         viewModelScope.launch {
+            val weeklyPrice = SettingsRepository(getApplication()).weeklyPrice
             repository.update(
                 renter.copy(
-                    debtAmount = 0.0,
+                    debtAmount = maxOf(0.0, renter.debtAmount - weeklyPrice),
                     lastPaymentTimestamp = System.currentTimeMillis(),
                     isOverdueSmsSent = false
                 )
             )
         }
-    }
-
-    fun scheduleOneHourReminder(context: Context, renter: Renter) {
-        val oneTimeWork = OneTimeWorkRequestBuilder<PaymentCheckWorker>()
-            .setInitialDelay(1, java.util.concurrent.TimeUnit.HOURS)
-            .setInputData(
-                workDataOf(
-                    PaymentCheckWorker.KEY_RENTER_ID to renter.id,
-                    PaymentCheckWorker.KEY_ONE_TIME to true
-                )
-            )
-            .build()
-        WorkManager.getInstance(context).enqueueUniqueWork(
-            "reminder_${renter.id}",
-            androidx.work.ExistingWorkPolicy.REPLACE,
-            oneTimeWork
-        )
     }
 }
