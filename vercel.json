@@ -1,20 +1,6 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
   "framework": null,
-  "builds": [
-    { "src": "public/**", "use": "@vercel/static" },
-    { "src": "api/auth/**/*.ts", "use": "@vercel/node" },
-    { "src": "api/renters/**/*.ts", "use": "@vercel/node" },
-    { "src": "api/scooters/**/*.ts", "use": "@vercel/node" },
-    { "src": "api/contract-history/**/*.ts", "use": "@vercel/node" },
-    { "src": "api/notifications/**/*.ts", "use": "@vercel/node" },
-    { "src": "api/init.ts", "use": "@vercel/node" }
-  ],
-  "routes": [
-    { "src": "/api/(.*)", "dest": "/api/$1" },
-    { "handle": "filesystem" },
-    { "src": "/(.*)", "dest": "/public/$1" }
-  ],
   "headers": [
     {
       "source": "/index.html",
