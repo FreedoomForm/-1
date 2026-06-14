@@ -1,5 +1,5 @@
-export default function handler(req: Request): Response {
-  return new Response(JSON.stringify({ pong: true, ts: Date.now() }), {
-    headers: { 'Content-Type': 'application/json' }
-  });
+import type { VercelRequest, VercelResponse } from '@vercel/node';
+
+export default function handler(req: VercelRequest, res: VercelResponse) {
+  res.status(200).json({ pong: true, ts: Date.now() });
 }
