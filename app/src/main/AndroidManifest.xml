@@ -26,12 +26,18 @@
             </intent-filter>
         </activity>
 
-        <!-- Получатель action-кнопок из уведомлений. Срабатывает даже
-             когда приложение закрыто. Не exported — принимает только
-             наши PendingIntents. -->
+        <!-- Получатель action-кнопок из уведомлений.
+             exported=false — вызываем только из наших PendingIntent.
+             intent-filter с action'ами — для явного соответствия
+             (хотя явный класс-компонент уже достаточен). -->
         <receiver
             android:name=".worker.NotificationActionReceiver"
-            android:exported="false" />
+            android:exported="false">
+            <intent-filter>
+                <action android:name="com.example.ACTION_PAYMENT_RECEIVED" />
+                <action android:name="com.example.ACTION_REMIND_IN_ONE_HOUR" />
+            </intent-filter>
+        </receiver>
 
     </application>
 

@@ -6,6 +6,7 @@ import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
 import android.os.Build
+import android.util.Log
 import androidx.core.app.NotificationCompat
 import androidx.core.content.getSystemService
 import com.example.MainActivity
@@ -18,11 +19,11 @@ import kotlinx.coroutines.launch
 
 /**
  * Управляет каналом уведомлений, публикует напоминания о сроке оплаты и
- * сохраняет копию каждого уведомления в таблицу `notification_history`,
- * чтобы пользователь мог видеть список внутри приложения.
+ * сохраняет копию каждого уведомления в таблицу `notification_history`.
  */
 object NotificationHelper {
 
+    private const val TAG = "NotificationHelper"
     private const val CHANNEL_ID = "payment_reminders"
     private const val CHANNEL_NAME = "To'lov eslatmalari"
     private const val CHANNEL_DESC = "Mijoz to'lov muddati eslatmalari"
@@ -46,9 +47,10 @@ object NotificationHelper {
 
     /**
      * Опубликовать уведомление с двумя action-кнопками:
-     *  • «To'lov qabul qilindi» — закрывает долг и помечает оплаченным
-     *  • «1 soat eslatma»      — ставит напоминание через час
-     * Действия работают и при закрытом приложении (BroadcastReceiver).
+     *  • «To'lov qabul qilindi» — списывает недельный тариф из долга
+     *    и помечает скутер как возвращённый.
+     *  • «1 soat eslatma»      — ставит напоминание через час.
+     * Действия работают и при закрытом приложении.
      */
     fun postPaymentDueNotification(
         context: Context,
@@ -58,6 +60,7 @@ object NotificationHelper {
     ) {
         val title = "To'lov muddati yetdi"
         val body = "Mijoz $name ($phone) bugun to'lov qilishi kerak"
+        Log.d(TAG, "Posting notification for renter #$renterId: $name")
 
         // Открыть приложение при тапе на тело уведомления
         val openIntent = Intent(context, MainActivity::class.java).apply {
@@ -95,6 +98,8 @@ object NotificationHelper {
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
 
+        // Используем только те иконки, которые точно существуют в android.R.drawable
+        // на всех API-уровнях. checkbox_on_background ранее был проблемой.
         val notification = NotificationCompat.Builder(context, CHANNEL_ID)
             .setSmallIcon(android.R.drawable.stat_notify_chat)
             .setContentTitle(title)
@@ -104,12 +109,12 @@ object NotificationHelper {
             .setAutoCancel(true)
             .setContentIntent(openPendingIntent)
             .addAction(
-                android.R.drawable.checkbox_on_background,
+                android.R.drawable.ic_menu_save,        // «Сохранить» = принять оплату
                 "To'lov qabul qilindi",
                 paymentPendingIntent
             )
             .addAction(
-                android.R.drawable.ic_popup_reminder,
+                android.R.drawable.ic_popup_reminder,   // Колокольчик-напоминание
                 "1 soat eslatma",
                 remindPendingIntent
             )
@@ -118,8 +123,9 @@ object NotificationHelper {
         try {
             context.getSystemService<NotificationManager>()?.notify(renterId, notification)
             saveToHistory(context, renterId, title, body)
-        } catch (_: SecurityException) {
-            // Android 13+: пользователь не дал POST_NOTIFICATIONS
+            Log.d(TAG, "Notification #$renterId posted successfully")
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to post notification #$renterId", e)
         }
     }
 
@@ -141,7 +147,7 @@ object NotificationHelper {
                     )
                 )
             } catch (e: Exception) {
-                e.printStackTrace()
+                Log.e(TAG, "Failed to save notification history", e)
             }
         }
     }

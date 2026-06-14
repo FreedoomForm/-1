@@ -488,20 +488,28 @@ fun MainScreen(
                     if (scooterSortDirection == SortDirection.ASC) r else -r
                 }
 
-                LazyColumn {
-                    items(filteredScooters, key = { it.id }) { scooter ->
-                        ScooterCardItem(
-                            scooter = scooter,
-                            isSelected = selectedScooters.contains(scooter.id),
-                            onSelect = { checked ->
-                                val newSet = selectedScooters.toMutableSet()
-                                if (checked) newSet.add(scooter.id) else newSet.remove(scooter.id)
-                                selectedScooters = newSet
-                            },
-                            onClick = { scooterToEdit = scooter }
-                        )
-                    }
-                }
+                ScooterTable(
+                    scooters = filteredScooters,
+                    renters = renters,
+                    selected = selectedScooters,
+                    sortColumn = scooterSortColumn,
+                    sortDirection = scooterSortDirection,
+                    onSort = { col ->
+                        if (scooterSortColumn == col) {
+                            scooterSortDirection =
+                                if (scooterSortDirection == SortDirection.ASC) SortDirection.DESC else SortDirection.ASC
+                        } else {
+                            scooterSortColumn = col
+                            scooterSortDirection = SortDirection.ASC
+                        }
+                    },
+                    onSelect = { id, checked ->
+                        val newSet = selectedScooters.toMutableSet()
+                        if (checked) newSet.add(id) else newSet.remove(id)
+                        selectedScooters = newSet
+                    },
+                    onClick = { scooterToEdit = it }
+                )
             }
         }
 
@@ -567,6 +575,7 @@ fun MainScreen(
             val isEditScooter = scooterToEdit != null
             ScooterFormDialog(
                 initialScooter = scooterToEdit,
+                existingScooters = scooters,
                 onDismiss = {
                     showAddScooterDialog = false
                     scooterToEdit = null
@@ -696,8 +705,7 @@ fun RenterTable(
     val wScoot = 1.0f
     val wStart = 1.1f
     val wEnd   = 1.1f
-    val wDebt  = 0.7f
-    val wStat  = 0.7f
+    val wDebt  = 0.8f
 
     val dateFmt = remember { SimpleDateFormat("dd.MM.yyyy", Locale.getDefault()) }
 
@@ -719,16 +727,6 @@ fun RenterTable(
                 HeaderCell("Boshlanish", wStart, SortColumn.START_TIME, sortColumn, sortDirection, onSort)
                 HeaderCell("Tugash",     wEnd,   SortColumn.START_TIME, sortColumn, sortDirection, onSort)
                 HeaderCell("Qarz",       wDebt,  SortColumn.DEBT,        sortColumn, sortDirection, onSort)
-                Text(
-                    "Holat",
-                    modifier = Modifier
-                        .weight(wStat)
-                        .padding(horizontal = 4.dp),
-                    style = MaterialTheme.typography.labelSmall,
-                    color = ClaudeText,
-                    fontWeight = FontWeight.Bold,
-                    textAlign = TextAlign.Center
-                )
             }
         }
         HorizontalDivider(color = ClaudeDivider)
@@ -754,95 +752,87 @@ fun RenterTable(
                 val isSelected = selected.contains(renter.id)
                 val status = statusOf(renter)
                 val sColor = statusColor(status)
-                val sLabel = statusLabel(status)
 
+                // Цветной контур вокруг строки показывает статус:
+                //   красный — есть долг, зелёный — ок, серый — вернул скутер
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .background(
-                            if (isSelected) Color(0xFFF3F4F6) else Color.White
-                        )
-                        .combinedClickable(
-                            onClick = { if (isSelected) onSelect(renter.id, false) else onClick(renter) },
-                            onLongClick = { onSelect(renter.id, !isSelected) }
-                        )
-                        .padding(horizontal = 8.dp, vertical = 10.dp),
-                    verticalAlignment = Alignment.CenterVertically
+                        .padding(horizontal = 8.dp, vertical = 4.dp)
                 ) {
-                    // Mijoz
-                    Text(
-                        renter.name,
-                        modifier = Modifier.weight(wName).padding(horizontal = 4.dp),
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = ClaudeText,
-                        fontWeight = FontWeight.SemiBold,
-                        maxLines = 1
-                    )
-                    // Tel
-                    Text(
-                        renter.phoneNumber,
-                        modifier = Modifier.weight(wPhone).padding(horizontal = 4.dp),
-                        style = MaterialTheme.typography.bodySmall,
-                        color = ClaudeTextSecondary,
-                        maxLines = 1
-                    )
-                    // Skuter
-                    Text(
-                        renter.scooterName ?: "—",
-                        modifier = Modifier.weight(wScoot).padding(horizontal = 4.dp),
-                        style = MaterialTheme.typography.bodySmall,
-                        color = ClaudeText,
-                        maxLines = 1
-                    )
-                    // Boshlanish
-                    Text(
-                        dateFmt.format(Date(renter.rentStartDateTimestamp)),
-                        modifier = Modifier.weight(wStart).padding(horizontal = 4.dp),
-                        style = MaterialTheme.typography.bodySmall,
-                        color = ClaudeText,
-                        maxLines = 1
-                    )
-                    // Tugash
-                    val expiry = renter.rentStartDateTimestamp +
-                        (renter.rentDurationDays * 24L * 60 * 60 * 1000)
-                    Text(
-                        dateFmt.format(Date(expiry)),
-                        modifier = Modifier.weight(wEnd).padding(horizontal = 4.dp),
-                        style = MaterialTheme.typography.bodySmall,
-                        color = ClaudeText,
-                        maxLines = 1
-                    )
-                    // Qarz
-                    Text(
-                        renter.debtAmount.toBigDecimal().stripTrailingZeros().toPlainString(),
-                        modifier = Modifier.weight(wDebt).padding(horizontal = 4.dp),
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = ClaudeText,
-                        fontWeight = FontWeight.Bold,
-                        textAlign = TextAlign.End,
-                        maxLines = 1
-                    )
-                    // Holat (кружок + текст)
                     Row(
-                        modifier = Modifier.weight(wStat).padding(horizontal = 4.dp),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .border(
+                                width = if (isSelected) 2.dp else 1.5.dp,
+                                color = sColor,
+                                shape = RoundedCornerShape(8.dp)
+                            )
+                            .background(
+                                if (isSelected) Color(0xFFF3F4F6) else Color.White
+                            )
+                            .combinedClickable(
+                                onClick = { if (isSelected) onSelect(renter.id, false) else onClick(renter) },
+                                onLongClick = { onSelect(renter.id, !isSelected) }
+                            )
+                            .padding(horizontal = 8.dp, vertical = 10.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Box(
-                            modifier = Modifier
-                                .size(10.dp)
-                                .background(sColor, CircleShape)
-                        )
-                        Spacer(modifier = Modifier.width(4.dp))
+                        // Mijoz
                         Text(
-                            sLabel,
-                            style = MaterialTheme.typography.labelSmall,
-                            color = sColor,
+                            renter.name,
+                            modifier = Modifier.weight(wName).padding(horizontal = 4.dp),
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = ClaudeText,
+                            fontWeight = FontWeight.SemiBold,
+                            maxLines = 1
+                        )
+                        // Tel
+                        Text(
+                            renter.phoneNumber,
+                            modifier = Modifier.weight(wPhone).padding(horizontal = 4.dp),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = ClaudeTextSecondary,
+                            maxLines = 1
+                        )
+                        // Skuter
+                        Text(
+                            renter.scooterName ?: "—",
+                            modifier = Modifier.weight(wScoot).padding(horizontal = 4.dp),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = ClaudeText,
+                            maxLines = 1
+                        )
+                        // Boshlanish
+                        Text(
+                            dateFmt.format(Date(renter.rentStartDateTimestamp)),
+                            modifier = Modifier.weight(wStart).padding(horizontal = 4.dp),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = ClaudeText,
+                            maxLines = 1
+                        )
+                        // Tugash
+                        val expiry = renter.rentStartDateTimestamp +
+                            (renter.rentDurationDays * 24L * 60 * 60 * 1000)
+                        Text(
+                            dateFmt.format(Date(expiry)),
+                            modifier = Modifier.weight(wEnd).padding(horizontal = 4.dp),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = ClaudeText,
+                            maxLines = 1
+                        )
+                        // Qarz
+                        Text(
+                            renter.debtAmount.toBigDecimal().stripTrailingZeros().toPlainString(),
+                            modifier = Modifier.weight(wDebt).padding(horizontal = 4.dp),
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = ClaudeText,
                             fontWeight = FontWeight.Bold,
+                            textAlign = TextAlign.End,
                             maxLines = 1
                         )
                     }
                 }
-                HorizontalDivider(color = ClaudeDivider.copy(alpha = 0.5f))
             }
         }
     }
@@ -1346,68 +1336,171 @@ class UzPhoneVisualTransformation : VisualTransformation {
     }
 }
 
+/* ============================================================================
+   ТАБЛИЦА СКУТЕРОВ (с колонкой состояния)
+   ============================================================================ */
+
+private enum class ScooterStatus { RENTED, IN_BASE }
+
+private fun scooterStatusOf(scooterId: Int, renters: List<Renter>): ScooterStatus {
+    val active = renters.any { it.scooterId == scooterId && !it.isReturned }
+    return if (active) ScooterStatus.RENTED else ScooterStatus.IN_BASE
+}
+
+private fun scooterStatusColor(s: ScooterStatus): Color = when (s) {
+    ScooterStatus.RENTED  -> Color(0xFFE05B44) // красный — в аренде
+    ScooterStatus.IN_BASE -> Color(0xFF34C759) // зелёный — в базе
+}
+
+private fun scooterStatusLabel(s: ScooterStatus): String = when (s) {
+    ScooterStatus.RENTED  -> "Ijarada"
+    ScooterStatus.IN_BASE -> "Bazada"
+}
+
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
-fun ScooterCardItem(
-    scooter: Scooter,
-    isSelected: Boolean,
-    onSelect: (Boolean) -> Unit,
-    onClick: () -> Unit
+fun ScooterTable(
+    scooters: List<Scooter>,
+    renters: List<Renter>,
+    selected: Set<Int>,
+    sortColumn: SortColumn,
+    sortDirection: SortDirection,
+    onSort: (SortColumn) -> Unit,
+    onSelect: (Int, Boolean) -> Unit,
+    onClick: (Scooter) -> Unit
 ) {
-    Card(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(horizontal = 16.dp, vertical = 6.dp)
-            .combinedClickable(
-                onClick = { if (isSelected) onSelect(false) else onClick() },
-                onLongClick = { onSelect(!isSelected) }
-            ),
-        shape = RoundedCornerShape(16.dp),
-        colors = CardDefaults.cardColors(containerColor = if (isSelected) Color(0xFFF3F4F6) else Color.White),
-        elevation = CardDefaults.cardElevation(defaultElevation = if (isSelected) 0.dp else 2.dp)
-    ) {
-        Row(
-            modifier = Modifier.padding(16.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Box(
+    val wName  = 2.0f
+    val wStat  = 1.0f
+
+    Column(modifier = Modifier.fillMaxSize()) {
+        // Заголовок
+        Surface(color = ClaudeCard, modifier = Modifier.fillMaxWidth()) {
+            Row(
                 modifier = Modifier
-                    .size(48.dp)
-                    .background(Color(0xFFF2F2F7), CircleShape),
-                contentAlignment = Alignment.Center
+                    .fillMaxWidth()
+                    .padding(horizontal = 8.dp, vertical = 8.dp),
+                verticalAlignment = Alignment.CenterVertically
             ) {
-                Icon(
-                    Icons.Default.DirectionsBike,
-                    contentDescription = null,
-                    tint = ClaudeTextSecondary,
-                    modifier = Modifier.size(24.dp)
+                HeaderCell("Nomi",  wName, SortColumn.NAME, sortColumn, sortDirection, onSort)
+                Text(
+                    "Holat",
+                    modifier = Modifier
+                        .weight(wStat)
+                        .padding(horizontal = 4.dp),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = ClaudeText,
+                    fontWeight = FontWeight.Bold,
+                    textAlign = TextAlign.Center
                 )
             }
-            Spacer(modifier = Modifier.width(16.dp))
-            Text(
-                scooter.name,
-                modifier = Modifier.weight(1f),
-                style = MaterialTheme.typography.bodyMedium,
-                fontWeight = FontWeight.Bold,
-                color = ClaudeText
-            )
-            Icon(
-                Icons.Default.KeyboardArrowRight,
-                contentDescription = null,
-                tint = ClaudeTextSecondary,
-                modifier = Modifier.size(20.dp)
-            )
+        }
+        HorizontalDivider(color = ClaudeDivider)
+
+        if (scooters.isEmpty()) {
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(32.dp),
+                contentAlignment = Alignment.Center
+            ) {
+                Text(
+                    "Skuterlar yo'q",
+                    color = ClaudeTextSecondary,
+                    style = MaterialTheme.typography.bodyMedium
+                )
+            }
+            return@Column
+        }
+
+        LazyColumn(modifier = Modifier.fillMaxSize()) {
+            items(scooters, key = { it.id }) { scooter ->
+                val isSelected = selected.contains(scooter.id)
+                val status = scooterStatusOf(scooter.id, renters)
+                val sColor = scooterStatusColor(status)
+
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 8.dp, vertical = 4.dp)
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .border(
+                                width = if (isSelected) 2.dp else 1.5.dp,
+                                color = sColor,
+                                shape = RoundedCornerShape(8.dp)
+                            )
+                            .background(if (isSelected) Color(0xFFF3F4F6) else Color.White)
+                            .combinedClickable(
+                                onClick = { if (isSelected) onSelect(scooter.id, false) else onClick(scooter) },
+                                onLongClick = { onSelect(scooter.id, !isSelected) }
+                            )
+                            .padding(horizontal = 8.dp, vertical = 12.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            scooter.name,
+                            modifier = Modifier
+                                .weight(wName)
+                                .padding(horizontal = 4.dp),
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = ClaudeText,
+                            fontWeight = FontWeight.SemiBold,
+                            maxLines = 1
+                        )
+                        Row(
+                            modifier = Modifier
+                                .weight(wStat)
+                                .padding(horizontal = 4.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Box(
+                                modifier = Modifier
+                                    .size(10.dp)
+                                    .background(sColor, CircleShape)
+                            )
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text(
+                                scooterStatusLabel(status),
+                                style = MaterialTheme.typography.labelSmall,
+                                color = sColor,
+                                fontWeight = FontWeight.Bold,
+                                maxLines = 1
+                            )
+                        }
+                    }
+                }
+            }
         }
     }
 }
 
+/**
+ * Диалог создания / редактирования скутера.
+ * При создании автоматически предлагает следующий свободный «BC-NNN» —
+ * формат фиксированный и сохраняется при сохранении.
+ */
 @Composable
 fun ScooterFormDialog(
     initialScooter: Scooter?,
+    existingScooters: List<Scooter>,
     onDismiss: () -> Unit,
     onSave: (String) -> Unit
 ) {
-    var name by remember { mutableStateOf(initialScooter?.name ?: "") }
+    // Следующий номер в формате BC-NNN, исходя из уже существующих имён.
+    // Если редактируем — используем текущее имя как стартовое значение.
+    val initialName = remember(initialScooter, existingScooters) {
+        if (initialScooter != null) {
+            initialScooter.name
+        } else {
+            val nextN = (existingScooters
+                .mapNotNull { it.name.removePrefix("BC-").trimStart('0').toIntOrNull() }
+                .maxOrNull() ?: 0) + 1
+            "BC-" + nextN.toString().padStart(3, '0')
+        }
+    }
+    var name by remember { mutableStateOf(initialName) }
 
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -1425,9 +1518,18 @@ fun ScooterFormDialog(
                 OutlinedTextField(
                     value = name,
                     onValueChange = { name = it },
-                    label = { Text("Skuter nomi") },
+                    label = { Text("Skuter nomi (BC- formatida)") },
                     modifier = Modifier.fillMaxWidth(),
-                    shape = RoundedCornerShape(8.dp)
+                    shape = RoundedCornerShape(8.dp),
+                    supportingText = {
+                        if (initialScooter == null) {
+                            Text(
+                                "Avtomatik raqamlandi. Istalgan nom bilan almashtirishingiz mumkin.",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = ClaudeTextSecondary
+                            )
+                        }
+                    }
                 )
             }
         },
