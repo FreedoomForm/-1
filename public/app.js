@@ -184,7 +184,7 @@ async function onLoginSubmit(e) {
   document.getElementById('login-error').classList.add('hidden');
 
   try {
-    const resp = await api('/auth/login', { body: { email, password } });
+    const resp = await api('/auth/login', { method: 'POST', body: { email, password } });
     STORAGE.token = resp.token;
     STORAGE.role = resp.user.role;
     STORAGE.email = resp.user.email;
@@ -206,7 +206,7 @@ async function onRegisterSubmit(e) {
   const password = fd.get('password');
 
   try {
-    const resp = await api('/auth/register', { body: { email, password } });
+    const resp = await api('/auth/register', { method: 'POST', body: { email, password } });
     STORAGE.token = resp.token;
     STORAGE.role = resp.user.role;
     STORAGE.email = resp.user.email;
