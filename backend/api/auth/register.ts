@@ -35,7 +35,8 @@ export default withCors(async (req: Request) => {
   const sql = getSql();
 
   // Считаем существующих пользователей — первый станет admin.
-  const [{ count }] = await sql`SELECT COUNT(*)::int AS count FROM users`;
+  const cntRows = (await sql`SELECT COUNT(*)::int AS count FROM users`) as any[];
+  const count = cntRows[0].count;
   const role = count === 0 ? 'admin' : 'viewer';
 
   const passwordHash = await bcrypt.hash(password, 10);
