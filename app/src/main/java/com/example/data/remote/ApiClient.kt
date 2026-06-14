@@ -27,15 +27,8 @@ object ApiClient {
     @Synchronized
     fun getService(context: Context): ApiService {
         val tokenStore = TokenStore(context.applicationContext)
-        val baseUrl = tokenStore.serverUrl?.trim()?.let {
-            if (it.endsWith("/")) it else "$it/"
-        }
-
-        if (baseUrl == null) {
-            throw IllegalStateException(
-                "Server URL не задан. Войдите в систему сначала."
-            )
-        }
+        val rawUrl = tokenStore.serverUrl?.trim() ?: TokenStore.DEFAULT_SERVER_URL
+        val baseUrl = if (rawUrl.endsWith("/")) rawUrl else "$rawUrl/"
 
         if (cached != null && cachedUrl == baseUrl) return cached!!
 

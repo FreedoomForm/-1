@@ -102,7 +102,7 @@ function renderLogin() {
         <form id="login-form" class="space-y-3">
           <div>
             <label class="label">Server URL</label>
-            <input class="input" name="base" value="${base}" placeholder="https://my-app.vercel.app" />
+            <input class="input" name="base" value="${base}" placeholder="https://city1bike.vercel.app" />
             <p class="text-xs text-stone-400 mt-1">Bo'sh qoldirsangiz — joriy sahifa URL ishlatiladi</p>
           </div>
           <div>
@@ -142,7 +142,7 @@ function renderRegister() {
         <form id="reg-form" class="space-y-3">
           <div>
             <label class="label">Server URL</label>
-            <input class="input" name="base" value="${STORAGE.base}" placeholder="https://my-app.vercel.app" />
+            <input class="input" name="base" value="${STORAGE.base}" placeholder="https://city1bike.vercel.app" />
           </div>
           <div>
             <label class="label">Email</label>

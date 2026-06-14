@@ -21,7 +21,7 @@ class SettingsRepository(context: Context) {
 
     /** URL бэкенда Vercel, например https://my-app.vercel.app. */
     var apiBaseUrl: String
-        get() = prefs.getString("api_base_url", "") ?: ""
+        get() = prefs.getString("api_base_url", DEFAULT_SERVER_URL) ?: DEFAULT_SERVER_URL
         set(value) = prefs.edit().putString("api_base_url", value).apply()
 
     /** Локальный пароль senior admin (fallback, если backend недоступен). */
@@ -39,6 +39,7 @@ class SettingsRepository(context: Context) {
         set(value) = prefs.edit().putString("current_role", value).apply()
 
     companion object {
+        const val DEFAULT_SERVER_URL = "https://city1bike.vercel.app"
         const val DEFAULT_TEMPLATE = """Assalomu alaykum {name}, sizning skuter ijarangiz {days} kunga kechikdi. Iltimos, to'lovni o'z vaqtida kiriting. Umumiy qarz: {debt}.
 
 https://transfer.paycom.uz/680a40043fc0407a2e48e8fe

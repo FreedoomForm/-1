@@ -34,7 +34,7 @@ class TokenStore(context: Context) {
         set(value) = prefs.edit().putString(KEY_JWT, value).apply()
 
     var serverUrl: String?
-        get() = prefs.getString(KEY_SERVER_URL, null)
+        get() = prefs.getString(KEY_SERVER_URL, null) ?: DEFAULT_SERVER_URL
         set(value) = prefs.edit().putString(KEY_SERVER_URL, value).apply()
 
     var userEmail: String?
@@ -54,6 +54,7 @@ class TokenStore(context: Context) {
     companion object {
         private const val FILE_NAME = "scooter_secure_prefs"
         private const val KEY_JWT = "jwt"
+        const val DEFAULT_SERVER_URL = "https://city1bike.vercel.app"
         private const val KEY_SERVER_URL = "server_url"
         private const val KEY_USER_EMAIL = "user_email"
         private const val KEY_ROLE = "role"

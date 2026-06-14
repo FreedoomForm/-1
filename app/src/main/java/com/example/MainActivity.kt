@@ -1853,7 +1853,7 @@ fun LoginScreen(
                         onErrorShown()
                     },
                     label = { Text("Server URL") },
-                    placeholder = { Text("https://my-app.vercel.app") },
+                    placeholder = { Text(com.example.data.SettingsRepository.DEFAULT_SERVER_URL) },
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri),
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth(),
