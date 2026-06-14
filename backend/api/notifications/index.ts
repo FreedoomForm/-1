@@ -2,9 +2,9 @@
  * GET  /api/notifications — последние уведомления
  * POST /api/notifications — записать отправленное уведомление
  */
-import { getSql } from '../_lib/db.js';
-import { getAuth } from '../_lib/auth.js';
-import { withCors, jsonResponse, errorResponse } from '../_lib/cors.js';
+import { getSql } from '../../lib/db.js';
+import { getAuth } from '../../lib/auth.js';
+import { withCors, jsonResponse, errorResponse } from '../../lib/cors.js';
 
 interface CreateNotificationBody {
   timestamp: number;
