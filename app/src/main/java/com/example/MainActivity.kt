@@ -57,6 +57,7 @@ import com.example.data.NotificationHistoryEntity
 import com.example.data.Renter
 import com.example.data.Scooter
 import com.example.ui.ContractHistoryViewModel
+import com.example.ui.LoginState
 import com.example.ui.LoginViewModel
 import com.example.ui.NotificationHistoryViewModel
 import com.example.ui.RenterViewModel
