@@ -142,7 +142,7 @@ class LoginViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch {
             withContext(Dispatchers.IO) {
                 // Очищаем и Room, чтобы другой пользователь не видел данные.
-                AppDatabase.getDatabase(getApplication()).runInTransaction {
+                AppDatabase.getDatabase(getApplication()).withTransaction {
                     AppDatabase.getDatabase(getApplication()).renterDao().deleteAll()
                     AppDatabase.getDatabase(getApplication()).scooterDao().deleteAll()
                     AppDatabase.getDatabase(getApplication())

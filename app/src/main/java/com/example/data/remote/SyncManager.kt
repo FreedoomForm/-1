@@ -35,7 +35,7 @@ class SyncManager(
             val contractHistory = api.getContractHistory()
             val notifications = api.getNotifications()
 
-            db.runInTransaction {
+            db.withTransaction {
                 db.scooterDao().deleteAll()
                 db.renterDao().deleteAll()
                 db.contractHistoryDao().deleteAll()
