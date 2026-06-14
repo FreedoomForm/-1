@@ -4,6 +4,7 @@ import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.util.Log
+import androidx.core.app.NotificationManagerCompat
 import androidx.work.ExistingWorkPolicy
 import androidx.work.OneTimeWorkRequestBuilder
 import androidx.work.WorkManager
@@ -18,6 +19,9 @@ import java.util.concurrent.TimeUnit
 /**
  * Получатель action-кнопок из уведомлений. Работает даже когда
  * приложение закрыто.
+ *
+ * После любой успешной обработки уведомление автоматически исчезает
+ * из шторки (NotificationManagerCompat.cancel).
  *
  * Поддерживает два действия:
  *  • ACTION_PAYMENT_RECEIVED   — «To'lov qabul qilindi»:
@@ -45,8 +49,8 @@ class NotificationActionReceiver : BroadcastReceiver() {
     }
 
     /**
-     * «To'lov qabul qilindi»: списываем недельный тариф из долга (не ниже 0).
-     * Скутер у клиента НЕ забираем — isReturned остаётся прежним.
+     * «To'lov qabul qilindi»: списываем недельный тариф из долга.
+     * Скутер у клиента НЕ забираем.
      */
     private fun handlePaymentReceived(context: Context, renterId: Int) {
         val pending = goAsync()
@@ -65,9 +69,11 @@ class NotificationActionReceiver : BroadcastReceiver() {
                         debtAmount = newDebt,
                         lastPaymentTimestamp = System.currentTimeMillis(),
                         isOverdueSmsSent = false
-                        // isReturned НЕ меняется — клиент держит скутер
                     )
                 )
+                // Удаляем уведомление из шторки — действие обработано.
+                NotificationManagerCompat.from(context).cancel(renterId)
+                Log.d(TAG, "Notification #$renterId dismissed after payment")
             } catch (e: Exception) {
                 Log.e(TAG, "handlePaymentReceived failed", e)
             } finally {
@@ -78,7 +84,7 @@ class NotificationActionReceiver : BroadcastReceiver() {
 
     /**
      * «Kontraktni uzish»: списываем недельный тариф из долга и помечаем
-     * арендатора как вернувшего скутер (isReturned = true).
+     * арендатора как вернувшего скутер.
      */
     private fun handleTerminateContract(context: Context, renterId: Int) {
         val pending = goAsync()
@@ -100,6 +106,8 @@ class NotificationActionReceiver : BroadcastReceiver() {
                         isOverdueSmsSent = false
                     )
                 )
+                NotificationManagerCompat.from(context).cancel(renterId)
+                Log.d(TAG, "Notification #$renterId dismissed after terminate")
             } catch (e: Exception) {
                 Log.e(TAG, "handleTerminateContract failed", e)
             } finally {
@@ -114,8 +122,6 @@ class NotificationActionReceiver : BroadcastReceiver() {
         const val ACTION_TERMINATE_CONTRACT = "com.example.ACTION_TERMINATE_CONTRACT"
         const val EXTRA_RENTER_ID = "renterId"
 
-        /** Запланировать напоминание через час. (Оставлено на случай, если
-         *  понадобится для отладки или альтернативных сценариев.) */
         @Suppress("unused")
         fun scheduleOneHourReminder(context: Context, renterId: Int) {
             val work = OneTimeWorkRequestBuilder<PaymentCheckWorker>()

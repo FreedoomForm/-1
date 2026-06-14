@@ -2,6 +2,7 @@ package com.example.worker
 
 import android.content.Context
 import android.telephony.SmsManager
+import android.util.Log
 import androidx.work.CoroutineWorker
 import androidx.work.WorkerParameters
 import com.example.data.AppDatabase
@@ -10,6 +11,19 @@ import com.example.data.SettingsRepository
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
+/**
+ * Шлёт SMS просроченным арендаторам.
+ *
+ * Запускается двумя способами:
+ *  • Периодически — раз в 4 часа (MainActivity регистрирует
+ *    «OverdueSmsWork» при старте приложения).
+ *  • Одноразово — сразу после создания арендатора с просроченной
+ *    датой (RenterViewModel.addRenter ставит задачу в очередь).
+ *
+ * Для отправки требуется разрешение android.permission.SEND_SMS,
+ * которое автоматически запрашивается при первом запуске приложения.
+ * На эмуляторах Android SMS-отправка не работает вовсе.
+ */
 class SmsWorker(
     appContext: Context,
     workerParams: WorkerParameters
@@ -23,36 +37,73 @@ class SmsWorker(
             val activeRenters = repository.getActiveRenters()
             val currentTime = System.currentTimeMillis()
 
+            Log.d(TAG, "SmsWorker started: ${activeRenters.size} active renters")
+
+            var sentCount = 0
+            var skippedCount = 0
+
             activeRenters.forEach { renter ->
                 val elapsedMillis = currentTime - renter.rentStartDateTimestamp
                 val elapsedDays = (elapsedMillis / (1000 * 60 * 60 * 24)).toInt()
 
-                if (elapsedDays > renter.rentDurationDays && !renter.isOverdueSmsSent) {
+                if (renter.isOverdueSmsSent) {
+                    skippedCount++
+                    return@forEach
+                }
+
+                if (elapsedDays > renter.rentDurationDays) {
                     val daysOverdue = elapsedDays - renter.rentDurationDays
                     val rawTemplate = settingsRepo.smsTemplate
                     val message = rawTemplate
                         .replace("{name}", renter.name)
                         .replace("{days}", daysOverdue.toString())
                         .replace("{debt}", renter.debtAmount.toString())
-                    
-                    sendSms(renter.phoneNumber, message)
-                    
-                    repository.update(renter.copy(isOverdueSmsSent = true))
+
+                    val ok = sendSms(renter.phoneNumber, message)
+                    if (ok) {
+                        repository.update(renter.copy(isOverdueSmsSent = true))
+                        sentCount++
+                        Log.d(TAG, "SMS sent for renter #${renter.id} (${renter.name}), " +
+                            "$daysOverdue days overdue")
+                    } else {
+                        Log.w(TAG, "SMS failed for renter #${renter.id} (${renter.name})")
+                    }
                 }
             }
+
+            Log.d(TAG, "SmsWorker finished: sent=$sentCount skipped=$skippedCount")
             Result.success()
         } catch (e: Exception) {
-            e.printStackTrace()
+            Log.e(TAG, "SmsWorker failed", e)
             Result.retry()
         }
     }
 
-    private fun sendSms(phone: String, message: String) {
-        try {
+    /**
+     * Возвращает true, если SMS успешно отправлено (или поставлено в очередь
+     * системой). Возвращает false при любой ошибке — чтобы в логах был виден
+     * конкретный renter, который не удалось оповестить.
+     */
+    private fun sendSms(phone: String, message: String): Boolean {
+        return try {
             val smsManager = applicationContext.getSystemService(SmsManager::class.java)
+                ?: throw IllegalStateException(
+                    "SmsManager is null — у устройства нет SIM-карты или эмулятор"
+                )
             smsManager.sendTextMessage(phone, null, message, null, null)
+            Log.d(TAG, "SmsManager.sendTextMessage OK to $phone (${message.length} chars)")
+            true
+        } catch (e: SecurityException) {
+            // Нет разрешения SEND_SMS — пользователь не дал
+            Log.e(TAG, "SecurityException: SEND_SMS permission not granted", e)
+            false
         } catch (e: Exception) {
-            e.printStackTrace()
+            Log.e(TAG, "sendSms failed for $phone", e)
+            false
         }
+    }
+
+    companion object {
+        private const val TAG = "SmsWorker"
     }
 }

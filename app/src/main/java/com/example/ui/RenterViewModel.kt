@@ -11,6 +11,7 @@ import com.example.data.Renter
 import com.example.data.RenterRepository
 import com.example.data.SettingsRepository
 import com.example.worker.PaymentCheckWorker
+import com.example.worker.SmsWorker
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.stateIn
@@ -32,9 +33,12 @@ class RenterViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     /**
-     * Создать арендатора. Если на момент создания срок аренды уже истёк,
-     * долг автоматически = недельный тариф и сразу же уходит уведомление
-     * (без ожидания 01:00 следующего дня).
+     * Создать арендатора.
+     *  • Если аренда уже просрочена на момент создания:
+     *      — долг = недельный тариф;
+     *      — сразу же уходит локальное уведомление;
+     *      — сразу же пытаемся отправить SMS (через SmsWorker).
+     *  • Если аренда ещё активна — обычное сохранение без уведомлений.
      */
     fun addRenter(
         name: String,
@@ -62,17 +66,18 @@ class RenterViewModel(application: Application) : AndroidViewModel(application) 
                     rentStartDateTimestamp = startTimestamp,
                     scooterId = scooterId,
                     scooterName = scooterName,
-                    // Помечаем сразу, чтобы периодический worker не
-                    // дублировал уведомление на 01:00 для уже просроченных
-                    isOverdueSmsSent = isOverdueAtCreation
+                    // Не помечаем заранее — пусть SmsWorker сам поставит true,
+                    // когда успешно отправит SMS (или PaymentCheckWorker,
+                    // когда пришлёт уведомление).
+                    isOverdueSmsSent = false
                 )
             )
 
             if (isOverdueAtCreation) {
-                // Моментальная отправка (без ожидания 01:00) — по запросу
-                // пользователя: «если клиент создаётся уже с просроченной
-                // датой, отправка сообщения в момент создания».
-                val immediateWork = OneTimeWorkRequestBuilder<PaymentCheckWorker>()
+                val wm = WorkManager.getInstance(getApplication())
+
+                // Локальное уведомление прямо сейчас
+                val notifWork = OneTimeWorkRequestBuilder<PaymentCheckWorker>()
                     .setInputData(
                         workDataOf(
                             PaymentCheckWorker.KEY_RENTER_ID to newId.toInt(),
@@ -80,7 +85,15 @@ class RenterViewModel(application: Application) : AndroidViewModel(application) 
                         )
                     )
                     .build()
-                WorkManager.getInstance(getApplication()).enqueue(immediateWork)
+                wm.enqueue(notifWork)
+
+                // SMS прямо сейчас (без ожидания периодического 4-часового тика)
+                val smsWork = OneTimeWorkRequestBuilder<SmsWorker>().build()
+                wm.enqueueUniqueWork(
+                    "immediate_sms_${newId}",
+                    androidx.work.ExistingWorkPolicy.REPLACE,
+                    smsWork
+                )
             }
         }
     }
@@ -103,11 +116,6 @@ class RenterViewModel(application: Application) : AndroidViewModel(application) 
         }
     }
 
-    /**
-     * «Оплатил» через приложение (форма редактирования, если кнопка
-     * когда-либо вернётся). Скутер НЕ возвращается — только долг
-     * уменьшается на недельный тариф.
-     */
     fun markPaymentReceived(renter: Renter) {
         viewModelScope.launch {
             val weeklyPrice = SettingsRepository(getApplication()).weeklyPrice
