@@ -17,13 +17,13 @@ export default withCors(async (req: Request) => {
   const sql = getSql();
 
   if (req.method === 'GET') {
-    const rows = await sql`
+    const rows = (await sql`
       SELECT id, name, documented_number,
              EXTRACT(EPOCH FROM created_at)::bigint AS created_at
       FROM scooters
       WHERE user_id = ${auth.sub}
       ORDER BY name ASC
-    `;
+    `) as any[];
     return jsonResponse(rows);
   }
 
@@ -35,11 +35,11 @@ export default withCors(async (req: Request) => {
 
     if (!body.name?.trim()) return errorResponse('name required', 422);
 
-    const rows = await sql`
+    const rows = (await sql`
       INSERT INTO scooters (user_id, name, documented_number)
       VALUES (${auth.sub}, ${body.name.trim()}, ${body.documented_number ?? null})
       RETURNING id
-    `;
+    `) as any[];
     return jsonResponse({ id: rows[0].id }, 201);
   }
 

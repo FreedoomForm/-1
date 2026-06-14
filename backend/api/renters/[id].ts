@@ -35,7 +35,7 @@ export default withCors(async (req: Request) => {
   const sql = getSql();
 
   if (req.method === 'GET') {
-    const rows = await sql`
+    const rows = (await sql`
       SELECT id, name, phone_number, debt_amount, rent_duration_days,
              rent_start_date_timestamp, is_returned, is_overdue_sms_sent,
              scooter_id, scooter_name, last_payment_timestamp, balance,
@@ -43,7 +43,7 @@ export default withCors(async (req: Request) => {
       FROM renters
       WHERE id = ${id} AND user_id = ${auth.sub}
       LIMIT 1
-    `;
+    `) as any[];
     const r = rows[0];
     if (!r) return errorResponse('Not found', 404);
     return jsonResponse({
@@ -61,7 +61,7 @@ export default withCors(async (req: Request) => {
     try { body = await req.json(); }
     catch { return errorResponse('Invalid JSON body'); }
 
-    const result = await sql`
+    const result = (await sql`
       UPDATE renters SET
         name                      = COALESCE(${body.name ?? null}, name),
         phone_number              = COALESCE(${body.phone_number ?? null}, phone_number),
@@ -76,16 +76,16 @@ export default withCors(async (req: Request) => {
         balance                   = COALESCE(${body.balance ?? null}, balance)
       WHERE id = ${id} AND user_id = ${auth.sub}
       RETURNING id
-    `;
+    `) as any[];
     if (result.length === 0) return errorResponse('Not found', 404);
     return jsonResponse({ id });
   }
 
   if (req.method === 'DELETE') {
     if (auth.role !== 'admin') return errorResponse('Admin only', 403, 'FORBIDDEN');
-    const result = await sql`
+    const result = (await sql`
       DELETE FROM renters WHERE id = ${id} AND user_id = ${auth.sub} RETURNING id
-    `;
+    `) as any[];
     if (result.length === 0) return errorResponse('Not found', 404);
     return jsonResponse({ deleted: id });
   }

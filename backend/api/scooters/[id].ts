@@ -20,13 +20,13 @@ export default withCors(async (req: Request) => {
   const sql = getSql();
 
   if (req.method === 'GET') {
-    const rows = await sql`
+    const rows = (await sql`
       SELECT id, name, documented_number,
              EXTRACT(EPOCH FROM created_at)::bigint AS created_at
       FROM scooters
       WHERE id = ${id} AND user_id = ${auth.sub}
       LIMIT 1
-    `;
+    `) as any[];
     const s = rows[0];
     if (!s) return errorResponse('Not found', 404);
     return jsonResponse(s);
@@ -38,22 +38,22 @@ export default withCors(async (req: Request) => {
     try { body = await req.json(); }
     catch { return errorResponse('Invalid JSON body'); }
 
-    const result = await sql`
+    const result = (await sql`
       UPDATE scooters SET
         name              = COALESCE(${body.name ?? null}, name),
         documented_number = COALESCE(${body.documented_number ?? null}, documented_number)
       WHERE id = ${id} AND user_id = ${auth.sub}
       RETURNING id
-    `;
+    `) as any[];
     if (result.length === 0) return errorResponse('Not found', 404);
     return jsonResponse({ id });
   }
 
   if (req.method === 'DELETE') {
     if (auth.role !== 'admin') return errorResponse('Admin only', 403, 'FORBIDDEN');
-    const result = await sql`
+    const result = (await sql`
       DELETE FROM scooters WHERE id = ${id} AND user_id = ${auth.sub} RETURNING id
-    `;
+    `) as any[];
     if (result.length === 0) return errorResponse('Not found', 404);
     return jsonResponse({ deleted: id });
   }

@@ -19,13 +19,13 @@ export default withCors(async (req: Request) => {
   const sql = getSql();
 
   if (req.method === 'GET') {
-    const rows = await sql`
+    const rows = (await sql`
       SELECT id, timestamp, renter_id, title, message
       FROM notification_history
       WHERE user_id = ${auth.sub}
       ORDER BY timestamp DESC
       LIMIT 500
-    `;
+    `) as any[];
     return jsonResponse(rows);
   }
 
@@ -38,12 +38,12 @@ export default withCors(async (req: Request) => {
     if (!body.title?.trim()) return errorResponse('title required', 422);
     if (!body.message?.trim()) return errorResponse('message required', 422);
 
-    const rows = await sql`
+    const rows = (await sql`
       INSERT INTO notification_history (user_id, timestamp, renter_id, title, message)
       VALUES (${auth.sub}, ${body.timestamp}, ${body.renter_id ?? null},
               ${body.title.trim()}, ${body.message.trim()})
       RETURNING id
-    `;
+    `) as any[];
     return jsonResponse({ id: rows[0].id }, 201);
   }
 

@@ -27,7 +27,7 @@ export default withCors(async (req: Request) => {
   const sql = getSql();
 
   if (req.method === 'GET') {
-    const rows = await sql`
+    const rows = (await sql`
       SELECT id, name, phone_number, debt_amount, rent_duration_days,
              rent_start_date_timestamp, is_returned, is_overdue_sms_sent,
              scooter_id, scooter_name, last_payment_timestamp, balance,
@@ -35,7 +35,7 @@ export default withCors(async (req: Request) => {
       FROM renters
       WHERE user_id = ${auth.sub}
       ORDER BY is_returned ASC, rent_start_date_timestamp DESC
-    `;
+    `) as any[];
     return jsonResponse(rows.map(r => ({
       ...r,
       debt_amount: Number(r.debt_amount),
@@ -57,7 +57,7 @@ export default withCors(async (req: Request) => {
       return errorResponse('rent_duration_days must be > 0', 422);
     }
 
-    const rows = await sql`
+    const rows = (await sql`
       INSERT INTO renters (
         user_id, name, phone_number, debt_amount, rent_duration_days,
         rent_start_date_timestamp, is_returned, is_overdue_sms_sent,
@@ -77,7 +77,7 @@ export default withCors(async (req: Request) => {
         ${body.balance ?? 0}
       )
       RETURNING id
-    `;
+    `) as any[];
     return jsonResponse({ id: rows[0].id }, 201);
   }
 

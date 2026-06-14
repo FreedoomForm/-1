@@ -25,9 +25,9 @@ export default withCors(async (req: Request) => {
   if (!email || !password) return errorResponse('Email and password required', 422);
 
   const sql = getSql();
-  const rows = await sql`
+  const rows = (await sql`
     SELECT id, email, role, password_hash FROM users WHERE email = ${email} LIMIT 1
-  `;
+  `) as any[];
   const user = rows[0];
   if (!user) return errorResponse('Invalid credentials', 401, 'INVALID_CREDENTIALS');
 

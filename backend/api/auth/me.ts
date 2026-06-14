@@ -15,7 +15,7 @@ export default withCors(async (req: Request) => {
   const auth = await getAuth(req);
   if (!auth) return errorResponse('Unauthorized', 401);
 
-  const rows = await getSql()`
+  const rows = (await getSql()) as any[]
     SELECT id, email, role,
            EXTRACT(EPOCH FROM created_at)::bigint AS created_at
     FROM users WHERE id = ${auth.sub} LIMIT 1

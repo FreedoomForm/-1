@@ -32,7 +32,7 @@ export default withCors(async (req: Request) => {
   const schemaSql = readFileSync(schemaPath, 'utf-8');
 
   const sql = getSql();
-  await sql.query(schemaSql);
+  await (sql as any).query(schemaSql);
 
   return jsonResponse({ ok: true, message: 'Schema applied. INIT_TOKEN can be removed now.' });
 });

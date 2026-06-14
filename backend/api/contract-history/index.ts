@@ -25,13 +25,13 @@ export default withCors(async (req: Request) => {
   const sql = getSql();
 
   if (req.method === 'GET') {
-    const rows = await sql`
+    const rows = (await sql`
       SELECT id, renter_id, timestamp, type, amount, notes
       FROM contract_history
       WHERE user_id = ${auth.sub}
       ORDER BY timestamp DESC
       LIMIT 500
-    `;
+    `) as any[];
     return jsonResponse(rows.map(r => ({ ...r, amount: Number(r.amount) })));
   }
 
@@ -47,12 +47,12 @@ export default withCors(async (req: Request) => {
       return errorResponse(`type must be one of: ${[...ALLOWED_TYPES].join(', ')}`, 422);
     }
 
-    const rows = await sql`
+    const rows = (await sql`
       INSERT INTO contract_history (user_id, renter_id, timestamp, type, amount, notes)
       VALUES (${auth.sub}, ${body.renter_id}, ${body.timestamp}, ${body.type},
               ${body.amount ?? 0}, ${body.notes ?? null})
       RETURNING id
-    `;
+    `) as any[];
     return jsonResponse({ id: rows[0].id }, 201);
   }
 

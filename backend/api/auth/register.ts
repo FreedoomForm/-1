@@ -42,11 +42,11 @@ export default withCors(async (req: Request) => {
 
   let user;
   try {
-    const rows = await sql`
+    const rows = (await sql`
       INSERT INTO users (email, password_hash, role)
       VALUES (${email}, ${passwordHash}, ${role})
       RETURNING id, email, role
-    `;
+    `) as any[];
     user = rows[0];
   } catch (err: any) {
     if (err?.message?.includes('unique') || err?.code === '23505') {
