@@ -1,5 +1,6 @@
 /* ═══════════════════════════════════════════════════════════
    Skuter Ijarasi — Android-matching Design System
+   Matches Compose Material3 + Claude theme from Color.kt
    ═══════════════════════════════════════════════════════════ */
 
 :root {
@@ -252,6 +253,63 @@ input, select, textarea { font-family: inherit; font-size: inherit; }
 
 .btn-danger-outline:hover { opacity: 0.8; }
 
+/* Android-matching batch action buttons */
+.btn-green {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 0 12px;
+  height: 48px;
+  background: var(--green);
+  color: #FFFFFF;
+  border: none;
+  border-radius: 12px;
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: opacity 0.15s;
+  flex: 1.4;
+  white-space: nowrap;
+}
+.btn-green:hover { opacity: 0.85; }
+
+.btn-black {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 0 12px;
+  height: 48px;
+  background: var(--accent);
+  color: #FFFFFF;
+  border: none;
+  border-radius: 12px;
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: opacity 0.15s;
+  flex: 1.4;
+  white-space: nowrap;
+}
+.btn-black:hover { opacity: 0.85; }
+
+.btn-white-outline {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  height: 48px;
+  padding: 0 8px;
+  background: var(--card);
+  color: var(--text-secondary);
+  border: 1px solid var(--divider);
+  border-radius: 12px;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+.btn-white-outline:hover { background: var(--selection); }
+
 .spinner {
   display: inline-block;
   width: 18px;
@@ -297,7 +355,7 @@ input, select, textarea { font-family: inherit; font-size: inherit; }
 .topbar-actions {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 4px;
 }
 
 .topbar-icon-btn {
@@ -345,7 +403,7 @@ input, select, textarea { font-family: inherit; font-size: inherit; }
   overflow-y: auto;
 }
 
-/* ─── Search Bar ──────────────────────────────────────── */
+/* ─── Search Bar (renters tab — pill shaped like OutlinedTextField 24dp) ─── */
 .search-bar {
   display: flex;
   align-items: center;
@@ -353,7 +411,7 @@ input, select, textarea { font-family: inherit; font-size: inherit; }
   background: var(--card);
   border-radius: 24px;
   padding: 8px 14px;
-  margin-bottom: 12px;
+  margin: 8px 0 8px;
   border: 1px solid var(--divider);
 }
 
@@ -373,23 +431,9 @@ input, select, textarea { font-family: inherit; font-size: inherit; }
 
 .search-bar input::placeholder { color: var(--text-secondary); }
 
+/* Scooter search bar — squared (12dp like Android) */
 .search-bar-squared {
   border-radius: 12px;
-}
-
-/* ─── Filter row ──────────────────────────────────────── */
-.filter-row {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  margin-bottom: 12px;
-}
-
-.filter-row .field-select {
-  width: auto;
-  padding: 6px 10px;
-  font-size: 13px;
-  border-radius: 8px;
 }
 
 /* ─── Table ───────────────────────────────────────────── */
@@ -408,7 +452,7 @@ input, select, textarea { font-family: inherit; font-size: inherit; }
 }
 
 .table-header-renters {
-  grid-template-columns: 2fr 1.5fr 1.5fr 1fr 1fr 1fr;
+  grid-template-columns: 1.4fr 1.2fr 1fr 1.1fr 1.1fr 0.8fr;
 }
 
 .table-header-scooters {
@@ -418,7 +462,7 @@ input, select, textarea { font-family: inherit; font-size: inherit; }
 .th {
   font-size: 11px;
   font-weight: 700;
-  color: var(--text-secondary);
+  color: var(--text);
   text-transform: uppercase;
   letter-spacing: 0.04em;
   padding: 4px 4px;
@@ -432,45 +476,57 @@ input, select, textarea { font-family: inherit; font-size: inherit; }
   gap: 4px;
 }
 
-/* ─── Renter Row ──────────────────────────────────────── */
+/* ─── Renter Row — FULL BORDER like Android .border(1.5dp, color, RoundedCornerShape(8dp)) ──── */
 .renter-row {
   display: grid;
-  grid-template-columns: 2fr 1.5fr 1.5fr 1fr 1fr 1fr;
+  grid-template-columns: 1.4fr 1.2fr 1fr 1.1fr 1.1fr 0.8fr;
   align-items: center;
   padding: 10px 8px;
   background: var(--card);
   border-radius: 8px;
-  border-left: 1.5px solid var(--text-secondary);
-  transition: background 0.1s;
+  border: 1.5px solid var(--text-secondary);
+  transition: background 0.1s, border-color 0.1s;
   cursor: pointer;
   position: relative;
 }
 
 .renter-row:hover { background: var(--selection); }
 
-.renter-row.status-ok { border-left-color: var(--green); }
-.renter-row.status-overdue { border-left-color: var(--red); }
-.renter-row.status-returned { border-left-color: var(--text-secondary); }
+.renter-row.status-ok { border-color: var(--green); }
+.renter-row.status-overdue { border-color: var(--red); }
+.renter-row.status-returned { border-color: var(--text-secondary); }
 
-.renter-row.selected { background: var(--selection); }
+.renter-row.selected {
+  background: var(--selection);
+  border-width: 2px;
+}
 
 .renter-name {
   font-size: 14px;
   font-weight: 600;
   color: var(--text);
   padding: 0 4px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .renter-phone {
   font-size: 12px;
   color: var(--text-secondary);
   padding: 0 4px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .renter-scooter {
   font-size: 12px;
   color: var(--text);
   padding: 0 4px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .renter-date {
@@ -533,7 +589,7 @@ input, select, textarea { font-family: inherit; font-size: inherit; }
   color: var(--red);
 }
 
-/* ─── Scooter Row ─────────────────────────────────────── */
+/* ─── Scooter Row — FULL BORDER like Android ──────────── */
 .scooter-row {
   display: grid;
   grid-template-columns: 2fr 1fr;
@@ -541,16 +597,21 @@ input, select, textarea { font-family: inherit; font-size: inherit; }
   padding: 12px 8px;
   background: var(--card);
   border-radius: 8px;
-  border-left: 1.5px solid var(--green);
-  transition: background 0.1s;
+  border: 1.5px solid var(--green);
+  transition: background 0.1s, border-color 0.1s;
   cursor: pointer;
   position: relative;
 }
 
-.scooter-row.status-rented { border-left-color: var(--red); }
-.scooter-row.status-free { border-left-color: var(--green); }
+.scooter-row.status-rented { border-color: var(--red); }
+.scooter-row.status-free { border-color: var(--green); }
 
 .scooter-row:hover { background: var(--selection); }
+
+.scooter-row.selected {
+  background: var(--selection);
+  border-width: 2px;
+}
 
 .scooter-name {
   font-size: 14px;
@@ -562,6 +623,7 @@ input, select, textarea { font-family: inherit; font-size: inherit; }
 .scooter-status {
   display: flex;
   align-items: center;
+  justify-content: center;
   gap: 6px;
   padding: 0 4px;
 }
@@ -578,8 +640,10 @@ input, select, textarea { font-family: inherit; font-size: inherit; }
 .status-dot.red { background: var(--red); }
 
 .scooter-status-label {
-  font-size: 13px;
+  font-size: 11px;
+  font-weight: 700;
   color: var(--text);
+  text-transform: uppercase;
 }
 
 .scooter-row .row-actions { display: none; }
@@ -616,7 +680,7 @@ input, select, textarea { font-family: inherit; font-size: inherit; }
 .fab:hover { transform: scale(1.05); }
 .fab:active { transform: scale(0.95); }
 
-.fab .material-icons { font-size: 28px; }
+.fab .material-icons { font-size: 32px; }
 
 /* ─── Bottom Navigation ───────────────────────────────── */
 .bottomnav {
@@ -699,6 +763,13 @@ input, select, textarea { font-family: inherit; font-size: inherit; }
   font-weight: 600;
   color: var(--text);
   margin-bottom: 16px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.modal-title .material-icons {
+  color: var(--accent);
 }
 
 .modal-form {
@@ -784,48 +855,43 @@ input, select, textarea { font-family: inherit; font-size: inherit; }
   to { opacity: 1; transform: translateY(0); }
 }
 
-/* ─── History / Notification Modal Content ────────────── */
-.modal-list { display: flex; flex-direction: column; gap: 0; }
+/* ─── Card-based History / Notification items (matching Android Card layout) ── */
+.history-card {
+  background: var(--card);
+  border-radius: 10px;
+  padding: 12px;
+  box-shadow: 0 1px 2px rgba(0,0,0,0.06);
+  border: 1px solid var(--divider);
+}
 
-.modal-list-header {
-  display: grid;
-  padding: 8px 12px;
-  background: var(--selection);
-  border-radius: 8px 8px 0 0;
-  font-size: 11px;
+.history-card-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 4px;
+}
+
+.history-card-title {
+  font-size: 14px;
   font-weight: 700;
+  color: var(--text);
+}
+
+.history-card-date {
+  font-size: 11px;
   color: var(--text-secondary);
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
 }
 
-.modal-list-header.history-header {
-  grid-template-columns: 1.2fr 1fr 1fr 0.8fr 1.5fr;
+.history-card-body {
+  font-size: 13px;
+  color: var(--text-secondary);
 }
 
-.modal-list-header.notif-header {
-  grid-template-columns: 1.2fr 1fr 1.5fr;
-}
-
-.modal-list-row {
-  display: grid;
-  padding: 10px 12px;
-  border-bottom: 1px solid var(--divider);
+.history-card-amount {
   font-size: 13px;
   color: var(--text);
-  align-items: center;
+  margin-top: 2px;
 }
-
-.modal-list-row.history-row {
-  grid-template-columns: 1.2fr 1fr 1fr 0.8fr 1.5fr;
-}
-
-.modal-list-row.notif-row {
-  grid-template-columns: 1.2fr 1fr 1.5fr;
-}
-
-.modal-list-row .secondary { color: var(--text-secondary); font-size: 12px; }
-.modal-list-row .bold { font-weight: 600; }
 
 /* ─── Settings Sections ───────────────────────────────── */
 .settings-section {
@@ -875,32 +941,18 @@ input, select, textarea { font-family: inherit; font-size: inherit; }
   color: var(--text);
 }
 
-/* ─── Batch action row ────────────────────────────────── */
+/* ─── Batch action row (Android-matching style) ──────── */
 .batch-row {
   display: flex;
   align-items: center;
   gap: 8px;
-  margin-bottom: 12px;
-  padding: 8px 12px;
-  background: var(--selection);
-  border-radius: 8px;
+  margin-bottom: 8px;
+  padding: 0;
   font-size: 13px;
   color: var(--text);
 }
 
-.batch-row .count { font-weight: 600; }
-
-/* ─── Overdue banner ────────────────────────────────── */
-.overdue-banner {
-  background: #fee2e2;
-  color: var(--red);
-  padding: 8px 12px;
-  border-radius: 8px;
-  font-size: 13px;
-  font-weight: 600;
-  margin-bottom: 12px;
-  text-align: center;
-}
+.batch-row .count { font-weight: 600; margin-right: 8px; }
 
 /* ─── Renter detail rows in modal ───────────────────── */
 .renter-detail-row {
@@ -937,34 +989,24 @@ input, select, textarea { font-family: inherit; font-size: inherit; }
 @media (max-width: 640px) {
   .table-header-renters,
   .renter-row {
-    grid-template-columns: 1.5fr 1fr 1fr 0.8fr 0.8fr 0.8fr;
+    grid-template-columns: 1.4fr 1.2fr 1fr 1.1fr 1.1fr 0.8fr;
     font-size: 12px;
   }
 
   .renter-name { font-size: 13px; }
-  .renter-debt { font-size: 13px; }
+  .renter-balance { font-size: 13px; }
 
   .modal { padding: 16px; border-radius: 12px; }
 
   .modal-form .form-row {
     grid-template-columns: 1fr;
   }
-
-  .modal-list-header.history-header,
-  .modal-list-row.history-row {
-    grid-template-columns: 1fr 1fr 1fr;
-  }
-
-  .modal-list-header.history-header .th-hide-sm,
-  .modal-list-row.history-row .td-hide-sm {
-    display: none;
-  }
 }
 
 @media (max-width: 420px) {
   .table-header-renters,
   .renter-row {
-    grid-template-columns: 1.5fr 1fr 0.8fr 0.8fr;
+    grid-template-columns: 1.4fr 1.2fr 0.8fr 0.8fr;
   }
 
   .th-hide-xs,

@@ -414,17 +414,14 @@ function renderMain() {
         <div class="topbar-title">Skuter Ijarasi</div>
         <div class="topbar-actions">
           <button class="topbar-icon-btn" id="btn-notifications" title="Bildirishnomalar">
-            <span class="material-icons">notifications</span>
+            <span class="material-icons">notifications_none</span>
             ${unreadCount > 0 ? `<span class="topbar-badge">${unreadCount > 99 ? '99+' : unreadCount}</span>` : ''}
           </button>
           <button class="topbar-icon-btn" id="btn-history" title="Kontrakt tarixi">
             <span class="material-icons">date_range</span>
           </button>
           <button class="topbar-icon-btn" id="btn-settings" title="Sozlamalar">
-            <span class="material-icons">settings</span>
-          </button>
-          <button class="topbar-icon-btn" id="btn-logout" title="Chiqish">
-            <span class="material-icons">logout</span>
+            <span class="material-icons">settings_outlined</span>
           </button>
         </div>
       </header>
@@ -439,7 +436,7 @@ function renderMain() {
           <span class="nav-tab-label">Ijarachilar</span>
         </button>
         <button class="nav-tab ${state.selectedTab === 'scooters' ? 'active' : ''}" data-tab="scooters">
-          <span class="material-icons">two_wheeler</span>
+          <span class="material-icons">pedal_bike</span>
           <span class="nav-tab-label">Skuterlar</span>
         </button>
       </nav>
@@ -463,7 +460,6 @@ function renderMain() {
   document.getElementById('btn-notifications').addEventListener('click', openNotificationsModal);
   document.getElementById('btn-history').addEventListener('click', openHistoryModal);
   document.getElementById('btn-settings').addEventListener('click', openSettings);
-  document.getElementById('btn-logout').addEventListener('click', doLogout);
 
   renderCurrentTab();
 }
@@ -499,27 +495,16 @@ function renderRentersTab() {
     <div class="search-bar">
       <span class="material-icons">search</span>
       <input id="renter-search" placeholder="Mijoz yoki skuter qidirish" />
-      <span class="material-icons" style="cursor:pointer" id="renter-date-filter" title="Sana filtri">event</span>
+      <span class="material-icons" style="cursor:pointer${state.dateFrom || state.dateTo ? ';color:var(--accent)' : ''}" id="renter-date-filter" title="Sana filtri">event</span>
     </div>
 
-    <div class="filter-row">
-      <select class="field-select" id="renter-filter">
-        <option value="all">Barchasi</option>
-        <option value="active">Faol</option>
-        <option value="overdue">Qarzdor</option>
-        <option value="returned">Qaytgan</option>
-      </select>
-      ${state.dateFrom || state.dateTo ? '<button class="btn-secondary" id="clear-date-filter" style="font-size:12px;padding:4px 10px">Sana: o\'chirish</button>' : ''}
-    </div>
-
-    ${overdueCount > 0 ? `<div class="overdue-banner">${overdueCount} ta ijarachi qarzdorlikda!</div>` : ''}
+    ${state.dateFrom || state.dateTo ? '<div style="margin-bottom:8px;display:flex;gap:8px;align-items:center;font-size:12px;color:var(--text-secondary)"><span>Sana: ' + fmtDate(parseDateInput(state.dateFrom)) + ' — ' + (state.dateTo ? fmtDate(parseDateInput(state.dateTo)) : '...') + '</span><button class="btn-secondary" id="clear-date-filter" style="font-size:11px;padding:2px 8px;height:24px">O\'chirish</button></div>' : ''}
 
     <div id="renter-batch-bar"></div>
     <div class="table-wrapper" id="renters-table-wrapper"></div>
   `;
 
   document.getElementById('renter-search').addEventListener('input', filterRenters);
-  document.getElementById('renter-filter').addEventListener('change', filterRenters);
   document.getElementById('renter-date-filter').addEventListener('click', openDateRangeFilter);
 
   const clearBtn = document.getElementById('clear-date-filter');
@@ -536,16 +521,11 @@ function renderRentersTab() {
 
 function filterRenters() {
   const q = (document.getElementById('renter-search').value || '').toLowerCase();
-  const filter = document.getElementById('renter-filter').value;
   let rows = state.renters.filter(r => {
     if (q) {
       const hay = `${r.name} ${r.phone_number} ${r.scooter_name || ''}`.toLowerCase();
       if (!hay.includes(q)) return false;
     }
-    const fin = calcRenterFinances(r);
-    if (filter === 'active' && (r.is_returned || fin.displayBalance < 0)) return false;
-    if (filter === 'overdue' && !(fin.displayBalance < 0 && !r.is_returned)) return false;
-    if (filter === 'returned' && !r.is_returned) return false;
 
     if (state.dateFrom || state.dateTo) {
       const expiry = r.rent_start_date_timestamp + r.rent_duration_days * 86400000;
@@ -589,12 +569,12 @@ function buildRentersTable(rows) {
   const sd = state.sortDir;
   return `
     <div class="table-header table-header-renters">
-      <div class="th sortable" data-sort="name">Ism ${sortArrow('name', sc, sd)}</div>
+      <div class="th sortable" data-sort="name">Mijoz ${sortArrow('name', sc, sd)}</div>
       <div class="th">Tel</div>
       <div class="th hide-xs">Skuter</div>
-      <div class="th sortable" data-sort="start">Bosh. ${sortArrow('start', sc, sd)}</div>
-      <div class="th hide-xs">Tug.</div>
-      <div class="th sortable th-right" data-sort="balance">Balans ${sortArrow('balance', sc, sd)}</div>
+      <div class="th sortable" data-sort="start">Boshlanish ${sortArrow('start', sc, sd)}</div>
+      <div class="th hide-xs">Tugash</div>
+      <div class="th sortable th-right" data-sort="balance">Qarz ${sortArrow('balance', sc, sd)}</div>
     </div>
     <div class="table-rows">
       ${rows.map(r => {
@@ -605,26 +585,12 @@ function buildRentersTable(rows) {
         const balanceClass = fin.displayBalance < 0 ? 'balance-negative' : fin.displayBalance > 0 ? 'balance-positive' : '';
         return `
           <div class="renter-row ${s.cssClass} ${selected ? 'selected' : ''}" data-id="${r.id}">
-            <div class="renter-name">
-              <span class="checkbox-wrap">
-                <input type="checkbox" class="renter-checkbox" data-id="${r.id}" ${selected ? 'checked' : ''} />
-              </span>
-              ${escapeHtml(r.name)}
-            </div>
+            <div class="renter-name">${escapeHtml(r.name)}</div>
             <div class="renter-phone">${formatPhone(escapeHtml(r.phone_number))}</div>
             <div class="renter-scooter hide-xs">${escapeHtml(r.scooter_name || '—')}</div>
             <div class="renter-date">${fmtDate(r.rent_start_date_timestamp)}</div>
             <div class="renter-date hide-xs">${fmtDate(expiry)}</div>
             <div class="renter-balance ${balanceClass}">${formatBalance(fin.displayBalance)}</div>
-            ${admin ? `
-              <div class="row-actions">
-                <button class="row-action-btn edit-btn" data-act="edit" data-id="${r.id}" title="Tahrirlash">
-                  <span class="material-icons">edit</span>
-                </button>
-                <button class="row-action-btn delete-btn" data-act="del" data-id="${r.id}" title="O'chirish">
-                  <span class="material-icons">delete</span>
-                </button>
-              </div>` : ''}
           </div>
         `;
       }).join('')}
@@ -650,51 +616,57 @@ function attachRenterRowActions() {
     });
   });
 
-  // Row click -> edit or toggle selection
-  document.querySelectorAll('.renter-row').forEach(row => {
-    row.addEventListener('click', e => {
-      if (e.target.classList.contains('renter-checkbox')) {
-        const id = parseInt(e.target.dataset.id, 10);
-        if (e.target.checked) state.selectedRenterIds.add(id);
-        else state.selectedRenterIds.delete(id);
-        updateBatchBar();
-        row.classList.toggle('selected', e.target.checked);
-        return;
-      }
-      if (e.target.closest('.row-action-btn')) return;
-      const id = parseInt(row.dataset.id, 10);
-      openRenterForm(id);
-    });
-  });
-
-  // Long press to toggle selection
+  // Row click -> edit (like Android onClick), long press -> select (like Android onLongClick)
   let longPressTimer = null;
   document.querySelectorAll('.renter-row').forEach(row => {
+    row.addEventListener('click', e => {
+      const id = parseInt(row.dataset.id, 10);
+      if (state.selectedRenterIds.has(id)) {
+        // If already selected, deselect
+        state.selectedRenterIds.delete(id);
+        updateBatchBar();
+        filterRenters();
+      } else if (state.selectedRenterIds.size > 0) {
+        // If other rows are selected, add this one
+        state.selectedRenterIds.add(id);
+        updateBatchBar();
+        filterRenters();
+      } else {
+        // No selection — open edit form
+        openRenterForm(id);
+      }
+    });
+    // Long press to toggle selection
     row.addEventListener('mousedown', e => {
-      if (e.target.closest('.row-action-btn') || e.target.classList.contains('renter-checkbox')) return;
       longPressTimer = setTimeout(() => {
         const id = parseInt(row.dataset.id, 10);
-        state.selectedRenterIds.add(id);
+        if (state.selectedRenterIds.has(id)) {
+          state.selectedRenterIds.delete(id);
+        } else {
+          state.selectedRenterIds.add(id);
+        }
         updateBatchBar();
         filterRenters();
       }, 500);
     });
     row.addEventListener('mouseup', () => clearTimeout(longPressTimer));
     row.addEventListener('mouseleave', () => clearTimeout(longPressTimer));
+    // Touch support
+    row.addEventListener('touchstart', e => {
+      longPressTimer = setTimeout(() => {
+        const id = parseInt(row.dataset.id, 10);
+        if (state.selectedRenterIds.has(id)) {
+          state.selectedRenterIds.delete(id);
+        } else {
+          state.selectedRenterIds.add(id);
+        }
+        updateBatchBar();
+        filterRenters();
+      }, 500);
+    }, { passive: true });
+    row.addEventListener('touchend', () => clearTimeout(longPressTimer));
+    row.addEventListener('touchmove', () => clearTimeout(longPressTimer));
   });
-
-  if (admin) {
-    document.querySelectorAll('[data-act="edit"]').forEach(b =>
-      b.addEventListener('click', e => {
-        e.stopPropagation();
-        openRenterForm(parseInt(b.dataset.id, 10));
-      }));
-    document.querySelectorAll('[data-act="del"]').forEach(b =>
-      b.addEventListener('click', e => {
-        e.stopPropagation();
-        deleteRenter(parseInt(b.dataset.id, 10));
-      }));
-  }
 }
 
 function updateBatchBar() {
@@ -709,23 +681,19 @@ function updateBatchBar() {
   const wp = parseInt(STORAGE.weeklyPrice, 10) || 350000;
   bar.innerHTML = `
     <div class="batch-row">
-      <span class="count">${count} ta tanlandi</span>
       ${admin ? `
-        <button class="btn-secondary" id="batch-pay-weekly">
-          <span class="material-icons" style="font-size:16px">payments</span>
-          To'lov (${formatNum(wp)} so'm)
+        <button class="btn-green" id="batch-pay-weekly">
+          1 hafta to'lov
         </button>
-        <button class="btn-secondary" id="batch-terminate">
-          <span class="material-icons" style="font-size:16px">block</span>
+        <button class="btn-black" id="batch-terminate">
           Kontraktni uzish
         </button>
-        <button class="btn-danger-outline" id="batch-delete">
-          <span class="material-icons" style="font-size:16px">delete</span>
-          O'chirish
+        <button class="btn-white-outline" id="batch-delete">
+          <span class="material-icons" style="font-size:18px">delete</span>
         </button>
       ` : ''}
-      <button class="btn-secondary" id="batch-clear" style="margin-left:auto">
-        <span class="material-icons" style="font-size:16px">close</span>
+      <button class="btn-white-outline" id="batch-clear" style="margin-left:auto">
+        <span class="material-icons" style="font-size:18px">close</span>
       </button>
     </div>
   `;
@@ -935,7 +903,7 @@ function buildScootersTable(rows) {
   return `
     <div class="table-header table-header-scooters">
       <div class="th sortable" data-scooter-sort="name">Nomi ${sortArrow('name', 'name', sd)}</div>
-      <div class="th">Holat</div>
+      <div class="th" style="text-align:center">Holat</div>
     </div>
     <div class="table-rows">
       ${rows.map(s => {
@@ -943,25 +911,11 @@ function buildScootersTable(rows) {
         const selected = state.selectedScooterIds.has(s.id);
         return `
           <div class="scooter-row ${st.cssClass} ${selected ? 'selected' : ''}" data-id="${s.id}">
-            <div class="scooter-name">
-              <span class="checkbox-wrap">
-                <input type="checkbox" class="scooter-checkbox" data-id="${s.id}" ${selected ? 'checked' : ''} />
-              </span>
-              ${escapeHtml(s.name)}
-            </div>
+            <div class="scooter-name">${escapeHtml(s.name)}</div>
             <div class="scooter-status">
               <span class="status-dot ${st.dotClass}"></span>
-              <span class="scooter-status-label">${st.label}</span>
+              <span class="scooter-status-label" style="color:${st.color}">${st.label}</span>
             </div>
-            ${admin ? `
-              <div class="row-actions">
-                <button class="row-action-btn edit-btn" data-scooter-act="edit" data-id="${s.id}" title="Tahrirlash">
-                  <span class="material-icons">edit</span>
-                </button>
-                <button class="row-action-btn delete-btn" data-scooter-act="del" data-id="${s.id}" title="O'chirish">
-                  <span class="material-icons">delete</span>
-                </button>
-              </div>` : ''}
           </div>
         `;
       }).join('')}
@@ -980,34 +934,52 @@ function attachScooterRowActions() {
     });
   });
 
+  // Row click -> edit (like Android), long press -> select
+  let longPressTimer = null;
   document.querySelectorAll('.scooter-row').forEach(row => {
     row.addEventListener('click', e => {
-      if (e.target.classList.contains('scooter-checkbox')) {
-        const id = parseInt(e.target.dataset.id, 10);
-        if (e.target.checked) state.selectedScooterIds.add(id);
-        else state.selectedScooterIds.delete(id);
-        updateScooterBatchBar();
-        row.classList.toggle('selected', e.target.checked);
-        return;
-      }
-      if (e.target.closest('.row-action-btn')) return;
       const id = parseInt(row.dataset.id, 10);
-      openScooterForm(id);
+      if (state.selectedScooterIds.has(id)) {
+        state.selectedScooterIds.delete(id);
+        updateScooterBatchBar();
+        filterScooters();
+      } else if (state.selectedScooterIds.size > 0) {
+        state.selectedScooterIds.add(id);
+        updateScooterBatchBar();
+        filterScooters();
+      } else {
+        openScooterForm(id);
+      }
     });
+    row.addEventListener('mousedown', e => {
+      longPressTimer = setTimeout(() => {
+        const id = parseInt(row.dataset.id, 10);
+        if (state.selectedScooterIds.has(id)) {
+          state.selectedScooterIds.delete(id);
+        } else {
+          state.selectedScooterIds.add(id);
+        }
+        updateScooterBatchBar();
+        filterScooters();
+      }, 500);
+    });
+    row.addEventListener('mouseup', () => clearTimeout(longPressTimer));
+    row.addEventListener('mouseleave', () => clearTimeout(longPressTimer));
+    row.addEventListener('touchstart', e => {
+      longPressTimer = setTimeout(() => {
+        const id = parseInt(row.dataset.id, 10);
+        if (state.selectedScooterIds.has(id)) {
+          state.selectedScooterIds.delete(id);
+        } else {
+          state.selectedScooterIds.add(id);
+        }
+        updateScooterBatchBar();
+        filterScooters();
+      }, 500);
+    }, { passive: true });
+    row.addEventListener('touchend', () => clearTimeout(longPressTimer));
+    row.addEventListener('touchmove', () => clearTimeout(longPressTimer));
   });
-
-  if (admin) {
-    document.querySelectorAll('[data-scooter-act="edit"]').forEach(b =>
-      b.addEventListener('click', e => {
-        e.stopPropagation();
-        openScooterForm(parseInt(b.dataset.id, 10));
-      }));
-    document.querySelectorAll('[data-scooter-act="del"]').forEach(b =>
-      b.addEventListener('click', e => {
-        e.stopPropagation();
-        deleteScooter(parseInt(b.dataset.id, 10));
-      }));
-  }
 }
 
 function updateScooterBatchBar() {
@@ -1022,12 +994,11 @@ function updateScooterBatchBar() {
   bar.innerHTML = `
     <div class="batch-row">
       <span class="count">${count} ta tanlandi</span>
-      <button class="btn-danger-outline" id="scooter-batch-delete">
-        <span class="material-icons" style="font-size:16px">delete</span>
+      <button class="btn-black" id="scooter-batch-delete">
         O'chirish
       </button>
-      <button class="btn-secondary" id="scooter-batch-clear" style="margin-left:auto">
-        <span class="material-icons" style="font-size:16px">close</span>
+      <button class="btn-white-outline" id="scooter-batch-clear" style="margin-left:auto">
+        <span class="material-icons" style="font-size:18px">close</span>
       </button>
     </div>
   `;
@@ -1265,76 +1236,40 @@ function openHistoryModal() {
   let rows = [...state.history].sort((a, b) => b.timestamp - a.timestamp);
 
   showModal(`
-    <div class="modal-title">Kontrakt tarixi</div>
-    <div style="margin-bottom:12px">
-      <div class="filter-row" style="margin-bottom:0">
-        <input class="field-input" id="hist-search" placeholder="Ijarachi yoki tur bo'yicha qidirish..." style="flex:1" />
-        <select class="field-select" id="hist-type" style="width:auto">
-          <option value="all">Barchasi</option>
-          <option value="CREATED">Yaratildi</option>
-          <option value="PAYMENT">To'lov</option>
-          <option value="AUTO_RENEW">Avtomatik yangilanish</option>
-          <option value="TERMINATED">Tugatildi</option>
-          <option value="RETURNED">Qaytarildi</option>
-        </select>
-      </div>
-    </div>
-    <div id="hist-list"></div>
+    <div class="modal-title"><span class="material-icons">date_range</span> Kontraktlar tarixi</div>
+    ${rows.length === 0 ? '<div class="empty-state">Tarix bo\'sh</div>' : `
+    <div style="display:flex;flex-direction:column;gap:4px;max-height:480px;overflow-y:auto">
+      ${rows.map(h => `
+        <div class="history-card">
+          <div class="history-card-header">
+            <span class="history-card-title">${escapeHtml(renterMap[h.renter_id] || 'Mijoz #' + h.renter_id)} — ${typeLabels[h.type] || h.type}</span>
+            <span class="history-card-date">${fmtDateTime(h.timestamp)}</span>
+          </div>
+          ${h.amount > 0 ? `<div class="history-card-amount">${formatNum(h.amount)} UZS</div>` : ''}
+          ${h.notes ? `<div class="history-card-body">${escapeHtml(h.notes)}</div>` : ''}
+        </div>
+      `).join('')}
+    </div>`}
     <div class="modal-actions" style="margin-top:12px">
-      <button class="btn-danger-outline" id="clear-history-btn">Tozalash</button>
-      <button class="btn-secondary" id="close-hist-btn">Yopish</button>
+      ${rows.length > 0 ? '<button class="btn-secondary" id="clear-history-btn">Tozalash</button>' : ''}
+      <button class="btn-primary" id="close-hist-btn" style="width:auto;padding:0 24px;height:40px;font-size:14px;background:var(--accent)">Yopish</button>
     </div>
   `);
 
-  function filterAndRender() {
-    const q = (document.getElementById('hist-search').value || '').toLowerCase();
-    const t = document.getElementById('hist-type').value;
-    let filtered = rows.filter(h => {
-      if (t !== 'all' && h.type !== t) return false;
-      if (q && !(`${renterMap[h.renter_id] || ''} ${h.notes || ''}`.toLowerCase().includes(q))) return false;
-      return true;
-    });
-    if (filtered.length === 0) {
-      document.getElementById('hist-list').innerHTML = '<div class="empty-state">Hozircha tarix bo\'sh</div>';
-      return;
-    }
-    document.getElementById('hist-list').innerHTML = `
-      <div class="modal-list-header history-header">
-        <div class="th">Vaqt</div>
-        <div class="th">Ijarachi</div>
-        <div class="th">Tur</div>
-        <div class="th th-hide-sm">Summa</div>
-        <div class="th th-hide-sm">Izoh</div>
-      </div>
-      <div class="modal-list">
-        ${filtered.map(h => `
-          <div class="modal-list-row history-row">
-            <div class="secondary">${fmtDateTime(h.timestamp)}</div>
-            <div class="bold">${escapeHtml(renterMap[h.renter_id] || '#' + h.renter_id)}</div>
-            <div>${typeLabels[h.type] || h.type}</div>
-            <div class="td-hide-sm">${h.amount > 0 ? formatNum(h.amount) + ' UZS' : '—'}</div>
-            <div class="secondary td-hide-sm">${escapeHtml(h.notes || '')}</div>
-          </div>
-        `).join('')}
-      </div>
-    `;
-  }
-
-  document.getElementById('hist-search').addEventListener('input', filterAndRender);
-  document.getElementById('hist-type').addEventListener('change', filterAndRender);
-  filterAndRender();
-
   document.getElementById('close-hist-btn').addEventListener('click', closeModal);
-  document.getElementById('clear-history-btn').addEventListener('click', async () => {
-    if (!confirm('Barcha tarix yozuvlarini o\'chirmoqchimisiz?')) return;
-    try {
-      await api('/contract-history', { method: 'DELETE' });
-      state.history = [];
-      toast('Tarix tozalandi', 'success');
-      closeModal();
-      renderMain();
-    } catch (err) { toast(friendlyError(err.message), 'error'); }
-  });
+  const clearBtn = document.getElementById('clear-history-btn');
+  if (clearBtn) {
+    clearBtn.addEventListener('click', async () => {
+      if (!confirm('Barcha tarix yozuvlarini o\'chirmoqchimisiz?')) return;
+      try {
+        await api('/contract-history', { method: 'DELETE' });
+        state.history = [];
+        toast('Tarix tozalandi', 'success');
+        closeModal();
+        renderMain();
+      } catch (err) { toast(friendlyError(err.message), 'error'); }
+    });
+  }
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -1343,37 +1278,23 @@ function openHistoryModal() {
 function openNotificationsModal() {
   const renterMap = Object.fromEntries(state.renters.map(r => [r.id, r.name]));
 
-  if (state.notifications.length === 0) {
-    showModal(`
-      <div class="modal-title">Bildirishnomalar</div>
-      <div class="empty-state">Hech qanday bildirishnoma yo'q</div>
-      <div class="modal-actions">
-        <button class="btn-secondary" id="close-notif-btn">Yopish</button>
-      </div>
-    `);
-    document.getElementById('close-notif-btn').addEventListener('click', closeModal);
-    return;
-  }
-
   showModal(`
-    <div class="modal-title">Bildirishnomalar</div>
-    <div class="modal-list-header notif-header">
-      <div class="th">Vaqt</div>
-      <div class="th">Sarlavha</div>
-      <div class="th">Xabar</div>
-    </div>
-    <div class="modal-list">
+    <div class="modal-title"><span class="material-icons">notifications_none</span> Bildirishnomalar tarixi</div>
+    ${state.notifications.length === 0 ? '<div class="empty-state">Hech qanday bildirishnoma yo\'q</div>' : `
+    <div style="display:flex;flex-direction:column;gap:4px;max-height:480px;overflow-y:auto">
       ${state.notifications.map(n => `
-        <div class="modal-list-row notif-row">
-          <div class="secondary">${fmtDateTime(n.timestamp)}</div>
-          <div class="bold">${escapeHtml(n.title)}</div>
-          <div>${escapeHtml(n.message)}</div>
+        <div class="history-card">
+          <div class="history-card-header">
+            <span class="history-card-title">${escapeHtml(n.title)}</span>
+            <span class="history-card-date">${fmtDateTime(n.timestamp)}</span>
+          </div>
+          <div class="history-card-body">${escapeHtml(n.message)}</div>
         </div>
       `).join('')}
-    </div>
+    </div>`}
     <div class="modal-actions" style="margin-top:12px">
-      <button class="btn-danger-outline" id="clear-notif-btn">Tozalash</button>
-      <button class="btn-secondary" id="close-notif-btn">Yopish</button>
+      ${state.notifications.length > 0 ? '<button class="btn-secondary" id="clear-notif-btn">Tozalash</button>' : ''}
+      <button class="btn-primary" id="close-notif-btn" style="width:auto;padding:0 24px;height:40px;font-size:14px;background:var(--accent)">Yopish</button>
     </div>
   `);
 
@@ -1496,15 +1417,20 @@ Call center: 71 200 55 56.`;
     <div class="settings-section">
       <div class="settings-section-title">Sinxronizatsiya</div>
       <div class="settings-section-content">
-        <button class="btn-primary" id="refresh-btn" style="width:auto;padding:0 24px;height:40px;font-size:14px">
-          <span class="material-icons" style="font-size:18px">sync</span> Ma'lumotlarni yangilash
+        <div style="font-size:13px;color:var(--text-secondary);margin-bottom:4px">Offline ma'lumotlarni serverga yuborish va serverdan yuklab olish</div>
+        <button class="btn-primary" id="refresh-btn" style="width:100%">
+          <span class="material-icons" style="font-size:18px">sync</span> Sinxronizatsiya
         </button>
       </div>
     </div>
 
+    <div style="margin-top:8px">
+      <button class="btn-danger-outline" id="logout-btn" style="width:100%;height:48px;border-radius:8px">Chiqish (boshqa akkauntga o'tish)</button>
+    </div>
+
     <div class="modal-actions" style="border-top:1px solid var(--divider);padding-top:12px">
-      ${admin ? `<button class="btn-secondary" id="save-settings-btn">Saqlash</button>` : ''}
-      <button class="btn-danger-outline" id="logout-btn">Chiqish (boshqa akkauntga o'tish)</button>
+      ${admin ? `<button class="btn-primary" id="save-settings-btn" style="width:auto;padding:0 24px;height:40px;font-size:14px">Saqlash</button>` : ''}
+      <button class="btn-secondary" id="cancel-settings-btn">Bekor qilish</button>
     </div>
   `);
 
@@ -1531,6 +1457,8 @@ Call center: 71 200 55 56.`;
     closeModal();
     doLogout();
   });
+
+  document.getElementById('cancel-settings-btn').addEventListener('click', closeModal);
 
   if (admin) {
     document.getElementById('save-settings-btn').addEventListener('click', () => {
