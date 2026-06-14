@@ -784,11 +784,20 @@ function renderNotifications() {
 }
 
 // ─── Settings ───────────────────────────────────────────
-function renderSettings() {
+async function renderSettings() {
   if (!state.isAdmin()) {
     renderDashboard();
     return;
   }
+
+  // Тянем реальные данные с сервера через /api/me (защищён JWT).
+  let serverInfo = null;
+  try {
+    serverInfo = await api('/auth/me');
+  } catch (err) {
+    /* token мог протухнуть — пользователь увидит ошибку ниже */
+  }
+
   document.getElementById('main-content').innerHTML = `
     <h1 class="text-2xl font-semibold mb-6">Sozlamalar</h1>
 
@@ -797,9 +806,15 @@ function renderSettings() {
         <h2 class="font-semibold mb-3">Backend</h2>
         <p class="text-sm text-stone-500 mb-1">Server URL</p>
         <p class="font-mono text-xs break-all mb-3">${escapeHtml(STORAGE.base)}</p>
-        <p class="text-sm text-stone-500 mb-1">Sizning akkaunt</p>
-        <p class="text-sm mb-1">${escapeHtml(STORAGE.email || '?')}</p>
-        <p class="text-xs text-stone-400">Rol: ${STORAGE.role}</p>
+        <p class="text-sm text-stone-500 mb-1">Sizning akkaunt (serverdan tasdiqlangan)</p>
+        ${serverInfo ? `
+          <p class="text-sm mb-1"><b>${escapeHtml(serverInfo.email)}</b></p>
+          <p class="text-xs text-stone-400">Rol: ${serverInfo.role} · ID: ${serverInfo.id}</p>
+          <p class="text-xs text-stone-400">Ro'yxatdan o'tgan: ${fmtDateTime(serverInfo.created_at)}</p>
+        ` : `
+          <p class="text-sm text-red-600 mb-1">Serverdan ma'lumot olinmadi</p>
+          <p class="text-xs text-stone-400">Local cache: ${escapeHtml(STORAGE.email || '?')} (${STORAGE.role})</p>
+        `}
       </div>
 
       <div class="card">
