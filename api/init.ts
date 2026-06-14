@@ -12,6 +12,7 @@
  */
 import { getSql } from './_lib/db.js';
 import { withCors, jsonResponse, errorResponse } from './_lib/cors.js';
+import { SCHEMA_SQL } from './_lib/schema.js';
 
 export default withCors(async (req: Request) => {
   if (req.method !== 'POST') return errorResponse('Use POST', 405);
@@ -22,17 +23,8 @@ export default withCors(async (req: Request) => {
     return errorResponse('Invalid or missing X-Init-Token header', 403, 'FORBIDDEN');
   }
 
-  // Идемпотентно применяем schema.sql.
-  const { readFileSync } = await import('node:fs');
-  const { fileURLToPath } = await import('node:url');
-  const path = await import('node:path');
-
-  const __dirname = path.dirname(fileURLToPath(import.meta.url));
-  const schemaPath = path.join(__dirname, '_lib', 'schema.sql');
-  const schemaSql = readFileSync(schemaPath, 'utf-8');
-
   const sql = getSql();
-  await (sql as any).query(schemaSql);
+  await (sql as any).query(SCHEMA_SQL);
 
   return jsonResponse({ ok: true, message: 'Schema applied. INIT_TOKEN can be removed now.' });
 });

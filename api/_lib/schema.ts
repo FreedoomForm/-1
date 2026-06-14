@@ -1,3 +1,9 @@
+/**
+ * Schema SQL for database initialization.
+ * Exported as a string constant so Vercel's bundler includes it
+ * reliably in the serverless function (no runtime fs.readFile needed).
+ */
+export const SCHEMA_SQL = `
 -- ─────────────────────────────────────────────────────────────
 -- Схема БД для Scooter Rent API.
 -- Применяется один раз через POST /api/init (защищённый endpoint).
@@ -64,3 +70,4 @@ CREATE TABLE IF NOT EXISTS notification_history (
 );
 CREATE INDEX IF NOT EXISTS idx_notifications_user_id   ON notification_history(user_id);
 CREATE INDEX IF NOT EXISTS idx_notifications_timestamp ON notification_history(timestamp DESC);
+`;
