@@ -223,6 +223,7 @@ fun MainScreen(
     var updateInfo by remember { mutableStateOf<UpdateInfo?>(null) }
     var isCheckingUpdate by remember { mutableStateOf(false) }
     var isUpToDate by remember { mutableStateOf(false) } // Приложение актуально — не показываем уведомление
+    val context = LocalContext.current
     val updateManager = remember { InAppUpdateManager(context) }
     val updateState by updateManager.state.collectAsStateWithLifecycle()
     val coroutineScope = rememberCoroutineScope()
@@ -233,7 +234,6 @@ fun MainScreen(
         onDispose { viewModel.stopAutoSync() }
     }
 
-    val context = LocalContext.current
     val scooters by scooterViewModel.scootersList.collectAsStateWithLifecycle()
 
     // Авто-проверка обновлений при запуске
