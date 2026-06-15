@@ -2,6 +2,8 @@ package com.example.ui
 
 import android.app.Application
 import android.content.pm.PackageManager
+import android.os.Build
+import android.telephony.SmsManager
 import android.util.Log
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.AndroidViewModel
@@ -123,68 +125,17 @@ class RenterViewModel(application: Application) : AndroidViewModel(application) 
 
             // СНАЧАЛА пишем в Room — рентер появляется мгновенно
             val localId = repository.insert(provisional).toInt()
-            var savedRenter = provisional.copy(id = localId)
-
-            // ПОТОМ шлём на API — получаем server id
-            viewModelScope.launch(Dispatchers.IO) {
-                try {
-                    val serverId = sync.pushRenter(provisional)
-                    if (serverId != null && serverId != localId) {
-                        // Обновляем id в одной транзакции — без delete+insert,
-                        // чтобы UI не «моргал» (исчезновение арендатора)
-                        val db = AppDatabase.getDatabase(getApplication<Application>())
-                        db.withTransaction {
-                            db.renterDao().updateRenterId(localId, serverId)
-                            db.contractHistoryDao().updateRenterId(localId, serverId)
-                            db.notificationHistoryDao().updateRenterId(localId, serverId)
-                        }
-                        savedRenter = savedRenter.copy(id = serverId)
-                        Log.d(TAG, "Renter synced: local #$localId → server #$serverId")
-                    }
-                } catch (e: Exception) {
-                    Log.w(TAG, "pushRenter failed, stays local #$localId", e)
-                }
-            }
-
-            // Записываем в историю контрактов
-            try {
-                historyRepository.insert(
-                    ContractHistoryEntry(
-                        renterId = savedRenter.id,
-                        timestamp = now,
-                        type = ContractHistoryEntry.TYPE_CREATED,
-                        amount = effectiveWeeklyPrice,
-                        notes = if (isOverdueAtCreation)
-                            "Kechikkan holda yaratildi (${(-initialBalance).toBigDecimal().stripTrailingZeros().toPlainString()})"
-                        else "Yaratildi"
-                    )
-                )
-            } catch (e: Exception) {
-                Log.w(TAG, "Failed to save contract history locally", e)
-            }
-            try {
-                sync.pushContractHistory(
-                    ContractHistoryEntry(
-                        renterId = savedRenter.id,
-                        timestamp = now,
-                        type = ContractHistoryEntry.TYPE_CREATED,
-                        amount = effectiveWeeklyPrice,
-                        notes = if (isOverdueAtCreation)
-                            "Kechikkan holda yaratildi (${(-initialBalance).toBigDecimal().stripTrailingZeros().toPlainString()})"
-                        else "Yaratildi"
-                    )
-                )
-            } catch (e: Exception) {
-                Log.w(TAG, "Failed to push contract history to server", e)
-            }
+            val savedRenter = provisional.copy(id = localId)
 
             // ===== НЕМЕДЛЕННОЕ УВЕДОМЛЕНИЕ И SMS =====
+            // ВАЖНО: SMS отправляется ДО любых sync-вызовов!
+            // Раньше sync.pushContractHistory() блокировал SMS на 45 сек при недоступном бэкенде.
             if (isOverdueAtCreation) {
                 val context = getApplication<Application>()
-                Log.d(TAG, "Renter #${savedRenter.id} is OVERDUE at creation — sending SMS & notification")
+                Log.d(TAG, "Renter #${savedRenter.id} is OVERDUE at creation — sending SMS & notification IMMEDIATELY")
                 Log.d(TAG, "expiryTime=$expiryTime, now=$now, phone=${savedRenter.phoneNumber}")
 
-                // 1) Показываем уведомление ПРЯМО СЕЙЧАС — не через Worker
+                // 1) Показываем уведомление ПРЯМО СЕЙЧАС
                 try {
                     NotificationHelper.createChannel(context)
                     NotificationHelper.postPaymentDueNotification(
@@ -195,7 +146,7 @@ class RenterViewModel(application: Application) : AndroidViewModel(application) 
                     Log.e(TAG, "Failed to show notification", e)
                 }
 
-                // 2) Отправляем SMS ПРЯМО СЕЙЧАС — не через Worker
+                // 2) Отправляем SMS ПРЯМО СЕЙЧАС
                 try {
                     if (ContextCompat.checkSelfPermission(
                             context, android.Manifest.permission.SEND_SMS
@@ -211,9 +162,9 @@ class RenterViewModel(application: Application) : AndroidViewModel(application) 
                             .replace("{days}", daysOverdue.toString())
                             .replace("{debt}", debtDisplay)
 
-                        val smsManager = context.getSystemService(
-                            android.telephony.SmsManager::class.java
-                        )
+                        // Совместимость: API 31+ — getSystemService,
+                        // более старые — SmsManager.getDefault()
+                        val smsManager = getSmsManager(context)
                         if (smsManager != null) {
                             smsManager.sendTextMessage(
                                 savedRenter.phoneNumber, null, message, null, null
@@ -224,11 +175,10 @@ class RenterViewModel(application: Application) : AndroidViewModel(application) 
                                 savedRenter.copy(isOverdueSmsSent = true)
                             )
                         } else {
-                            Log.w(TAG, "SmsManager is null — no SIM card")
+                            Log.w(TAG, "SmsManager is null — no SIM card or unsupported Android version")
                         }
                     } else {
                         Log.w(TAG, "SEND_SMS permission not granted — scheduling SmsWorker")
-                        // Если нет разрешения, пробуем через Worker
                         val smsWork = OneTimeWorkRequestBuilder<SmsWorker>().build()
                         WorkManager.getInstance(context).enqueue(smsWork)
                     }
@@ -238,7 +188,7 @@ class RenterViewModel(application: Application) : AndroidViewModel(application) 
                     Log.e(TAG, "SMS failed", e)
                 }
 
-                // 3) Также сохраняем уведомление в историю уведомлений на сервере
+                // 3) Сохраняем уведомление в историю локально
                 try {
                     val notifEntry = com.example.data.NotificationHistoryEntity(
                         timestamp = now,
@@ -251,19 +201,8 @@ class RenterViewModel(application: Application) : AndroidViewModel(application) 
                 } catch (e: Exception) {
                     Log.w(TAG, "Failed to save notification history locally", e)
                 }
-                try {
-                    val notifEntry = com.example.data.NotificationHistoryEntity(
-                        timestamp = now,
-                        renterId = savedRenter.id,
-                        title = "To'lov muddati yetdi",
-                        message = "Mijoz ${savedRenter.name} (${savedRenter.phoneNumber}) bugun to'lov qilishi kerak"
-                    )
-                    sync.pushNotification(notifEntry)
-                } catch (e: Exception) {
-                    Log.w(TAG, "Failed to push notification to server", e)
-                }
 
-                // 4) Регистрируем периодические проверки (для будущих напоминаний)
+                // 4) Регистрируем периодические проверки
                 val wm = WorkManager.getInstance(getApplication())
                 val paymentCheckRequest =
                     androidx.work.PeriodicWorkRequestBuilder<PaymentCheckWorker>(1, java.util.concurrent.TimeUnit.HOURS).build()
@@ -273,6 +212,93 @@ class RenterViewModel(application: Application) : AndroidViewModel(application) 
                     paymentCheckRequest
                 )
             }
+
+            // ===== ВСЕ СЕТВОВЫЕ ВЫЗОВЫ — В ОТДЕЛЬНОЙ КОРУТИНЕ =====
+            // Не блокируют SMS/уведомления. Если бэкенд недоступен —
+            // просто логируем ошибку, локальные данные уже сохранены.
+            viewModelScope.launch(Dispatchers.IO) {
+                val renterIdForSync = savedRenter.id
+
+                // A) Пуш рентера на сервер → обновляем ID
+                try {
+                    val serverId = sync.pushRenter(provisional)
+                    if (serverId != null && serverId != localId) {
+                        val db = AppDatabase.getDatabase(getApplication<Application>())
+                        db.withTransaction {
+                            db.renterDao().updateRenterId(localId, serverId)
+                            db.contractHistoryDao().updateRenterId(localId, serverId)
+                            db.notificationHistoryDao().updateRenterId(localId, serverId)
+                        }
+                        Log.d(TAG, "Renter synced: local #$localId → server #$serverId")
+                    }
+                } catch (e: Exception) {
+                    Log.w(TAG, "pushRenter failed, stays local #$localId", e)
+                }
+
+                // B) Локальная история контрактов
+                try {
+                    historyRepository.insert(
+                        ContractHistoryEntry(
+                            renterId = renterIdForSync,
+                            timestamp = now,
+                            type = ContractHistoryEntry.TYPE_CREATED,
+                            amount = effectiveWeeklyPrice,
+                            notes = if (isOverdueAtCreation)
+                                "Kechikkan holda yaratildi (${(-initialBalance).toBigDecimal().stripTrailingZeros().toPlainString()})"
+                            else "Yaratildi"
+                        )
+                    )
+                } catch (e: Exception) {
+                    Log.w(TAG, "Failed to save contract history locally", e)
+                }
+
+                // C) Пуш истории контрактов на сервер
+                try {
+                    sync.pushContractHistory(
+                        ContractHistoryEntry(
+                            renterId = renterIdForSync,
+                            timestamp = now,
+                            type = ContractHistoryEntry.TYPE_CREATED,
+                            amount = effectiveWeeklyPrice,
+                            notes = if (isOverdueAtCreation)
+                                "Kechikkan holda yaratildi (${(-initialBalance).toBigDecimal().stripTrailingZeros().toPlainString()})"
+                            else "Yaratildi"
+                        )
+                    )
+                } catch (e: Exception) {
+                    Log.w(TAG, "Failed to push contract history to server", e)
+                }
+
+                // D) Пуш уведомления на сервер
+                if (isOverdueAtCreation) {
+                    try {
+                        val notifEntry = com.example.data.NotificationHistoryEntity(
+                            timestamp = now,
+                            renterId = renterIdForSync,
+                            title = "To'lov muddati yetdi",
+                            message = "Mijoz ${savedRenter.name} (${savedRenter.phoneNumber}) bugun to'lov qilishi kerak"
+                        )
+                        sync.pushNotification(notifEntry)
+                    } catch (e: Exception) {
+                        Log.w(TAG, "Failed to push notification to server", e)
+                    }
+                }
+            }
+        }
+    }
+
+    /**
+     * Получает SmsManager с совместимостью для всех версий Android.
+     *
+     * - API 31+ (Android 12+): context.getSystemService(SmsManager::class.java)
+     * - API < 31: SmsManager.getDefault() (deprecated в 31, но работает на старых)
+     */
+    @Suppress("DEPRECATION")
+    private fun getSmsManager(context: android.content.Context): SmsManager? {
+        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            context.getSystemService(SmsManager::class.java)
+        } else {
+            SmsManager.getDefault()
         }
     }
 

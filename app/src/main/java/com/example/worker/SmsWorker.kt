@@ -1,6 +1,7 @@
 package com.example.worker
 
 import android.content.Context
+import android.os.Build
 import android.telephony.SmsManager
 import android.util.Log
 import androidx.work.CoroutineWorker
@@ -86,7 +87,7 @@ class SmsWorker(
      */
     private fun sendSms(phone: String, message: String): Boolean {
         return try {
-            val smsManager = applicationContext.getSystemService(SmsManager::class.java)
+            val smsManager = getSmsManager(applicationContext)
                 ?: throw IllegalStateException(
                     "SmsManager is null — у устройства нет SIM-карты или эмулятор"
                 )
@@ -100,6 +101,20 @@ class SmsWorker(
         } catch (e: Exception) {
             Log.e(TAG, "sendSms failed for $phone", e)
             false
+        }
+    }
+
+    /**
+     * Получает SmsManager с совместимостью для всех версий Android.
+     * - API 31+ (Android 12+): context.getSystemService(SmsManager::class.java)
+     * - API < 31: SmsManager.getDefault()
+     */
+    @Suppress("DEPRECATION")
+    private fun getSmsManager(context: Context): SmsManager? {
+        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            context.getSystemService(SmsManager::class.java)
+        } else {
+            SmsManager.getDefault()
         }
     }
 
