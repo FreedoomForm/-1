@@ -147,32 +147,42 @@ class RenterViewModel(application: Application) : AndroidViewModel(application) 
             }
 
             // Записываем в историю контрактов
-            historyRepository.insert(
-                ContractHistoryEntry(
-                    renterId = savedRenter.id,
-                    timestamp = now,
-                    type = ContractHistoryEntry.TYPE_CREATED,
-                    amount = effectiveWeeklyPrice,
-                    notes = if (isOverdueAtCreation)
-                        "Kechikkan holda yaratildi (${(-initialBalance).toBigDecimal().stripTrailingZeros().toPlainString()})"
-                    else "Yaratildi"
+            try {
+                historyRepository.insert(
+                    ContractHistoryEntry(
+                        renterId = savedRenter.id,
+                        timestamp = now,
+                        type = ContractHistoryEntry.TYPE_CREATED,
+                        amount = effectiveWeeklyPrice,
+                        notes = if (isOverdueAtCreation)
+                            "Kechikkan holda yaratildi (${(-initialBalance).toBigDecimal().stripTrailingZeros().toPlainString()})"
+                        else "Yaratildi"
+                    )
                 )
-            )
-            sync.pushContractHistory(
-                ContractHistoryEntry(
-                    renterId = savedRenter.id,
-                    timestamp = now,
-                    type = ContractHistoryEntry.TYPE_CREATED,
-                    amount = effectiveWeeklyPrice,
-                    notes = if (isOverdueAtCreation)
-                        "Kechikkan holda yaratildi (${(-initialBalance).toBigDecimal().stripTrailingZeros().toPlainString()})"
-                    else "Yaratildi"
+            } catch (e: Exception) {
+                Log.w(TAG, "Failed to save contract history locally", e)
+            }
+            try {
+                sync.pushContractHistory(
+                    ContractHistoryEntry(
+                        renterId = savedRenter.id,
+                        timestamp = now,
+                        type = ContractHistoryEntry.TYPE_CREATED,
+                        amount = effectiveWeeklyPrice,
+                        notes = if (isOverdueAtCreation)
+                            "Kechikkan holda yaratildi (${(-initialBalance).toBigDecimal().stripTrailingZeros().toPlainString()})"
+                        else "Yaratildi"
+                    )
                 )
-            )
+            } catch (e: Exception) {
+                Log.w(TAG, "Failed to push contract history to server", e)
+            }
 
             // ===== НЕМЕДЛЕННОЕ УВЕДОМЛЕНИЕ И SMS =====
             if (isOverdueAtCreation) {
                 val context = getApplication<Application>()
+                Log.d(TAG, "Renter #${savedRenter.id} is OVERDUE at creation — sending SMS & notification")
+                Log.d(TAG, "expiryTime=$expiryTime, now=$now, phone=${savedRenter.phoneNumber}")
 
                 // 1) Показываем уведомление ПРЯМО СЕЙЧАС — не через Worker
                 try {
@@ -238,9 +248,19 @@ class RenterViewModel(application: Application) : AndroidViewModel(application) 
                     )
                     val db = AppDatabase.getDatabase(context)
                     db.notificationHistoryDao().insert(notifEntry)
+                } catch (e: Exception) {
+                    Log.w(TAG, "Failed to save notification history locally", e)
+                }
+                try {
+                    val notifEntry = com.example.data.NotificationHistoryEntity(
+                        timestamp = now,
+                        renterId = savedRenter.id,
+                        title = "To'lov muddati yetdi",
+                        message = "Mijoz ${savedRenter.name} (${savedRenter.phoneNumber}) bugun to'lov qilishi kerak"
+                    )
                     sync.pushNotification(notifEntry)
                 } catch (e: Exception) {
-                    Log.w(TAG, "Failed to save notification history", e)
+                    Log.w(TAG, "Failed to push notification to server", e)
                 }
 
                 // 4) Регистрируем периодические проверки (для будущих напоминаний)
