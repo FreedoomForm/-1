@@ -43,12 +43,4 @@ interface RenterDao {
     /** Обновляет id арендатора (для замены локального id на серверный). */
     @Query("UPDATE renters SET id = :newId WHERE id = :oldId")
     suspend fun updateRenterId(oldId: Int, newId: Int)
-
-    /** Обновляет renterId в истории контрактов при смене id арендатора. */
-    @Query("UPDATE contract_history SET renterId = :newId WHERE renterId = :oldId")
-    suspend fun updateContractHistoryRenterId(oldId: Int, newId: Int)
-
-    /** Обновляет renterId в истории уведомлений при смене id арендатора. */
-    @Query("UPDATE notification_history SET renterId = :newId WHERE renterId = :oldId")
-    suspend fun updateNotificationHistoryRenterId(oldId: Int, newId: Int)
 }

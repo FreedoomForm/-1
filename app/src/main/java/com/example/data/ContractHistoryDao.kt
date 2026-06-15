@@ -25,4 +25,8 @@ interface ContractHistoryDao {
 
     @Query("DELETE FROM contract_history")
     suspend fun deleteAll()
+
+    /** Обновляет renterId при смене id арендатора. */
+    @Query("UPDATE contract_history SET renterId = :newId WHERE renterId = :oldId")
+    suspend fun updateRenterId(oldId: Int, newId: Int)
 }

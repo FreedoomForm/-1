@@ -135,8 +135,8 @@ class RenterViewModel(application: Application) : AndroidViewModel(application) 
                         val db = AppDatabase.getDatabase(getApplication<Application>())
                         db.withTransaction {
                             db.renterDao().updateRenterId(localId, serverId)
-                            db.renterDao().updateContractHistoryRenterId(localId, serverId)
-                            db.renterDao().updateNotificationHistoryRenterId(localId, serverId)
+                            db.contractHistoryDao().updateRenterId(localId, serverId)
+                            db.notificationHistoryDao().updateRenterId(localId, serverId)
                         }
                         savedRenter = savedRenter.copy(id = serverId)
                         Log.d(TAG, "Renter synced: local #$localId → server #$serverId")
