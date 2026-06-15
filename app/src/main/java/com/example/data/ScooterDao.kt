@@ -15,6 +15,9 @@ interface ScooterDao {
     @Query("SELECT * FROM scooters ORDER BY id ASC")
     suspend fun getAllScootersOnce(): List<Scooter>
 
+    @Query("SELECT * FROM scooters WHERE id = :id LIMIT 1")
+    suspend fun getScooterById(id: Int): Scooter?
+
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertScooter(scooter: Scooter): Long
 

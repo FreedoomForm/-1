@@ -2,6 +2,7 @@ package com.example.data
 
 import androidx.room.Dao
 import androidx.room.Insert
+import androidx.room.OnConflictStrategy
 import androidx.room.Query
 import kotlinx.coroutines.flow.Flow
 
@@ -16,7 +17,7 @@ interface ContractHistoryDao {
     @Query("SELECT * FROM contract_history WHERE renterId = :renterId ORDER BY timestamp DESC")
     suspend fun getForRenter(renterId: Int): List<ContractHistoryEntry>
 
-    @Insert
+    @Insert(onConflict = OnConflictStrategy.IGNORE)
     suspend fun insert(entry: ContractHistoryEntry)
 
     @Query("DELETE FROM contract_history")

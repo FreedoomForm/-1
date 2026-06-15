@@ -2,6 +2,7 @@ package com.example.data
 
 import androidx.room.Dao
 import androidx.room.Insert
+import androidx.room.OnConflictStrategy
 import androidx.room.Query
 import kotlinx.coroutines.flow.Flow
 
@@ -13,7 +14,7 @@ interface NotificationHistoryDao {
     @Query("SELECT * FROM notification_history ORDER BY timestamp DESC")
     suspend fun getAllOnce(): List<NotificationHistoryEntity>
 
-    @Insert
+    @Insert(onConflict = OnConflictStrategy.IGNORE)
     suspend fun insert(entity: NotificationHistoryEntity)
 
     @Query("DELETE FROM notification_history")

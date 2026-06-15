@@ -17,7 +17,7 @@ concurrency:
   cancel-in-progress: true
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   build-debug:
@@ -98,6 +98,33 @@ jobs:
           path: ${{ steps.locate_apk.outputs.apk_path }}
           if-no-files-found: error
           retention-days: 30
+
+      # ── Авто-обновление: создаём GitHub Release с APK ──
+      - name: Extract version from build.gradle.kts
+        id: version
+        if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+        run: |
+          VERSION=$(grep 'versionName' app/build.gradle.kts | head -1 | sed 's/.*versionName.*=.*"\(.*\)".*/\1/')
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "Extracted version: $VERSION"
+
+      - name: Create GitHub Release with APK
+        if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ steps.version.outputs.version }}-${{ github.run_number }}
+          name: "Scooter Rent v${{ steps.version.outputs.version }} (#${{ github.run_number }})"
+          body: |
+            Автоматическая сборка из коммита ${{ github.sha }}
+
+            📱 **Установка**: Скачайте `app-debug.apk` и откройте на устройстве Android.
+
+            Если у вас уже установлено приложение — просто установите APK поверх.
+            Данные сохранятся автоматически.
+          files: |
+            ${{ steps.locate_apk.outputs.apk_path }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Upload build logs
         if: always()
