@@ -25,6 +25,7 @@ import com.example.data.SettingsRepository
 import com.example.data.remote.SyncManager
 import com.example.worker.NotificationHelper
 import com.example.worker.PaymentCheckWorker
+import com.example.worker.SimHelper
 import com.example.worker.SmsWorker
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -39,16 +40,14 @@ import kotlinx.coroutines.launch
 
 /**
  * Результат операции SMS для отображения в UI.
- * Содержит понятное сообщение, которое можно скопировать и найти в интернете.
  */
 data class SmsResult(
     val success: Boolean,
     val message: String,
-    val errorCode: String? = null,      // Короткий код ошибки для поиска
-    val exceptionClass: String? = null,  // Имя класса исключения
-    val exceptionMessage: String? = null // Полное сообщение исключения
+    val errorCode: String? = null,
+    val exceptionClass: String? = null,
+    val exceptionMessage: String? = null
 ) {
-    /** Полный текст для копирования — включает все детали */
     val fullDetails: String
         get() = buildString {
             appendLine(message)
@@ -67,7 +66,6 @@ class RenterViewModel(application: Application) : AndroidViewModel(application) 
     private var autoSyncJob: Job? = null
     private var smsSendCounter = 0
 
-    /** Результаты SMS-отправки — UI подписывается и показывает диалог */
     private val _smsResults = MutableSharedFlow<SmsResult>(extraBufferCapacity = 10)
     val smsResults: SharedFlow<SmsResult> = _smsResults
 
@@ -85,9 +83,6 @@ class RenterViewModel(application: Application) : AndroidViewModel(application) 
         )
     }
 
-    /**
-     * Авто-синхронизация каждые 30 секунд.
-     */
     fun startAutoSync() {
         if (autoSyncJob?.isActive == true) return
         autoSyncJob = viewModelScope.launch(Dispatchers.IO) {
@@ -149,16 +144,13 @@ class RenterViewModel(application: Application) : AndroidViewModel(application) 
                 balance = initialBalance
             )
 
-            // СНАЧАЛА пишем в Room — рентер появляется мгновенно
             val localId = repository.insert(provisional).toInt()
             val savedRenter = provisional.copy(id = localId)
 
-            // ===== НЕМЕДЛЕННОЕ УВЕДОМЛЕНИЕ И SMS =====
             if (isOverdueAtCreation) {
                 val context = getApplication<Application>()
-                Log.d(TAG, "Renter #${savedRenter.id} is OVERDUE at creation — sending SMS & notification IMMEDIATELY")
+                Log.d(TAG, "Renter #${savedRenter.id} is OVERDUE — sending SMS & notification")
 
-                // 1) Показываем уведомление ПРЯМО СЕЙЧАС
                 try {
                     NotificationHelper.createChannel(context)
                     NotificationHelper.postPaymentDueNotification(
@@ -168,10 +160,8 @@ class RenterViewModel(application: Application) : AndroidViewModel(application) 
                     Log.e(TAG, "Failed to show notification", e)
                 }
 
-                // 2) Отправляем SMS с отслеживанием реального результата
                 sendSmsWithDeliveryReport(context, savedRenter, expiryTime, now, initialBalance)
 
-                // 3) Сохраняем уведомление в историю локально
                 try {
                     val notifEntry = com.example.data.NotificationHistoryEntity(
                         timestamp = now,
@@ -185,7 +175,6 @@ class RenterViewModel(application: Application) : AndroidViewModel(application) 
                     Log.w(TAG, "Failed to save notification history locally", e)
                 }
 
-                // 4) Регистрируем периодические проверки
                 val wm = WorkManager.getInstance(getApplication())
                 val paymentCheckRequest =
                     androidx.work.PeriodicWorkRequestBuilder<PaymentCheckWorker>(1, java.util.concurrent.TimeUnit.HOURS).build()
@@ -196,7 +185,6 @@ class RenterViewModel(application: Application) : AndroidViewModel(application) 
                 )
             }
 
-            // ===== ВСЕ СЕТВОВЫЕ ВЫЗОВЫ — В ОТДЕЛЬНОЙ КОРУТИНЕ =====
             viewModelScope.launch(Dispatchers.IO) {
                 val renterIdForSync = savedRenter.id
 
@@ -265,16 +253,13 @@ class RenterViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     /**
-     * Отправляет SMS с PendingIntent для отслеживания РЕАЛЬНОГО результата.
+     * SMS ni 2 bosqichda yuboradi:
      *
-     * sendTextMessage() без sentIntent только ставит SMS в очередь и
-     * НЕ сообщает об ошибке. С sentIntent мы получаем реальный результат:
-     * - RESULT_OK — SMS реально отправлено оператором
-     * - RESULT_ERROR_GENERIC_FAILURE — общая ошибка
-     * - RESULT_ERROR_NO_SERVICE — нет сети
-     * - RESULT_ERROR_RADIO_OFF — радио выключено (авиарежим)
-     * - RESULT_ERROR_NULL_PDU — ошибка протокола
-     * - RESULT_ERROR_LIMIT_EXCEEDED — лимит SMS превышен
+     * 1-urinish: getSmsManagerForSubscriptionId(subId) — aniq SIM bilan
+     * 2-urinish (fallback): eski usul — getDefault() / getSystemService()
+     *
+     * Shuningdek, telefon raqamini normallashtiradi va to'liq diagnostika
+     * ko'rsatadi.
      */
     private fun sendSmsWithDeliveryReport(
         context: android.content.Context,
@@ -283,7 +268,7 @@ class RenterViewModel(application: Application) : AndroidViewModel(application) 
         now: Long,
         initialBalance: Double
     ) {
-        // Шаг 1: Проверка разрешения
+        // 1. Permission tekshirish
         val hasPermission = ContextCompat.checkSelfPermission(
             context, android.Manifest.permission.SEND_SMS
         ) == PackageManager.PERMISSION_GRANTED
@@ -301,22 +286,10 @@ class RenterViewModel(application: Application) : AndroidViewModel(application) 
             return
         }
 
-        // Шаг 2: Получение SmsManager
-        val smsManager = getSmsManager(context)
-        if (smsManager == null) {
-            val apiLevel = Build.VERSION.SDK_INT
-            _smsResults.tryEmit(SmsResult(
-                success = false,
-                message = "SMS yuborilmadi: SmsManager topilmadi",
-                errorCode = "SMS_MANAGER_NULL",
-                exceptionClass = "IllegalStateException",
-                exceptionMessage = "SmsManager null. API level=$apiLevel. Qurilmada SIM-karta yoq yoki bu emulyator."
-            ))
-            return
-        }
+        // 2. Telefon raqamini normallashtirish
+        val rawPhone = renter.phoneNumber
+        val phone = SimHelper.normalizePhoneNumber(rawPhone)
 
-        // Шаг 3: Проверка номера телефона
-        val phone = renter.phoneNumber
         if (phone.isBlank()) {
             _smsResults.tryEmit(SmsResult(
                 success = false,
@@ -328,7 +301,37 @@ class RenterViewModel(application: Application) : AndroidViewModel(application) 
             return
         }
 
-        // Шаг 4: Формирование сообщения
+        // Raqam formati to'g'riligini tekshirish
+        if (!SimHelper.isValidUzbekPhone(phone)) {
+            Log.w(TAG, "Raqam O'zbekiston formatiga to'g'ri kelmayapti: $rawPhone → $phone")
+            // Xabar yuborishga harakat qilamiz — balki boshqa mamlakat raqami
+        }
+
+        // 3. SmsManager olish — 1-urinish: subscription ID bilan
+        var smsManager = getSmsManager(context)
+        var usedSubId = SimHelper.resolveSubscriptionIdPublic(context)
+
+        // Agar SmsManager null bo'lsa — eski usul bilan urinib ko'rish
+        if (smsManager == null) {
+            Log.w(TAG, "SmsManager (subId) null — eski usul bilan urinilmoqda")
+            smsManager = SimHelper.getLegacySmsManager(context)
+            usedSubId = -1
+        }
+
+        if (smsManager == null) {
+            val apiLevel = Build.VERSION.SDK_INT
+            val diag = SimHelper.getDiagnostics(context, rawPhone)
+            _smsResults.tryEmit(SmsResult(
+                success = false,
+                message = "SMS yuborilmadi: SmsManager topilmadi",
+                errorCode = "SMS_MANAGER_NULL",
+                exceptionClass = "IllegalStateException",
+                exceptionMessage = "SmsManager null. API=$apiLevel.\n${diag.fullReport}"
+            ))
+            return
+        }
+
+        // 4. Xabarni shakllantirish
         val settingsRepo = SettingsRepository(context)
         val rawTemplate = settingsRepo.smsTemplate
         val daysOverdue = ((now - expiryTime) / (1000L * 60 * 60 * 24)).toInt()
@@ -339,9 +342,9 @@ class RenterViewModel(application: Application) : AndroidViewModel(application) 
             .replace("{days}", daysOverdue.toString())
             .replace("{debt}", debtDisplay)
 
-        Log.d(TAG, "SMS message length: ${message.length} chars, to: $phone")
+        Log.d(TAG, "SMS: to=$phone (${rawPhone}→${phone}), ${message.length} chars, subId=$usedSubId")
 
-        // Шаг 5: Регистрируем BroadcastReceiver для получения РЕАЛЬНОГО результата
+        // 5. PendingIntent + BroadcastReceiver
         val actionId = "com.example.SMS_SENT_${++smsSendCounter}"
         val sentIntent = PendingIntent.getBroadcast(
             context,
@@ -354,10 +357,9 @@ class RenterViewModel(application: Application) : AndroidViewModel(application) 
             override fun onReceive(ctx: Context, intent: Intent) {
                 ctx.unregisterReceiver(this)
                 val resultCode = resultCode
-                Log.d(TAG, "SMS sent result for $phone: resultCode=$resultCode")
+                Log.d(TAG, "SMS result for $phone: code=$resultCode (subId=$usedSubId)")
 
                 if (resultCode == android.app.Activity.RESULT_OK) {
-                    // SMS реально отправлено оператором!
                     viewModelScope.launch(Dispatchers.IO) {
                         repository.update(renter.copy(isOverdueSmsSent = true))
                     }
@@ -365,15 +367,20 @@ class RenterViewModel(application: Application) : AndroidViewModel(application) 
                         success = true,
                         message = "SMS muvaffaqiyatli yuborildi: $phone"
                     ))
+                } else if (resultCode == SmsManager.RESULT_ERROR_GENERIC_FAILURE && usedSubId != -1) {
+                    // ❗ GENERIC_FAILURE va subId ishlatilmoqda — ESKI USUL bilan qayta urinish
+                    Log.w(TAG, "GENERIC_FAILURE with subId=$usedSubId — retrying with legacy SmsManager")
+                    retryWithLegacySmsManager(context, renter, phone, message)
                 } else {
-                    // SMS провалилась — показываем конкретную причину
-                    val (errorName, errorDesc) = smsErrorCodeToText(resultCode)
+                    // Boshqa xatolar
+                    val (errorName, errorDesc) = smsErrorCodeToText(resultCode, context, rawPhone)
+                    val diag = SimHelper.getDiagnostics(context, rawPhone)
                     _smsResults.tryEmit(SmsResult(
                         success = false,
                         message = "SMS yuborilmadi: $errorName",
                         errorCode = "SMS_SEND_FAILED_$resultCode",
                         exceptionClass = errorName,
-                        exceptionMessage = errorDesc
+                        exceptionMessage = "$errorDesc\n\n${diag.fullReport}"
                     ))
                 }
             }
@@ -385,16 +392,20 @@ class RenterViewModel(application: Application) : AndroidViewModel(application) 
             Log.e(TAG, "Failed to register SMS receiver", e)
         }
 
-        // Шаг 6: Отправка SMS с sentIntent
+        // 6. SMS yuborish — 1-urinish
         try {
             smsManager.sendTextMessage(phone, null, message, sentIntent, null)
-            Log.d(TAG, "SMS queued for sending to $phone (waiting for result...)")
+            Log.d(TAG, "SMS 1-urinish: subId=$usedSubId → $phone")
 
-            // Показываем промежуточное сообщение — SMS в очереди
             _smsResults.tryEmit(SmsResult(
                 success = true,
                 message = "SMS yuborilmoqda: $phone... (natija kutilmoqda)"
             ))
+        } catch (e: IllegalArgumentException) {
+            try { context.unregisterReceiver(receiver) } catch (_: Exception) {}
+            // Raqam formati xato — normallashtirilgan raqam bilan qayta urinish
+            Log.w(TAG, "IllegalArgumentException for $phone — retrying with legacy SmsManager")
+            retryWithLegacySmsManager(context, renter, phone, message)
         } catch (e: SecurityException) {
             try { context.unregisterReceiver(receiver) } catch (_: Exception) {}
             _smsResults.tryEmit(SmsResult(
@@ -404,68 +415,134 @@ class RenterViewModel(application: Application) : AndroidViewModel(application) 
                 exceptionClass = e.javaClass.simpleName,
                 exceptionMessage = e.message ?: "SEND_SMS ruxsati rad etildi"
             ))
-        } catch (e: IllegalArgumentException) {
+        } catch (e: Exception) {
             try { context.unregisterReceiver(receiver) } catch (_: Exception) {}
+            Log.e(TAG, "SMS 1-urinishda xato, eski usul bilan urinilmoqda", e)
+            retryWithLegacySmsManager(context, renter, phone, message)
+        }
+    }
+
+    /**
+     * FALLBACK: Eski usul (getDefault / getSystemService) bilan SMS yuborish.
+     *
+     * Agar getSmsManagerForSubscriptionId bilan GENERIC_FAILURE chiqsa,
+     * bu usul ishlaydi — chunki "avatgacha" shu usul ishlagan.
+     */
+    private fun retryWithLegacySmsManager(
+        context: android.content.Context,
+        renter: Renter,
+        phone: String,
+        message: String
+    ) {
+        val legacyManager = SimHelper.getLegacySmsManager(context)
+        if (legacyManager == null) {
+            val diag = SimHelper.getDiagnostics(context, phone)
             _smsResults.tryEmit(SmsResult(
                 success = false,
-                message = "SMS yuborilmadi: noto'g'ri raqam formati",
-                errorCode = "SMS_INVALID_PHONE",
-                exceptionClass = e.javaClass.simpleName,
-                exceptionMessage = e.message ?: "Telefon raqami formati noto'g'ri: $phone"
+                message = "SMS yuborilmadi: SmsManager topilmadi (ikkala usul ham)",
+                errorCode = "SMS_MANAGER_NULL_BOTH",
+                exceptionClass = "IllegalStateException",
+                exceptionMessage = "Na subscription, na legacy SmsManager topilmadi.\n${diag.fullReport}"
+            ))
+            return
+        }
+
+        val actionId = "com.example.SMS_LEGACY_${++smsSendCounter}"
+        val sentIntent = PendingIntent.getBroadcast(
+            context,
+            smsSendCounter,
+            Intent(actionId),
+            PendingIntent.FLAG_ONE_SHOT or PendingIntent.FLAG_IMMUTABLE
+        )
+
+        val receiver = object : BroadcastReceiver() {
+            override fun onReceive(ctx: Context, intent: Intent) {
+                ctx.unregisterReceiver(this)
+                val resultCode = resultCode
+                Log.d(TAG, "SMS LEGACY result for $phone: code=$resultCode")
+
+                if (resultCode == android.app.Activity.RESULT_OK) {
+                    viewModelScope.launch(Dispatchers.IO) {
+                        repository.update(renter.copy(isOverdueSmsSent = true))
+                    }
+                    _smsResults.tryEmit(SmsResult(
+                        success = true,
+                        message = "SMS muvaffaqiyatli yuborildi (eski usul): $phone"
+                    ))
+                } else {
+                    val (errorName, errorDesc) = smsErrorCodeToText(resultCode, context, phone)
+                    val diag = SimHelper.getDiagnostics(context, phone)
+                    _smsResults.tryEmit(SmsResult(
+                        success = false,
+                        message = "SMS yuborilmadi: $errorName (ikkala usul ham)",
+                        errorCode = "SMS_SEND_FAILED_${resultCode}_LEGACY",
+                        exceptionClass = errorName,
+                        exceptionMessage = "$errorDesc\n\nDiagnostika:\n${diag.fullReport}"
+                    ))
+                }
+            }
+        }
+
+        try {
+            context.registerReceiver(receiver, IntentFilter(actionId))
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to register LEGACY SMS receiver", e)
+        }
+
+        try {
+            legacyManager.sendTextMessage(phone, null, message, sentIntent, null)
+            Log.d(TAG, "SMS 2-urinish (LEGACY): → $phone")
+
+            _smsResults.tryEmit(SmsResult(
+                success = true,
+                message = "SMS qayta yuborilmoqda (eski usul): $phone..."
             ))
         } catch (e: Exception) {
             try { context.unregisterReceiver(receiver) } catch (_: Exception) {}
+            val diag = SimHelper.getDiagnostics(context, phone)
             _smsResults.tryEmit(SmsResult(
                 success = false,
-                message = "SMS yuborilmadi: kutilmagan xato",
-                errorCode = "SMS_UNEXPECTED_ERROR",
+                message = "SMS yuborilmadi: ${e.javaClass.simpleName}",
+                errorCode = "SMS_LEGACY_EXCEPTION",
                 exceptionClass = e.javaClass.simpleName,
-                exceptionMessage = e.message ?: "Noma'lum xato yuz berdi"
+                exceptionMessage = "${e.message}\n\nDiagnostika:\n${diag.fullReport}"
             ))
         }
     }
 
-    /**
-     * Конвертирует код ошибки SmsManager в понятный текст.
-     *
-     * Коды ошибок:
-     * - RESULT_ERROR_GENERIC_FAILURE (1) — общая ошибка (SIM, сеть, оператор)
-     * - RESULT_ERROR_NO_SERVICE (4) — нет сотовой сети
-     * - RESULT_ERROR_NULL_PDU (3) — ошибка протокола PDU
-     * - RESULT_ERROR_RADIO_OFF (2) — радио выключено (авиарежим)
-     * - RESULT_ERROR_LIMIT_EXCEEDED (5) — лимит SMS превышен
-     */
-    private fun smsErrorCodeToText(code: Int): Pair<String, String> {
+    private fun smsErrorCodeToText(code: Int, context: Context, phone: String): Pair<String, String> {
         return when (code) {
-            SmsManager.RESULT_ERROR_GENERIC_FAILURE ->
-                "GENERIC_FAILURE" to
-                "Umumiy xato (kod 1). Sabablari: 1) 2 ta SIM kartadan foydalanmoqdasiz — Ilova sozlamalaridan SIM kartani tanlang. 2) SIM-karta ishlamayapti yoki balans yetarli emas. 3) Operator rad etdi yoki tarmoqda muammo. Internetda qidirish: 'Android SmsManager RESULT_ERROR_GENERIC_FAILURE dual SIM'"
+            SmsManager.RESULT_ERROR_GENERIC_FAILURE -> {
+                val diag = SimHelper.getDiagnostics(context, phone)
+                "GENERIC_FAILURE" to buildString {
+                    appendLine("Umumiy xato (kod 1). Mumkin bo'lgan sabablar:")
+                    appendLine("1) SIM balans yetarli emas — operator balansini tekshiring")
+                    appendLine("2) 2 ta SIM — Sozlamalardan SIM kartani tanlang")
+                    appendLine("3) Operator SMS ni rad etmoqda")
+                    appendLine("4) Tarmoq muammosi — signal darajasini tekshiring")
+                    appendLine("5) Raqam formati noto'g'ri: '$phone'")
+                    appendLine()
+                    appendLine("Qidirish: 'Android SmsManager RESULT_ERROR_GENERIC_FAILURE'")
+                }
+            }
             SmsManager.RESULT_ERROR_RADIO_OFF ->
-                "RADIO_OFF" to
-                "Radio o'chiq (kod 2). Telefon parvozd rejimida yoki tarmoq o'chiq. Parvozd rejimini o'chiring va qayta urinib ko'ring."
+                "RADIO_OFF" to "Radio o'chiq (kod 2). Parvozd rejimini o'chiring."
             SmsManager.RESULT_ERROR_NULL_PDU ->
-                "NULL_PDU" to
-                "PDU protokol xatosi (kod 3). Operator SMS formatini qo'llab-quvvatlamayapti. Boshqa telefon raqamiga yuborib ko'ring."
+                "NULL_PDU" to "PDU protokol xatosi (kod 3). Operator SMS formatini qo'llab-quvvatlamayapti."
             SmsManager.RESULT_ERROR_NO_SERVICE ->
-                "NO_SERVICE" to
-                "Tarmoq yo'q (kod 4). Telefon tarmoqqa ulanmagan. Signal darajasini tekshiring va qayta urinib ko'ring."
+                "NO_SERVICE" to "Tarmoq yo'q (kod 4). Signal darajasini tekshiring."
             SmsManager.RESULT_ERROR_LIMIT_EXCEEDED ->
-                "LIMIT_EXCEEDED" to
-                "SMS limiti oshildi (kod 5). Judayam ko'p SMS yuborildi. Bir oz kutib qayta urinib ko'ring."
+                "LIMIT_EXCEEDED" to "SMS limiti oshildi (kod 5). Bir oz kutib qayta urinib ko'ring."
             else ->
-                "UNKNOWN_ERROR_$code" to
-                "Noma'lum xato kodi: $code. Internetda qidirish: 'Android SmsManager error code $code'"
+                "UNKNOWN_ERROR_$code" to "Noma'lum xato kodi: $code"
         }
     }
 
     /**
-     * SmsManager ni dual-SIM qo'llab-quvvatlash bilan olish.
-     *
-     * SimHelper orqali aniq SIM kartani tanlaydi.
-     * Agar SIM tanlanmagan bo'lsa, birinchi faol SIM ni avto-tanlaydi.
+     * SmsManager ni dual-SIM bilan olish.
      */
     private fun getSmsManager(context: android.content.Context): SmsManager? {
-        return com.example.worker.SimHelper.getSmsManagerForSim(context)
+        return SimHelper.getSmsManagerForSim(context)
     }
 
     fun updateRenter(renter: Renter) {
