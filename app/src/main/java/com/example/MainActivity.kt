@@ -647,38 +647,42 @@ fun MainScreen(
                                 style = MaterialTheme.typography.labelMedium
                             )
                         }
-                        // SMS yuborish tugmasi — faqat kechikkan mijozlarga
+                        // SMS yuborish tugmasi — tanlangan mijozlarga
                         Button(
                             onClick = {
-                                val renters = renters.filter { it.id in selectedRenters }
+                                val rentersToSend = renters.filter { it.id in selectedRenters }
                                 var sentCount = 0
-                                renters.forEach { renter ->
+                                var failCount = 0
+                                rentersToSend.forEach { renter ->
                                     val settingsRepo = com.example.data.SettingsRepository(context)
                                     val currentTime = System.currentTimeMillis()
                                     val elapsedDays = ((currentTime - renter.rentStartDateTimestamp) / (1000L * 60 * 60 * 24)).toInt()
                                     val daysOverdue = elapsedDays - renter.rentDurationDays
-                                    if (daysOverdue > 0 && !renter.isOverdueSmsSent) {
-                                        val phone = com.example.worker.SimHelper.normalizePhoneNumber(renter.phoneNumber)
-                                        val message = settingsRepo.smsTemplate
-                                            .replace("{name}", renter.name)
-                                            .replace("{days}", daysOverdue.toString())
-                                            .replace("{debt}", renter.debtAmount.toString())
-                                        val smsManager = com.example.worker.SimHelper.getSmsManagerForSim(context)
-                                        if (smsManager != null) {
-                                            try {
-                                                com.example.worker.SimHelper.sendSmsAuto(smsManager, phone, message, null, null)
+                                    val phone = com.example.worker.SimHelper.normalizePhoneNumber(renter.phoneNumber)
+                                    val message = settingsRepo.smsTemplate
+                                        .replace("{name}", renter.name)
+                                        .replace("{days}", maxOf(0, daysOverdue).toString())
+                                        .replace("{debt}", renter.debtAmount.toString())
+                                    val smsManager = com.example.worker.SimHelper.getSmsManagerForSim(context)
+                                    if (smsManager != null) {
+                                        try {
+                                            com.example.worker.SimHelper.sendSmsAuto(smsManager, phone, message, null, null)
+                                            if (daysOverdue > 0 && !renter.isOverdueSmsSent) {
                                                 viewModel.updateRenter(renter.copy(isOverdueSmsSent = true))
-                                                sentCount++
-                                            } catch (e: Exception) {
-                                                Log.w("SMS", "Failed for ${renter.name}: ${e.message}")
                                             }
+                                            sentCount++
+                                        } catch (e: Exception) {
+                                            Log.w("SMS", "Failed for ${renter.name}: ${e.message}")
+                                            failCount++
                                         }
+                                    } else {
+                                        failCount++
                                     }
                                 }
                                 if (sentCount > 0) {
-                                    Toast.makeText(context, "$sentCount ta SMS yuborildi", Toast.LENGTH_SHORT).show()
+                                    Toast.makeText(context, "$sentCount ta SMS yuborildi${if (failCount > 0) ", $failCount ta xato" else ""}", Toast.LENGTH_SHORT).show()
                                 } else {
-                                    Toast.makeText(context, "Kechikkan mijozlar topilmadi yoki SMS allaqachon yuborilgan", Toast.LENGTH_SHORT).show()
+                                    Toast.makeText(context, "SMS yuborib bo'lmadi", Toast.LENGTH_SHORT).show()
                                 }
                                 selectedRenters = emptySet()
                             },
@@ -851,6 +855,7 @@ fun MainScreen(
                 weeklyPrice = weekly,
                 monthlyPrice = monthly,
                 scooters = scooters,
+                activeRenters = renters,
                 onDismiss = {
                     showAddDialog = false
                     renterToEdit = null
@@ -1352,6 +1357,7 @@ fun RenterFormDialog(
     weeklyPrice: Double,
     monthlyPrice: Double,
     scooters: List<Scooter> = emptyList(),
+    activeRenters: List<Renter> = emptyList(),
     onDismiss: () -> Unit,
     onSave: (String, String, Double, Int, Long, Int?, String?, Boolean) -> Unit
 ) {
@@ -1390,6 +1396,25 @@ fun RenterFormDialog(
     var expandedScooter by remember { mutableStateOf(false) }
 
     val isEdit = initialRenter != null
+
+    // Вычисляем ID скутеров, которые уже арендованы активными арендаторами
+    // (исключаем текущего арендатора при редактировании — его скутер должен быть доступен)
+    val rentedScooterIds = activeRenters
+        .filter { it.scooterId != null && !it.isReturned && it.id != initialRenter?.id }
+        .mapNotNull { it.scooterId }
+        .toSet()
+
+    // Доступные скутеры = не арендованные + текущий скутер арендатора (при редактировании)
+    val availableScooters = scooters.filter { scooter ->
+        scooter.id !in rentedScooterIds
+    }
+
+    // Если выбранный скутер уже арендован другим — сбрасываем выбор
+    LaunchedEffect(rentedScooterIds) {
+        if (selectedScooterId != null && selectedScooterId in rentedScooterIds) {
+            selectedScooterId = null
+        }
+    }
 
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -1500,7 +1525,8 @@ fun RenterFormDialog(
                     }
                 }
 
-                val selectedScooter = scooters.find { it.id == selectedScooterId }
+                val selectedScooter = availableScooters.find { it.id == selectedScooterId }
+                    ?: scooters.find { it.id == selectedScooterId }
                 val scooterText = selectedScooter?.name ?: "Tanlanmagan"
 
                 ExposedDropdownMenuBox(
@@ -1529,7 +1555,7 @@ fun RenterFormDialog(
                                 expandedScooter = false
                             }
                         )
-                        scooters.forEach { scooter ->
+                        availableScooters.forEach { scooter ->
                             DropdownMenuItem(
                                 text = { Text(scooter.name) },
                                 onClick = {

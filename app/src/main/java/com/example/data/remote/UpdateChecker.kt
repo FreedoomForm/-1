@@ -207,15 +207,24 @@ class UpdateChecker(
      * Парсит versionCode из тега релиза или тела релиза.
      * Поддерживаемые форматы:
      *   - Тег = число (например "3") → 3
+     *   - Тег = "1.2.77" → извлекаем последнюю часть как versionCode (77)
      *   - В теле: "versionCode:3" или "versionCode=3" или "versionCode: 3"
      */
     private fun parseVersionCode(tagName: String, body: String): Int? {
-        // Попробуем распарсить тег как число
+        // Попробуем распарсить тег как целое число (например "3")
         tagName.toIntOrNull()?.let { return it }
 
-        // Попробуем найти versionCode в теле релиза
+        // Попробуем найти versionCode в теле релиза (приоритет!)
         val regex = Regex("""versionCode\s*[:=]\s*(\d+)""", RegexOption.IGNORE_CASE)
-        return regex.find(body)?.groupValues?.get(1)?.toIntOrNull()
+        regex.find(body)?.groupValues?.get(1)?.toIntOrNull()?.let { return it }
+
+        // Попробуем извлечь versionCode из последней части тега (например "1.2.77" → 77)
+        val parts = tagName.split(".")
+        if (parts.size >= 3) {
+            parts.last().toIntOrNull()?.let { return it }
+        }
+
+        return null
     }
 
     /**
