@@ -87,11 +87,9 @@ class SmsWorker(
     private fun sendSms(phone: String, message: String): Boolean {
         return try {
             val smsManager = getSmsManager(applicationContext)
-                ?: throw IllegalStateException(
-                    "SmsManager is null — у устройства нет SIM-карты или эмулятор"
-                )
-            smsManager.sendTextMessage(phone, null, message, null, null)
-            Log.d(TAG, "SmsManager.sendTextMessage OK to $phone (${message.length} chars)")
+                ?: throw IllegalStateException("SmsManager is null")
+            SimHelper.sendSmsAuto(smsManager, phone, message, null, null)
+            Log.d(TAG, "SmsManager.sendSmsAuto OK to $phone (${message.length} chars)")
             true
         } catch (e: SecurityException) {
             // Нет разрешения SEND_SMS — пользователь не дал

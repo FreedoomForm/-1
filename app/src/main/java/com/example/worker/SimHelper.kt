@@ -14,19 +14,18 @@ import androidx.core.content.ContextCompat
 /**
  * Dual-SIM qurilmalarda SIM kartani tanlash va SmsManager ni olish uchun yordamchi klass.
  *
- * Asosiy muammo: SmsManager.getDefault() 2 ta SIM bo'lganda qaysi SIM dan
- * foydalanishni bilmaydi va GENERIC_FAILURE qaytaradi.
- *
- * Yechim: SmsManager.getSmsManagerForSubscriptionId(subId) orqali
- * aniq SIM kartani tanlash.
+ * 3 qatlamli SmsManager olish:
+ * 1. getSmsManagerForSubscriptionId(subId) — aniq SIM
+ * 2. context.getSystemService(SmsManager::class.java) — default SIM (Android 12+)
+ * 3. SmsManager.getDefault() — eski usul (deprecated lekin ba'zi qurilmalarda ishlaydi)
  */
 object SimHelper {
 
     private const val TAG = "SimHelper"
 
-    /**
-     * SIM karta ma'lumotlari.
-     */
+    /** SMS maksimal uzunligi — bundan uzun bo'lsa multipart kerak */
+    const val SMS_MAX_LENGTH = 160
+
     data class SimInfo(
         val subscriptionId: Int,
         val slotIndex: Int,
@@ -35,11 +34,9 @@ object SimHelper {
         val mcc: Int,
         val mnc: Int
     ) {
-        /** UI da ko'rsatish uchun matn: "SIM 1: Umobile" */
         val displayName: String
             get() = "SIM ${slotIndex + 1}: $carrierName"
 
-        /** To'liq ma'lumot: "SIM 1: Umobile (+998901234567)" */
         val fullDisplayName: String
             get() = if (!phoneNumber.isNullOrBlank()) {
                 "SIM ${slotIndex + 1}: $carrierName ($phoneNumber)"
@@ -48,9 +45,6 @@ object SimHelper {
             }
     }
 
-    /**
-     * SIM karta diagnostika ma'lumotlari — xato paytida ko'rsatish uchun.
-     */
     data class SimDiagnostics(
         val simCount: Int,
         val simState: Int,
@@ -61,9 +55,9 @@ object SimHelper {
         val selectedSubId: Int,
         val resolvedSubId: Int,
         val isAirplaneMode: Boolean,
-        val normalizedPhone: String
+        val normalizedPhone: String,
+        val defaultSmsSubId: Int
     ) {
-        /** To'liq diagnostika matni */
         val fullReport: String
             get() = buildString {
                 appendLine("SIM diagnostikasi:")
@@ -73,21 +67,26 @@ object SimHelper {
                 appendLine("  Telefon turi: ${if (phoneType == TelephonyManager.PHONE_TYPE_GSM) "GSM" else if (phoneType == TelephonyManager.PHONE_TYPE_CDMA) "CDMA" else "SIP"}")
                 appendLine("  Tanlangan subId: $selectedSubId")
                 appendLine("  Foydalanilgan subId: $resolvedSubId")
-                appendLine("  Parvozd rejimi: ${if (isAirplaneMode) "YOQIQ ❌" else "O'chiq ✓"}")
+                appendLine("  Default SMS subId: $defaultSmsSubId")
+                appendLine("  Parvozd rejimi: ${if (isAirplaneMode) "YOQIQ" else "O'chiq"}")
                 appendLine("  Raqam formati: $normalizedPhone")
             }
     }
 
     /**
-     * Qurilmadagi barcha faol SIM kartalarni qaytaradi.
-     * READ_PHONE_STATE permission talab qilinadi.
+     * SMS yuborish natijasi — har bir urinish uchun alohida.
      */
+    data class SmsSendAttempt(
+        val attempt: Int,
+        val method: String,
+        val smsManager: SmsManager?,
+        val subId: Int
+    )
+
     fun getActiveSimCards(context: Context): List<SimInfo> {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.LOLLIPOP_MR1) {
-            Log.w(TAG, "API < 22 — SubscriptionManager mavjud emas")
             return emptyList()
         }
-
         if (!hasPhoneStatePermission(context)) {
             Log.e(TAG, "READ_PHONE_STATE permission yo'q")
             return emptyList()
@@ -116,11 +115,6 @@ object SimHelper {
                     Log.w(TAG, "SIM info o'qishda xato: ${e.message}")
                     null
                 }
-            }.also { simList ->
-                Log.d(TAG, "Topilgan SIM kartalar: ${simList.size}")
-                simList.forEach { sim ->
-                    Log.d(TAG, "  ${sim.fullDisplayName} (subId=${sim.subscriptionId})")
-                }
             }
         } catch (e: SecurityException) {
             Log.e(TAG, "SecurityException: READ_PHONE_STATE yo'q", e)
@@ -133,47 +127,24 @@ object SimHelper {
 
     /**
      * Telefon raqamini O'zbekiston standartiga normallashtirish.
-     *
-     * Qabul qilinadigan formatlar:
-     * - +998901234567 → +998901234567
-     * - 998901234567  → +998901234567
-     * - 8901234567    → +998901234567  (eski Sovet formati)
-     * - 901234567     → +998901234567
-     * - +7901234567   → +998901234567  (Qozog'iston/Kirg'iziston aralash)
      */
     fun normalizePhoneNumber(phone: String): String {
         if (phone.isBlank()) return phone
 
-        // Bo'sh joy, tire, qavslarni olib tashlash
         var normalized = phone.trim()
             .replace("[\\s\\-\\(\\)\\.]".toRegex(), "")
 
-        // Agar + bilan boshlansa, + ni vaqtincha olib tashlash
         val hadPlus = normalized.startsWith("+")
         if (hadPlus) {
             normalized = normalized.substring(1)
         }
 
-        // Eski Sovet formati: 8 bilan boshlansa → 998 ga almashtirish
         if (normalized.startsWith("8") && normalized.length == 10) {
             normalized = "998" + normalized.substring(1)
-        }
-        // 9 bilan boshlanib 9 raqamli bo'lsa → 998 qo'shish
-        else if (normalized.startsWith("9") && normalized.length == 9) {
+        } else if (normalized.startsWith("9") && normalized.length == 9) {
             normalized = "998" + normalized
         }
-        // 998 bilan boshlansa → + qo'shish
-        else if (normalized.startsWith("998") && normalized.length == 12) {
-            // already correct, just need +
-        }
-        // 7 bilan boshlansa (Qozog'iston formati +7) → agar 10 raqam bo'lsa, 998 deb hisoblash
-        else if (normalized.startsWith("7") && normalized.length == 11) {
-            // Bu Qozog'iston +7 formati bo'lishi mumkin,
-            // lekin O'zbekiston uchun 998 ga o'zgartirmaymiz
-            Log.w(TAG, "Raqam +7 formatida: $phone — O'zbekiston uchun +998 kerak")
-        }
 
-        // + qo'shish
         if (!normalized.startsWith("+")) {
             normalized = "+$normalized"
         }
@@ -185,16 +156,13 @@ object SimHelper {
         return normalized
     }
 
-    /**
-     * Raqam O'zbekiston formatiga to'g'ri ekanligini tekshirish.
-     */
     fun isValidUzbekPhone(phone: String): Boolean {
         val normalized = normalizePhoneNumber(phone)
         return normalized.matches("\\+998\\d{9}".toRegex())
     }
 
     /**
-     * Diagnostika ma'lumotlarini olish — xato paytida UI da ko'rsatish uchun.
+     * Diagnostika ma'lumotlarini olish.
      */
     @Suppress("DEPRECATION")
     fun getDiagnostics(context: Context, rawPhone: String): SimDiagnostics {
@@ -210,7 +178,7 @@ object SimHelper {
             TelephonyManager.SIM_STATE_PIN_REQUIRED -> "PIN kerak"
             TelephonyManager.SIM_STATE_PUK_REQUIRED -> "PUK kerak"
             TelephonyManager.SIM_STATE_NETWORK_LOCKED -> "Tarmoq qulfi"
-            TelephonyManager.SIM_STATE_READY -> "Tayyor ✓"
+            TelephonyManager.SIM_STATE_READY -> "Tayyor"
             TelephonyManager.SIM_STATE_NOT_READY -> "Tayyor emas"
             TelephonyManager.SIM_STATE_PERM_DISABLED -> "Butunlay o'chirilgan"
             TelephonyManager.SIM_STATE_CARD_IO_ERROR -> "SIM karta xatosi"
@@ -226,6 +194,15 @@ object SimHelper {
             false
         }
 
+        // Default SMS subscription ID ni olish
+        val defaultSmsSubId = try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP_MR1) {
+                SubscriptionManager.getDefaultSmsSubscriptionId()
+            } else -1
+        } catch (e: Exception) {
+            -1
+        }
+
         return SimDiagnostics(
             simCount = getActiveSimCards(context).size,
             simState = simState,
@@ -236,109 +213,187 @@ object SimHelper {
             selectedSubId = selectedSubId,
             resolvedSubId = resolvedSubId,
             isAirplaneMode = isAirplaneMode,
-            normalizedPhone = normalizePhoneNumber(rawPhone)
+            normalizedPhone = normalizePhoneNumber(rawPhone),
+            defaultSmsSubId = defaultSmsSubId
         )
     }
 
     /**
-     * Berilgan subscription ID uchun SmsManager qaytaradi.
+     * SmsManager ni 3 ta usul bilan olishga urinadi.
+     * Har bir usul alohida SmsManager qaytaradi — birinchisi ishlamasa
+     * keyingisi ishlatiladi.
      *
-     * Agar subId == -1 bo'lsa (tanlanmagan), avvalo saqlangan SIM ni tekshiradi,
-     * keyin birinchi faol SIM ni tanlaydi, oxirda getDefault() ga tushadi.
+     * @return SmsSendAttempt ro'yxati — qaysi usul qachon ishlatilganini ko'rsatadi
      */
     @Suppress("DEPRECATION")
-    fun getSmsManagerForSim(context: Context, subscriptionId: Int = -1): SmsManager? {
-        return try {
-            val effectiveSubId = resolveSubscriptionId(context, subscriptionId)
+    fun getAllSmsManagers(context: Context): List<SmsSendAttempt> {
+        val attempts = mutableListOf<SmsSendAttempt>()
+        val subId = resolveSubscriptionId(context, -1)
 
-            if (effectiveSubId != -1) {
-                Log.d(TAG, "SmsManager subId=$effectiveSubId uchun olinmoqda")
-                val manager = getSmsManagerForSubId(effectiveSubId)
-                if (manager != null) {
-                    Log.d(TAG, "SmsManager subId=$effectiveSubId muvaffaqiyatli olindi")
-                    return manager
-                }
-                // subId bilan olib bo'lmadi — fallback ga o'tamiz
-                Log.w(TAG, "SmsManager subId=$effectiveSubId uchun null, default ga o'tilmoqda")
-            }
+        // 1-urinish: getSmsManagerForSubscriptionId(subId)
+        if (subId != -1) {
+            val manager1 = getSmsManagerForSubId(subId)
+            attempts.add(SmsSendAttempt(1, "getSmsManagerForSubscriptionId($subId)", manager1, subId))
+        }
 
-            // Fallback: default SmsManager
-            Log.w(TAG, "Default SmsManager ishlatilmoqda")
-            getDefaultSmsManager(context)
-        } catch (e: Exception) {
-            Log.e(TAG, "SmsManager olishda xato", e)
+        // 2-urinish: context.getSystemService(SmsManager::class.java) — Android 12+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
             try {
-                getDefaultSmsManager(context)
-            } catch (e2: Exception) {
-                Log.e(TAG, "Hatto getDefault() ham ishlamadi", e2)
-                null
+                val manager2 = context.getSystemService(SmsManager::class.java)
+                attempts.add(SmsSendAttempt(2, "getSystemService(SmsManager)", manager2, -1))
+            } catch (e: Exception) {
+                Log.w(TAG, "getSystemService(SmsManager) xato: ${e.message}")
             }
         }
+
+        // 3-urinish: SmsManager.getDefault() — eng eski usul, deprecated lekin ba'zi qurilmalarda ishlaydi
+        try {
+            val manager3 = SmsManager.getDefault()
+            attempts.add(SmsSendAttempt(3, "SmsManager.getDefault()", manager3, -1))
+        } catch (e: Exception) {
+            Log.w(TAG, "SmsManager.getDefault() xato: ${e.message}")
+        }
+
+        attempts.forEach { attempt ->
+            Log.d(TAG, "SMS attempt ${attempt.attempt}: ${attempt.method} → ${if (attempt.smsManager != null) "OK" else "NULL"}")
+        }
+
+        return attempts
     }
 
     /**
-     * ESKI USUL bilan SmsManager olish — GENERIC_FAILURE bo'lganda
-     * fallback sifatida ishlatiladi.
-     *
-     * Bu usul "avatgacha" ishlagan — ba'zi qurilmalarda
-     * getSmsManagerForSubscriptionId ishlamaydi.
+     * SmsManager ni olish — birinchi topilganini qaytaradi.
      */
     @Suppress("DEPRECATION")
-    fun getLegacySmsManager(context: Context): SmsManager? {
+    fun getSmsManagerForSim(context: Context, subscriptionId: Int = -1): SmsManager? {
+        val effectiveSubId = if (subscriptionId != -1) subscriptionId
+            else resolveSubscriptionId(context, -1)
+
+        // 1. Subscription ID bilan
+        if (effectiveSubId != -1) {
+            val manager = getSmsManagerForSubId(effectiveSubId)
+            if (manager != null) return manager
+        }
+
+        // 2. getSystemService
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            try {
+                val manager = context.getSystemService(SmsManager::class.java)
+                if (manager != null) return manager
+            } catch (_: Exception) {}
+        }
+
+        // 3. getDefault()
         return try {
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-                context.getSystemService(SmsManager::class.java)
-            } else {
-                SmsManager.getDefault()
-            }
+            SmsManager.getDefault()
         } catch (e: Exception) {
-            Log.e(TAG, "Legacy SmsManager olishda xato", e)
+            Log.e(TAG, "Barcha SmsManager usullari muvaffaqiyatsiz", e)
             null
         }
     }
 
     /**
-     * Subscription ID ni aniqlash: berilgan, saqlangan yoki birinchi faol SIM.
+     * Eski usul bilan SmsManager — GENERIC_FAILURE fallback uchun.
+     * Bu usul "avatgacha" ishlagan.
      */
-    private fun resolveSubscriptionId(context: Context, providedSubId: Int): Int {
-        // 1. Agar aniq ID berilgan bo'lsa
-        if (providedSubId != -1) {
-            Log.d(TAG, "Berilgan subId=$providedSubId ishlatilmoqda")
-            return providedSubId
+    @Suppress("DEPRECATION")
+    fun getLegacySmsManager(context: Context): SmsManager? {
+        // 1. getSystemService
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            try {
+                val manager = context.getSystemService(SmsManager::class.java)
+                if (manager != null) return manager
+            } catch (_: Exception) {}
         }
 
-        // 2. Saqlangan ID ni tekshirish
+        // 2. getDefault()
+        return try {
+            SmsManager.getDefault()
+        } catch (e: Exception) {
+            null
+        }
+    }
+
+    /**
+     * SmsManager orqali SMS yuborish — avtomatik multipart bilan.
+     *
+     * Agar xabar 160 belgidan uzun bo'lsa, sendMultipartTextMessage ishlatiladi.
+     * Aks holda sendTextMessage ishlatiladi.
+     */
+    fun sendSmsAuto(
+        smsManager: SmsManager,
+        phone: String,
+        message: String,
+        sentIntent: PendingIntent? = null,
+        deliveryIntent: PendingIntent? = null
+    ) {
+        if (message.length > SMS_MAX_LENGTH) {
+            // Uzun xabar — multipart
+            val parts = smsManager.divideMessage(message)
+            Log.d(TAG, "SMS multipart: ${parts.size} qism, ${message.length} chars")
+
+            val sentIntents = if (sentIntent != null) {
+                ArrayList<PendingIntent>().apply { repeat(parts.size) { add(sentIntent) } }
+            } else null
+
+            val deliveryIntents = if (deliveryIntent != null) {
+                ArrayList<PendingIntent>().apply { repeat(parts.size) { add(deliveryIntent) } }
+            } else null
+
+            smsManager.sendMultipartTextMessage(phone, null, parts, sentIntents, deliveryIntents)
+        } else {
+            // Qisqa xabar — oddiy
+            smsManager.sendTextMessage(phone, null, message, sentIntent, deliveryIntent)
+        }
+    }
+
+    /**
+     * SmsManager orqali SMS yuborish — PendingIntentsiz (fire-and-forget).
+     * Bu eng sodda usul — agar PendingIntent muammo bo'lsa ishlatiladi.
+     */
+    fun sendSmsFireAndForget(
+        smsManager: SmsManager,
+        phone: String,
+        message: String
+    ): Boolean {
+        return try {
+            sendSmsAuto(smsManager, phone, message, null, null)
+            Log.d(TAG, "SMS fire-and-forget OK: $phone")
+            true
+        } catch (e: Exception) {
+            Log.e(TAG, "SMS fire-and-forget xato: $phone", e)
+            false
+        }
+    }
+
+    private fun resolveSubscriptionId(context: Context, providedSubId: Int): Int {
+        if (providedSubId != -1) return providedSubId
+
         val settingsRepo = com.example.data.SettingsRepository(context)
         val savedSubId = settingsRepo.selectedSimSubscriptionId
         if (savedSubId != -1) {
             val activeSims = getActiveSimCards(context)
             if (activeSims.any { it.subscriptionId == savedSubId }) {
-                Log.d(TAG, "Saqlangan subId=$savedSubId ishlatilmoqda")
                 return savedSubId
             } else {
-                Log.w(TAG, "Saqlangan subId=$savedSubId endi faol emas, yangilanmoqda")
                 settingsRepo.selectedSimSubscriptionId = -1
             }
         }
 
-        // 3. Birinchi faol SIM ni tanlash
         val activeSims = getActiveSimCards(context)
         if (activeSims.isNotEmpty()) {
             val firstSim = activeSims.first()
-            Log.d(TAG, "Birinchi faol SIM: ${firstSim.displayName} (subId=${firstSim.subscriptionId})")
             settingsRepo.selectedSimSubscriptionId = firstSim.subscriptionId
             return firstSim.subscriptionId
         }
 
-        // 4. Hech narsa topilmadi
         return -1
     }
 
-    /**
-     * Subscription ID bo'yicha SmsManager olish.
-     * API 31+ da SmsManager.getSmsManagerForSubscriptionId()
-     * API 22-30 da reflection orqali
-     */
+    fun resolveSubscriptionIdPublic(context: Context): Int {
+        return resolveSubscriptionId(context, -1)
+    }
+
     private fun getSmsManagerForSubId(subId: Int): SmsManager? {
         return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
             SmsManager.getSmsManagerForSubscriptionId(subId)
@@ -357,45 +412,16 @@ object SimHelper {
         }
     }
 
-    /**
-     * Default SmsManager olish (fallback).
-     */
-    @Suppress("DEPRECATION")
-    private fun getDefaultSmsManager(context: Context): SmsManager? {
-        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-            context.getSystemService(SmsManager::class.java)
-        } else {
-            SmsManager.getDefault()
-        }
-    }
-
-    /**
-     * READ_PHONE_STATE permission bor-yo'qligini tekshirish.
-     */
     fun hasPhoneStatePermission(context: Context): Boolean {
         return ContextCompat.checkSelfPermission(
             context, Manifest.permission.READ_PHONE_STATE
         ) == PackageManager.PERMISSION_GRANTED
     }
 
-    /**
-     * Ommaviy metod — RenterViewModel tomonidan foydalaniladi.
-     * Saqlangan subscription ID ni qaytaradi yoki -1.
-     */
-    fun resolveSubscriptionIdPublic(context: Context): Int {
-        return resolveSubscriptionId(context, -1)
-    }
-
-    /**
-     * Qurilmada nechta faol SIM borligini qaytaradi.
-     */
     fun getSimCount(context: Context): Int {
         return getActiveSimCards(context).size
     }
 
-    /**
-     * Berilgan subscription ID haqiqiy va faol ekanligini tekshiradi.
-     */
     fun isValidSubscriptionId(context: Context, subId: Int): Boolean {
         if (subId == -1) return false
         return getActiveSimCards(context).any { it.subscriptionId == subId }
@@ -405,8 +431,6 @@ object SimHelper {
     private fun getPhoneNumber(info: SubscriptionInfo): String? {
         return try {
             info.number
-        } catch (e: SecurityException) {
-            null
         } catch (e: Exception) {
             null
         }
