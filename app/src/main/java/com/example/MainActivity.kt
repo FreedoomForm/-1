@@ -28,7 +28,7 @@ import androidx.compose.material.icons.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.List
 import androidx.compose.material.icons.filled.DirectionsBike
 import androidx.compose.material.icons.filled.Search
-import androidx.compose.material.icons.filled.Sync
+import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.foundation.border
 import androidx.compose.material.icons.filled.DateRange
 import androidx.compose.material.icons.filled.Notifications
@@ -62,6 +62,9 @@ import com.example.data.Renter
 import com.example.data.Scooter
 import com.example.data.remote.SyncManager
 import com.example.data.remote.SyncResult
+import com.example.data.remote.InAppUpdateManager
+import com.example.data.remote.InAppUpdateState
+import com.example.data.remote.UpdateCheckResult
 import com.example.data.remote.UpdateChecker
 import com.example.data.remote.UpdateInfo
 import com.example.ui.ContractHistoryViewModel
@@ -219,6 +222,9 @@ fun MainScreen(
     var syncResult by remember { mutableStateOf<SyncResult?>(null) }
     var updateInfo by remember { mutableStateOf<UpdateInfo?>(null) }
     var isCheckingUpdate by remember { mutableStateOf(false) }
+    var isUpToDate by remember { mutableStateOf(false) } // Приложение актуально — не показываем уведомление
+    val updateManager = remember { InAppUpdateManager(context) }
+    val updateState by updateManager.state.collectAsStateWithLifecycle()
     val coroutineScope = rememberCoroutineScope()
 
     // Авто-синхронизация (smart merge, каждые 30 секунд)
@@ -231,16 +237,32 @@ fun MainScreen(
     val scooters by scooterViewModel.scootersList.collectAsStateWithLifecycle()
 
     // Авто-проверка обновлений при запуске
+    // Показываем уведомление ТОЛЬКО если есть реальное обновление
     LaunchedEffect(Unit) {
         try {
             val checker = UpdateChecker(context)
-            val info = checker.checkForUpdate()
-            if (info != null) {
-                updateInfo = info
-                Log.d("MainScreen", "Update available: v${info.versionName}")
+            val (result, info) = checker.checkForUpdate()
+            when (result) {
+                UpdateCheckResult.UPDATE_AVAILABLE -> {
+                    updateInfo = info
+                    isUpToDate = false
+                    Log.d("MainScreen", "Update available: v${info?.versionName}")
+                }
+                UpdateCheckResult.UP_TO_DATE -> {
+                    updateInfo = null
+                    isUpToDate = true
+                    Log.d("MainScreen", "App is up to date")
+                }
+                UpdateCheckResult.ERROR -> {
+                    // Ошибка API = НЕ показываем уведомление
+                    updateInfo = null
+                    isUpToDate = false
+                    Log.d("MainScreen", "Update check failed — not showing notification")
+                }
             }
         } catch (e: Exception) {
             Log.w("MainScreen", "Auto-update check failed", e)
+            // Ошибка = не показываем уведомление
         }
     }
 
@@ -323,7 +345,7 @@ fun MainScreen(
                             )
                         } else {
                             Icon(
-                                Icons.Default.Sync,
+                                Icons.Default.Refresh,
                                 contentDescription = "Sinxronizatsiya",
                                 modifier = Modifier.size(20.dp),
                                 tint = ClaudeText
@@ -418,45 +440,132 @@ fun MainScreen(
                 .padding(innerPadding)
                 .fillMaxSize()
         ) {
-            // ── Баннер обновления ──────────────────────────
-            if (updateInfo != null) {
-                Card(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 16.dp, vertical = 8.dp)
-                        .clickable {
-                            val intent = android.content.Intent(
-                                android.content.Intent.ACTION_VIEW,
-                                android.net.Uri.parse(updateInfo!!.downloadUrl)
-                            )
-                            context.startActivity(intent)
-                        },
-                    colors = CardDefaults.cardColors(containerColor = Color(0xFFE8F5E9)),
-                    shape = RoundedCornerShape(10.dp)
-                ) {
-                    Row(
-                        modifier = Modifier.padding(12.dp),
-                        verticalAlignment = Alignment.CenterVertically
+            // ── Баннер обновления (ТОЛЬКО если есть обновление) ──
+            when (val st = updateState) {
+                is InAppUpdateState.Downloading -> {
+                    Card(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 16.dp, vertical = 8.dp),
+                        colors = CardDefaults.cardColors(containerColor = Color(0xFFE3F2FD)),
+                        shape = RoundedCornerShape(10.dp)
                     ) {
-                        Icon(
-                            Icons.Default.Sync,
-                            contentDescription = null,
-                            tint = Color(0xFF2E7D32),
-                            modifier = Modifier.size(24.dp)
-                        )
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Column(modifier = Modifier.weight(1f)) {
+                        Column(modifier = Modifier.padding(12.dp)) {
                             Text(
-                                "Yangi versiya: v${updateInfo!!.versionName}",
+                                "Yangilash yuklab olinmoqda... ${(st.progress * 100).toInt()}%",
                                 style = MaterialTheme.typography.labelMedium,
-                                color = Color(0xFF2E7D32),
+                                color = Color(0xFF1565C0),
                                 fontWeight = FontWeight.Bold
                             )
-                            Text(
-                                "Bosing — yuklab olish",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = Color(0xFF388E3C)
+                            Spacer(modifier = Modifier.height(4.dp))
+                            LinearProgressIndicator(
+                                progress = { st.progress },
+                                modifier = Modifier.fillMaxWidth(),
+                                color = Color(0xFF1565C0),
+                                trackColor = Color(0xFFBBDEFB)
                             )
+                        }
+                    }
+                }
+                is InAppUpdateState.Installing -> {
+                    Card(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 16.dp, vertical = 8.dp),
+                        colors = CardDefaults.cardColors(containerColor = Color(0xFFE3F2FD)),
+                        shape = RoundedCornerShape(10.dp)
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(12.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            CircularProgressIndicator(
+                                modifier = Modifier.size(20.dp),
+                                color = Color(0xFF1565C0),
+                                strokeWidth = 2.dp
+                            )
+                            Spacer(modifier = Modifier.width(12.dp))
+                            Text(
+                                "O'rnatilmoqda...",
+                                style = MaterialTheme.typography.labelMedium,
+                                color = Color(0xFF1565C0)
+                            )
+                        }
+                    }
+                }
+                is InAppUpdateState.Error -> {
+                    Card(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 16.dp, vertical = 8.dp),
+                        colors = CardDefaults.cardColors(containerColor = Color(0xFFFFEBEE)),
+                        shape = RoundedCornerShape(10.dp)
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(12.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Text(
+                                st.message,
+                                style = MaterialTheme.typography.labelMedium,
+                                color = Color(0xFFC62828),
+                                modifier = Modifier.weight(1f)
+                            )
+                            TextButton(onClick = { updateManager.reset() }) {
+                                Text("Yopish", color = Color(0xFFC62828))
+                            }
+                        }
+                    }
+                }
+                is InAppUpdateState.Installed -> {
+                    // Установлено — ничего не показываем
+                }
+                else -> {
+                    // Idle или ReadyToInstall — показываем баннер только если есть обновление
+                    if (updateInfo != null) {
+                        Card(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 16.dp, vertical = 8.dp)
+                                .clickable {
+                                    coroutineScope.launch {
+                                        if (!updateManager.canInstallFromUnknownSources()) {
+                                            updateManager.openInstallPermissionSettings()
+                                            Toast.makeText(context, "Ilova sozlamalaridan \"Noma'lum manbalardan o'rnatish\" ruxsatini bering", Toast.LENGTH_LONG).show()
+                                        } else {
+                                            updateManager.downloadAndInstall(updateInfo!!)
+                                        }
+                                    }
+                                },
+                            colors = CardDefaults.cardColors(containerColor = Color(0xFFE8F5E9)),
+                            shape = RoundedCornerShape(10.dp)
+                        ) {
+                            Row(
+                                modifier = Modifier.padding(12.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Icon(
+                                    Icons.Default.Refresh,
+                                    contentDescription = null,
+                                    tint = Color(0xFF2E7D32),
+                                    modifier = Modifier.size(24.dp)
+                                )
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text(
+                                        "Yangi versiya: v${updateInfo!!.versionName}",
+                                        style = MaterialTheme.typography.labelMedium,
+                                        color = Color(0xFF2E7D32),
+                                        fontWeight = FontWeight.Bold
+                                    )
+                                    Text(
+                                        "Bosing — bir tugma bilan yangilash",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = Color(0xFF388E3C)
+                                    )
+                                }
+                            }
                         }
                     }
                 }
@@ -824,6 +933,18 @@ fun MainScreen(
                 currentMonthlyPrice = monthly,
                 updateInfo = updateInfo,
                 isCheckingUpdate = isCheckingUpdate,
+                isUpToDate = isUpToDate,
+                updateState = updateState,
+                onStartUpdate = { info ->
+                    coroutineScope.launch {
+                        if (!updateManager.canInstallFromUnknownSources()) {
+                            updateManager.openInstallPermissionSettings()
+                            Toast.makeText(context, "Ilova sozlamalaridan \"Noma'lum manbalardan o'rnatish\" ruxsatini bering", Toast.LENGTH_LONG).show()
+                        } else {
+                            updateManager.downloadAndInstall(info)
+                        }
+                    }
+                },
                 onDismiss = { showSettings = false },
                 onSave = { newTemplate, newWeekly, newMonthly ->
                     settingsViewModel.updateTemplate(newTemplate)
@@ -839,7 +960,21 @@ fun MainScreen(
                         isCheckingUpdate = true
                         coroutineScope.launch {
                             val checker = UpdateChecker(context)
-                            updateInfo = checker.checkForUpdate()
+                            val (result, info) = checker.checkForUpdate()
+                            when (result) {
+                                UpdateCheckResult.UPDATE_AVAILABLE -> {
+                                    updateInfo = info
+                                    isUpToDate = false
+                                }
+                                UpdateCheckResult.UP_TO_DATE -> {
+                                    updateInfo = null
+                                    isUpToDate = true
+                                }
+                                UpdateCheckResult.ERROR -> {
+                                    updateInfo = null
+                                    isUpToDate = false
+                                }
+                            }
                             isCheckingUpdate = false
                         }
                     }
@@ -1473,6 +1608,9 @@ fun SettingsDialog(
     currentMonthlyPrice: Double,
     updateInfo: UpdateInfo? = null,
     isCheckingUpdate: Boolean = false,
+    isUpToDate: Boolean = false,
+    updateState: InAppUpdateState = InAppUpdateState.Idle,
+    onStartUpdate: (UpdateInfo) -> Unit = {},
     onDismiss: () -> Unit,
     onSave: (String, Double, Double) -> Unit,
     onLogout: () -> Unit = {},
@@ -1659,7 +1797,7 @@ fun SettingsDialog(
 
                 HorizontalDivider()
 
-                // ── Update check button ───────────────────
+                // ── Update section ───────────────────────────
                 Column {
                     Text(
                         "Ilova yangilanishlari",
@@ -1667,80 +1805,154 @@ fun SettingsDialog(
                         color = ClaudeText
                     )
                     Spacer(modifier = Modifier.height(4.dp))
-                    Text(
-                        "Yangi versiya mavjud bo'lsa avtomatik yuklab olish",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = ClaudeTextSecondary
-                    )
-                    Spacer(modifier = Modifier.height(8.dp))
 
-                    if (updateInfo != null) {
-                        // Доступно обновление
-                        Card(
-                            modifier = Modifier.fillMaxWidth(),
-                            colors = CardDefaults.cardColors(containerColor = Color(0xFFE8F5E9)),
-                            shape = RoundedCornerShape(8.dp)
-                        ) {
-                            Column(modifier = Modifier.padding(12.dp)) {
-                                Text(
-                                    "Yangi versiya: v${updateInfo.versionName}",
-                                    style = MaterialTheme.typography.labelMedium,
-                                    color = Color(0xFF2E7D32)
-                                )
-                                if (updateInfo.releaseNotes.isNotBlank()) {
+                    when (updateState) {
+                        is InAppUpdateState.Downloading -> {
+                            Card(
+                                modifier = Modifier.fillMaxWidth(),
+                                colors = CardDefaults.cardColors(containerColor = Color(0xFFE3F2FD)),
+                                shape = RoundedCornerShape(8.dp)
+                            ) {
+                                Column(modifier = Modifier.padding(12.dp)) {
                                     Text(
-                                        updateInfo.releaseNotes.take(200),
-                                        style = MaterialTheme.typography.bodySmall,
-                                        color = Color(0xFF388E3C)
+                                        "Yuklab olinmoqda... ${(updateState.progress * 100).toInt()}%",
+                                        style = MaterialTheme.typography.labelMedium,
+                                        color = Color(0xFF1565C0)
                                     )
-                                }
-                                Spacer(modifier = Modifier.height(8.dp))
-                                Button(
-                                    onClick = {
-                                        val intent = android.content.Intent(
-                                            android.content.Intent.ACTION_VIEW,
-                                            android.net.Uri.parse(updateInfo.downloadUrl)
-                                        )
-                                        onDismiss()
-                                        settingsContext.startActivity(intent)
-                                    },
-                                    modifier = Modifier.fillMaxWidth(),
-                                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF34C759)),
-                                    shape = RoundedCornerShape(8.dp)
-                                ) {
-                                    Icon(
-                                        Icons.Default.Sync,
-                                        contentDescription = null,
-                                        modifier = Modifier.size(18.dp)
+                                    Spacer(modifier = Modifier.height(4.dp))
+                                    LinearProgressIndicator(
+                                        progress = { updateState.progress },
+                                        modifier = Modifier.fillMaxWidth(),
+                                        color = Color(0xFF1565C0),
+                                        trackColor = Color(0xFFBBDEFB)
                                     )
-                                    Spacer(modifier = Modifier.width(4.dp))
-                                    Text("Yangilash (yuklab olish)", color = Color.White)
                                 }
                             }
                         }
-                    } else {
-                        OutlinedButton(
-                            onClick = onCheckUpdate,
-                            enabled = !isCheckingUpdate,
-                            modifier = Modifier.fillMaxWidth(),
-                            shape = RoundedCornerShape(8.dp)
-                        ) {
-                            if (isCheckingUpdate) {
-                                CircularProgressIndicator(
-                                    modifier = Modifier.size(18.dp),
-                                    color = ClaudeAccent,
-                                    strokeWidth = 2.dp
+                        is InAppUpdateState.Installing -> {
+                            Card(
+                                modifier = Modifier.fillMaxWidth(),
+                                colors = CardDefaults.cardColors(containerColor = Color(0xFFE3F2FD)),
+                                shape = RoundedCornerShape(8.dp)
+                            ) {
+                                Row(
+                                    modifier = Modifier.padding(12.dp),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    CircularProgressIndicator(
+                                        modifier = Modifier.size(18.dp),
+                                        color = Color(0xFF1565C0),
+                                        strokeWidth = 2.dp
+                                    )
+                                    Spacer(modifier = Modifier.width(8.dp))
+                                    Text("O'rnatilmoqda...", color = Color(0xFF1565C0))
+                                }
+                            }
+                        }
+                        is InAppUpdateState.Error -> {
+                            Card(
+                                modifier = Modifier.fillMaxWidth(),
+                                colors = CardDefaults.cardColors(containerColor = Color(0xFFFFEBEE)),
+                                shape = RoundedCornerShape(8.dp)
+                            ) {
+                                Text(
+                                    updateState.message,
+                                    modifier = Modifier.padding(12.dp),
+                                    color = Color(0xFFC62828),
+                                    style = MaterialTheme.typography.bodySmall
                                 )
-                                Spacer(modifier = Modifier.width(8.dp))
-                                Text("Tekshirilmoqda...")
+                            }
+                        }
+                        else -> {
+                            // Idle / ReadyToInstall
+                            if (updateInfo != null) {
+                                // Доступно обновление
+                                Card(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    colors = CardDefaults.cardColors(containerColor = Color(0xFFE8F5E9)),
+                                    shape = RoundedCornerShape(8.dp)
+                                ) {
+                                    Column(modifier = Modifier.padding(12.dp)) {
+                                        Text(
+                                            "Yangi versiya: v${updateInfo.versionName}",
+                                            style = MaterialTheme.typography.labelMedium,
+                                            color = Color(0xFF2E7D32)
+                                        )
+                                        if (updateInfo.releaseNotes.isNotBlank()) {
+                                            Text(
+                                                updateInfo.releaseNotes.take(200),
+                                                style = MaterialTheme.typography.bodySmall,
+                                                color = Color(0xFF388E3C)
+                                            )
+                                        }
+                                        Spacer(modifier = Modifier.height(8.dp))
+                                        Button(
+                                            onClick = { onStartUpdate(updateInfo) },
+                                            modifier = Modifier.fillMaxWidth(),
+                                            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF34C759)),
+                                            shape = RoundedCornerShape(8.dp)
+                                        ) {
+                                            Icon(
+                                                Icons.Default.Refresh,
+                                                contentDescription = null,
+                                                modifier = Modifier.size(18.dp)
+                                            )
+                                            Spacer(modifier = Modifier.width(4.dp))
+                                            Text("Yangilash", color = Color.White)
+                                        }
+                                    }
+                                }
+                            } else if (isUpToDate) {
+                                // Приложение актуально
+                                Card(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    colors = CardDefaults.cardColors(containerColor = Color(0xFFF1F8E9)),
+                                    shape = RoundedCornerShape(8.dp)
+                                ) {
+                                    Row(
+                                        modifier = Modifier.padding(12.dp),
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Icon(
+                                            Icons.Default.Refresh,
+                                            contentDescription = null,
+                                            tint = Color(0xFF33691E),
+                                            modifier = Modifier.size(18.dp)
+                                        )
+                                        Spacer(modifier = Modifier.width(8.dp))
+                                        Text(
+                                            "Ilova eng so'nggi versiyada",
+                                            color = Color(0xFF33691E),
+                                            style = MaterialTheme.typography.bodySmall
+                                        )
+                                    }
+                                }
                             } else {
-                                Icon(
-                                    Icons.Default.Sync,
-                                    contentDescription = null,
-                                    modifier = Modifier.size(18.dp)
-                                )
-                                Spacer(modifier = Modifier.width(4.dp))
-                                Text("Yangilanishni tekshirish")
+                                // Ещё не проверяли или ошибка
+                                OutlinedButton(
+                                    onClick = onCheckUpdate,
+                                    enabled = !isCheckingUpdate,
+                                    modifier = Modifier.fillMaxWidth(),
+                                    shape = RoundedCornerShape(8.dp)
+                                ) {
+                                    if (isCheckingUpdate) {
+                                        CircularProgressIndicator(
+                                            modifier = Modifier.size(18.dp),
+                                            color = ClaudeAccent,
+                                            strokeWidth = 2.dp
+                                        )
+                                        Spacer(modifier = Modifier.width(8.dp))
+                                        Text("Tekshirilmoqda...")
+                                    } else {
+                                        Icon(
+                                            Icons.Default.Refresh,
+                                            contentDescription = null,
+                                            modifier = Modifier.size(18.dp)
+                                        )
+                                        Spacer(modifier = Modifier.width(4.dp))
+                                        Text("Yangilanishni tekshirish")
+                                    }
+                                }
                             }
                         }
                     }

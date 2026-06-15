@@ -1,44 +1,59 @@
 package com.example.data.remote
 
 import android.content.Context
+import android.os.Build
 import android.util.Log
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import org.json.JSONObject
+import java.io.File
 import java.net.URL
 
 /**
  * Проверяет обновления приложения через GitHub Releases API.
  *
- * Алгоритм:
- * 1. Запрашивает последний релиз с GitHub
- *    (https://api.github.com/repos/{owner}/{repo}/releases/latest)
- * 2. Сравнивает versionName приложения с тегом релиза
- * 3. Если доступна новая версия — возвращает UpdateInfo с URL для скачивания APK
- *
- * Настройка:
- * - Владелец репозитория и имя задаются в companion object
- * - Нужно создать Release на GitHub и загрузить APK как asset
+ * Ключевые принципы (v2):
+ * 1. Сравнение по versionCode (целое число) — НАДЁЖНЕЕ чем versionName (строка)
+ * 2. Тег релиза на GitHub должен быть числом = versionCode (например "3")
+ *    ЛИБО можно указать versionCode в body релиза: "versionCode:3"
+ * 3. Если версия одинаковая или новее — updateInfo = null (НЕ показываем уведомление)
+ * 4. Любая ошибка API → null (НЕ показываем уведомление)
+ * 5. Скачивание APK прямо в приложение — без браузера
  */
 data class UpdateInfo(
     val versionName: String,
+    val versionCode: Int,
     val downloadUrl: String,
     val releaseNotes: String,
     val fileSize: Long,
     val publishDate: String
 )
 
+/**
+ * Результат проверки обновлений — различает «обновление доступно»,
+ * «приложение актуально» и «ошибка».
+ */
+enum class UpdateCheckResult {
+    UPDATE_AVAILABLE,
+    UP_TO_DATE,
+    ERROR
+}
+
 class UpdateChecker(
     private val context: Context
 ) {
     /**
      * Проверяет наличие обновления на GitHub.
-     * Возвращает UpdateInfo если доступна новая версия, или null если текущая актуальна.
+     * Возвращает Pair(result, updateInfo):
+     *   result = UPDATE_AVAILABLE → updateInfo != null
+     *   result = UP_TO_DATE → updateInfo = null
+     *   result = ERROR → updateInfo = null
      */
-    suspend fun checkForUpdate(): UpdateInfo? = withContext(Dispatchers.IO) {
+    suspend fun checkForUpdate(): Pair<UpdateCheckResult, UpdateInfo?> = withContext(Dispatchers.IO) {
         try {
-            val currentVersion = getCurrentVersionName()
-            Log.d(TAG, "Current app version: $currentVersion")
+            val currentVersionCode = getCurrentVersionCode()
+            val currentVersionName = getCurrentVersionName()
+            Log.d(TAG, "Current: versionCode=$currentVersionCode, versionName=$currentVersionName")
 
             val apiUrl = "https://api.github.com/repos/$REPO_OWNER/$REPO_NAME/releases/latest"
             val connection = URL(apiUrl).openConnection()
@@ -53,10 +68,13 @@ class UpdateChecker(
             val releaseNotes = release.optString("body", "")
             val publishDate = release.optString("published_at", "")
 
-            Log.d(TAG, "Latest GitHub release: $tagName")
+            // Определяем versionCode из тега или из тела релиза
+            val remoteVersionCode = parseVersionCode(tagName, releaseNotes)
+
+            Log.d(TAG, "Latest GitHub release: tag=$tagName, remoteVersionCode=$remoteVersionCode")
 
             // Ищем APK asset в релизе
-            val assets = release.optJSONArray("assets") ?: return@withContext null
+            val assets = release.optJSONArray("assets") ?: return@withContext Pair(UpdateCheckResult.ERROR, null)
             var downloadUrl: String? = null
             var fileSize: Long = 0
 
@@ -72,26 +90,103 @@ class UpdateChecker(
 
             if (downloadUrl == null) {
                 Log.w(TAG, "No APK asset found in release $tagName")
-                return@withContext null
+                return@withContext Pair(UpdateCheckResult.ERROR, null)
             }
 
-            // Сравниваем версии
-            if (isNewerVersion(currentVersion, tagName)) {
-                Log.d(TAG, "Update available: $currentVersion → $tagName")
+            // Главное сравнение: versionCode
+            if (remoteVersionCode != null) {
+                if (currentVersionCode >= remoteVersionCode) {
+                    Log.d(TAG, "App is up to date (versionCode: $currentVersionCode >= $remoteVersionCode)")
+                    return@withContext Pair(UpdateCheckResult.UP_TO_DATE, null)
+                }
+            } else {
+                // Fallback: сравнение по versionName
+                if (!isNewerVersion(currentVersionName, tagName)) {
+                    Log.d(TAG, "App is up to date (versionName: $currentVersionName >= $tagName)")
+                    return@withContext Pair(UpdateCheckResult.UP_TO_DATE, null)
+                }
+            }
+
+            // Новая версия доступна
+            val effectiveVersionCode = remoteVersionCode ?: (currentVersionCode + 1)
+            Log.d(TAG, "Update available: $currentVersionName → $tagName (code: $currentVersionCode → $effectiveVersionCode)")
+            Pair(
+                UpdateCheckResult.UPDATE_AVAILABLE,
                 UpdateInfo(
                     versionName = tagName,
+                    versionCode = effectiveVersionCode,
                     downloadUrl = downloadUrl,
                     releaseNotes = releaseNotes,
                     fileSize = fileSize,
                     publishDate = publishDate
                 )
-            } else {
-                Log.d(TAG, "App is up to date ($currentVersion >= $tagName)")
-                null
-            }
+            )
         } catch (e: Exception) {
             Log.e(TAG, "Failed to check for updates", e)
+            Pair(UpdateCheckResult.ERROR, null)
+        }
+    }
+
+    /**
+     * Скачивает APK файл в кэш приложения.
+     * Возвращает File на скачанный APK или null при ошибке.
+     * @param onProgress колбэк с прогрессом (0.0 .. 1.0)
+     */
+    suspend fun downloadApk(
+        downloadUrl: String,
+        onProgress: (Float) -> Unit = {}
+    ): File? = withContext(Dispatchers.IO) {
+        try {
+            val apkFile = File(context.cacheDir, "update.apk")
+            // Удаляем старый файл если есть
+            if (apkFile.exists()) apkFile.delete()
+
+            val connection = URL(downloadUrl).openConnection()
+            connection.connectTimeout = 30_000
+            connection.readTimeout = 60_000
+            connection.connect()
+
+            val fileSize = connection.contentLength.toLong()
+
+            connection.getInputStream().buffered().use { input ->
+                apkFile.outputStream().buffered().use { output ->
+                    val buffer = ByteArray(8192)
+                    var bytesRead: Int
+                    var totalRead = 0L
+
+                    while (input.read(buffer).also { bytesRead = it } != -1) {
+                        output.write(buffer, 0, bytesRead)
+                        totalRead += bytesRead
+                        if (fileSize > 0) {
+                            onProgress(totalRead.toFloat() / fileSize.toFloat())
+                        }
+                    }
+                }
+            }
+
+            Log.d(TAG, "APK downloaded: ${apkFile.length()} bytes")
+            apkFile
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to download APK", e)
             null
+        }
+    }
+
+    /**
+     * Получает текущий versionCode приложения.
+     */
+    private fun getCurrentVersionCode(): Int {
+        return try {
+            val packageInfo = context.packageManager.getPackageInfo(context.packageName, 0)
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+                packageInfo.longVersionCode.toInt()
+            } else {
+                @Suppress("DEPRECATION")
+                packageInfo.versionCode
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed to get version code", e)
+            1
         }
     }
 
@@ -109,17 +204,28 @@ class UpdateChecker(
     }
 
     /**
+     * Парсит versionCode из тега релиза или тела релиза.
+     * Поддерживаемые форматы:
+     *   - Тег = число (например "3") → 3
+     *   - В теле: "versionCode:3" или "versionCode=3" или "versionCode: 3"
+     */
+    private fun parseVersionCode(tagName: String, body: String): Int? {
+        // Попробуем распарсить тег как число
+        tagName.toIntOrNull()?.let { return it }
+
+        // Попробуем найти versionCode в теле релиза
+        val regex = Regex("""versionCode\s*[:=]\s*(\d+)""", RegexOption.IGNORE_CASE)
+        return regex.find(body)?.groupValues?.get(1)?.toIntOrNull()
+    }
+
+    /**
      * Сравнивает номера версий.
      * Поддерживает форматы: "1.0", "1.2.3", "1.2.3-67", "1.2.67"
-     * Если версия содержит суффикс через "-" (например "1.1-67"),
-     * он обрабатывается как дополнительный компонент версии.
      * Возвращает true если remote > local
      */
     private fun isNewerVersion(local: String, remote: String): Boolean {
         val normalizedLocal = normalizeVersion(local)
         val normalizedRemote = normalizeVersion(remote)
-
-        Log.d(TAG, "Version comparison: local='$local' → $normalizedLocal, remote='$remote' → $normalizedRemote")
 
         val localParts = normalizedLocal.split(".").map { it.toIntOrNull() ?: 0 }
         val remoteParts = normalizedRemote.split(".").map { it.toIntOrNull() ?: 0 }
@@ -136,7 +242,6 @@ class UpdateChecker(
 
     /**
      * Нормализует строку версии: заменяет "-" на "."
-     * Например: "1.1-67" → "1.1.67", "1.2.3" → "1.2.3"
      */
     private fun normalizeVersion(version: String): String {
         return version.replace('-', '.')
@@ -145,6 +250,6 @@ class UpdateChecker(
     companion object {
         private const val TAG = "UpdateChecker"
         const val REPO_OWNER = "FreedoomForm"
-        const val REPO_NAME = "-1"
+        const val REPO_NAME = "-1" // ⚠️ Замените на имя вашего GitHub репозитория!
     }
 }

@@ -29,7 +29,15 @@ sealed class LoginState {
 
 /**
  * Логин через backend API. Сохраняет JWT в EncryptedSharedPreferences.
- * После успешного логина делает pullAll() — Room заполняется данными с сервера.
+ *
+ * Стратегия синхронизации после логина (LOCAL-FIRST v5):
+ *
+ *  • ADMIN: Локальные данные ГЛАВНЫЕ.
+ *    - Если Room не пуст → pushOnly() (отправить локал на сервер, НЕ перезаписывать локал)
+ *    - Если Room пуст (первый вход) → pullAll() (получить данные с сервера)
+ *    Это гарантирует, что удалённые админом записи НЕ появятся заново.
+ *
+ *  • VIEWER: Всегда pullAll() — они читают данные с сервера.
  */
 class LoginViewModel(application: Application) : AndroidViewModel(application) {
 
@@ -62,12 +70,28 @@ class LoginViewModel(application: Application) : AndroidViewModel(application) {
                     tokenStore.jwt = response.token
                     tokenStore.role = response.user.role
 
-                    // Полный pull с сервера в Room.
                     val sync = SyncManager(getApplication(), api)
-                    val pulled = sync.pullAll()
+                    val userRole = parseRole(response.user.role)
 
-                    if (!pulled) {
-                        Log.w(TAG, "Pull failed after login — Room is empty")
+                    if (userRole == UserRole.ADMIN) {
+                        // ADMIN: локальные данные ГЛАВНЫЕ
+                        val db = AppDatabase.getDatabase(getApplication())
+                        val localRentersCount = db.renterDao().getAllRentersOnce().size
+                        val localScootersCount = db.scooterDao().getAllScootersOnce().size
+
+                        if (localRentersCount == 0 && localScootersCount == 0) {
+                            // Room пуст — первый вход на этом устройстве, тянем с сервера
+                            Log.d(TAG, "ADMIN first login: Room is empty → pullAll()")
+                            sync.pullAll()
+                        } else {
+                            // Room не пуст — локал главнее, отправляем на сервер
+                            Log.d(TAG, "ADMIN login: Room has data ($localRentersCount renters, $localScootersCount scooters) → pushOnly()")
+                            sync.pushOnly()
+                        }
+                    } else {
+                        // VIEWER: всегда тянем с сервера
+                        Log.d(TAG, "VIEWER login → pullAll()")
+                        sync.pullAll()
                     }
 
                     response
@@ -123,6 +147,7 @@ class LoginViewModel(application: Application) : AndroidViewModel(application) {
                         getApplication(),
                         ApiClient.getService(getApplication())
                     )
+                    // Регистрация: Room пуст, тянем с сервера
                     sync.pullAll()
 
                     _role.value = parseRole(response.user.role)
