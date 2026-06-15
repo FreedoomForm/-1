@@ -417,6 +417,9 @@ function renderMain() {
             <span class="material-icons">notifications_none</span>
             ${unreadCount > 0 ? `<span class="topbar-badge">${unreadCount > 99 ? '99+' : unreadCount}</span>` : ''}
           </button>
+          <button class="topbar-icon-btn" id="btn-sync" title="Sinxronizatsiya">
+            🔄
+          </button>
           <button class="topbar-icon-btn" id="btn-history" title="Kontrakt tarixi">
             <span class="material-icons">date_range</span>
           </button>
@@ -458,6 +461,7 @@ function renderMain() {
   }
 
   document.getElementById('btn-notifications').addEventListener('click', openNotificationsModal);
+  document.getElementById('btn-sync').addEventListener('click', doSync);
   document.getElementById('btn-history').addEventListener('click', openHistoryModal);
   document.getElementById('btn-settings').addEventListener('click', openSettings);
 
@@ -1314,6 +1318,25 @@ function openNotificationsModal() {
 // ═══════════════════════════════════════════════════════════
 // SETTINGS MODAL
 // ═══════════════════════════════════════════════════════════
+async function doSync() {
+  const btn = document.getElementById('btn-sync');
+  if (!btn) return;
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spinner" style="width:16px;height:16px;border-width:2px"></span>';
+  try {
+    state.overdueChecked = false;
+    await loadAll();
+    await checkAndNotifyOverdue();
+    state.notifications = await api('/notifications').catch(() => state.notifications);
+    toast('Ma\'lumotlar yangilandi', 'success');
+  } catch (err) {
+    toast(friendlyError(err.message), 'error');
+  } finally {
+    btn.disabled = false;
+    btn.innerHTML = '🔄';
+  }
+}
+
 async function openSettings() {
   let serverInfo = null;
   try {
@@ -1414,16 +1437,6 @@ Call center: 71 200 55 56.`;
       </div>
     </div>
 
-    <div class="settings-section">
-      <div class="settings-section-title">Sinxronizatsiya</div>
-      <div class="settings-section-content">
-        <div style="font-size:13px;color:var(--text-secondary);margin-bottom:4px">Offline ma'lumotlarni serverga yuborish va serverdan yuklab olish</div>
-        <button class="btn-primary" id="refresh-btn" style="width:100%">
-          <span class="material-icons" style="font-size:18px">sync</span> Sinxronizatsiya
-        </button>
-      </div>
-    </div>
-
     <div style="margin-top:8px">
       <button class="btn-danger-outline" id="logout-btn" style="width:100%;height:48px;border-radius:8px">Chiqish (boshqa akkauntga o'tish)</button>
     </div>
@@ -1433,25 +1446,6 @@ Call center: 71 200 55 56.`;
       <button class="btn-secondary" id="cancel-settings-btn">Bekor qilish</button>
     </div>
   `);
-
-  document.getElementById('refresh-btn').addEventListener('click', async () => {
-    const btn = document.getElementById('refresh-btn');
-    btn.disabled = true;
-    btn.innerHTML = '<span class="spinner"></span> Yuklanmoqda...';
-    try {
-      state.overdueChecked = false;
-      await loadAll();
-      await checkAndNotifyOverdue();
-      state.notifications = await api('/notifications').catch(() => state.notifications);
-      toast('Ma\'lumotlar yangilandi', 'success');
-      closeModal();
-      renderMain();
-    } catch (err) {
-      toast(friendlyError(err.message), 'error');
-      btn.disabled = false;
-      btn.innerHTML = '<span class="material-icons" style="font-size:18px">sync</span> Ma\'lumotlarni yangilash';
-    }
-  });
 
   document.getElementById('logout-btn').addEventListener('click', () => {
     closeModal();

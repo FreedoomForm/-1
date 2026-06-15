@@ -49,6 +49,7 @@ import androidx.compose.ui.text.input.OffsetMapping
 import androidx.compose.ui.text.input.TransformedText
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.work.ExistingPeriodicWorkPolicy
@@ -290,6 +291,34 @@ fun MainScreen(
                                     )
                                 }
                             }
+                        }
+                    }
+                    // 🔄 Синхронизация
+                    IconButton(
+                        onClick = {
+                            if (!isSyncing) {
+                                isSyncing = true
+                                coroutineScope.launch {
+                                    val sync = SyncManager(context)
+                                    syncResult = sync.syncAll()
+                                    isSyncing = false
+                                }
+                            }
+                        },
+                        modifier = Modifier
+                            .padding(end = 4.dp, start = 4.dp)
+                            .size(40.dp)
+                            .background(Color.White, CircleShape)
+                            .border(1.dp, ClaudeDivider, CircleShape)
+                    ) {
+                        if (isSyncing) {
+                            CircularProgressIndicator(
+                                modifier = Modifier.size(18.dp),
+                                color = ClaudeAccent,
+                                strokeWidth = 2.dp
+                            )
+                        } else {
+                            Text("🔄", fontSize = 18.sp)
                         }
                     }
                     // 📜 Контрактлар тарихи (рядом с ⚙️)
@@ -730,7 +759,6 @@ fun MainScreen(
                 currentTemplate = template,
                 currentWeeklyPrice = weekly,
                 currentMonthlyPrice = monthly,
-                isSyncing = isSyncing,
                 updateInfo = updateInfo,
                 isCheckingUpdate = isCheckingUpdate,
                 onDismiss = { showSettings = false },
@@ -742,16 +770,6 @@ fun MainScreen(
                 onLogout = {
                     showSettings = false
                     loginViewModel.logout()
-                },
-                onSync = {
-                    if (!isSyncing) {
-                        isSyncing = true
-                        coroutineScope.launch {
-                            val sync = SyncManager(context)
-                            syncResult = sync.syncAll()
-                            isSyncing = false
-                        }
-                    }
                 },
                 onCheckUpdate = {
                     if (!isCheckingUpdate) {
@@ -1379,13 +1397,11 @@ fun SettingsDialog(
     currentTemplate: String,
     currentWeeklyPrice: Double,
     currentMonthlyPrice: Double,
-    isSyncing: Boolean = false,
     updateInfo: UpdateInfo? = null,
     isCheckingUpdate: Boolean = false,
     onDismiss: () -> Unit,
     onSave: (String, Double, Double) -> Unit,
     onLogout: () -> Unit = {},
-    onSync: () -> Unit = {},
     onCheckUpdate: () -> Unit = {}
 ) {
     var template by remember { mutableStateOf(currentTemplate) }
@@ -1395,6 +1411,7 @@ fun SettingsDialog(
     var monthly by remember {
         mutableStateOf(if (currentMonthlyPrice > 0) currentMonthlyPrice.toString() else "")
     }
+    val settingsContext = LocalContext.current
 
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -1448,52 +1465,6 @@ fun SettingsDialog(
 
                 HorizontalDivider()
 
-                // ── Sync button ──────────────────────────────
-                Column {
-                    Text(
-                        "Ma'lumotlarni sinxronizatsiya",
-                        style = MaterialTheme.typography.labelMedium,
-                        color = ClaudeText
-                    )
-                    Spacer(modifier = Modifier.height(4.dp))
-                    Text(
-                        "Offline ma'lumotlarni serverga yuborish va serverdan yuklab olish",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = ClaudeTextSecondary
-                    )
-                    Spacer(modifier = Modifier.height(8.dp))
-                    Button(
-                        onClick = onSync,
-                        enabled = !isSyncing,
-                        modifier = Modifier.fillMaxWidth(),
-                        colors = ButtonDefaults.buttonColors(
-                            containerColor = ClaudeAccent,
-                            disabledContainerColor = ClaudeTextSecondary
-                        ),
-                        shape = RoundedCornerShape(8.dp)
-                    ) {
-                        if (isSyncing) {
-                            CircularProgressIndicator(
-                                modifier = Modifier.size(18.dp),
-                                color = Color.White,
-                                strokeWidth = 2.dp
-                            )
-                            Spacer(modifier = Modifier.width(8.dp))
-                            Text("Sinxronizatsiya...", color = Color.White)
-                        } else {
-                            Icon(
-                                Icons.Default.Sync,
-                                contentDescription = null,
-                                modifier = Modifier.size(18.dp)
-                            )
-                            Spacer(modifier = Modifier.width(4.dp))
-                            Text("Sinxronizatsiya", color = Color.White)
-                        }
-                    }
-                }
-
-                HorizontalDivider()
-
                 // ── Update check button ───────────────────
                 Column {
                     Text(
@@ -1537,7 +1508,7 @@ fun SettingsDialog(
                                             android.net.Uri.parse(updateInfo.downloadUrl)
                                         )
                                         onDismiss()
-                                        context.startActivity(intent)
+                                        settingsContext.startActivity(intent)
                                     },
                                     modifier = Modifier.fillMaxWidth(),
                                     colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF34C759)),

@@ -379,6 +379,11 @@ input, select, textarea { font-family: inherit; font-size: inherit; }
   color: var(--text);
 }
 
+.topbar-icon-btn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
 .topbar-badge {
   position: absolute;
   top: -2px;
