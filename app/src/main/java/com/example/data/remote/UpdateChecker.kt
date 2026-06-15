@@ -110,12 +110,19 @@ class UpdateChecker(
 
     /**
      * Сравнивает номера версий.
-     * Поддерживает формат: "1.0", "1.2.3", "2.0.1"
+     * Поддерживает форматы: "1.0", "1.2.3", "1.2.3-67", "1.2.67"
+     * Если версия содержит суффикс через "-" (например "1.1-67"),
+     * он обрабатывается как дополнительный компонент версии.
      * Возвращает true если remote > local
      */
     private fun isNewerVersion(local: String, remote: String): Boolean {
-        val localParts = local.split(".").map { it.toIntOrNull() ?: 0 }
-        val remoteParts = remote.split(".").map { it.toIntOrNull() ?: 0 }
+        val normalizedLocal = normalizeVersion(local)
+        val normalizedRemote = normalizeVersion(remote)
+
+        Log.d(TAG, "Version comparison: local='$local' → $normalizedLocal, remote='$remote' → $normalizedRemote")
+
+        val localParts = normalizedLocal.split(".").map { it.toIntOrNull() ?: 0 }
+        val remoteParts = normalizedRemote.split(".").map { it.toIntOrNull() ?: 0 }
         val maxLen = maxOf(localParts.size, remoteParts.size)
 
         for (i in 0 until maxLen) {
@@ -125,6 +132,14 @@ class UpdateChecker(
             if (r < l) return false
         }
         return false // Версии одинаковы
+    }
+
+    /**
+     * Нормализует строку версии: заменяет "-" на "."
+     * Например: "1.1-67" → "1.1.67", "1.2.3" → "1.2.3"
+     */
+    private fun normalizeVersion(version: String): String {
+        return version.replace('-', '.')
     }
 
     companion object {

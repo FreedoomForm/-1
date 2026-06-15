@@ -100,20 +100,28 @@ jobs:
           retention-days: 30
 
       # ── Авто-обновление: создаём GitHub Release с APK ──
-      - name: Extract version from build.gradle.kts
+      - name: Inject build number into versionName and versionCode
         id: version
         if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
         run: |
-          VERSION=$(grep 'versionName' app/build.gradle.kts | head -1 | sed 's/.*versionName.*=.*"\(.*\)".*/\1/')
-          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
-          echo "Extracted version: $VERSION"
+          BASE_VERSION=$(grep 'versionName' app/build.gradle.kts | head -1 | sed 's/.*versionName.*=.*"\(.*\)".*/\1/')
+          FULL_VERSION="${BASE_VERSION}.${{ github.run_number }}"
+          echo "Base version: $BASE_VERSION"
+          echo "Full version: $FULL_VERSION"
+          # Update versionName to include build number (e.g. "1.1" → "1.1.67")
+          sed -i "s/versionName = \"$BASE_VERSION\"/versionName = \"$FULL_VERSION\"/" app/build.gradle.kts
+          # Update versionCode to run_number so Android sees it as a newer build
+          sed -i "s/versionCode = [0-9]*/versionCode = ${{ github.run_number }}/" app/build.gradle.kts
+          echo "version=$FULL_VERSION" >> "$GITHUB_OUTPUT"
+          echo "Updated build.gradle.kts:"
+          grep -E 'versionCode|versionName' app/build.gradle.kts
 
       - name: Create GitHub Release with APK
         if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: v${{ steps.version.outputs.version }}-${{ github.run_number }}
-          name: "Scooter Rent v${{ steps.version.outputs.version }} (#${{ github.run_number }})"
+          tag_name: v${{ steps.version.outputs.version }}
+          name: "Scooter Rent v${{ steps.version.outputs.version }}"
           body: |
             Автоматическая сборка из коммита ${{ github.sha }}
 
