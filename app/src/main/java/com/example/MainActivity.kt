@@ -17,7 +17,6 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
-import androidx.compose.foundation.text.SelectionContainer
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
@@ -2240,11 +2239,11 @@ fun SmsResultDialog(
     AlertDialog(
         onDismissRequest = onDismiss,
         icon = {
-            Icon(
-                if (result.success) Icons.Default.Check else Icons.Default.Close,
-                contentDescription = null,
-                tint = if (result.success) Color(0xFF34C759) else Color(0xFFE05B44),
-                modifier = Modifier.size(32.dp)
+            Text(
+                if (result.success) "\u2713" else "\u2717",
+                color = if (result.success) Color(0xFF34C759) else Color(0xFFE05B44),
+                fontSize = 28.sp,
+                fontWeight = FontWeight.Bold
             )
         },
         title = {
@@ -2255,62 +2254,59 @@ fun SmsResultDialog(
             )
         },
         text = {
-            // SelectionContainer позволяет выделить и скопировать текст
-            SelectionContainer {
-                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Text(
-                        result.message,
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = ClaudeText
-                    )
-                    if (!result.success) {
-                        HorizontalDivider(color = ClaudeDivider)
-                        if (result.errorCode != null) {
-                            Row {
-                                Text(
-                                    "Xato kodi: ",
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = ClaudeTextSecondary,
-                                    fontWeight = FontWeight.Bold
-                                )
-                                Text(
-                                    result.errorCode,
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = Color(0xFFE05B44),
-                                    fontWeight = FontWeight.Bold
-                                )
-                            }
-                        }
-                        if (result.exceptionClass != null) {
-                            Row {
-                                Text(
-                                    "Exception: ",
-                                    style = MaterialTheme.typography.labelSmall,
-                                    color = ClaudeTextSecondary,
-                                    fontWeight = FontWeight.Bold
-                                )
-                                Text(
-                                    result.exceptionClass,
-                                    style = MaterialTheme.typography.labelSmall,
-                                    color = ClaudeText,
-                                    fontFamily = FontFamily.Monospace
-                                )
-                            }
-                        }
-                        if (result.exceptionMessage != null) {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text(
+                    result.message,
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = ClaudeText
+                )
+                if (!result.success) {
+                    HorizontalDivider(color = ClaudeDivider)
+                    if (result.errorCode != null) {
+                        Row {
                             Text(
-                                result.exceptionMessage,
+                                "Xato kodi: ",
                                 style = MaterialTheme.typography.bodySmall,
-                                color = ClaudeTextSecondary
+                                color = ClaudeTextSecondary,
+                                fontWeight = FontWeight.Bold
+                            )
+                            Text(
+                                result.errorCode,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = Color(0xFFE05B44),
+                                fontWeight = FontWeight.Bold
                             )
                         }
-                        HorizontalDivider(color = ClaudeDivider)
+                    }
+                    if (result.exceptionClass != null) {
+                        Row {
+                            Text(
+                                "Exception: ",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = ClaudeTextSecondary,
+                                fontWeight = FontWeight.Bold
+                            )
+                            Text(
+                                result.exceptionClass,
+                                style = MaterialTheme.typography.labelSmall,
+                                color = ClaudeText,
+                                fontFamily = FontFamily.Monospace
+                            )
+                        }
+                    }
+                    if (result.exceptionMessage != null) {
                         Text(
-                            "Ushbu xatolik kodini nusxalab internetda qidiring",
-                            style = MaterialTheme.typography.labelSmall,
+                            result.exceptionMessage,
+                            style = MaterialTheme.typography.bodySmall,
                             color = ClaudeTextSecondary
                         )
                     }
+                    HorizontalDivider(color = ClaudeDivider)
+                    Text(
+                        "Ushbu xatolik kodini nusxalab internetda qidiring",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = ClaudeTextSecondary
+                    )
                 }
             }
         },

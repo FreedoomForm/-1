@@ -347,7 +347,10 @@ class RenterViewModel(application: Application) : AndroidViewModel(application) 
         try {
             smsManager.sendTextMessage(phone, null, message, null, null)
             Log.d(TAG, "SMS sent successfully to $phone")
-            repository.update(renter.copy(isOverdueSmsSent = true))
+            // Отмечаем SMS отправленным в отдельной корутине (update — suspend)
+            viewModelScope.launch(Dispatchers.IO) {
+                repository.update(renter.copy(isOverdueSmsSent = true))
+            }
 
             _smsResults.tryEmit(SmsResult(
                 success = true,
