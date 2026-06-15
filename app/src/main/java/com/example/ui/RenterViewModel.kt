@@ -15,6 +15,7 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import androidx.work.OneTimeWorkRequestBuilder
 import androidx.work.WorkManager
+import androidx.room.withTransaction
 import com.example.data.AppDatabase
 import com.example.data.ContractHistoryEntry
 import com.example.data.Renter
