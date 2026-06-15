@@ -69,7 +69,6 @@ import com.example.ui.LoginState
 import com.example.ui.LoginViewModel
 import com.example.ui.NotificationHistoryViewModel
 import com.example.ui.RenterViewModel
-import com.example.ui.SmsResult
 import com.example.ui.SettingsViewModel
 import com.example.ui.ScooterViewModel
 import com.example.ui.UserRole
@@ -323,7 +322,12 @@ fun MainScreen(
                                 strokeWidth = 2.dp
                             )
                         } else {
-                            Text("🔄", fontSize = 18.sp)
+                            Icon(
+                                Icons.Default.Sync,
+                                contentDescription = "Sinxronizatsiya",
+                                modifier = Modifier.size(20.dp),
+                                tint = ClaudeText
+                            )
                         }
                     }
                     // 📜 Контрактлар тарихи (рядом с ⚙️)
@@ -534,6 +538,60 @@ fun MainScreen(
                                 style = MaterialTheme.typography.labelMedium
                             )
                         }
+                        // SMS yuborish tugmasi — faqat kechikkan mijozlarga
+                        Button(
+                            onClick = {
+                                val renters = renters.filter { it.id in selectedRenters }
+                                var sentCount = 0
+                                renters.forEach { renter ->
+                                    val settingsRepo = com.example.data.SettingsRepository(context)
+                                    val currentTime = System.currentTimeMillis()
+                                    val elapsedDays = ((currentTime - renter.rentStartDateTimestamp) / (1000L * 60 * 60 * 24)).toInt()
+                                    val daysOverdue = elapsedDays - renter.rentDurationDays
+                                    if (daysOverdue > 0 && !renter.isOverdueSmsSent) {
+                                        val phone = com.example.worker.SimHelper.normalizePhoneNumber(renter.phoneNumber)
+                                        val message = settingsRepo.smsTemplate
+                                            .replace("{name}", renter.name)
+                                            .replace("{days}", daysOverdue.toString())
+                                            .replace("{debt}", renter.debtAmount.toString())
+                                        val smsManager = com.example.worker.SimHelper.getSmsManagerForSim(context)
+                                        if (smsManager != null) {
+                                            try {
+                                                com.example.worker.SimHelper.sendSmsAuto(smsManager, phone, message, null, null)
+                                                viewModel.updateRenter(renter.copy(isOverdueSmsSent = true))
+                                                sentCount++
+                                            } catch (e: Exception) {
+                                                Log.w("SMS", "Failed for ${renter.name}: ${e.message}")
+                                            }
+                                        }
+                                    }
+                                }
+                                if (sentCount > 0) {
+                                    Toast.makeText(context, "$sentCount ta SMS yuborildi", Toast.LENGTH_SHORT).show()
+                                } else {
+                                    Toast.makeText(context, "Kechikkan mijozlar topilmadi yoki SMS allaqachon yuborilgan", Toast.LENGTH_SHORT).show()
+                                }
+                                selectedRenters = emptySet()
+                            },
+                            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF007AFF)),
+                            shape = RoundedCornerShape(12.dp),
+                            modifier = Modifier.weight(1.2f).height(48.dp),
+                            contentPadding = PaddingValues(horizontal = 4.dp)
+                        ) {
+                            Icon(
+                                Icons.Default.List,
+                                contentDescription = null,
+                                modifier = Modifier.size(16.dp),
+                                tint = Color.White
+                            )
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text(
+                                "SMS",
+                                color = Color.White,
+                                style = MaterialTheme.typography.labelMedium
+                            )
+                        }
+                        // O'chirish tugmasi
                         Button(
                             onClick = {
                                 selectedRenters.forEach { id -> viewModel.deleteRenter(id) }
@@ -843,19 +901,15 @@ fun MainScreen(
             )
         }
 
-        // ===== Диалог результата SMS =====
-        // Подписываемся на результаты SMS из ViewModel
-        var smsResultDialog by remember { mutableStateOf<com.example.ui.SmsResult?>(null) }
+        // SMS natijalari — dialog o'chirildi, faqat Toast ko'rsatiladi
         LaunchedEffect(Unit) {
             viewModel.smsResults.collect { result ->
-                smsResultDialog = result
+                if (result.success) {
+                    Toast.makeText(context, result.message, Toast.LENGTH_SHORT).show()
+                } else {
+                    Toast.makeText(context, result.message, Toast.LENGTH_LONG).show()
+                }
             }
-        }
-        if (smsResultDialog != null) {
-            SmsResultDialog(
-                result = smsResultDialog!!,
-                onDismiss = { smsResultDialog = null }
-            )
         }
     }
 }
@@ -2342,102 +2396,5 @@ fun ContractHistoryDialog(
                 }
             }
         }
-    )
-}
-
-/**
- * Диалог с результатом SMS-отправки.
- *
- * Показывает:
- * - Успех: зелёная иконка и короткое сообщение
- * - Ошибка: красная иконка, код ошибки, класс исключения, полное сообщение
- *
- * Текст ошибки можно выделить и скопировать (SelectionContainer).
- */
-@Composable
-fun SmsResultDialog(
-    result: SmsResult,
-    onDismiss: () -> Unit
-) {
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        icon = {
-            Text(
-                if (result.success) "\u2713" else "\u2717",
-                color = if (result.success) Color(0xFF34C759) else Color(0xFFE05B44),
-                fontSize = 28.sp,
-                fontWeight = FontWeight.Bold
-            )
-        },
-        title = {
-            Text(
-                if (result.success) "SMS yuborildi" else "SMS xatosi",
-                color = if (result.success) Color(0xFF34C759) else Color(0xFFE05B44),
-                fontWeight = FontWeight.Bold
-            )
-        },
-        text = {
-            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                Text(
-                    result.message,
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = ClaudeText
-                )
-                if (!result.success) {
-                    HorizontalDivider(color = ClaudeDivider)
-                    if (result.errorCode != null) {
-                        Row {
-                            Text(
-                                "Xato kodi: ",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = ClaudeTextSecondary,
-                                fontWeight = FontWeight.Bold
-                            )
-                            Text(
-                                result.errorCode,
-                                style = MaterialTheme.typography.bodySmall,
-                                color = Color(0xFFE05B44),
-                                fontWeight = FontWeight.Bold
-                            )
-                        }
-                    }
-                    if (result.exceptionClass != null) {
-                        Row {
-                            Text(
-                                "Exception: ",
-                                style = MaterialTheme.typography.labelSmall,
-                                color = ClaudeTextSecondary,
-                                fontWeight = FontWeight.Bold
-                            )
-                            Text(
-                                result.exceptionClass,
-                                style = MaterialTheme.typography.labelSmall,
-                                color = ClaudeText,
-                                fontFamily = FontFamily.Monospace
-                            )
-                        }
-                    }
-                    if (result.exceptionMessage != null) {
-                        Text(
-                            result.exceptionMessage,
-                            style = MaterialTheme.typography.bodySmall,
-                            color = ClaudeTextSecondary
-                        )
-                    }
-                    HorizontalDivider(color = ClaudeDivider)
-                    Text(
-                        "Ushbu xatolik kodini nusxalab internetda qidiring",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = ClaudeTextSecondary
-                    )
-                }
-            }
-        },
-        confirmButton = {
-            TextButton(onClick = onDismiss) {
-                Text("OK", color = ClaudeAccent)
-            }
-        },
-        containerColor = ClaudeCard
     )
 }

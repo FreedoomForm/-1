@@ -83,7 +83,7 @@ class RenterViewModel(application: Application) : AndroidViewModel(application) 
         if (autoSyncJob?.isActive == true) return
         autoSyncJob = viewModelScope.launch(Dispatchers.IO) {
             while (isActive) {
-                try { sync.smartMerge() } catch (e: Exception) { Log.w(TAG, "Auto-sync failed", e) }
+                try { sync.pushOnly() } catch (e: Exception) { Log.w(TAG, "Auto-sync failed", e) }
                 delay(30_000)
             }
         }
