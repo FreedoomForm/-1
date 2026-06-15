@@ -1,7 +1,6 @@
 package com.example.worker
 
 import android.content.Context
-import android.os.Build
 import android.telephony.SmsManager
 import android.util.Log
 import androidx.work.CoroutineWorker
@@ -105,17 +104,15 @@ class SmsWorker(
     }
 
     /**
-     * Получает SmsManager с совместимостью для всех версий Android.
-     * - API 31+ (Android 12+): context.getSystemService(SmsManager::class.java)
-     * - API < 31: SmsManager.getDefault()
+     * SmsManager ni dual-SIM qo'llab-quvvatlash bilan olish.
+     *
+     * SimHelper orqali:
+     * 1. Saqlangan SIM subscription ID tekshiriladi
+     * 2. Agar tanlanmagan bo'lsa, birinchi faol SIM tanlanadi
+     * 3. Oxirgi chora: getDefault() (GENERIC_FAILURE xavfi bor!)
      */
-    @Suppress("DEPRECATION")
     private fun getSmsManager(context: Context): SmsManager? {
-        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-            context.getSystemService(SmsManager::class.java)
-        } else {
-            SmsManager.getDefault()
-        }
+        return SimHelper.getSmsManagerForSim(context)
     }
 
     companion object {

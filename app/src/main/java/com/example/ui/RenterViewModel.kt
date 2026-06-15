@@ -439,7 +439,7 @@ class RenterViewModel(application: Application) : AndroidViewModel(application) 
         return when (code) {
             SmsManager.RESULT_ERROR_GENERIC_FAILURE ->
                 "GENERIC_FAILURE" to
-                "Umumiy xato (kod 1). Sabablari: SIM-karta ishlamayapti, operator rad etdi, yoki tarmoqda muammo. Internetda qidirish: 'Android SmsManager RESULT_ERROR_GENERIC_FAILURE'"
+                "Umumiy xato (kod 1). Sabablari: 1) 2 ta SIM kartadan foydalanmoqdasiz — Ilova sozlamalaridan SIM kartani tanlang. 2) SIM-karta ishlamayapti yoki balans yetarli emas. 3) Operator rad etdi yoki tarmoqda muammo. Internetda qidirish: 'Android SmsManager RESULT_ERROR_GENERIC_FAILURE dual SIM'"
             SmsManager.RESULT_ERROR_RADIO_OFF ->
                 "RADIO_OFF" to
                 "Radio o'chiq (kod 2). Telefon parvozd rejimida yoki tarmoq o'chiq. Parvozd rejimini o'chiring va qayta urinib ko'ring."
@@ -459,20 +459,13 @@ class RenterViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     /**
-     * Получает SmsManager с совместимостью для всех версий Android.
+     * SmsManager ni dual-SIM qo'llab-quvvatlash bilan olish.
+     *
+     * SimHelper orqali aniq SIM kartani tanlaydi.
+     * Agar SIM tanlanmagan bo'lsa, birinchi faol SIM ni avto-tanlaydi.
      */
-    @Suppress("DEPRECATION")
     private fun getSmsManager(context: android.content.Context): SmsManager? {
-        return try {
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-                context.getSystemService(SmsManager::class.java)
-            } else {
-                SmsManager.getDefault()
-            }
-        } catch (e: Exception) {
-            Log.e(TAG, "getSmsManager failed", e)
-            null
-        }
+        return com.example.worker.SimHelper.getSmsManagerForSim(context)
     }
 
     fun updateRenter(renter: Renter) {

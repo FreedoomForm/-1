@@ -17,6 +17,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
@@ -119,12 +120,14 @@ class MainActivity : ComponentActivity() {
                     contract = ActivityResultContracts.RequestPermission()
                 ) { /* результат не важен — мы запрашиваем автоматически */ }
 
-                // Авто-запрос SMS + POST_NOTIFICATIONS (Android 13+) при первом старте.
+                // Авто-запрос SMS + POST_NOTIFICATIONS (Android 13+) + READ_PHONE_STATE при первом старте.
                 LaunchedEffect(Unit) {
                     permissionLauncher.launch(Manifest.permission.SEND_SMS)
                     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
                         permissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
                     }
+                    // READ_PHONE_STATE — SIM kartalarni aniqlash uchun kerak (dual-SIM qo'llab-quvvatlash)
+                    permissionLauncher.launch(Manifest.permission.READ_PHONE_STATE)
                 }
 
                 val loginViewModel: LoginViewModel = viewModel()
@@ -1478,6 +1481,126 @@ fun SettingsDialog(
                             focusedBorderColor = ClaudeTextSecondary
                         )
                     )
+                }
+
+                HorizontalDivider()
+
+                // ── SIM karta tanlash ───────────────────────
+                Column {
+                    Text(
+                        "SIM karta",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = ClaudeText
+                    )
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Text(
+                        "SMS yuborish uchun SIM kartani tanlang. 2 ta SIM bo'lsa, tanlamasangiz xato chiqishi mumkin (GENERIC_FAILURE).",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = ClaudeTextSecondary
+                    )
+                    Spacer(modifier = Modifier.height(8.dp))
+
+                    val simContext = LocalContext.current
+                    val simCards = remember {
+                        com.example.worker.SimHelper.getActiveSimCards(simContext)
+                    }
+                    val settingsRepo = remember { com.example.data.SettingsRepository(simContext) }
+                    var selectedSimSubId by remember {
+                        mutableStateOf(settingsRepo.selectedSimSubscriptionId)
+                    }
+
+                    if (simCards.isEmpty()) {
+                        // Permission yo'q yoki SIM topilmadi
+                        val hasPermission = com.example.worker.SimHelper.hasPhoneStatePermission(simContext)
+                        if (!hasPermission) {
+                            Card(
+                                modifier = Modifier.fillMaxWidth(),
+                                colors = CardDefaults.cardColors(containerColor = Color(0xFFFFF3E0)),
+                                shape = RoundedCornerShape(8.dp)
+                            ) {
+                                Column(modifier = Modifier.padding(12.dp)) {
+                                    Text(
+                                        "SIM ma'lumotlarini olish uchun ruxsat kerak",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = Color(0xFFE65100)
+                                    )
+                                    Spacer(modifier = Modifier.height(8.dp))
+                                    OutlinedButton(
+                                        onClick = {
+                                            // Permission ni qo'lda so'rash
+                                            simContext.startActivity(
+                                                android.content.Intent(
+                                                    android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+                                                    android.net.Uri.fromParts("package", simContext.packageName, null)
+                                                )
+                                            )
+                                        },
+                                        modifier = Modifier.fillMaxWidth(),
+                                        shape = RoundedCornerShape(8.dp)
+                                    ) {
+                                        Text("Sozlamalarni ochish", color = Color(0xFFE65100))
+                                    }
+                                }
+                            }
+                        } else {
+                            Text(
+                                "SIM karta topilmadi (faqat 1 ta SIM yoki emulyator)",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = ClaudeTextSecondary
+                            )
+                        }
+                    } else if (simCards.size == 1) {
+                        // 1 ta SIM — avto-tanlangan
+                        Text(
+                            "✓ ${simCards[0].fullDisplayName} (avto-tanlangan)",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = Color(0xFF2E7D32)
+                        )
+                    } else {
+                        // 2+ ta SIM — tanlash
+                        simCards.forEach { sim ->
+                            val isSelected = selectedSimSubId == sim.subscriptionId
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clip(RoundedCornerShape(8.dp))
+                                    .background(if (isSelected) Color(0xFFE8F5E9) else Color.Transparent)
+                                    .clickable {
+                                        selectedSimSubId = sim.subscriptionId
+                                        settingsRepo.selectedSimSubscriptionId = sim.subscriptionId
+                                    }
+                                    .padding(horizontal = 12.dp, vertical = 10.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                RadioButton(
+                                    selected = isSelected,
+                                    onClick = {
+                                        selectedSimSubId = sim.subscriptionId
+                                        settingsRepo.selectedSimSubscriptionId = sim.subscriptionId
+                                    },
+                                    colors = RadioButtonDefaults.colors(
+                                        selectedColor = Color(0xFF2E7D32)
+                                    )
+                                )
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Column {
+                                    Text(
+                                        sim.displayName,
+                                        style = MaterialTheme.typography.bodyMedium,
+                                        fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal,
+                                        color = if (isSelected) Color(0xFF2E7D32) else ClaudeText
+                                    )
+                                    if (!sim.phoneNumber.isNullOrBlank()) {
+                                        Text(
+                                            sim.phoneNumber,
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = ClaudeTextSecondary
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    }
                 }
 
                 HorizontalDivider()

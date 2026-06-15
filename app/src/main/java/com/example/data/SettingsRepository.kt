@@ -34,6 +34,11 @@ class SettingsRepository(context: Context) {
         get() = prefs.getString("viewer_password", "viewer") ?: "viewer"
         set(value) = prefs.edit().putString("viewer_password", value).apply()
 
+    /** Tanlangan SIM kartaning subscription ID (-1 = tanlanmagan) */
+    var selectedSimSubscriptionId: Int
+        get() = prefs.getInt("selected_sim_sub_id", -1)
+        set(value) = prefs.edit().putInt("selected_sim_sub_id", value).apply()
+
     var currentRole: String?
         get() = prefs.getString("current_role", null)
         set(value) = prefs.edit().putString("current_role", value).apply()
