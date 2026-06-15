@@ -17,6 +17,8 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.text.SelectionContainer
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.ArrowDropDown
@@ -67,6 +69,7 @@ import com.example.ui.LoginState
 import com.example.ui.LoginViewModel
 import com.example.ui.NotificationHistoryViewModel
 import com.example.ui.RenterViewModel
+import com.example.ui.SmsResult
 import com.example.ui.SettingsViewModel
 import com.example.ui.ScooterViewModel
 import com.example.ui.UserRole
@@ -835,6 +838,21 @@ fun MainScreen(
                     contractHistoryViewModel.clear()
                     Toast.makeText(context, "Tozalandi", Toast.LENGTH_SHORT).show()
                 }
+            )
+        }
+
+        // ===== Диалог результата SMS =====
+        // Подписываемся на результаты SMS из ViewModel
+        var smsResultDialog by remember { mutableStateOf<com.example.ui.SmsResult?>(null) }
+        LaunchedEffect(Unit) {
+            viewModel.smsResults.collect { result ->
+                smsResultDialog = result
+            }
+        }
+        if (smsResultDialog != null) {
+            SmsResultDialog(
+                result = smsResultDialog!!,
+                onDismiss = { smsResultDialog = null }
             )
         }
     }
@@ -2202,5 +2220,105 @@ fun ContractHistoryDialog(
                 }
             }
         }
+    )
+}
+
+/**
+ * Диалог с результатом SMS-отправки.
+ *
+ * Показывает:
+ * - Успех: зелёная иконка и короткое сообщение
+ * - Ошибка: красная иконка, код ошибки, класс исключения, полное сообщение
+ *
+ * Текст ошибки можно выделить и скопировать (SelectionContainer).
+ */
+@Composable
+fun SmsResultDialog(
+    result: SmsResult,
+    onDismiss: () -> Unit
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        icon = {
+            Icon(
+                if (result.success) Icons.Default.Check else Icons.Default.Close,
+                contentDescription = null,
+                tint = if (result.success) Color(0xFF34C759) else Color(0xFFE05B44),
+                modifier = Modifier.size(32.dp)
+            )
+        },
+        title = {
+            Text(
+                if (result.success) "SMS yuborildi" else "SMS xatosi",
+                color = if (result.success) Color(0xFF34C759) else Color(0xFFE05B44),
+                fontWeight = FontWeight.Bold
+            )
+        },
+        text = {
+            // SelectionContainer позволяет выделить и скопировать текст
+            SelectionContainer {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(
+                        result.message,
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = ClaudeText
+                    )
+                    if (!result.success) {
+                        HorizontalDivider(color = ClaudeDivider)
+                        if (result.errorCode != null) {
+                            Row {
+                                Text(
+                                    "Xato kodi: ",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = ClaudeTextSecondary,
+                                    fontWeight = FontWeight.Bold
+                                )
+                                Text(
+                                    result.errorCode,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = Color(0xFFE05B44),
+                                    fontWeight = FontWeight.Bold
+                                )
+                            }
+                        }
+                        if (result.exceptionClass != null) {
+                            Row {
+                                Text(
+                                    "Exception: ",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = ClaudeTextSecondary,
+                                    fontWeight = FontWeight.Bold
+                                )
+                                Text(
+                                    result.exceptionClass,
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = ClaudeText,
+                                    fontFamily = FontFamily.Monospace
+                                )
+                            }
+                        }
+                        if (result.exceptionMessage != null) {
+                            Text(
+                                result.exceptionMessage,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = ClaudeTextSecondary
+                            )
+                        }
+                        HorizontalDivider(color = ClaudeDivider)
+                        Text(
+                            "Ushbu xatolik kodini nusxalab internetda qidiring",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = ClaudeTextSecondary
+                        )
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = onDismiss) {
+                Text("OK", color = ClaudeAccent)
+            }
+        },
+        containerColor = ClaudeCard
     )
 }
