@@ -40,6 +40,7 @@ class SettingsRepository(context: Context) {
 
     companion object {
         const val DEFAULT_SERVER_URL = "https://city1bike.vercel.app"
+        const val DEFAULT_WEEKLY_PRICE = 150_000.0
         const val DEFAULT_TEMPLATE = """Assalomu alaykum {name}, sizning skuter ijarangiz {days} kunga kechikdi. Iltimos, to'lovni o'z vaqtida kiriting. Umumiy qarz: {debt}.
 
 https://transfer.paycom.uz/680a40043fc0407a2e48e8fe

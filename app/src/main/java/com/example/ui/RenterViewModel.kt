@@ -9,6 +9,7 @@ import androidx.lifecycle.viewModelScope
 import androidx.work.OneTimeWorkRequestBuilder
 import androidx.work.WorkManager
 import androidx.work.workDataOf
+import androidx.room.withTransaction
 import com.example.data.AppDatabase
 import com.example.data.ContractHistoryEntry
 import com.example.data.Renter
@@ -128,15 +129,17 @@ class RenterViewModel(application: Application) : AndroidViewModel(application) 
             viewModelScope.launch(Dispatchers.IO) {
                 try {
                     val serverId = sync.pushRenter(provisional)
-                    if (serverId != null) {
-                        if (serverId != localId) {
-                            // Обновляем id существующей записи
-                            val db = AppDatabase.getDatabase(getApplication<Application>())
-                            db.renterDao().deleteRenter(localId)
-                            db.renterDao().insertRenter(savedRenter.copy(id = serverId))
-                            savedRenter = savedRenter.copy(id = serverId)
-                            Log.d(TAG, "Renter synced: local #$localId → server #$serverId")
+                    if (serverId != null && serverId != localId) {
+                        // Обновляем id в одной транзакции — без delete+insert,
+                        // чтобы UI не «моргал» (исчезновение арендатора)
+                        val db = AppDatabase.getDatabase(getApplication<Application>())
+                        db.withTransaction {
+                            db.renterDao().updateRenterId(localId, serverId)
+                            db.renterDao().updateContractHistoryRenterId(localId, serverId)
+                            db.renterDao().updateNotificationHistoryRenterId(localId, serverId)
                         }
+                        savedRenter = savedRenter.copy(id = serverId)
+                        Log.d(TAG, "Renter synced: local #$localId → server #$serverId")
                     }
                 } catch (e: Exception) {
                     Log.w(TAG, "pushRenter failed, stays local #$localId", e)

@@ -77,6 +77,7 @@ import com.example.ui.theme.ClaudeText
 import com.example.ui.theme.ClaudeTextSecondary
 import com.example.ui.theme.MyApplicationTheme
 import com.example.worker.NotificationHelper
+import android.util.Log
 import com.example.worker.PaymentCheckWorker
 import com.example.worker.SmsWorker
 import java.text.SimpleDateFormat
@@ -221,6 +222,9 @@ fun MainScreen(
         onDispose { viewModel.stopAutoSync() }
     }
 
+    val context = LocalContext.current
+    val scooters by scooterViewModel.scootersList.collectAsStateWithLifecycle()
+
     // Авто-проверка обновлений при запуске
     LaunchedEffect(Unit) {
         try {
@@ -234,9 +238,6 @@ fun MainScreen(
             Log.w("MainScreen", "Auto-update check failed", e)
         }
     }
-
-    val scooters by scooterViewModel.scootersList.collectAsStateWithLifecycle()
-    val context = LocalContext.current
 
     val renters by viewModel.rentersList.collectAsStateWithLifecycle()
     val history by historyViewModel.history.collectAsStateWithLifecycle()
@@ -1536,8 +1537,7 @@ fun SettingsDialog(
                                             android.net.Uri.parse(updateInfo.downloadUrl)
                                         )
                                         onDismiss()
-                                        val ctx = LocalContext.current
-                                        ctx.startActivity(intent)
+                                        context.startActivity(intent)
                                     },
                                     modifier = Modifier.fillMaxWidth(),
                                     colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF34C759)),
