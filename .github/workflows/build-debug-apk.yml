@@ -76,7 +76,7 @@ jobs:
         continue-on-error: true
 
       - name: Assemble debug APK
-        run: ./gradlew assembleDebug --no-daemon --stacktrace
+        run: ./gradlew clean assembleDebug --no-daemon --stacktrace
 
       - name: Locate built APK
         id: locate_apk
