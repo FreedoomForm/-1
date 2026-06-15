@@ -1,6 +1,9 @@
 package com.example.ui
 
 import android.app.Application
+import android.content.pm.PackageManager
+import android.util.Log
+import androidx.core.content.ContextCompat
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import androidx.work.OneTimeWorkRequestBuilder
@@ -12,14 +15,16 @@ import com.example.data.Renter
 import com.example.data.RenterRepository
 import com.example.data.SettingsRepository
 import com.example.data.remote.SyncManager
-import com.example.data.remote.toCreateDto
-import com.example.data.remote.toEntity
-import com.example.data.remote.toUpdateDto
+import com.example.worker.NotificationHelper
 import com.example.worker.PaymentCheckWorker
 import com.example.worker.SmsWorker
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.stateIn
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 
 class RenterViewModel(application: Application) : AndroidViewModel(application) {
@@ -27,6 +32,8 @@ class RenterViewModel(application: Application) : AndroidViewModel(application) 
     private val historyRepository: com.example.data.ContractHistoryRepository
     private val sync: SyncManager
     val rentersList: StateFlow<List<Renter>>
+
+    private var autoSyncJob: Job? = null
 
     init {
         val database = AppDatabase.getDatabase(application)
@@ -43,10 +50,36 @@ class RenterViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     /**
-     * Создать арендатора.
-     * Сначала шлём на API → получаем server id → пишем в Room с этим id.
-     * Если API недоступен — пишем только локально (id=0, автогенерация Room).
+     * Авто-синхронизация каждые 30 секунд.
+     *
+     * ВАЖНО: Использует smartMerge() вместо pullAll()!
+     * smartMerge() НЕ удаляет локальные данные — он обновляет
+     * существующие и добавляет новые с сервера.
+     * Это устраняет проблему исчезновения данных.
+     *
+     * Интервал увеличен с 5с до 30с для снижения нагрузки на сервер.
      */
+    fun startAutoSync() {
+        if (autoSyncJob?.isActive == true) return
+        autoSyncJob = viewModelScope.launch(Dispatchers.IO) {
+            Log.d(TAG, "Auto-sync started (every 30s, smart merge)")
+            while (isActive) {
+                try {
+                    sync.smartMerge()
+                } catch (e: Exception) {
+                    Log.w(TAG, "Auto-sync failed", e)
+                }
+                delay(30_000)
+            }
+        }
+    }
+
+    fun stopAutoSync() {
+        autoSyncJob?.cancel()
+        autoSyncJob = null
+        Log.d(TAG, "Auto-sync stopped")
+    }
+
     fun addRenter(
         name: String,
         phone: String,
@@ -61,72 +94,160 @@ class RenterViewModel(application: Application) : AndroidViewModel(application) 
             val now = System.currentTimeMillis()
             val expiryTime = startTimestamp + duration * 24L * 60 * 60 * 1000
             val isOverdueAtCreation = expiryTime < now
-            val finalDebt = if (isOverdueAtCreation) weeklyPrice else debt
 
-            // Пробуем сначала API — получим server-assigned id.
-            val serverId = if (isOverdueAtCreation || debt > 0 || true) {
-                val provisional = Renter(
-                    name = name,
-                    phoneNumber = phone,
-                    debtAmount = finalDebt,
-                    rentDurationDays = duration,
-                    rentStartDateTimestamp = startTimestamp,
-                    scooterId = scooterId,
-                    scooterName = scooterName,
-                    balance = 0.0
-                )
-                sync.pushRenter(provisional)
-            } else null
+            val effectiveWeeklyPrice = if (weeklyPrice > 0) weeklyPrice
+                else SettingsRepository.DEFAULT_WEEKLY_PRICE
 
-            val newId = serverId ?: repository.insert(
-                Renter(
-                    name = name,
-                    phoneNumber = phone,
-                    debtAmount = finalDebt,
-                    rentDurationDays = duration,
-                    rentStartDateTimestamp = startTimestamp,
-                    scooterId = scooterId,
-                    scooterName = scooterName,
-                    balance = 0.0
-                )
-            ).toInt()
+            val initialBalance = if (isOverdueAtCreation) {
+                val overdueMillis = now - expiryTime
+                val overdueWeeks = (overdueMillis / (7L * 24 * 60 * 60 * 1000)).toInt().coerceAtLeast(1)
+                -(effectiveWeeklyPrice * overdueWeeks)
+            } else if (debt > 0) {
+                -debt
+            } else {
+                0.0
+            }
+            val finalDebt = if (initialBalance < 0) -initialBalance else 0.0
 
+            val provisional = Renter(
+                name = name,
+                phoneNumber = phone,
+                debtAmount = finalDebt,
+                rentDurationDays = duration,
+                rentStartDateTimestamp = startTimestamp,
+                scooterId = scooterId,
+                scooterName = scooterName,
+                balance = initialBalance
+            )
+
+            // СНАЧАЛА пишем в Room — рентер появляется мгновенно
+            val localId = repository.insert(provisional).toInt()
+            var savedRenter = provisional.copy(id = localId)
+
+            // ПОТОМ шлём на API — получаем server id
+            viewModelScope.launch(Dispatchers.IO) {
+                try {
+                    val serverId = sync.pushRenter(provisional)
+                    if (serverId != null) {
+                        if (serverId != localId) {
+                            // Обновляем id существующей записи
+                            val db = AppDatabase.getDatabase(getApplication<Application>())
+                            db.renterDao().deleteRenter(localId)
+                            db.renterDao().insertRenter(savedRenter.copy(id = serverId))
+                            savedRenter = savedRenter.copy(id = serverId)
+                            Log.d(TAG, "Renter synced: local #$localId → server #$serverId")
+                        }
+                    }
+                } catch (e: Exception) {
+                    Log.w(TAG, "pushRenter failed, stays local #$localId", e)
+                }
+            }
+
+            // Записываем в историю контрактов
             historyRepository.insert(
                 ContractHistoryEntry(
-                    renterId = newId,
+                    renterId = savedRenter.id,
                     timestamp = now,
                     type = ContractHistoryEntry.TYPE_CREATED,
-                    amount = weeklyPrice,
-                    notes = if (isOverdueAtCreation) "Kechikkan holda yaratildi" else "Yaratildi"
+                    amount = effectiveWeeklyPrice,
+                    notes = if (isOverdueAtCreation)
+                        "Kechikkan holda yaratildi (${(-initialBalance).toBigDecimal().stripTrailingZeros().toPlainString()})"
+                    else "Yaratildi"
                 )
             )
             sync.pushContractHistory(
                 ContractHistoryEntry(
-                    renterId = newId,
+                    renterId = savedRenter.id,
                     timestamp = now,
                     type = ContractHistoryEntry.TYPE_CREATED,
-                    amount = weeklyPrice,
-                    notes = if (isOverdueAtCreation) "Kechikkan holda yaratildi" else "Yaratildi"
+                    amount = effectiveWeeklyPrice,
+                    notes = if (isOverdueAtCreation)
+                        "Kechikkan holda yaratildi (${(-initialBalance).toBigDecimal().stripTrailingZeros().toPlainString()})"
+                    else "Yaratildi"
                 )
             )
 
+            // ===== НЕМЕДЛЕННОЕ УВЕДОМЛЕНИЕ И SMS =====
             if (isOverdueAtCreation) {
-                val wm = WorkManager.getInstance(getApplication())
-                val notifWork = OneTimeWorkRequestBuilder<PaymentCheckWorker>()
-                    .setInputData(
-                        workDataOf(
-                            PaymentCheckWorker.KEY_RENTER_ID to newId,
-                            PaymentCheckWorker.KEY_ONE_TIME to true
-                        )
-                    )
-                    .build()
-                wm.enqueue(notifWork)
+                val context = getApplication<Application>()
 
-                val smsWork = OneTimeWorkRequestBuilder<SmsWorker>().build()
-                wm.enqueueUniqueWork(
-                    "immediate_sms_$newId",
-                    androidx.work.ExistingWorkPolicy.REPLACE,
-                    smsWork
+                // 1) Показываем уведомление ПРЯМО СЕЙЧАС — не через Worker
+                try {
+                    NotificationHelper.createChannel(context)
+                    NotificationHelper.postPaymentDueNotification(
+                        context, savedRenter.id, savedRenter.name, savedRenter.phoneNumber
+                    )
+                    Log.d(TAG, "Notification shown immediately for renter #${savedRenter.id}")
+                } catch (e: Exception) {
+                    Log.e(TAG, "Failed to show notification", e)
+                }
+
+                // 2) Отправляем SMS ПРЯМО СЕЙЧАС — не через Worker
+                try {
+                    if (ContextCompat.checkSelfPermission(
+                            context, android.Manifest.permission.SEND_SMS
+                        ) == PackageManager.PERMISSION_GRANTED
+                    ) {
+                        val settingsRepo = SettingsRepository(context)
+                        val rawTemplate = settingsRepo.smsTemplate
+                        val daysOverdue = ((now - expiryTime) / (1000L * 60 * 60 * 24)).toInt()
+                        val debtDisplay = (-initialBalance).toBigDecimal()
+                            .stripTrailingZeros().toPlainString()
+                        val message = rawTemplate
+                            .replace("{name}", savedRenter.name)
+                            .replace("{days}", daysOverdue.toString())
+                            .replace("{debt}", debtDisplay)
+
+                        val smsManager = context.getSystemService(
+                            android.telephony.SmsManager::class.java
+                        )
+                        if (smsManager != null) {
+                            smsManager.sendTextMessage(
+                                savedRenter.phoneNumber, null, message, null, null
+                            )
+                            Log.d(TAG, "SMS sent immediately to ${savedRenter.phoneNumber}")
+                            // Помечаем что SMS отправлено
+                            repository.update(
+                                savedRenter.copy(isOverdueSmsSent = true)
+                            )
+                        } else {
+                            Log.w(TAG, "SmsManager is null — no SIM card")
+                        }
+                    } else {
+                        Log.w(TAG, "SEND_SMS permission not granted — scheduling SmsWorker")
+                        // Если нет разрешения, пробуем через Worker
+                        val smsWork = OneTimeWorkRequestBuilder<SmsWorker>().build()
+                        WorkManager.getInstance(context).enqueue(smsWork)
+                    }
+                } catch (e: SecurityException) {
+                    Log.e(TAG, "SMS SecurityException", e)
+                } catch (e: Exception) {
+                    Log.e(TAG, "SMS failed", e)
+                }
+
+                // 3) Также сохраняем уведомление в историю уведомлений на сервере
+                try {
+                    val notifEntry = com.example.data.NotificationHistoryEntity(
+                        timestamp = now,
+                        renterId = savedRenter.id,
+                        title = "To'lov muddati yetdi",
+                        message = "Mijoz ${savedRenter.name} (${savedRenter.phoneNumber}) bugun to'lov qilishi kerak"
+                    )
+                    val db = AppDatabase.getDatabase(context)
+                    db.notificationHistoryDao().insert(notifEntry)
+                    sync.pushNotification(notifEntry)
+                } catch (e: Exception) {
+                    Log.w(TAG, "Failed to save notification history", e)
+                }
+
+                // 4) Регистрируем периодические проверки (для будущих напоминаний)
+                val wm = WorkManager.getInstance(getApplication())
+                val paymentCheckRequest =
+                    androidx.work.PeriodicWorkRequestBuilder<PaymentCheckWorker>(1, java.util.concurrent.TimeUnit.HOURS).build()
+                wm.enqueueUniquePeriodicWork(
+                    "PaymentCheckWork",
+                    androidx.work.ExistingPeriodicWorkPolicy.KEEP,
+                    paymentCheckRequest
                 )
             }
         }
@@ -179,10 +300,13 @@ class RenterViewModel(application: Application) : AndroidViewModel(application) 
     ) {
         val weeklyPrice = weeklyPriceOverride
             ?: SettingsRepository(getApplication()).weeklyPrice
-        val newDebt = maxOf(0.0, renter.debtAmount - weeklyPrice)
+        val effectivePrice = if (weeklyPrice > 0) weeklyPrice
+            else SettingsRepository.DEFAULT_WEEKLY_PRICE
+        val newBalance = renter.balance + effectivePrice
+        val newDebt = maxOf(0.0, -newBalance)
         val updated = renter.copy(
             debtAmount = newDebt,
-            balance = renter.balance + weeklyPrice,
+            balance = newBalance,
             lastPaymentTimestamp = System.currentTimeMillis(),
             isOverdueSmsSent = false
         )
@@ -193,7 +317,7 @@ class RenterViewModel(application: Application) : AndroidViewModel(application) 
             renterId = renter.id,
             timestamp = System.currentTimeMillis(),
             type = ContractHistoryEntry.TYPE_PAYMENT,
-            amount = weeklyPrice,
+            amount = effectivePrice,
             notes = notes
         )
         historyRepository.insert(entry)
@@ -201,9 +325,13 @@ class RenterViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     private suspend fun applyTermination(renter: Renter, weeklyPrice: Double) {
+        val effectivePrice = if (weeklyPrice > 0) weeklyPrice
+            else SettingsRepository.DEFAULT_WEEKLY_PRICE
+        val newBalance = renter.balance + effectivePrice
+        val newDebt = maxOf(0.0, -newBalance)
         val updated = renter.copy(
-            debtAmount = maxOf(0.0, renter.debtAmount - weeklyPrice),
-            balance = renter.balance + weeklyPrice,
+            debtAmount = newDebt,
+            balance = newBalance,
             isReturned = true,
             lastPaymentTimestamp = System.currentTimeMillis(),
             isOverdueSmsSent = false
@@ -215,10 +343,14 @@ class RenterViewModel(application: Application) : AndroidViewModel(application) 
             renterId = renter.id,
             timestamp = System.currentTimeMillis(),
             type = ContractHistoryEntry.TYPE_TERMINATED,
-            amount = weeklyPrice,
+            amount = effectivePrice,
             notes = "Kontrakt tugatildi"
         )
         historyRepository.insert(entry)
         sync.pushContractHistory(entry)
+    }
+
+    companion object {
+        private const val TAG = "RenterViewModel"
     }
 }

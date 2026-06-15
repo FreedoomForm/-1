@@ -14,22 +14,96 @@ import kotlinx.coroutines.withContext
 /**
  * Синхронизация Room ↔ API.
  *
- * Стратегия v1:
- *  • pullAll()      — после успешного логина заменяет Room-данные
- *                     данными с сервера (источник истины).
- *  • push*()        — после локального изменения шлёт запись на сервер.
- *                     Возвращает серверный id (для создания).
- *  • syncAll()      — полная двусторонняя синхронизация:
- *                     1) Push — отправляет все локальные данные на сервер
- *                     2) Pull — забирает данные с сервера (источник истины)
- *  • При недоступности сервера — локальные изменения остаются,
- *    но в лог пишется warning. Следующий pull перезатрёт их.
+ * Стратегия v3 (исправленная — данные больше не исчезают):
+ *  • smartMerge()     — умное слияние: серверные данные обновляют локальные,
+ *                       локальные изменения отправляются на сервер.
+ *                       НЕ удаляет локальные данные.
+ *  • pullAll()        — полное обновление при первом логине
+ *                       (заменяет Room-данные данными с сервера).
+ *  • push*()          — после локального изменения шлёт запись на сервер.
+ *  • syncAll()        — полная синхронизация (SmartMerge → Push),
+ *                       используется кнопкой «Sinxronizatsiya».
+ *
+ *  КЛЮЧЕВОЕ ИЗМЕНЕНИЕ v3:
+ *  Авто-синхронизация теперь использует smartMerge() вместо pullAll().
+ *  smartMerge() НЕ удаляет локальные данные — он обновляет существующие
+ *  и добавляет новые с сервера. Это устраняет проблему, когда арендатор
+ *  создавался локально, а затем исчезал из-за pullAll().
  */
 class SyncManager(
     private val context: Context,
     private val api: ApiService = ApiClient.getService(context),
     private val db: AppDatabase = AppDatabase.getDatabase(context)
 ) {
+    /**
+     * Умное слияние серверных данных с локальными.
+     * НЕ удаляет локальные данные — обновляет существующие и добавляет новые.
+     *
+     * Алгоритм:
+     * 1. Получаем данные с сервера
+     * 2. Для каждой серверной записи:
+     *    - Если существует локально (по id) → обновляем
+     *    - Если не существует → вставляем
+     * 3. Локальные записи, которых нет на сервере — оставляем (они будут
+     *    отправлены при следующем push)
+     */
+    suspend fun smartMerge(): Boolean = withContext(Dispatchers.IO) {
+        try {
+            Log.d(TAG, "smartMerge: starting")
+
+            val scooters = api.getScooters()
+            val renters = api.getRenters()
+            val contractHistory = api.getContractHistory()
+            val notifications = api.getNotifications()
+
+            db.withTransaction {
+                // ── Scooters: upsert ──────────────────────────────
+                for (dto in scooters) {
+                    val entity = dto.toEntity()
+                    val existing = db.scooterDao().getScooterById(entity.id)
+                    if (existing != null) {
+                        db.scooterDao().updateScooter(entity)
+                    } else {
+                        db.scooterDao().insertScooter(entity)
+                    }
+                }
+
+                // ── Renters: upsert ──────────────────────────────
+                for (dto in renters) {
+                    val entity = dto.toEntity()
+                    val existing = db.renterDao().getRenterById(entity.id)
+                    if (existing != null) {
+                        db.renterDao().updateRenter(entity)
+                    } else {
+                        db.renterDao().insertRenter(entity)
+                    }
+                }
+
+                // ── Contract history: insert (IGNORE duplicates) ───
+                for (dto in contractHistory) {
+                    db.contractHistoryDao().insert(dto.toEntity())
+                }
+
+                // ── Notifications: insert (IGNORE duplicates) ──────
+                for (dto in notifications) {
+                    db.notificationHistoryDao().insert(dto.toEntity())
+                }
+            }
+
+            Log.d(TAG, "smartMerge: ok (scooters=${scooters.size}, " +
+                "renters=${renters.size}, history=${contractHistory.size}, " +
+                "notifications=${notifications.size})")
+            true
+        } catch (e: Exception) {
+            Log.e(TAG, "smartMerge failed", e)
+            false
+        }
+    }
+
+    /**
+     * Полная замена локальных данных серверными (деструктивная).
+     * Используется ТОЛЬКО при первом логине — не при авто-синхронизации!
+     */
     suspend fun pullAll(): Boolean = withContext(Dispatchers.IO) {
         try {
             Log.d(TAG, "pullAll: starting")
@@ -60,89 +134,100 @@ class SyncManager(
     }
 
     /**
-     * Полная синхронизация: push всех локальных данных → pull с сервера.
+     * Полная синхронизация (v3): SmartMerge → Push.
      *
-     * Возвращает SyncResult с деталями — сколько записей отправлено/получено.
-     * Используется кнопкой «Sinxronizatsiya» в настройках.
+     * Сначала сливаем серверные данные с локальными (не удаляя!),
+     * затем отправляем все локальные изменения.
      */
     suspend fun syncAll(): SyncResult = withContext(Dispatchers.IO) {
         val result = SyncResult()
         try {
+            // ── 1. SmartMerge — сливаем без удаления ────────────
+            Log.d(TAG, "syncAll: starting merge phase")
+            val mergeOk = smartMerge()
+            if (mergeOk) {
+                result.pullSuccess = true
+                Log.d(TAG, "syncAll: merge ok")
+            } else {
+                result.pullSuccess = false
+                Log.w(TAG, "syncAll: merge failed, trying push anyway")
+            }
+
             Log.d(TAG, "syncAll: starting push phase")
 
-            // ── 1. Push scooters ──────────────────────────────
+            // ── 2. Push scooters (update existing) ──────────────
             val localScooters = db.scooterDao().getAllScootersOnce()
             for (s in localScooters) {
-                try {
-                    api.createScooter(s.toCreateDto())
+                val ok = try {
+                    api.updateScooter(s.id, s.toUpdateDto())
                     result.scootersPushed++
+                    true
                 } catch (e: Exception) {
-                    // Maybe already exists — try update
+                    // Maybe doesn't exist on server yet — try create
                     try {
-                        api.updateScooter(s.id, s.toUpdateDto())
+                        api.createScooter(s.toCreateDto())
                         result.scootersPushed++
+                        true
                     } catch (e2: Exception) {
                         Log.w(TAG, "pushScooter failed for #${s.id}", e2)
                         result.scootersFailed++
+                        false
                     }
                 }
             }
 
-            // ── 2. Push renters ──────────────────────────────
+            // ── 3. Push renters (update existing) ──────────────
             val localRenters = db.renterDao().getAllRentersOnce()
             for (r in localRenters) {
-                try {
-                    api.createRenter(r.toCreateDto())
+                val ok = try {
+                    api.updateRenter(r.id, r.toUpdateDto())
                     result.rentersPushed++
+                    true
                 } catch (e: Exception) {
+                    // Maybe doesn't exist on server yet — try create
                     try {
-                        api.updateRenter(r.id, r.toUpdateDto())
+                        api.createRenter(r.toCreateDto())
                         result.rentersPushed++
+                        true
                     } catch (e2: Exception) {
                         Log.w(TAG, "pushRenter failed for #${r.id}", e2)
                         result.rentersFailed++
+                        false
                     }
                 }
             }
 
-            // ── 3. Push contract history ──────────────────────
+            // ── 4. Push contract history ──────────────────────
             val localHistory = db.contractHistoryDao().getAllOnce()
             for (h in localHistory) {
-                try {
+                val ok = try {
                     api.createContractHistory(h.toCreateDto())
                     result.historyPushed++
+                    true
                 } catch (e: Exception) {
                     Log.w(TAG, "pushContractHistory failed", e)
                     result.historyFailed++
+                    false
                 }
             }
 
-            // ── 4. Push notifications ─────────────────────────
+            // ── 5. Push notifications ─────────────────────────
             val localNotifs = db.notificationHistoryDao().getAllOnce()
             for (n in localNotifs) {
-                try {
+                val ok = try {
                     api.createNotification(n.toCreateDto())
                     result.notificationsPushed++
+                    true
                 } catch (e: Exception) {
                     Log.w(TAG, "pushNotification failed", e)
                     result.notificationsFailed++
+                    false
                 }
             }
 
             Log.d(TAG, "syncAll: push done (scooters=${result.scootersPushed}, " +
                 "renters=${result.rentersPushed}, history=${result.historyPushed}, " +
                 "notifs=${result.notificationsPushed})")
-
-            // ── 5. Pull — сервер = источник истины ────────────
-            Log.d(TAG, "syncAll: starting pull phase")
-            val pullOk = pullAll()
-            if (pullOk) {
-                result.pullSuccess = true
-                Log.d(TAG, "syncAll: complete — pull ok")
-            } else {
-                result.pullSuccess = false
-                Log.w(TAG, "syncAll: push ok but pull failed")
-            }
 
             result.success = true
         } catch (e: Exception) {
