@@ -80,11 +80,6 @@ class InAppUpdateManager(private val context: Context) {
                 PackageInstaller.SessionParams.MODE_FULL_INSTALL
             )
 
-            // На Android 14+ можно указать причину установки
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
-                params.setInstallReason(PackageInstaller.INSTALL_REASON_USER_REQUESTED)
-            }
-
             val sessionId = packageInstaller.createSession(params)
             val session = packageInstaller.openSession(sessionId)
 
