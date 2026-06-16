@@ -80,12 +80,13 @@ class InAppUpdateManager(private val context: Context) {
                 PackageInstaller.SessionParams.MODE_FULL_INSTALL
             )
 
-            // На Android 12+ нужно указать причину установки
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-                params.setInstallReason(PackageInstaller.SessionParams.INSTALL_REASON_USER_REQUESTED)
+            // На Android 14+ можно указать причину установки
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+                params.setInstallReason(PackageInstaller.INSTALL_REASON_USER_REQUESTED)
             }
 
-            val session = packageInstaller.openSession(params)
+            val sessionId = packageInstaller.createSession(params)
+            val session = packageInstaller.openSession(sessionId)
 
             // Записываем APK в сессию
             apkFile.inputStream().use { input ->
