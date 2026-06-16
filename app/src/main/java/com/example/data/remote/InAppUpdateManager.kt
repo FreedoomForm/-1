@@ -5,7 +5,7 @@ import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
-import android.content.PackageInstaller
+import android.content.pm.PackageInstaller
 import android.os.Build
 import android.util.Log
 import kotlinx.coroutines.Dispatchers
@@ -164,7 +164,12 @@ class InAppUpdateManager(private val context: Context) {
                         when (status) {
                             PackageInstaller.STATUS_PENDING_USER_ACTION -> {
                                 // Система запрашивает подтверждение пользователя
-                                val confirmIntent = intent.getParcelableExtra<Intent>(Intent.EXTRA_INTENT)
+                                val confirmIntent = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                                    intent.getParcelableExtra(Intent.EXTRA_INTENT, Intent::class.java)
+                                } else {
+                                    @Suppress("DEPRECATION")
+                                    intent.getParcelableExtra(Intent.EXTRA_INTENT) as? Intent
+                                }
                                 if (confirmIntent != null) {
                                     confirmIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
                                     ctx.startActivity(confirmIntent)

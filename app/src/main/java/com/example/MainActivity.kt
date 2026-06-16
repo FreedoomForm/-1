@@ -223,8 +223,8 @@ fun MainScreen(
     var updateInfo by remember { mutableStateOf<UpdateInfo?>(null) }
     var isCheckingUpdate by remember { mutableStateOf(false) }
     var isUpToDate by remember { mutableStateOf(false) } // Приложение актуально — не показываем уведомление
-    val context = LocalContext.current
-    val updateManager = remember { InAppUpdateManager(context) }
+    val localContext = LocalContext.current
+    val updateManager = remember { InAppUpdateManager(localContext) }
     val updateState by updateManager.state.collectAsStateWithLifecycle()
     val coroutineScope = rememberCoroutineScope()
 
@@ -240,7 +240,7 @@ fun MainScreen(
     // Показываем уведомление ТОЛЬКО если есть реальное обновление
     LaunchedEffect(Unit) {
         try {
-            val checker = UpdateChecker(context)
+            val checker = UpdateChecker(localContext)
             val (result, info) = checker.checkForUpdate()
             when (result) {
                 UpdateCheckResult.UPDATE_AVAILABLE -> {
@@ -325,7 +325,7 @@ fun MainScreen(
                             if (!isSyncing) {
                                 isSyncing = true
                                 coroutineScope.launch {
-                                    val sync = SyncManager(context)
+                                    val sync = SyncManager(localContext)
                                     syncResult = sync.syncAll()
                                     isSyncing = false
                                 }
@@ -532,7 +532,7 @@ fun MainScreen(
                                     coroutineScope.launch {
                                         if (!updateManager.canInstallFromUnknownSources()) {
                                             updateManager.openInstallPermissionSettings()
-                                            Toast.makeText(context, "Ilova sozlamalaridan \"Noma'lum manbalardan o'rnatish\" ruxsatini bering", Toast.LENGTH_LONG).show()
+                                            Toast.makeText(localContext, "Ilova sozlamalaridan \"Noma'lum manbalardan o'rnatish\" ruxsatini bering", Toast.LENGTH_LONG).show()
                                         } else {
                                             updateManager.downloadAndInstall(updateInfo!!)
                                         }
@@ -616,7 +616,7 @@ fun MainScreen(
                         Button(
                             onClick = {
                                 viewModel.payWeeklyForRenters(selectedRenters)
-                                Toast.makeText(context, "To'lov qabul qilindi", Toast.LENGTH_SHORT).show()
+                                Toast.makeText(localContext, "To'lov qabul qilindi", Toast.LENGTH_SHORT).show()
                                 selectedRenters = emptySet()
                             },
                             colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF34C759)),
@@ -633,7 +633,7 @@ fun MainScreen(
                         Button(
                             onClick = {
                                 viewModel.terminateRenters(selectedRenters)
-                                Toast.makeText(context, "Kontrakt tugatildi", Toast.LENGTH_SHORT).show()
+                                Toast.makeText(localContext, "Kontrakt tugatildi", Toast.LENGTH_SHORT).show()
                                 selectedRenters = emptySet()
                             },
                             colors = ButtonDefaults.buttonColors(containerColor = ClaudeAccent),
@@ -654,7 +654,7 @@ fun MainScreen(
                                 var sentCount = 0
                                 var failCount = 0
                                 rentersToSend.forEach { renter ->
-                                    val settingsRepo = com.example.data.SettingsRepository(context)
+                                    val settingsRepo = com.example.data.SettingsRepository(localContext)
                                     val currentTime = System.currentTimeMillis()
                                     val elapsedDays = ((currentTime - renter.rentStartDateTimestamp) / (1000L * 60 * 60 * 24)).toInt()
                                     val daysOverdue = elapsedDays - renter.rentDurationDays
@@ -663,7 +663,7 @@ fun MainScreen(
                                         .replace("{name}", renter.name)
                                         .replace("{days}", maxOf(0, daysOverdue).toString())
                                         .replace("{debt}", renter.debtAmount.toString())
-                                    val smsManager = com.example.worker.SimHelper.getSmsManagerForSim(context)
+                                    val smsManager = com.example.worker.SimHelper.getSmsManagerForSim(localContext)
                                     if (smsManager != null) {
                                         try {
                                             com.example.worker.SimHelper.sendSmsAuto(smsManager, phone, message, null, null)
@@ -680,9 +680,9 @@ fun MainScreen(
                                     }
                                 }
                                 if (sentCount > 0) {
-                                    Toast.makeText(context, "$sentCount ta SMS yuborildi${if (failCount > 0) ", $failCount ta xato" else ""}", Toast.LENGTH_SHORT).show()
+                                    Toast.makeText(localContext, "$sentCount ta SMS yuborildi${if (failCount > 0) ", $failCount ta xato" else ""}", Toast.LENGTH_SHORT).show()
                                 } else {
-                                    Toast.makeText(context, "SMS yuborib bo'lmadi", Toast.LENGTH_SHORT).show()
+                                    Toast.makeText(localContext, "SMS yuborib bo'lmadi", Toast.LENGTH_SHORT).show()
                                 }
                                 selectedRenters = emptySet()
                             },
@@ -944,7 +944,7 @@ fun MainScreen(
                     coroutineScope.launch {
                         if (!updateManager.canInstallFromUnknownSources()) {
                             updateManager.openInstallPermissionSettings()
-                            Toast.makeText(context, "Ilova sozlamalaridan \"Noma'lum manbalardan o'rnatish\" ruxsatini bering", Toast.LENGTH_LONG).show()
+                            Toast.makeText(localContext, "Ilova sozlamalaridan \"Noma'lum manbalardan o'rnatish\" ruxsatini bering", Toast.LENGTH_LONG).show()
                         } else {
                             updateManager.downloadAndInstall(info)
                         }
@@ -964,7 +964,7 @@ fun MainScreen(
                     if (!isCheckingUpdate) {
                         isCheckingUpdate = true
                         coroutineScope.launch {
-                            val checker = UpdateChecker(context)
+                            val checker = UpdateChecker(localContext)
                             val (result, info) = checker.checkForUpdate()
                             when (result) {
                                 UpdateCheckResult.UPDATE_AVAILABLE -> {
@@ -1023,7 +1023,7 @@ fun MainScreen(
                 onDismiss = { showHistoryDialog = false },
                 onClear = {
                     historyViewModel.clear()
-                    Toast.makeText(context, "Tozalandi", Toast.LENGTH_SHORT).show()
+                    Toast.makeText(localContext, "Tozalandi", Toast.LENGTH_SHORT).show()
                 }
             )
         }
@@ -1036,7 +1036,7 @@ fun MainScreen(
                 onDismiss = { showContractHistoryDialog = false },
                 onClear = {
                     contractHistoryViewModel.clear()
-                    Toast.makeText(context, "Tozalandi", Toast.LENGTH_SHORT).show()
+                    Toast.makeText(localContext, "Tozalandi", Toast.LENGTH_SHORT).show()
                 }
             )
         }
@@ -1045,9 +1045,9 @@ fun MainScreen(
         LaunchedEffect(Unit) {
             viewModel.smsResults.collect { result ->
                 if (result.success) {
-                    Toast.makeText(context, result.message, Toast.LENGTH_SHORT).show()
+                    Toast.makeText(localContext, result.message, Toast.LENGTH_SHORT).show()
                 } else {
-                    Toast.makeText(context, result.message, Toast.LENGTH_LONG).show()
+                    Toast.makeText(localContext, result.message, Toast.LENGTH_LONG).show()
                 }
             }
         }
