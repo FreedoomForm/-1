@@ -1161,11 +1161,13 @@ fun RenterTable(
     onSelect: (Int, Boolean) -> Unit,
     onClick: (Renter) -> Unit
 ) {
-    // Фиксированные ширины колонок в dp. Базовые 6 колонок всегда видны и
-    // помещаются на экране телефона. Опциональные 9 колонок (PDF-реквизиты)
-    // добавляются только если хотя бы у одного арендатора есть данные в этом
-    // поле — иначе колонка скрыта, чтобы не занимать место. Когда опциональные
-    // колонки появляются, таблица становится горизонтально прокручиваемой.
+    // ── Две компоновки ───────────────────────────────────────────────────
+    // 1) БЕЗ опциональных колонок: weight-based Row, БЕЗ горизонтального
+    //    скролла. Все 6 базовых колонок (Name, Phone, Scooter, Start, End,
+    //    Balance) умещаются на экране телефона пропорционально. Так
+    //    Balans и Tugash (= data poslednego kontrakta) всегда видны.
+    // 2) С опциональными колонками: fixed widths + horizontalScroll.
+    //    Базовые 6 + Passport/Address/Pinfl — пользователь скроллит вправо.
     val wName     = 110.dp
     val wPhone    = 100.dp
     val wScoot    = 80.dp
@@ -1175,6 +1177,14 @@ fun RenterTable(
     val wPassport = 110.dp
     val wAddress  = 140.dp
     val wPinfl    = 95.dp
+
+    // Weight-based widths для базовых колонок (когда нет extras).
+    val fName  = 1.4f
+    val fPhone = 1.0f
+    val fScoot = 0.8f
+    val fStart = 1.0f
+    val fEnd   = 1.1f
+    val fDebt  = 0.9f
 
     // Определяем, какие опциональные колонки нужно показать (хотя бы у одного
     // арендатора есть непустое значение в этом поле).
@@ -1187,27 +1197,34 @@ fun RenterTable(
     val hScrollState = rememberScrollState()
 
     Column(modifier = Modifier.fillMaxSize()) {
-        // Заголовок — только иконки для быстрой ассоциации.
-        // Когда есть опциональные колонки, заголовок прокручивается вместе с телом.
-        Surface(
-            color = ClaudeCard,
-            modifier = if (hasAnyExtra) Modifier.fillMaxWidth() else Modifier.fillMaxWidth()
-        ) {
+        // ── Заголовок ────────────────────────────────────────────────────
+        Surface(color = ClaudeCard, modifier = Modifier.fillMaxWidth()) {
             Row(
                 modifier = Modifier
                     .then(if (hasAnyExtra) Modifier.horizontalScroll(hScrollState) else Modifier)
                     .padding(horizontal = 8.dp, vertical = 4.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                SortableHeaderCellFixed(Icons.Default.Person,               wName,  "col_name",      sortState) { onSortClick("col_name") }
-                SortableHeaderCellFixed(Icons.Default.Phone,                wPhone, "col_phone",     sortState) { onSortClick("col_phone") }
-                SortableHeaderCellFixed(Icons.Default.DirectionsBike,       wScoot, "col_scooter",   sortState) { onSortClick("col_scooter") }
-                SortableHeaderCellFixed(Icons.Default.CalendarToday,        wStart, "col_start",     sortState) { onSortClick("col_start") }
-                SortableHeaderCellFixed(Icons.Default.Event,                wEnd,   "col_end",       sortState) { onSortClick("col_end") }
-                SortableHeaderCellFixed(Icons.Default.AccountBalanceWallet, wDebt,  "col_balance",   sortState) { onSortClick("col_balance") }
-                if (hasPassport) SortableHeaderCellFixed(Icons.Default.CreditCard,  wPassport, "col_passport", sortState) { onSortClick("col_passport") }
-                if (hasAddress)  SortableHeaderCellFixed(Icons.Default.Home,       wAddress,  "col_address",  sortState) { onSortClick("col_address") }
-                if (hasPinfl)    SortableHeaderCellFixed(Icons.Default.Fingerprint, wPinfl,    "col_pinfl",    sortState) { onSortClick("col_pinfl") }
+                if (hasAnyExtra) {
+                    // Fixed-width версия — со скроллом
+                    SortableHeaderCellFixed(Icons.Default.Person,               wName,  "col_name",      sortState) { onSortClick("col_name") }
+                    SortableHeaderCellFixed(Icons.Default.Phone,                wPhone, "col_phone",     sortState) { onSortClick("col_phone") }
+                    SortableHeaderCellFixed(Icons.Default.DirectionsBike,       wScoot, "col_scooter",   sortState) { onSortClick("col_scooter") }
+                    SortableHeaderCellFixed(Icons.Default.CalendarToday,        wStart, "col_start",     sortState) { onSortClick("col_start") }
+                    SortableHeaderCellFixed(Icons.Default.Event,                wEnd,   "col_end",       sortState) { onSortClick("col_end") }
+                    SortableHeaderCellFixed(Icons.Default.AccountBalanceWallet, wDebt,  "col_balance",   sortState) { onSortClick("col_balance") }
+                    if (hasPassport) SortableHeaderCellFixed(Icons.Default.CreditCard,  wPassport, "col_passport", sortState) { onSortClick("col_passport") }
+                    if (hasAddress)  SortableHeaderCellFixed(Icons.Default.Home,       wAddress,  "col_address",  sortState) { onSortClick("col_address") }
+                    if (hasPinfl)    SortableHeaderCellFixed(Icons.Default.Fingerprint, wPinfl,    "col_pinfl",    sortState) { onSortClick("col_pinfl") }
+                } else {
+                    // Weight-based версия — все 6 базовых колонок помещаются на экране
+                    SortableHeaderCell(Icons.Default.Person,               fName,  "col_name",      sortState) { onSortClick("col_name") }
+                    SortableHeaderCell(Icons.Default.Phone,                fPhone, "col_phone",     sortState) { onSortClick("col_phone") }
+                    SortableHeaderCell(Icons.Default.DirectionsBike,       fScoot, "col_scooter",   sortState) { onSortClick("col_scooter") }
+                    SortableHeaderCell(Icons.Default.CalendarToday,        fStart, "col_start",     sortState) { onSortClick("col_start") }
+                    SortableHeaderCell(Icons.Default.Event,                fEnd,   "col_end",       sortState) { onSortClick("col_end") }
+                    SortableHeaderCell(Icons.Default.AccountBalanceWallet, fDebt,  "col_balance",   sortState) { onSortClick("col_balance") }
+                }
             }
         }
         HorizontalDivider(color = ClaudeDivider)
@@ -1234,8 +1251,6 @@ fun RenterTable(
                 val status = statusOf(renter)
                 val sColor = statusColor(status)
 
-                // Цветной контур вокруг строки показывает статус:
-                //   красный — есть долг, зелёный — ок, серый — вернул скутер
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -1262,7 +1277,9 @@ fun RenterTable(
                         // Mijoz
                         Text(
                             renter.name,
-                            modifier = Modifier.width(wName).padding(horizontal = 4.dp),
+                            modifier = Modifier
+                                .then(if (hasAnyExtra) Modifier.width(wName) else Modifier.weight(fName))
+                                .padding(horizontal = 4.dp),
                             style = MaterialTheme.typography.bodyMedium,
                             color = ClaudeText,
                             fontWeight = FontWeight.SemiBold,
@@ -1271,7 +1288,9 @@ fun RenterTable(
                         // Tel
                         Text(
                             renter.phoneNumber,
-                            modifier = Modifier.width(wPhone).padding(horizontal = 4.dp),
+                            modifier = Modifier
+                                .then(if (hasAnyExtra) Modifier.width(wPhone) else Modifier.weight(fPhone))
+                                .padding(horizontal = 4.dp),
                             style = MaterialTheme.typography.bodySmall,
                             color = ClaudeTextSecondary,
                             maxLines = 1
@@ -1279,7 +1298,9 @@ fun RenterTable(
                         // Skuter
                         Text(
                             renter.scooterName ?: "—",
-                            modifier = Modifier.width(wScoot).padding(horizontal = 4.dp),
+                            modifier = Modifier
+                                .then(if (hasAnyExtra) Modifier.width(wScoot) else Modifier.weight(fScoot))
+                                .padding(horizontal = 4.dp),
                             style = MaterialTheme.typography.bodySmall,
                             color = ClaudeText,
                             maxLines = 1
@@ -1287,17 +1308,21 @@ fun RenterTable(
                         // Boshlanish
                         Text(
                             dateFmt.format(Date(renter.rentStartDateTimestamp)),
-                            modifier = Modifier.width(wStart).padding(horizontal = 4.dp),
+                            modifier = Modifier
+                                .then(if (hasAnyExtra) Modifier.width(wStart) else Modifier.weight(fStart))
+                                .padding(horizontal = 4.dp),
                             style = MaterialTheme.typography.bodySmall,
                             color = ClaudeText,
                             maxLines = 1
                         )
-                        // Tugash
+                        // Tugash (= data poslednego kontrakta)
                         val expiry = renter.rentStartDateTimestamp +
                             (renter.rentDurationDays * 24L * 60 * 60 * 1000)
                         Text(
                             dateFmt.format(Date(expiry)),
-                            modifier = Modifier.width(wEnd).padding(horizontal = 4.dp),
+                            modifier = Modifier
+                                .then(if (hasAnyExtra) Modifier.width(wEnd) else Modifier.weight(fEnd))
+                                .padding(horizontal = 4.dp),
                             style = MaterialTheme.typography.bodySmall,
                             color = ClaudeText,
                             maxLines = 1
@@ -1310,7 +1335,9 @@ fun RenterTable(
                         }
                         Text(
                             renter.balance.toLong().toString(),
-                            modifier = Modifier.width(wDebt).padding(horizontal = 4.dp),
+                            modifier = Modifier
+                                .then(if (hasAnyExtra) Modifier.width(wDebt) else Modifier.weight(fDebt))
+                                .padding(horizontal = 4.dp),
                             style = MaterialTheme.typography.bodyMedium,
                             color = balanceColor,
                             fontWeight = FontWeight.Bold,

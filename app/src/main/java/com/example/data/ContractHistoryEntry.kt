@@ -51,7 +51,14 @@ data class ContractHistoryEntry(
     val scooterSerialNumber: String = "",
     val batteryId1: String = "",
     val batteryId2: String = "",
-    val additionalInfo: String = ""
+    val additionalInfo: String = "",
+
+    // ── Статус контракта: оплачен / не оплачен ────────────────────────────
+    // true  = оплачен (зелёная линия статуса)
+    // false = долг (красная линия статуса)
+    // Применяется только к записям-контрактам (CREATED, AUTO_RENEW).
+    // PAYMENT/TERMINATED/RETURNED — транзакции, для них isPaid не используется.
+    val isPaid: Boolean = false
 ) {
     companion object {
         const val TYPE_CREATED = "CREATED"

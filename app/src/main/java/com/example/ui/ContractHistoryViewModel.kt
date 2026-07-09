@@ -31,6 +31,7 @@ class ContractHistoryViewModel(application: Application) : AndroidViewModel(appl
     // Кэш StateFlow по renterId — чтобы не создавать новый flow на каждую рекомпозицию
     // (старая версия создавала новый flow каждый вызов forRenter() → утечка + мерцание UI)
     private val renterFlows = mutableMapOf<Int, StateFlow<List<ContractHistoryEntry>>>()
+    private val renterContractFlows = mutableMapOf<Int, StateFlow<List<ContractHistoryEntry>>>()
     private val scooterFlows = mutableMapOf<String, StateFlow<List<ContractHistoryEntry>>>()
     private val flowsLock = Any()
 
@@ -47,6 +48,20 @@ class ContractHistoryViewModel(application: Application) : AndroidViewModel(appl
         synchronized(flowsLock) {
             renterFlows.getOrPut(renterId) {
                 repo.forRenter(renterId).stateIn(
+                    viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList()
+                )
+            }
+        }
+
+    /**
+     * Только контракты (CREATED + AUTO_RENEW) — для экрана истории контрактов.
+     * Каждая запись имеет флаг isPaid (true = зелёная линия, false = красная).
+     * Сортировка: ASC по weekStart (от самого раннего к самому позднему).
+     */
+    fun contractsForRenter(renterId: Int): StateFlow<List<ContractHistoryEntry>> =
+        synchronized(flowsLock) {
+            renterContractFlows.getOrPut(renterId) {
+                repo.contractsForRenter(renterId).stateIn(
                     viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList()
                 )
             }

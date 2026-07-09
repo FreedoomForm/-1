@@ -133,7 +133,8 @@ class PaymentCheckWorker(
                 scooterSerialNumber = scooter?.scooterSerialNumber ?: "",
                 batteryId1 = scooter?.batteryId1 ?: "",
                 batteryId2 = scooter?.batteryId2 ?: "",
-                additionalInfo = scooter?.additionalInfo ?: ""
+                additionalInfo = scooter?.additionalInfo ?: "",
+                isPaid = false  // авто-продление создаёт НЕОПЛАЧЕННЫЙ контракт (долг)
             )
         )
         Log.d(TAG, "Auto-renewed renter #${renter.id} for 1 week, balance ${renter.balance} → $newBalance")

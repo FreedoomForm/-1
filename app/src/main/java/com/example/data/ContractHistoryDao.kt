@@ -27,6 +27,51 @@ interface ContractHistoryDao {
     @Query("SELECT * FROM contract_history WHERE id = :id LIMIT 1")
     suspend fun getById(id: Int): ContractHistoryEntry?
 
+    /**
+     * Возвращает самый ранний неоплаченный контракт арендатора
+     * (CREATED или AUTO_RENEW с isPaid = false), отсортированный по weekStart.
+     * Используется при оплате: если баланс < 0, нужно пометить оплаченным
+     * именно самый ранний неоплаченный контракт.
+     */
+    @Query("""
+        SELECT * FROM contract_history
+        WHERE renterId = :renterId
+          AND isPaid = 0
+          AND type IN ('CREATED', 'AUTO_RENEW')
+        ORDER BY weekStart ASC
+        LIMIT 1
+    """)
+    suspend fun getEarliestUnpaidContract(renterId: Int): ContractHistoryEntry?
+
+    /**
+     * Возвращает самый поздний оплаченный контракт арендатора
+     * (используется при предоплате для вычисления начала нового контракта).
+     */
+    @Query("""
+        SELECT * FROM contract_history
+        WHERE renterId = :renterId
+          AND isPaid = 1
+          AND type IN ('CREATED', 'AUTO_RENEW')
+          AND weekEnd IS NOT NULL
+        ORDER BY weekEnd DESC
+        LIMIT 1
+    """)
+    suspend fun getLatestPaidContract(renterId: Int): ContractHistoryEntry?
+
+    /**
+     * Возвращает все контракты арендатора (CREATED + AUTO_RENEW),
+     * отсортированные по weekStart ASC. Используется для экрана
+     * истории контрактов, где показываются только контракты с зелёной/красной
+     * линией статуса.
+     */
+    @Query("""
+        SELECT * FROM contract_history
+        WHERE renterId = :renterId
+          AND type IN ('CREATED', 'AUTO_RENEW')
+        ORDER BY weekStart ASC
+    """)
+    fun getContractsForRenterFlow(renterId: Int): Flow<List<ContractHistoryEntry>>
+
     @Insert(onConflict = OnConflictStrategy.IGNORE)
     suspend fun insert(entry: ContractHistoryEntry): Long
 

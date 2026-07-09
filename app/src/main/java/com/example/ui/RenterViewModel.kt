@@ -589,65 +589,124 @@ class RenterViewModel(application: Application) : AndroidViewModel(application) 
         val weeklyPrice = weeklyPriceOverride ?: SettingsRepository(getApplication()).weeklyPrice
         val effectivePrice = if (weeklyPrice > 0) weeklyPrice else SettingsRepository.DEFAULT_WEEKLY_PRICE
         val newBalance = renter.balance + effectivePrice
-
-        // ── Branching by balance BEFORE this payment ─────────────────────────
-        // balance < 0  → payment covers old debt (existing behavior).
-        // balance >= 0 → PREPAYMENT for next week; new contract spans from the
-        //                last contract's weekEnd (or now if no prior contract) to +7 days.
         val now = System.currentTimeMillis()
-        val weekStart: Long
-        val weekEnd: Long
-        val effectiveNotes: String
 
+        // ── Логика статуса контракта ──────────────────────────────────────
+        //   balance < 0  → у арендатора долг. Оплата гасит СТАРЫЙ контракт:
+        //                  находим самый ранний неоплаченный (isPaid=false) контракт
+        //                  и помечаем его isPaid=true (красный → зелёный).
+        //                  Дата контракта НЕ меняется — он закрывается как оплаченный.
+        //   balance >= 0 → все текущие контракты уже зелёные. Создаём НОВЫЙ
+        //                  контракт от weekEnd самого позднего оплаченного контракта
+        //                  до +7 дней, сразу с isPaid=true (зелёный).
+        //
+        // В обоих случаях создаётся запись PAYMENT (транзакция оплаты для истории).
+        // Запись PAYMENT не показывается на экране контрактов — только CREATED/AUTO_RENEW.
         if (renter.balance < 0) {
-            // Debt coverage — keep current contract dates
-            weekStart = now
-            weekEnd = now + 7L * 24 * 60 * 60 * 1000
-            effectiveNotes = notes
-        } else {
-            // Prepayment — extend from last contract's end
-            val history = historyRepository.getForRenterOnce(renter.id)
-            val lastWeekEnd = history
-                .mapNotNull { it.weekEnd }
-                .maxOrNull()
-                ?: renter.rentStartDateTimestamp + renter.rentDurationDays * 24L * 60 * 60 * 1000
-            // If last contract already ended in the past, start from now instead
-            val baseStart = if (lastWeekEnd < now) now else lastWeekEnd
-            weekStart = baseStart
-            weekEnd = baseStart + 7L * 24 * 60 * 60 * 1000
-            effectiveNotes = "Oldindan to'lov (keyingi hafta): $notes"
-        }
+            // ── Гашение долга: помечаем самый ранний неоплаченный контракт ──
+            val unpaid = historyRepository.getEarliestUnpaidContract(renter.id)
+            if (unpaid != null) {
+                historyRepository.update(unpaid.copy(isPaid = true))
+            }
+            // Запись PAYMENT — для истории транзакций (не показывается на экране контрактов)
+            val scooter: Scooter? = renter.scooterId?.let { fetchScooterById(it) }
+            val paymentEntry = ContractHistoryEntry(
+                renterId = renter.id, timestamp = now,
+                type = ContractHistoryEntry.TYPE_PAYMENT, amount = effectivePrice, notes = notes,
+                renterName = renter.name, renterPhone = renter.phoneNumber, scooterName = renter.scooterName,
+                weekStart = unpaid?.weekStart,
+                weekEnd = unpaid?.weekEnd,
+                weeklyPrice = effectivePrice,
+                passportData = renter.passportData,
+                address = renter.address,
+                pinfl = renter.pinfl,
+                vinNumber = scooter?.vinNumber ?: "",
+                engineNumber = scooter?.engineNumber ?: "",
+                scooterSerialNumber = scooter?.scooterSerialNumber ?: "",
+                batteryId1 = scooter?.batteryId1 ?: "",
+                batteryId2 = scooter?.batteryId2 ?: "",
+                additionalInfo = scooter?.additionalInfo ?: ""
+            )
+            historyRepository.insert(paymentEntry)
 
-        val updated = renter.copy(
-            debtAmount = maxOf(0.0, -newBalance),
-            balance = newBalance,
-            // For prepayment case: shift rental period to the new week window.
-            // For debt coverage: keep original dates.
-            rentStartDateTimestamp = if (renter.balance >= 0) weekStart else renter.rentStartDateTimestamp,
-            rentDurationDays = if (renter.balance >= 0) 7 else renter.rentDurationDays,
-            lastPaymentTimestamp = now,
-            isOverdueSmsSent = false
-        )
-        repository.update(updated)
-        val scooter: Scooter? = renter.scooterId?.let { fetchScooterById(it) }
-        val entry = ContractHistoryEntry(
-            renterId = renter.id, timestamp = now,
-            type = ContractHistoryEntry.TYPE_PAYMENT, amount = effectivePrice, notes = effectiveNotes,
-            renterName = renter.name, renterPhone = renter.phoneNumber, scooterName = renter.scooterName,
-            weekStart = weekStart,
-            weekEnd = weekEnd,
-            weeklyPrice = effectivePrice,
-            passportData = renter.passportData,
-            address = renter.address,
-            pinfl = renter.pinfl,
-            vinNumber = scooter?.vinNumber ?: "",
-            engineNumber = scooter?.engineNumber ?: "",
-            scooterSerialNumber = scooter?.scooterSerialNumber ?: "",
-            batteryId1 = scooter?.batteryId1 ?: "",
-            batteryId2 = scooter?.batteryId2 ?: "",
-            additionalInfo = scooter?.additionalInfo ?: ""
-        )
-        historyRepository.insert(entry)
+            // Обновляем арендатора: баланс растёт, даты аренды НЕ меняются
+            val updated = renter.copy(
+                debtAmount = maxOf(0.0, -newBalance),
+                balance = newBalance,
+                lastPaymentTimestamp = now,
+                isOverdueSmsSent = false
+            )
+            repository.update(updated)
+        } else {
+            // ── Предоплата: создаём новый оплаченный контракт (зелёный) ─────
+            val latestPaid = historyRepository.getLatestPaidContract(renter.id)
+            val lastWeekEnd = latestPaid?.weekEnd
+                ?: (renter.rentStartDateTimestamp + renter.rentDurationDays * 24L * 60 * 60 * 1000)
+            // Если последний оплаченный контракт уже закончился в прошлом —
+            // начинаем новый с текущего момента, иначе продолжаем с weekEnd.
+            val baseStart = if (lastWeekEnd < now) now else lastWeekEnd
+            val weekStart = baseStart
+            val weekEnd = baseStart + 7L * 24 * 60 * 60 * 1000
+
+            val scooter: Scooter? = renter.scooterId?.let { fetchScooterById(it) }
+            val scooterVin = scooter?.vinNumber ?: ""
+            val scooterEngine = scooter?.engineNumber ?: ""
+            val scooterSerial = scooter?.scooterSerialNumber ?: ""
+            val scooterBat1 = scooter?.batteryId1 ?: ""
+            val scooterBat2 = scooter?.batteryId2 ?: ""
+            val scooterExtra = scooter?.additionalInfo ?: ""
+
+            // Новый контракт-неделя, сразу оплаченный (зелёный)
+            val newContract = ContractHistoryEntry(
+                renterId = renter.id, timestamp = now,
+                type = ContractHistoryEntry.TYPE_AUTO_RENEW, amount = effectivePrice,
+                notes = "Oldindan to'lov (keyingi hafta)",
+                renterName = renter.name, renterPhone = renter.phoneNumber, scooterName = renter.scooterName,
+                weekStart = weekStart, weekEnd = weekEnd,
+                weeklyPrice = effectivePrice,
+                passportData = renter.passportData,
+                address = renter.address,
+                pinfl = renter.pinfl,
+                vinNumber = scooterVin,
+                engineNumber = scooterEngine,
+                scooterSerialNumber = scooterSerial,
+                batteryId1 = scooterBat1,
+                batteryId2 = scooterBat2,
+                additionalInfo = scooterExtra,
+                isPaid = true
+            )
+            historyRepository.insert(newContract)
+
+            // Запись PAYMENT — для истории транзакций
+            val paymentEntry = ContractHistoryEntry(
+                renterId = renter.id, timestamp = now,
+                type = ContractHistoryEntry.TYPE_PAYMENT, amount = effectivePrice, notes = notes,
+                renterName = renter.name, renterPhone = renter.phoneNumber, scooterName = renter.scooterName,
+                weekStart = weekStart, weekEnd = weekEnd,
+                weeklyPrice = effectivePrice,
+                passportData = renter.passportData,
+                address = renter.address,
+                pinfl = renter.pinfl,
+                vinNumber = scooterVin,
+                engineNumber = scooterEngine,
+                scooterSerialNumber = scooterSerial,
+                batteryId1 = scooterBat1,
+                batteryId2 = scooterBat2,
+                additionalInfo = scooterExtra
+            )
+            historyRepository.insert(paymentEntry)
+
+            // Обновляем арендатора: баланс растёт, сдвигаем rent period на новую неделю
+            val updated = renter.copy(
+                debtAmount = maxOf(0.0, -newBalance),
+                balance = newBalance,
+                rentStartDateTimestamp = weekStart,
+                rentDurationDays = 7,
+                lastPaymentTimestamp = now,
+                isOverdueSmsSent = false
+            )
+            repository.update(updated)
+        }
     }
 
     private suspend fun applyTermination(renter: Renter, weeklyPrice: Double) {

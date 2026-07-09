@@ -72,7 +72,9 @@ fun RenterContractHistoryScreen(
     contractHistoryViewModel: ContractHistoryViewModel = viewModel(),
     renterViewModel: com.example.ui.RenterViewModel = viewModel()
 ) {
-    val contracts by contractHistoryViewModel.forRenter(renter.id).collectAsStateWithLifecycle()
+    // Только контракты (CREATED + AUTO_RENEW) — отсортированы ASC по weekStart.
+    // PAYMENT/TERMINATED/RETURNED — транзакции, не показываются на этом экране.
+    val contracts by contractHistoryViewModel.contractsForRenter(renter.id).collectAsStateWithLifecycle()
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
 
@@ -81,57 +83,20 @@ fun RenterContractHistoryScreen(
     var editingContract by remember { mutableStateOf<ContractHistoryEntry?>(null) }
     var showDeleteConfirm by remember { mutableStateOf(false) }
     var generatingPdfFor by remember { mutableStateOf<Int?>(null) }
-    var sortState by remember { mutableStateOf(TableSortState()) }
-    var showFilterPanel by remember { mutableStateOf(false) }
-    var filterValues by remember { mutableStateOf(mapOf<String, String>()) }
 
     val dateFmt = remember { SimpleDateFormat("dd.MM.yyyy", Locale.getDefault()) }
-    val dateTimeFmt = remember { SimpleDateFormat("dd.MM.yyyy HH:mm", Locale.getDefault()) }
-
-    val filterColumns = remember {
-        listOf(
-            FilterColumn("col_id", "Kontrakt #", "#"),
-            FilterColumn("col_date", "Sana", "dd.MM.yyyy"),
-            FilterColumn("col_type", "Tur", "Yaratildi/To'lov/..."),
-            FilterColumn("col_amount", "Summa", "summa"),
-            FilterColumn("col_notes", "Izoh", "matn")
-        )
-    }
 
     val filteredContracts = contracts.filter { c ->
-        val textMatch = c.notes?.contains(searchQuery, ignoreCase = true) == true ||
-            c.renterName.contains(searchQuery, ignoreCase = true) ||
-            c.type.contains(searchQuery, ignoreCase = true) ||
+        val periodStr = buildString {
+            c.weekStart?.let { append(dateFmt.format(Date(it))) }
+            if (c.weekEnd != null) append(" → ")
+            c.weekEnd?.let { append(dateFmt.format(Date(it))) }
+        }
+        val textMatch = periodStr.contains(searchQuery, ignoreCase = true) ||
+            c.notes?.contains(searchQuery, ignoreCase = true) == true ||
+            c.id.toString().contains(searchQuery) ||
             (c.scooterName?.contains(searchQuery, ignoreCase = true) == true)
-        val filterMatch = filterValues.all { (colId, filterText) ->
-            if (filterText.isBlank()) true
-            else when (colId) {
-                "col_id" -> c.id.toString().contains(filterText, ignoreCase = true)
-                "col_date" -> dateTimeFmt.format(Date(c.timestamp)).contains(filterText, ignoreCase = true)
-                "col_type" -> contractTypeLabel(c.type).contains(filterText, ignoreCase = true)
-                "col_amount" -> c.amount.toLong().toString().contains(filterText, ignoreCase = true)
-                "col_notes" -> (c.notes ?: "").contains(filterText, ignoreCase = true)
-                else -> true
-            }
-        }
-        textMatch && filterMatch
-    }.let { list ->
-        val col = sortState.activeColumn
-        val state = sortState.stateFor(col ?: "")
-        if (state == SortState.NONE) {
-            list  // default order (DESC by timestamp from DB query)
-        } else {
-            val comparator = when (col) {
-                "col_id" -> compareBy<ContractHistoryEntry> { it.id }
-                "col_date" -> compareBy<ContractHistoryEntry> { it.timestamp }
-                "col_type" -> compareBy<ContractHistoryEntry> { it.type }
-                "col_amount" -> compareBy<ContractHistoryEntry> { it.amount }
-                "col_notes" -> compareBy<ContractHistoryEntry> { it.notes ?: "" }
-                else -> compareBy<ContractHistoryEntry> { it.timestamp }
-            }
-            if (state == SortState.ASCENDING) list.sortedWith(comparator)
-            else list.sortedWith(comparator.reversed())
-        }
+        textMatch
     }
 
     Scaffold(
@@ -208,26 +173,13 @@ fun RenterContractHistoryScreen(
                 }
             }
 
-            // ── Unified search + filter ───────────────────────────────
+            // ── Unified search ───────────────────────────────────────
             UnifiedSearchBar(
                 query = searchQuery,
                 onQueryChange = { searchQuery = it },
                 placeholder = "Kontrakt qidirish...",
-                onCalendarClick = null,  // contracts не фильтруются по диапазону дат здесь
-                onFilterClick = { showFilterPanel = true },
-                filterActive = filterValues.any { it.value.isNotBlank() }
-            )
-
-            FilterSidePanel(
-                columns = filterColumns,
-                filterValues = filterValues,
-                onFilterChange = { colId, value ->
-                    filterValues = filterValues.toMutableMap().apply { put(colId, value) }
-                },
-                onSearch = { /* applied reactively */ },
-                onReset = { filterValues = emptyMap() },
-                onDismiss = { showFilterPanel = false },
-                visible = showFilterPanel
+                onCalendarClick = null,
+                onFilterClick = null
             )
 
             // ── Панель действий с выбранными ────────────────────────────
@@ -265,17 +217,19 @@ fun RenterContractHistoryScreen(
                         .padding(horizontal = 12.dp, vertical = 4.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    SortableHeaderCell(Icons.Default.Numbers,  0.4f, "col_id",     sortState) { sortState = sortState.click("col_id") }
-                    SortableHeaderCell(Icons.Default.Schedule, 1.0f, "col_date",   sortState) { sortState = sortState.click("col_date") }
-                    SortableHeaderCell(Icons.Default.Category, 1.0f, "col_type",   sortState) { sortState = sortState.click("col_type") }
-                    SortableHeaderCell(Icons.Default.DateRange,1.2f, "col_period", sortState) { sortState = sortState.click("col_date") }
-                    SortableHeaderCell(Icons.Default.Payments, 0.9f, "col_amount", sortState) { sortState = sortState.click("col_amount") }
-                    NonSortableHeaderCell(Icons.Default.Build, 1.0f, "Amal")
+                    NonSortableHeaderCell(Icons.Default.Numbers,   0.4f, "#")
+                    NonSortableHeaderCell(Icons.Default.DateRange, 1.6f, "Muddat (hafta)")
+                    NonSortableHeaderCell(Icons.Default.Payments,  0.9f, "Summa")
+                    NonSortableHeaderCell(Icons.Default.Build,     0.7f, "Amal")
                 }
             }
             HorizontalDivider(color = ClaudeDivider)
 
             // ── Список контрактов ──────────────────────────────────────
+            // Каждый контракт обведён цветной рамкой:
+            //   зелёной  — оплачен (isPaid = true)
+            //   красной  — долг (isPaid = false)
+            // Так же, как цветная линия статуса у арендатора в таблице.
             if (filteredContracts.isEmpty()) {
                 Box(
                     modifier = Modifier
@@ -293,7 +247,8 @@ fun RenterContractHistoryScreen(
                 LazyColumn(modifier = Modifier.fillMaxSize()) {
                     items(filteredContracts, key = { it.id }) { entry ->
                         val isSelected = entry.id in selectedContracts
-                        val typeColor = contractTypeColor(entry.type)
+                        val statusColor = if (entry.isPaid) StatusOk else StatusOverdue
+                        val statusLabel = if (entry.isPaid) "To'langan" else "To'lanmagan"
 
                         Row(
                             modifier = Modifier
@@ -315,8 +270,8 @@ fun RenterContractHistoryScreen(
                                     }
                                 )
                                 .border(
-                                    width = if (isSelected) 2.dp else 1.dp,
-                                    color = if (isSelected) ClaudeAccent else ClaudeDivider,
+                                    width = if (isSelected) 2.dp else 1.5.dp,
+                                    color = statusColor,
                                     shape = RoundedCornerShape(10.dp)
                                 )
                                 .padding(horizontal = 8.dp, vertical = 10.dp),
@@ -330,58 +285,58 @@ fun RenterContractHistoryScreen(
                                 color = ClaudeTextSecondary,
                                 maxLines = 1
                             )
-                            // Sana
-                            Text(
-                                dateTimeFmt.format(Date(entry.timestamp)),
-                                modifier = Modifier.weight(1.0f),
-                                style = MaterialTheme.typography.labelSmall,
-                                color = ClaudeText,
-                                maxLines = 1
-                            )
-                            // Tur (с цветным чипом)
-                            Row(
-                                modifier = Modifier.weight(1.0f),
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Box(
-                                    modifier = Modifier
-                                        .size(8.dp)
-                                        .background(typeColor, CircleShape)
-                                )
-                                Spacer(Modifier.width(4.dp))
+                            // Muddat (weekStart → weekEnd) + статус-метка
+                            Column(modifier = Modifier.weight(1.6f)) {
                                 Text(
-                                    contractTypeLabel(entry.type),
-                                    style = MaterialTheme.typography.labelSmall,
-                                    color = typeColor,
+                                    text = buildString {
+                                        entry.weekStart?.let { append(dateFmt.format(Date(it))) }
+                                        if (entry.weekEnd != null) append(" → ")
+                                        entry.weekEnd?.let { append(dateFmt.format(Date(it))) }
+                                    }.ifEmpty { "—" },
+                                    style = MaterialTheme.typography.labelMedium,
+                                    color = ClaudeText,
                                     fontWeight = FontWeight.SemiBold,
                                     maxLines = 1
                                 )
+                                Spacer(Modifier.height(2.dp))
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Box(
+                                        modifier = Modifier
+                                            .size(8.dp)
+                                            .background(statusColor, CircleShape)
+                                    )
+                                    Spacer(Modifier.width(4.dp))
+                                    Text(
+                                        statusLabel,
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = statusColor,
+                                        fontWeight = FontWeight.SemiBold,
+                                        maxLines = 1
+                                    )
+                                    if (!entry.notes.isNullOrBlank()) {
+                                        Spacer(Modifier.width(6.dp))
+                                        Text(
+                                            "• ${entry.notes}",
+                                            style = MaterialTheme.typography.labelSmall,
+                                            color = ClaudeTextSecondary,
+                                            maxLines = 1
+                                        )
+                                    }
+                                }
                             }
-                            // Muddat (weekStart → weekEnd)
-                            Text(
-                                text = buildString {
-                                    entry.weekStart?.let { append(dateFmt.format(Date(it))) }
-                                    if (entry.weekEnd != null) append(" → ")
-                                    entry.weekEnd?.let { append(dateFmt.format(Date(it))) }
-                                }.ifEmpty { "—" },
-                                modifier = Modifier.weight(1.2f),
-                                style = MaterialTheme.typography.labelSmall,
-                                color = ClaudeText,
-                                maxLines = 1
-                            )
                             // Summa
                             Text(
                                 "${entry.amount.toLong()}",
                                 modifier = Modifier.weight(0.9f),
-                                style = MaterialTheme.typography.labelSmall,
-                                color = if (entry.type == ContractHistoryEntry.TYPE_PAYMENT) StatusOk else ClaudeText,
+                                style = MaterialTheme.typography.labelMedium,
+                                color = if (entry.isPaid) StatusOk else StatusOverdue,
                                 fontWeight = FontWeight.Bold,
                                 textAlign = TextAlign.End,
                                 maxLines = 1
                             )
                             // Amal: PDF download
                             Row(
-                                modifier = Modifier.weight(1.0f),
+                                modifier = Modifier.weight(0.7f),
                                 horizontalArrangement = Arrangement.End
                             ) {
                                 if (generatingPdfFor == entry.id) {

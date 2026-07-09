@@ -8,8 +8,16 @@ class ContractHistoryRepository(private val dao: ContractHistoryDao) {
     fun forRenter(renterId: Int): Flow<List<ContractHistoryEntry>> = dao.getForRenterFlow(renterId)
     fun forScooter(scooterName: String): Flow<List<ContractHistoryEntry>> = dao.getForScooterFlow(scooterName)
 
+    /** Только контракты (CREATED + AUTO_RENEW) — для экрана истории контрактов. */
+    fun contractsForRenter(renterId: Int): Flow<List<ContractHistoryEntry>> =
+        dao.getContractsForRenterFlow(renterId)
+
     suspend fun getById(id: Int): ContractHistoryEntry? = dao.getById(id)
     suspend fun getForRenterOnce(renterId: Int): List<ContractHistoryEntry> = dao.getForRenter(renterId)
+    suspend fun getEarliestUnpaidContract(renterId: Int): ContractHistoryEntry? =
+        dao.getEarliestUnpaidContract(renterId)
+    suspend fun getLatestPaidContract(renterId: Int): ContractHistoryEntry? =
+        dao.getLatestPaidContract(renterId)
     suspend fun insert(entry: ContractHistoryEntry): Long = dao.insert(entry)
     suspend fun update(entry: ContractHistoryEntry) = dao.update(entry)
     suspend fun deleteById(id: Int) = dao.deleteById(id)
