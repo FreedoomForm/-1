@@ -11,6 +11,7 @@ import com.example.data.ContractHistoryEntry
 import com.example.data.ContractHistoryRepository
 import com.example.data.Renter
 import com.example.data.RenterRepository
+import com.example.data.Scooter
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
@@ -78,6 +79,63 @@ class ContractHistoryViewModel(application: Application) : AndroidViewModel(appl
 
     fun clear() {
         viewModelScope.launch { repo.clear() }
+    }
+
+    /**
+     * Создаёт новый контракт вручную с экрана истории контрактов.
+     *
+     * Создаётся запись типа AUTO_RENEW с денормализованными полями арендатора
+     * и скутера (для корректной генерации PDF).
+     *
+     * Важно: баланс арендатора НЕ меняется — это просто запись о контракте.
+     * Если пользователь хочет, чтобы контракт был "оплачен" (зелёный), он
+     * должен использовать кнопку "To'lov" на основной таблице арендаторов,
+     * которая реализует правильную логику баланса (см. RenterViewModel.applyWeeklyPayment).
+     *
+     * @param renter      арендатор (для денормализации и scooterId)
+     * @param weekStart   начало недели (millis)
+     * @param weekEnd     конец недели (millis)
+     * @param amount      сумма контракта
+     * @param isPaid      true = оплачен (зелёный), false = долг (красный)
+     * @param notes       примечание (опционально)
+     */
+    fun createManualContract(
+        renter: Renter,
+        weekStart: Long,
+        weekEnd: Long,
+        amount: Double,
+        isPaid: Boolean,
+        notes: String?
+    ) {
+        viewModelScope.launch(Dispatchers.IO) {
+            val scooter: Scooter? = renter.scooterId?.let {
+                AppDatabase.getDatabase(getApplication()).scooterDao().getScooterById(it)
+            }
+            val entry = ContractHistoryEntry(
+                renterId = renter.id,
+                timestamp = System.currentTimeMillis(),
+                type = ContractHistoryEntry.TYPE_AUTO_RENEW,
+                amount = amount,
+                notes = notes?.ifBlank { null },
+                renterName = renter.name,
+                renterPhone = renter.phoneNumber,
+                scooterName = renter.scooterName,
+                weekStart = weekStart,
+                weekEnd = weekEnd,
+                weeklyPrice = amount,
+                passportData = renter.passportData,
+                address = renter.address,
+                pinfl = renter.pinfl,
+                vinNumber = scooter?.vinNumber ?: "",
+                engineNumber = scooter?.engineNumber ?: "",
+                scooterSerialNumber = scooter?.scooterSerialNumber ?: "",
+                batteryId1 = scooter?.batteryId1 ?: "",
+                batteryId2 = scooter?.batteryId2 ?: "",
+                additionalInfo = scooter?.additionalInfo ?: "",
+                isPaid = isPaid
+            )
+            repo.insert(entry)
+        }
     }
 
     fun deleteContract(id: Int) {

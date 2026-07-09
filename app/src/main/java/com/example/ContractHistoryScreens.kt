@@ -35,6 +35,7 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import com.example.data.ContractHistoryEntry
 import com.example.data.Renter
 import com.example.data.Scooter
+import com.example.data.SettingsRepository
 import com.example.ui.ContractHistoryViewModel
 import com.example.ui.components.UnifiedSearchBar
 import com.example.ui.components.FilterSidePanel
@@ -82,6 +83,7 @@ fun RenterContractHistoryScreen(
     var searchQuery by remember { mutableStateOf("") }
     var editingContract by remember { mutableStateOf<ContractHistoryEntry?>(null) }
     var showDeleteConfirm by remember { mutableStateOf(false) }
+    var showCreateDialog by remember { mutableStateOf(false) }
     var generatingPdfFor by remember { mutableStateOf<Int?>(null) }
 
     val dateFmt = remember { SimpleDateFormat("dd.MM.yyyy", Locale.getDefault()) }
@@ -182,26 +184,48 @@ fun RenterContractHistoryScreen(
                 onFilterClick = null
             )
 
-            // ── Панель действий с выбранными ────────────────────────────
-            if (selectedContracts.isNotEmpty()) {
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 16.dp, vertical = 4.dp),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Text(
-                        "${selectedContracts.size} ta tanlandi",
-                        modifier = Modifier.weight(1f),
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = ClaudeText
+            // ── Панель действий (всегда видна) ────────────────────────────
+            // 3 кнопки:
+            //   • "Yaratish" — всегда: открывает диалог создания контракта
+            //   • "Tahrirlash" — только когда выбран ровно 1 контракт
+            //   • "O'chir" — когда выбрано ≥1 контракта
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp, vertical = 6.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                PrimaryButton(
+                    label = "Yaratish",
+                    icon = Icons.Default.Add,
+                    onClick = { showCreateDialog = true }
+                )
+                if (selectedContracts.size == 1) {
+                    SecondaryButton(
+                        label = "Tahrirlash",
+                        icon = Icons.Default.Edit,
+                        onClick = {
+                            // Находим выбранный контракт и открываем диалог редактирования
+                            val id = selectedContracts.first()
+                            editingContract = contracts.firstOrNull { it.id == id }
+                        }
                     )
+                }
+                if (selectedContracts.isNotEmpty()) {
                     DangerButton(
-                        label = "O'chir",
+                        label = "O'chir (${selectedContracts.size})",
                         icon = Icons.Default.Delete,
                         onClick = { showDeleteConfirm = true }
                     )
+                    Spacer(Modifier.weight(1f))
+                    Text(
+                        "${selectedContracts.size} ta tanlandi",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = ClaudeTextSecondary
+                    )
+                } else {
+                    Spacer(Modifier.weight(1f))
                 }
             }
 
@@ -430,6 +454,28 @@ fun RenterContractHistoryScreen(
             }
         )
     }
+
+    // ── Диалог создания контракта вручную ───────────────────────────────
+    if (showCreateDialog) {
+        CreateContractDialog(
+            renter = renter,
+            defaultAmount = SettingsRepository(context).weeklyPrice
+                .let { if (it > 0) it else SettingsRepository.DEFAULT_WEEKLY_PRICE },
+            onDismiss = { showCreateDialog = false },
+            onCreate = { weekStart, weekEnd, amount, isPaid, notes ->
+                contractHistoryViewModel.createManualContract(
+                    renter = renter,
+                    weekStart = weekStart,
+                    weekEnd = weekEnd,
+                    amount = amount,
+                    isPaid = isPaid,
+                    notes = notes
+                )
+                Toast.makeText(context, "Kontrakt yaratildi", Toast.LENGTH_SHORT).show()
+                showCreateDialog = false
+            }
+        )
+    }
 }
 
 @Composable
@@ -549,6 +595,224 @@ private fun InfoRow(label: String, value: String) {
         Text(label, style = MaterialTheme.typography.bodySmall, color = ClaudeTextSecondary)
         Text(value, style = MaterialTheme.typography.bodySmall, color = ClaudeText, fontWeight = FontWeight.SemiBold)
     }
+}
+
+/**
+ * Диалог ручного создания контракта с экрана истории контрактов.
+ *
+ * Позволяет задать:
+ *   • Дату начала недели (по умолчанию — сегодня)
+ *   • Дату конца недели (по умолчанию — начало + 7 дней)
+ *   • Сумму (по умолчанию — weeklyPrice из настроек)
+ *   • Статус: To'langan (зелёный) / To'lanmagan (красный)
+ *   • Примечание (опционально)
+ *
+ * Баланс арендатора НЕ меняется — пользователь может управлять балансом
+ * через кнопку "To'lov" на основной таблице.
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun CreateContractDialog(
+    renter: Renter,
+    defaultAmount: Double,
+    onDismiss: () -> Unit,
+    onCreate: (weekStart: Long, weekEnd: Long, amount: Double, isPaid: Boolean, notes: String?) -> Unit
+) {
+    val dateFmt = remember { SimpleDateFormat("dd.MM.yyyy", Locale.getDefault()) }
+    val now = System.currentTimeMillis()
+    val dayMs = 24L * 60 * 60 * 1000
+
+    // Начало — сегодня (обрезаем до начала дня)
+    val initialStart = (now / dayMs) * dayMs
+    var weekStart by remember { mutableStateOf(initialStart) }
+    var weekEnd by remember { mutableStateOf(initialStart + 7 * dayMs) }
+    var amount by remember { mutableStateOf(defaultAmount.toLong().toString()) }
+    var isPaid by remember { mutableStateOf(false) }
+    var notes by remember { mutableStateOf("") }
+    var showStartPicker by remember { mutableStateOf(false) }
+    var showEndPicker by remember { mutableStateOf(false) }
+
+    val startPickerState = rememberDatePickerState(initialSelectedDateMillis = weekStart)
+    val endPickerState = rememberDatePickerState(initialSelectedDateMillis = weekEnd)
+
+    if (showStartPicker) {
+        DatePickerDialog(
+            onDismissRequest = { showStartPicker = false },
+            confirmButton = {
+                TextActionButton(
+                    label = "Tanlash",
+                    icon = Icons.Default.Check,
+                    onClick = {
+                        startPickerState.selectedDateMillis?.let {
+                            weekStart = it
+                            // Если конец оказался раньше начала — сдвигаем конец на +7 дней от нового начала
+                            if (weekEnd <= weekStart) weekEnd = weekStart + 7 * dayMs
+                        }
+                        showStartPicker = false
+                    }
+                )
+            },
+            dismissButton = {
+                TextActionButton(
+                    label = "Bekor",
+                    icon = Icons.Default.Close,
+                    onClick = { showStartPicker = false }
+                )
+            }
+        ) {
+            DatePicker(state = startPickerState)
+        }
+    }
+
+    if (showEndPicker) {
+        DatePickerDialog(
+            onDismissRequest = { showEndPicker = false },
+            confirmButton = {
+                TextActionButton(
+                    label = "Tanlash",
+                    icon = Icons.Default.Check,
+                    onClick = {
+                        endPickerState.selectedDateMillis?.let { weekEnd = it }
+                        showEndPicker = false
+                    }
+                )
+            },
+            dismissButton = {
+                TextActionButton(
+                    label = "Bekor",
+                    icon = Icons.Default.Close,
+                    onClick = { showEndPicker = false }
+                )
+            }
+        ) {
+            DatePicker(state = endPickerState)
+        }
+    }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(Icons.Default.Add, contentDescription = null, tint = ClaudeAccent)
+                Spacer(Modifier.width(8.dp))
+                Text("Yangi kontrakt", style = MaterialTheme.typography.titleLarge)
+            }
+        },
+        containerColor = ClaudeCard,
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                // Информация об арендаторе
+                Card(
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = CardDefaults.cardColors(containerColor = ClaudeBackground),
+                    shape = RoundedCornerShape(8.dp)
+                ) {
+                    Column(modifier = Modifier.padding(12.dp)) {
+                        InfoRow("Mijoz", renter.name)
+                        InfoRow("Telefon", renter.phoneNumber)
+                        InfoRow("Skuter", renter.scooterName ?: "—")
+                    }
+                }
+
+                // Дата начала
+                OutlinedTextField(
+                    value = dateFmt.format(Date(weekStart)),
+                    onValueChange = {},
+                    label = { Text("Boshlanish sanasi") },
+                    readOnly = true,
+                    trailingIcon = {
+                        IconButton(onClick = { showStartPicker = true }) {
+                            Icon(Icons.Default.DateRange, contentDescription = "Sanani tanlash")
+                        }
+                    },
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(8.dp)
+                )
+
+                // Дата конца
+                OutlinedTextField(
+                    value = dateFmt.format(Date(weekEnd)),
+                    onValueChange = {},
+                    label = { Text("Tugash sanasi") },
+                    readOnly = true,
+                    trailingIcon = {
+                        IconButton(onClick = { showEndPicker = true }) {
+                            Icon(Icons.Default.DateRange, contentDescription = "Sanani tanlash")
+                        }
+                    },
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(8.dp)
+                )
+
+                // Сумма
+                OutlinedTextField(
+                    value = amount,
+                    onValueChange = { amount = it.filter { ch -> ch.isDigit() } },
+                    label = { Text("Summa (UZS)") },
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(8.dp)
+                )
+
+                // Статус оплаты
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    FilterChip(
+                        selected = isPaid,
+                        onClick = { isPaid = true },
+                        label = { Text("To'langan") },
+                        leadingIcon = {
+                            Box(
+                                modifier = Modifier
+                                    .size(8.dp)
+                                    .background(StatusOk, CircleShape)
+                            )
+                        }
+                    )
+                    FilterChip(
+                        selected = !isPaid,
+                        onClick = { isPaid = false },
+                        label = { Text("To'lanmagan") },
+                        leadingIcon = {
+                            Box(
+                                modifier = Modifier
+                                    .size(8.dp)
+                                    .background(StatusOverdue, CircleShape)
+                            )
+                        }
+                    )
+                }
+
+                // Примечание
+                OutlinedTextField(
+                    value = notes,
+                    onValueChange = { notes = it },
+                    label = { Text("Izoh (ixtiyoriy)") },
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(8.dp)
+                )
+            }
+        },
+        confirmButton = {
+            PrimaryButton(
+                label = "Yaratish",
+                icon = Icons.Default.Add,
+                onClick = {
+                    val parsedAmount = amount.toDoubleOrNull() ?: defaultAmount
+                    onCreate(weekStart, weekEnd, parsedAmount, isPaid, notes)
+                }
+            )
+        },
+        dismissButton = {
+            TextActionButton(
+                label = "Bekor",
+                icon = Icons.Default.Close,
+                onClick = onDismiss
+            )
+        }
+    )
 }
 
 /* ============================================================================
