@@ -67,6 +67,9 @@ import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.Fingerprint
 import androidx.compose.material.icons.filled.CreditCard
 import androidx.compose.material.icons.filled.Bolt
+import androidx.compose.material.icons.filled.Description
+import androidx.compose.material.icons.filled.Receipt
+import androidx.compose.material.icons.filled.RequestQuote
 import androidx.compose.material.icons.outlined.Notifications
 import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.foundation.ExperimentalFoundationApi
@@ -105,6 +108,7 @@ import com.example.ui.NotificationHistoryViewModel
 import com.example.ui.RenterViewModel
 import com.example.ui.SettingsViewModel
 import com.example.ui.ScooterViewModel
+import com.example.ui.TransactionViewModel
 import com.example.ui.theme.ClaudeAccent
 import com.example.ui.theme.ClaudeAccentBg
 import com.example.ui.theme.ClaudeAccentMuted
@@ -247,7 +251,8 @@ fun MainScreen(
     settingsViewModel: SettingsViewModel = viewModel(),
     scooterViewModel: ScooterViewModel = viewModel(),
     historyViewModel: NotificationHistoryViewModel = viewModel(),
-    contractHistoryViewModel: ContractHistoryViewModel = viewModel()
+    contractHistoryViewModel: ContractHistoryViewModel = viewModel(),
+    transactionViewModel: TransactionViewModel = viewModel()
 ) {
     var currentTab by remember { mutableStateOf(0) }
     var showSettings by remember { mutableStateOf(false) }
@@ -464,25 +469,30 @@ fun MainScreen(
             )
         },
         floatingActionButton = {
-            ExtendedFloatingActionButton(
-                onClick = {
-                    if (currentTab == 0) showAddDialog = true
-                    else showAddScooterDialog = true
-                },
-                containerColor = ClaudeAccent,
-                contentColor = Color.White,
-                shape = RoundedCornerShape(18.dp)
-            ) {
-                Icon(
-                    Icons.Default.Add,
-                    contentDescription = if (currentTab == 0) "Ijarachi qo'shish" else "Skuter qo'shish",
-                    modifier = Modifier.size(24.dp)
-                )
-                Spacer(modifier = Modifier.width(8.dp))
-                Text(
-                    if (currentTab == 0) "Qo'shish" else "Qo'shish",
-                    fontWeight = FontWeight.SemiBold
-                )
+            // FAB только на вкладках Арендаторы (0) и Скутеры (1).
+            // Вкладки Kontraktlar (2) и Tranzaksiya (3) имеют свои собственные
+            // FAB внутри соответствующих экранов.
+            if (currentTab == 0 || currentTab == 1) {
+                ExtendedFloatingActionButton(
+                    onClick = {
+                        if (currentTab == 0) showAddDialog = true
+                        else showAddScooterDialog = true
+                    },
+                    containerColor = ClaudeAccent,
+                    contentColor = Color.White,
+                    shape = RoundedCornerShape(18.dp)
+                ) {
+                    Icon(
+                        Icons.Default.Add,
+                        contentDescription = if (currentTab == 0) "Ijarachi qo'shish" else "Skuter qo'shish",
+                        modifier = Modifier.size(24.dp)
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text(
+                        if (currentTab == 0) "Qo'shish" else "Qo'shish",
+                        fontWeight = FontWeight.SemiBold
+                    )
+                }
             }
         },
         bottomBar = {
@@ -505,6 +515,32 @@ fun MainScreen(
                     onClick = { currentTab = 1 },
                     icon = { Icon(Icons.Default.DirectionsBike, contentDescription = "Skuterlar") },
                     label = { Text("Skuterlar") },
+                    colors = NavigationBarItemDefaults.colors(
+                        selectedIconColor = ClaudeAccent,
+                        unselectedIconColor = ClaudeTextSecondary,
+                        selectedTextColor = ClaudeAccent,
+                        unselectedTextColor = ClaudeTextSecondary,
+                        indicatorColor = ClaudeAccentBg
+                    )
+                )
+                NavigationBarItem(
+                    selected = currentTab == 2,
+                    onClick = { currentTab = 2 },
+                    icon = { Icon(Icons.Default.Description, contentDescription = "Kontraktlar") },
+                    label = { Text("Kontraktlar") },
+                    colors = NavigationBarItemDefaults.colors(
+                        selectedIconColor = ClaudeAccent,
+                        unselectedIconColor = ClaudeTextSecondary,
+                        selectedTextColor = ClaudeAccent,
+                        unselectedTextColor = ClaudeTextSecondary,
+                        indicatorColor = ClaudeAccentBg
+                    )
+                )
+                NavigationBarItem(
+                    selected = currentTab == 3,
+                    onClick = { currentTab = 3 },
+                    icon = { Icon(Icons.Default.RequestQuote, contentDescription = "Tranzaksiyalar") },
+                    label = { Text("Tranzaksiya") },
                     colors = NavigationBarItemDefaults.colors(
                         selectedIconColor = ClaudeAccent,
                         unselectedIconColor = ClaudeTextSecondary,
@@ -683,92 +719,101 @@ fun MainScreen(
                     }
                 )
 
-                if (selectedRenters.isNotEmpty()) {
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(horizontal = 16.dp, vertical = 8.dp),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        SuccessButton(
-                            label = "To'lov",
-                            icon = Icons.Default.Payments,
-                            onClick = {
-                                viewModel.payWeeklyForRenters(selectedRenters)
-                                Toast.makeText(localContext, "To'lov qabul qilindi", Toast.LENGTH_SHORT).show()
-                                selectedRenters = emptySet()
-                            },
-                            modifier = Modifier.weight(1.4f)
-                        )
-                        PrimaryButton(
-                            label = "Uzish",
-                            icon = Icons.Default.PowerOff,
-                            onClick = {
-                                viewModel.terminateRenters(selectedRenters)
-                                Toast.makeText(localContext, "Kontrakt tugatildi", Toast.LENGTH_SHORT).show()
-                                selectedRenters = emptySet()
-                            },
-                            modifier = Modifier.weight(1.2f)
-                        )
-                        // SMS yuborish tugmasi — tanlangan mijozlarga
-                        UnifiedButton(
-                            label = "SMS",
-                            icon = Icons.Default.Sms,
-                            onClick = {
-                                val rentersToSend = renters.filter { it.id in selectedRenters }
-                                var sentCount = 0
-                                var failCount = 0
-                                rentersToSend.forEach { renter ->
-                                    val settingsRepo = com.example.data.SettingsRepository(localContext)
-                                    val currentTime = System.currentTimeMillis()
-                                    val elapsedDays = ((currentTime - renter.rentStartDateTimestamp) / (1000L * 60 * 60 * 24)).toInt()
-                                    val daysOverdue = elapsedDays - renter.rentDurationDays
-                                    val phone = com.example.worker.SimHelper.normalizePhoneNumber(renter.phoneNumber)
-                                    // Долг = -balance (balance < 0). debtAmount может быть рассинхронизирован.
-                                    val debt = maxOf(0.0, -renter.balance)
-                                    val message = settingsRepo.smsTemplate
-                                        .replace("{name}", renter.name.trim().lowercase())
-                                        .replace("{days}", maxOf(1, daysOverdue).toString())
-                                        .replace("{debt}", debt.toLong().toString())
-                                        .replace("{payme}", settingsRepo.paymeLink)
-                                        .replace("{call}", settingsRepo.callCenter)
-                                    val smsManager = com.example.worker.SimHelper.getSmsManagerForSim(localContext)
-                                    if (smsManager != null) {
-                                        try {
-                                            com.example.worker.SimHelper.sendSmsAuto(smsManager, phone, message, null, null)
-                                            if (daysOverdue > 0 && !renter.isOverdueSmsSent) {
-                                                viewModel.updateRenter(renter.copy(isOverdueSmsSent = true))
-                                            }
-                                            sentCount++
-                                        } catch (e: Exception) {
-                                            Log.w("SMS", "Failed for ${renter.name}: ${e.message}")
-                                            failCount++
+                // ── Панель действий — ВСЕГДА ВИДНА (Task 3) ─────────────
+                // Кнопки To'lov / Uzish / SMS / O'chir всегда присутствуют.
+                // Чтобы выполнить действие, нужно выбрать хотя бы 1 арендатора
+                // (долгое нажатие по строке). Без выбора кнопки отображаются
+                // серыми (disabled) — но они видны всегда. Текст "X ta
+                // tanlandi" убран по просьбе пользователя.
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp, vertical = 8.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    val hasSelection = selectedRenters.isNotEmpty()
+                    SuccessButton(
+                        label = "To'lov",
+                        icon = Icons.Default.Payments,
+                        enabled = hasSelection,
+                        onClick = {
+                            viewModel.payWeeklyForRenters(selectedRenters)
+                            Toast.makeText(localContext, "To'lov qabul qilindi", Toast.LENGTH_SHORT).show()
+                            selectedRenters = emptySet()
+                        },
+                        modifier = Modifier.weight(1.4f)
+                    )
+                    PrimaryButton(
+                        label = "Uzish",
+                        icon = Icons.Default.PowerOff,
+                        enabled = hasSelection,
+                        onClick = {
+                            viewModel.terminateRenters(selectedRenters)
+                            Toast.makeText(localContext, "Kontrakt tugatildi", Toast.LENGTH_SHORT).show()
+                            selectedRenters = emptySet()
+                        },
+                        modifier = Modifier.weight(1.2f)
+                    )
+                    // SMS yuborish tugmasi — tanlangan mijozlarga
+                    UnifiedButton(
+                        label = "SMS",
+                        icon = Icons.Default.Sms,
+                        enabled = hasSelection,
+                        onClick = {
+                            val rentersToSend = renters.filter { it.id in selectedRenters }
+                            var sentCount = 0
+                            var failCount = 0
+                            rentersToSend.forEach { renter ->
+                                val settingsRepo = com.example.data.SettingsRepository(localContext)
+                                val currentTime = System.currentTimeMillis()
+                                val elapsedDays = ((currentTime - renter.rentStartDateTimestamp) / (1000L * 60 * 60 * 24)).toInt()
+                                val daysOverdue = elapsedDays - renter.rentDurationDays
+                                val phone = com.example.worker.SimHelper.normalizePhoneNumber(renter.phoneNumber)
+                                // Долг = -balance (balance < 0). debtAmount может быть рассинхронизирован.
+                                val debt = maxOf(0.0, -renter.balance)
+                                val message = settingsRepo.smsTemplate
+                                    .replace("{name}", renter.name.trim().lowercase())
+                                    .replace("{days}", maxOf(1, daysOverdue).toString())
+                                    .replace("{debt}", debt.toLong().toString())
+                                    .replace("{payme}", settingsRepo.paymeLink)
+                                    .replace("{call}", settingsRepo.callCenter)
+                                val smsManager = com.example.worker.SimHelper.getSmsManagerForSim(localContext)
+                                if (smsManager != null) {
+                                    try {
+                                        com.example.worker.SimHelper.sendSmsAuto(smsManager, phone, message, null, null)
+                                        if (daysOverdue > 0 && !renter.isOverdueSmsSent) {
+                                            viewModel.updateRenter(renter.copy(isOverdueSmsSent = true))
                                         }
-                                    } else {
+                                        sentCount++
+                                    } catch (e: Exception) {
+                                        Log.w("SMS", "Failed for ${renter.name}: ${e.message}")
                                         failCount++
                                     }
-                                }
-                                if (sentCount > 0) {
-                                    Toast.makeText(localContext, "$sentCount ta SMS yuborildi${if (failCount > 0) ", $failCount ta xato" else ""}", Toast.LENGTH_SHORT).show()
                                 } else {
-                                    Toast.makeText(localContext, "SMS yuborib bo'lmadi", Toast.LENGTH_SHORT).show()
+                                    failCount++
                                 }
-                                selectedRenters = emptySet()
-                            },
-                            variant = UnifiedButtonVariant.PRIMARY,
-                            modifier = Modifier.weight(1.0f)
-                        )
-                        // O'chirish tugmasi
-                        DangerOutlinedButton(
-                            label = "O'chir",
-                            icon = Icons.Default.Delete,
-                            onClick = {
-                                selectedRenters.forEach { id -> viewModel.deleteRenter(id) }
-                                selectedRenters = emptySet()
                             }
-                        )
-                    }
+                            if (sentCount > 0) {
+                                Toast.makeText(localContext, "$sentCount ta SMS yuborildi${if (failCount > 0) ", $failCount ta xato" else ""}", Toast.LENGTH_SHORT).show()
+                            } else {
+                                Toast.makeText(localContext, "SMS yuborib bo'lmadi", Toast.LENGTH_SHORT).show()
+                            }
+                            selectedRenters = emptySet()
+                        },
+                        variant = UnifiedButtonVariant.PRIMARY,
+                        modifier = Modifier.weight(1.0f)
+                    )
+                    // O'chirish tugmasi
+                    DangerOutlinedButton(
+                        label = "O'chir",
+                        icon = Icons.Default.Delete,
+                        enabled = hasSelection,
+                        onClick = {
+                            selectedRenters.forEach { id -> viewModel.deleteRenter(id) }
+                            selectedRenters = emptySet()
+                        }
+                    )
                 }
 
                 // ===== ТАБЛИЦА АРЕНДАТОРОВ =====
@@ -849,7 +894,7 @@ fun MainScreen(
                         navState = NavigationState.RenterHistory(renter)
                     }
                 )
-            } else {
+            } else if (currentTab == 1) {
                 // Вкладка «Скутеры» — unified search bar
                 UnifiedSearchBar(
                     query = searchQuery,
@@ -877,30 +922,28 @@ fun MainScreen(
                     }
                 )
 
-                if (selectedScooters.isNotEmpty()) {
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(horizontal = 16.dp, vertical = 8.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
-                        Text(
-                            "${selectedScooters.size} ta tanlandi",
-                            color = ClaudeText,
-                            modifier = Modifier.weight(1f)
-                        )
-                        DangerButton(
-                            label = "O'chir",
-                            icon = Icons.Default.Delete,
-                            onClick = {
-                                scooters.filter { it.id in selectedScooters }.forEach {
-                                    scooterViewModel.deleteScooter(it)
-                                }
-                                selectedScooters = setOf()
+                // ── Панель действий — ВСЕГДА ВИДНА (Task 3) ─────────────
+                // Кнопка O'chir присутствует всегда. Активна только когда
+                // выбран ≥1 скутер. Текст "X ta tanlandi" убран.
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp, vertical = 8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Spacer(Modifier.weight(1f))
+                    DangerButton(
+                        label = "O'chir",
+                        icon = Icons.Default.Delete,
+                        enabled = selectedScooters.isNotEmpty(),
+                        onClick = {
+                            scooters.filter { it.id in selectedScooters }.forEach {
+                                scooterViewModel.deleteScooter(it)
                             }
-                        )
-                    }
+                            selectedScooters = setOf()
+                        }
+                    )
                 }
 
                 val filteredScooters = scooters.filter { scooter ->
@@ -957,6 +1000,21 @@ fun MainScreen(
                         // Клик по скутеру → экран истории контрактов скутера
                         navState = NavigationState.ScooterHistory(scooter)
                     }
+                )
+            } else if (currentTab == 2) {
+                // ── Вкладка «Kontraktlar» — все контракты всех арендаторов ──
+                ContractListScreen(
+                    contractHistoryViewModel = contractHistoryViewModel,
+                    renterViewModel = viewModel,
+                    scooterViewModel = scooterViewModel
+                )
+            } else if (currentTab == 3) {
+                // ── Вкладка «Tranzaksiya» — все транзакции ──────────────
+                TransactionListScreen(
+                    transactionViewModel = transactionViewModel,
+                    renterViewModel = viewModel,
+                    scooterViewModel = scooterViewModel,
+                    contractHistoryViewModel = contractHistoryViewModel
                 )
             }
         }

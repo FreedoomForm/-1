@@ -193,11 +193,11 @@ fun RenterContractHistoryScreen(
                 onFilterClick = null
             )
 
-            // ── Панель действий (всегда видна) ────────────────────────────
-            // 3 кнопки:
-            //   • "Yaratish" — всегда: открывает диалог создания контракта
-            //   • "Tahrirlash" — только когда выбран ровно 1 контракт
-            //   • "O'chir" — когда выбрано ≥1 контракта
+            // ── Панель действий — ВСЕГДА ВИДНА (Task 3) ────────────────────
+            // Кнопки Yaratish / Tahrirlash / O'chir всегда присутствуют.
+            // Yaratish всегда активна. Tahrirlash активна только когда выбран
+            // ровно 1 контракт. O'chir активна когда выбрано ≥1. Текст
+            // "X ta tanlandi" убран по просьбе пользователя.
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -210,32 +210,23 @@ fun RenterContractHistoryScreen(
                     icon = Icons.Default.Add,
                     onClick = { showCreateDialog = true }
                 )
-                if (selectedContracts.size == 1) {
-                    SecondaryButton(
-                        label = "Tahrirlash",
-                        icon = Icons.Default.Edit,
-                        onClick = {
-                            // Находим выбранный контракт и открываем диалог редактирования
-                            val id = selectedContracts.first()
-                            editingContract = contracts.firstOrNull { it.id == id }
-                        }
-                    )
-                }
-                if (selectedContracts.isNotEmpty()) {
-                    DangerButton(
-                        label = "O'chir (${selectedContracts.size})",
-                        icon = Icons.Default.Delete,
-                        onClick = { showDeleteConfirm = true }
-                    )
-                    Spacer(Modifier.weight(1f))
-                    Text(
-                        "${selectedContracts.size} ta tanlandi",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = ClaudeTextSecondary
-                    )
-                } else {
-                    Spacer(Modifier.weight(1f))
-                }
+                SecondaryButton(
+                    label = "Tahrirlash",
+                    icon = Icons.Default.Edit,
+                    enabled = selectedContracts.size == 1,
+                    onClick = {
+                        // Находим выбранный контракт и открываем диалог редактирования
+                        val id = selectedContracts.first()
+                        editingContract = contracts.firstOrNull { it.id == id }
+                    }
+                )
+                DangerButton(
+                    label = "O'chir",
+                    icon = Icons.Default.Delete,
+                    enabled = selectedContracts.isNotEmpty(),
+                    onClick = { showDeleteConfirm = true }
+                )
+                Spacer(Modifier.weight(1f))
             }
 
             // ── Заголовок таблицы — только иконки ──────────────────────
@@ -541,7 +532,7 @@ private fun SummaryColumn(label: String, value: String, valueColor: Color = Clau
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun EditContractDialog(
+internal fun EditContractDialog(
     entry: ContractHistoryEntry,
     allRenters: List<Renter>,
     allScooters: List<Scooter>,

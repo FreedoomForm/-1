@@ -6,8 +6,14 @@ import androidx.room.Room
 import androidx.room.RoomDatabase
 
 @Database(
-    entities = [Renter::class, Scooter::class, NotificationHistoryEntity::class, ContractHistoryEntry::class],
-    version = 9,
+    entities = [
+        Renter::class,
+        Scooter::class,
+        NotificationHistoryEntity::class,
+        ContractHistoryEntry::class,
+        Transaction::class
+    ],
+    version = 10,
     exportSchema = false
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -15,6 +21,7 @@ abstract class AppDatabase : RoomDatabase() {
     abstract fun scooterDao(): ScooterDao
     abstract fun notificationHistoryDao(): NotificationHistoryDao
     abstract fun contractHistoryDao(): ContractHistoryDao
+    abstract fun transactionDao(): TransactionDao
 
     companion object {
         @Volatile
