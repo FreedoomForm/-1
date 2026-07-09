@@ -10,6 +10,7 @@ import androidx.work.WorkerParameters
 import androidx.work.workDataOf
 import com.example.data.AppDatabase
 import com.example.data.ContractHistoryEntry
+import com.example.data.SettingsRepository
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.util.Calendar
@@ -17,12 +18,13 @@ import java.util.concurrent.TimeUnit
 
 /**
  * • Периодически (раз в час) проверяет арендаторов:
- *     — если срок оплаты наступил И нет долга И баланс ≥ 0 →
- *       автоматически продлевает контракт на 1 неделю
- *       (rentStartDateTimestamp += 7 дней, rentDurationDays += 7)
- *       и пишет запись AUTO_RENEW в историю контрактов.
- *     — если срок оплаты наступил И есть долг → планирует
- *       уведомление на 01:00 следующего дня.
+ *     — если срок аренды истёк → автоматически продлевает контракт на 1 неделю
+ *       (rentStartDateTimestamp += 7 дней, rentDurationDays += 7),
+ *       списывает weeklyPrice с баланса, создаёт запись AUTO_RENEW
+ *       с полными денормализованными полями (для PDF и истории).
+ *       Баланс уходит в минус → это и есть долг.
+ *     — если после продления баланс < 0 (есть долг) И SMS ещё не отправлено →
+ *       планируется уведомление на 01:00 следующего дня.
  * • Одноразовый режим (KEY_ONE_TIME=true) — шлёт уведомление
  *   сразу (используется при создании арендатора с просрочкой
  *   и для запланированных 01:00 напоминаний).
@@ -35,6 +37,7 @@ class PaymentCheckWorker(
     override suspend fun doWork(): Result = withContext(Dispatchers.IO) {
         try {
             val db = AppDatabase.getDatabase(applicationContext)
+            val settingsRepo = SettingsRepository(applicationContext)
             val now = System.currentTimeMillis()
 
             NotificationHelper.createChannel(applicationContext)
@@ -53,14 +56,14 @@ class PaymentCheckWorker(
                     (renter.rentDurationDays * 24L * 60 * 60 * 1000)
 
                 if (now >= expiryTime) {
-                    if (renter.debtAmount <= 0.0 && renter.balance >= 0.0) {
-                        // Нет долга и баланс не отрицательный —
-                        // автоматически продлеваем на 1 неделю.
-                        autoRenew(db, renter, now)
-                    } else if (!renter.isOverdueSmsSent) {
+                    // Всегда продлеваем на 1 неделю и списываем weeklyPrice.
+                    // Баланс уходит в минус → это долг. Так появляется новый контракт
+                    // в истории и обновляются даты в таблице арендатора.
+                    val newBalance = autoRenew(db, settingsRepo, renter, now)
+
+                    if (newBalance < 0.0 && !renter.isOverdueSmsSent) {
                         // Есть долг — планируем уведомление на 01:00.
                         scheduleNextOneAmNotification(applicationContext, renter.id)
-                        db.renterDao().updateRenter(renter.copy(isOverdueSmsSent = true))
                         Log.d(TAG, "Scheduled 01:00 notification for renter #${renter.id}")
                     }
                 }
@@ -72,27 +75,57 @@ class PaymentCheckWorker(
         }
     }
 
+    /**
+     * Продлевает контракт арендатора на 1 неделю:
+     *   • rentStartDateTimestamp += 7 дней
+     *   • rentDurationDays += 7
+     *   • balance -= weeklyPrice (уходит в минус = долг)
+     *   • debtAmount = max(0, -balance) (синхронизация)
+     *   • isOverdueSmsSent = false (новая неделя — можно снова слать SMS)
+     *   • Создаёт запись AUTO_RENEW со всеми денормализованными полями.
+     *
+     * Возвращает новый баланс (для решения о SMS-уведомлении).
+     */
     private suspend fun autoRenew(
         db: AppDatabase,
+        settingsRepo: SettingsRepository,
         renter: com.example.data.Renter,
         now: Long
-    ) {
+    ): Double {
         val sevenDays = 7L * 24 * 60 * 60 * 1000
+        val weeklyPrice = settingsRepo.weeklyPrice.let {
+            if (it > 0) it else SettingsRepository.DEFAULT_WEEKLY_PRICE
+        }
+
+        val newBalance = renter.balance - weeklyPrice
         val renewed = renter.copy(
             rentStartDateTimestamp = renter.rentStartDateTimestamp + sevenDays,
-            rentDurationDays = renter.rentDurationDays + 7
+            rentDurationDays = renter.rentDurationDays + 7,
+            balance = newBalance,
+            debtAmount = maxOf(0.0, -newBalance),
+            isOverdueSmsSent = false
         )
         db.renterDao().updateRenter(renewed)
+
+        val weekStart = renewed.rentStartDateTimestamp
+        val weekEnd = weekStart + sevenDays
         db.contractHistoryDao().insert(
             ContractHistoryEntry(
                 renterId = renter.id,
                 timestamp = now,
                 type = ContractHistoryEntry.TYPE_AUTO_RENEW,
-                amount = 0.0,
-                notes = "Avtomatik yangilanish +7 kun"
+                amount = weeklyPrice,
+                notes = "Avtomatik yangilanish +7 kun",
+                renterName = renter.name,
+                renterPhone = renter.phoneNumber,
+                scooterName = renter.scooterName,
+                weekStart = weekStart,
+                weekEnd = weekEnd,
+                weeklyPrice = weeklyPrice
             )
         )
-        Log.d(TAG, "Auto-renewed renter #${renter.id} for 1 week")
+        Log.d(TAG, "Auto-renewed renter #${renter.id} for 1 week, balance ${renter.balance} → $newBalance")
+        return newBalance
     }
 
     private suspend fun handleOneTimeNotification(

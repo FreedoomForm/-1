@@ -172,7 +172,7 @@ private enum class RenterStatus { RETURNED, OVERDUE, OK }
 
 private fun statusOf(renter: Renter): RenterStatus = when {
     renter.isReturned -> RenterStatus.RETURNED
-    renter.debtAmount > 0.0 -> RenterStatus.OVERDUE
+    renter.balance < 0.0 -> RenterStatus.OVERDUE
     else -> RenterStatus.OK
 }
 
@@ -679,10 +679,12 @@ fun MainScreen(
                                     val elapsedDays = ((currentTime - renter.rentStartDateTimestamp) / (1000L * 60 * 60 * 24)).toInt()
                                     val daysOverdue = elapsedDays - renter.rentDurationDays
                                     val phone = com.example.worker.SimHelper.normalizePhoneNumber(renter.phoneNumber)
+                                    // Долг = -balance (balance < 0). debtAmount может быть рассинхронизирован.
+                                    val debt = maxOf(0.0, -renter.balance)
                                     val message = settingsRepo.smsTemplate
                                         .replace("{name}", renter.name.trim().lowercase())
                                         .replace("{days}", maxOf(1, daysOverdue).toString())
-                                        .replace("{debt}", renter.debtAmount.toLong().toString())
+                                        .replace("{debt}", debt.toLong().toString())
                                         .replace("{payme}", settingsRepo.paymeLink)
                                         .replace("{call}", settingsRepo.callCenter)
                                     val smsManager = com.example.worker.SimHelper.getSmsManagerForSim(localContext)
@@ -771,7 +773,7 @@ fun MainScreen(
                             val timeB = b.rentStartDateTimestamp + (b.rentDurationDays * 24L * 60 * 60 * 1000)
                             timeA.compareTo(timeB)
                         }
-                        SortColumn.DEBT -> a.debtAmount.compareTo(b.debtAmount)
+                        SortColumn.DEBT -> a.balance.compareTo(b.balance)
                         else -> 0
                     }
                     if (sortDirection == SortDirection.ASC) result else -result
@@ -1147,7 +1149,7 @@ fun RenterTable(
                 HeaderCell("Skuter",     wScoot, SortColumn.NAME,       sortColumn, sortDirection, onSort)
                 HeaderCell("Boshlanish", wStart, SortColumn.START_TIME, sortColumn, sortDirection, onSort)
                 HeaderCell("Tugash",     wEnd,   SortColumn.START_TIME, sortColumn, sortDirection, onSort)
-                HeaderCell("Qarz",       wDebt,  SortColumn.DEBT,        sortColumn, sortDirection, onSort)
+                HeaderCell("Balans",     wDebt,  SortColumn.DEBT,        sortColumn, sortDirection, onSort)
             }
         }
         HorizontalDivider(color = ClaudeDivider)
@@ -1242,12 +1244,17 @@ fun RenterTable(
                             color = ClaudeText,
                             maxLines = 1
                         )
-                        // Qarz
+                        // Balans (может быть отрицательным = долг, положительным = аванс)
+                        val balanceColor = when {
+                            renter.balance < 0 -> StatusOverdue
+                            renter.balance > 0 -> StatusOk
+                            else -> ClaudeText
+                        }
                         Text(
-                            renter.debtAmount.toBigDecimal().stripTrailingZeros().toPlainString(),
+                            renter.balance.toLong().toString(),
                             modifier = Modifier.weight(wDebt).padding(horizontal = 4.dp),
                             style = MaterialTheme.typography.bodyMedium,
-                            color = ClaudeText,
+                            color = balanceColor,
                             fontWeight = FontWeight.Bold,
                             textAlign = TextAlign.End,
                             maxLines = 1
@@ -1378,7 +1385,10 @@ fun RenterFormDialog(
         mutableStateOf(initialRenter?.phoneNumber?.filter { it.isDigit() }?.takeLast(9) ?: "")
     }
     var debt by remember {
-        mutableStateOf(initialRenter?.debtAmount?.toString() ?: "0.0")
+        // Показываем долг = -balance (если balance < 0), иначе debtAmount
+        val displayDebt = if ((initialRenter?.balance ?: 0.0) < 0) -initialRenter!!.balance
+                          else initialRenter?.debtAmount ?: 0.0
+        mutableStateOf(displayDebt.toString())
     }
     var duration by remember {
         mutableStateOf(initialRenter?.rentDurationDays?.toString() ?: "7")

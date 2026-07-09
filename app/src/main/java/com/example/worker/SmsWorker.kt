@@ -53,10 +53,13 @@ class SmsWorker(
 
                 if (elapsedDays > renter.rentDurationDays) {
                     val daysOverdue = elapsedDays - renter.rentDurationDays
+                    // Долг = -balance (если balance < 0). debtAmount может рассинхронизироваться,
+                    // поэтому всегда вычисляем из balance — это источник истины.
+                    val debt = maxOf(0.0, -renter.balance)
                     val message = settingsRepo.smsTemplate
                         .replace("{name}", renter.name.trim().lowercase())
                         .replace("{days}", maxOf(1, daysOverdue).toString())
-                        .replace("{debt}", renter.debtAmount.toLong().toString())
+                        .replace("{debt}", debt.toLong().toString())
                         .replace("{payme}", settingsRepo.paymeLink)
                         .replace("{call}", settingsRepo.callCenter)
 

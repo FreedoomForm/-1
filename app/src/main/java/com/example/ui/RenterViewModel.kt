@@ -231,7 +231,10 @@ class RenterViewModel(application: Application) : AndroidViewModel(application) 
         debtAmount: Double
     ): String {
         val days = if (now > expiryTime) ((now - expiryTime) / (1000L * 60 * 60 * 24)).toInt() else 0
-        val debt = debtAmount.toBigDecimal().setScale(0, java.math.RoundingMode.HALF_UP)
+        // Надёжный источник долга — balance. Если переданный debtAmount = 0,
+        // но balance < 0, используем -balance (debtAmount мог рассинхронизироваться).
+        val effectiveDebt = if (debtAmount > 0) debtAmount else maxOf(0.0, -renter.balance)
+        val debt = effectiveDebt.toBigDecimal().setScale(0, java.math.RoundingMode.HALF_UP)
             .stripTrailingZeros().toPlainString()
         val nameLower = renter.name.trim().lowercase()
         return settingsRepo.smsTemplate
@@ -509,8 +512,9 @@ class RenterViewModel(application: Application) : AndroidViewModel(application) 
      */
     fun payWeeklyForRenters(renterIds: Set<Int>) {
         viewModelScope.launch {
-            val weeklyPrice = SettingsRepository(getApplication()).weeklyPrice
-            renterIds.forEach { id -> repository.getById(id)?.let { applyWeeklyPayment(it, "Ommaviy to'lov (1 hafta)", weeklyPrice) } }
+            renterIds.forEach { id ->
+                repository.getById(id)?.let { applyWeeklyPayment(it, "Ommaviy to'lov (1 hafta)") }
+            }
         }
     }
 

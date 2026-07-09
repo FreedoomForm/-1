@@ -140,9 +140,13 @@ fun RenterContractHistoryScreen(
                         dateFmt.format(Date(renter.rentStartDateTimestamp))
                     )
                     SummaryColumn(
-                        "Qarz",
-                        "${renter.debtAmount.toLong()} UZS",
-                        valueColor = if (renter.debtAmount > 0) StatusOverdue else StatusOk
+                        "Balans",
+                        "${renter.balance.toLong()} UZS",
+                        valueColor = when {
+                            renter.balance < 0 -> StatusOverdue
+                            renter.balance > 0 -> StatusOk
+                            else -> ClaudeText
+                        }
                     )
                 }
             }

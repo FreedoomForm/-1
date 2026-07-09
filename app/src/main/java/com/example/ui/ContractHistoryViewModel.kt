@@ -28,6 +28,12 @@ class ContractHistoryViewModel(application: Application) : AndroidViewModel(appl
     private val renterRepo: RenterRepository
     val history: StateFlow<List<ContractHistoryEntry>>
 
+    // Кэш StateFlow по renterId — чтобы не создавать новый flow на каждую рекомпозицию
+    // (старая версия создавала новый flow каждый вызов forRenter() → утечка + мерцание UI)
+    private val renterFlows = mutableMapOf<Int, StateFlow<List<ContractHistoryEntry>>>()
+    private val scooterFlows = mutableMapOf<String, StateFlow<List<ContractHistoryEntry>>>()
+    private val flowsLock = Any()
+
     init {
         val db = AppDatabase.getDatabase(application)
         repo = ContractHistoryRepository(db.contractHistoryDao())
@@ -38,14 +44,22 @@ class ContractHistoryViewModel(application: Application) : AndroidViewModel(appl
     }
 
     fun forRenter(renterId: Int): StateFlow<List<ContractHistoryEntry>> =
-        repo.forRenter(renterId).stateIn(
-            viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList()
-        )
+        synchronized(flowsLock) {
+            renterFlows.getOrPut(renterId) {
+                repo.forRenter(renterId).stateIn(
+                    viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList()
+                )
+            }
+        }
 
     fun forScooter(scooterName: String): StateFlow<List<ContractHistoryEntry>> =
-        repo.forScooter(scooterName).stateIn(
-            viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList()
-        )
+        synchronized(flowsLock) {
+            scooterFlows.getOrPut(scooterName) {
+                repo.forScooter(scooterName).stateIn(
+                    viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList()
+                )
+            }
+        }
 
     fun clear() {
         viewModelScope.launch { repo.clear() }
