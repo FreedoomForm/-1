@@ -34,6 +34,22 @@ import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.foundation.border
 import androidx.compose.material.icons.filled.DateRange
 import androidx.compose.material.icons.filled.Notifications
+import androidx.compose.material.icons.filled.Person
+import androidx.compose.material.icons.filled.Phone
+import androidx.compose.material.icons.filled.CalendarToday
+import androidx.compose.material.icons.filled.Event
+import androidx.compose.material.icons.filled.AccountBalanceWallet
+import androidx.compose.material.icons.filled.Tune
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Clear
+import androidx.compose.material.icons.filled.Tag
+import androidx.compose.material.icons.filled.Info
+import androidx.compose.material.icons.filled.Schedule
+import androidx.compose.material.icons.filled.Category
+import androidx.compose.material.icons.filled.Build
+import androidx.compose.material.icons.filled.Numbers
+import androidx.compose.material.icons.filled.Label
+import androidx.compose.material.icons.filled.Payments
 import androidx.compose.material.icons.outlined.Notifications
 import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.foundation.ExperimentalFoundationApi
@@ -88,6 +104,15 @@ import com.example.ui.theme.StatusOverdue
 import com.example.ui.theme.StatusOverdueBg
 import com.example.ui.theme.StatusReturned
 import com.example.ui.theme.StatusReturnedBg
+import com.example.ui.components.UnifiedSearchBar
+import com.example.ui.components.FilterSidePanel
+import com.example.ui.components.FilterColumn
+import com.example.ui.components.PhoneReceiverSortIcon
+import com.example.ui.components.SortableHeaderCell
+import com.example.ui.components.NonSortableHeaderCell
+import com.example.ui.components.TableSortState
+import com.example.ui.components.SortState
+import com.example.ui.components.applyFilters
 import com.example.worker.NotificationHelper
 import android.util.Log
 import com.example.worker.PaymentCheckWorker
@@ -214,10 +239,32 @@ fun MainScreen(
     // ── Навигация ────────────────────────────────────────────────────
     var navState by remember { mutableStateOf<NavigationState>(NavigationState.MainView) }
 
-    var sortColumn by remember { mutableStateOf(SortColumn.STATUS) }
-    var sortDirection by remember { mutableStateOf(SortDirection.ASC) }
-    var scooterSortColumn by remember { mutableStateOf(SortColumn.NAME) }
-    var scooterSortDirection by remember { mutableStateOf(SortDirection.ASC) }
+    var renterSortState by remember { mutableStateOf(TableSortState()) }
+    var scooterSortState by remember { mutableStateOf(TableSortState()) }
+    // Filter panel state
+    var showRenterFilterPanel by remember { mutableStateOf(false) }
+    var showScooterFilterPanel by remember { mutableStateOf(false) }
+    var renterFilterValues by remember { mutableStateOf(mapOf<String, String>()) }
+    var scooterFilterValues by remember { mutableStateOf(mapOf<String, String>()) }
+
+    // Filter column definitions (shared between search bar and filter panel)
+    val renterFilterColumns = remember {
+        listOf(
+            FilterColumn("col_name", "Mijoz", "Ism bo'yicha"),
+            FilterColumn("col_phone", "Telefon", "+998..."),
+            FilterColumn("col_scooter", "Skuter", "Skuter nomi"),
+            FilterColumn("col_start", "Boshlanish sanasi", "dd.MM.yyyy"),
+            FilterColumn("col_end", "Tugash sanasi", "dd.MM.yyyy"),
+            FilterColumn("col_balance", "Balans", "summa")
+        )
+    }
+    val scooterFilterColumns = remember {
+        listOf(
+            FilterColumn("col_name", "Nomi", "Skuter nomi"),
+            FilterColumn("col_doc", "Hujjat raqami", "Doc #"),
+            FilterColumn("col_status", "Holat", "Ijarada / Bosh")
+        )
+    }
     var updateInfo by remember { mutableStateOf<UpdateInfo?>(null) }
     var isCheckingUpdate by remember { mutableStateOf(false) }
     var isUpToDate by remember { mutableStateOf(false) } // Приложение актуально — не показываем уведомление
@@ -592,38 +639,28 @@ fun MainScreen(
             }
 
             if (currentTab == 0) {
-                // Поиск
-                OutlinedTextField(
-                    value = searchQuery,
-                    onValueChange = { searchQuery = it },
-                    placeholder = { Text("Mijoz yoki skuter qidirish", color = ClaudeTextSecondary) },
-                    leadingIcon = {
-                        Icon(
-                            Icons.Default.Search,
-                            contentDescription = "Qidirish",
-                            tint = ClaudeTextSecondary
-                        )
+                // Unified search bar with calendar + filter buttons
+                UnifiedSearchBar(
+                    query = searchQuery,
+                    onQueryChange = { searchQuery = it },
+                    placeholder = "Mijoz yoki skuter qidirish",
+                    onCalendarClick = { showDateRangePicker = true },
+                    calendarActive = dateRangePickerState.selectedStartDateMillis != null,
+                    onFilterClick = { showRenterFilterPanel = true },
+                    filterActive = renterFilterValues.any { it.value.isNotBlank() }
+                )
+
+                // Filter side panel
+                FilterSidePanel(
+                    columns = renterFilterColumns,
+                    filterValues = renterFilterValues,
+                    onFilterChange = { colId, value ->
+                        renterFilterValues = renterFilterValues.toMutableMap().apply { put(colId, value) }
                     },
-                    trailingIcon = {
-                        IconButton(onClick = { showDateRangePicker = true }) {
-                            Icon(
-                                Icons.Default.DateRange,
-                                contentDescription = "Sana bo'yicha filter",
-                                tint = if (dateRangePickerState.selectedStartDateMillis != null) ClaudeAccent else ClaudeTextSecondary
-                            )
-                        }
-                    },
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 16.dp, vertical = 8.dp),
-                    shape = RoundedCornerShape(24.dp),
-                    colors = OutlinedTextFieldDefaults.colors(
-                        unfocusedBorderColor = ClaudeDivider,
-                        focusedBorderColor = ClaudeAccent,
-                        unfocusedContainerColor = Color.White,
-                        focusedContainerColor = Color.White
-                    ),
-                    singleLine = true
+                    onSearch = { /* filters already applied reactively */ },
+                    onReset = { renterFilterValues = emptyMap() },
+                    onDismiss = { showRenterFilterPanel = false },
+                    visible = showRenterFilterPanel
                 )
 
                 if (selectedRenters.isNotEmpty()) {
@@ -751,6 +788,8 @@ fun MainScreen(
                 }
 
                 // ===== ТАБЛИЦА АРЕНДАТОРОВ =====
+                val dateFmtLocal = remember { SimpleDateFormat("dd.MM.yyyy", Locale.getDefault()) }
+
                 val filteredRenters = renters.filter { renter ->
                     val textMatch = renter.name.contains(searchQuery, ignoreCase = true) ||
                         renter.phoneNumber.contains(searchQuery) ||
@@ -763,35 +802,51 @@ fun MainScreen(
                         if (endMillis != null) expiryTime in startMillis..endMillis
                         else expiryTime >= startMillis
                     } else true
-                    textMatch && dateMatch
-                }.sortedWith { a, b ->
-                    val result = when (sortColumn) {
-                        SortColumn.NAME -> a.name.compareTo(b.name, ignoreCase = true)
-                        SortColumn.START_TIME -> a.rentStartDateTimestamp.compareTo(b.rentStartDateTimestamp)
-                        SortColumn.STATUS -> {
-                            val timeA = a.rentStartDateTimestamp + (a.rentDurationDays * 24L * 60 * 60 * 1000)
-                            val timeB = b.rentStartDateTimestamp + (b.rentDurationDays * 24L * 60 * 60 * 1000)
-                            timeA.compareTo(timeB)
+                    // Column filters from side panel
+                    val expiryTs = renter.rentStartDateTimestamp + (renter.rentDurationDays * 24L * 60 * 60 * 1000)
+                    val filterMatch = renterFilterValues.all { (colId, filterText) ->
+                        if (filterText.isBlank()) true
+                        else when (colId) {
+                            "col_name" -> renter.name.contains(filterText, ignoreCase = true)
+                            "col_phone" -> renter.phoneNumber.contains(filterText, ignoreCase = true)
+                            "col_scooter" -> (renter.scooterName ?: "").contains(filterText, ignoreCase = true)
+                            "col_start" -> dateFmtLocal.format(Date(renter.rentStartDateTimestamp)).contains(filterText, ignoreCase = true)
+                            "col_end" -> dateFmtLocal.format(Date(expiryTs)).contains(filterText, ignoreCase = true)
+                            "col_balance" -> renter.balance.toLong().toString().contains(filterText, ignoreCase = true)
+                            else -> true
                         }
-                        SortColumn.DEBT -> a.balance.compareTo(b.balance)
-                        else -> 0
                     }
-                    if (sortDirection == SortDirection.ASC) result else -result
+                    textMatch && dateMatch && filterMatch
+                }.let { list ->
+                    // New 4-state sort: NONE → ASC → NONE → DESC → NONE
+                    val col = renterSortState.activeColumn
+                    val state = renterSortState.stateFor(col ?: "")
+                    if (state == SortState.NONE) {
+                        // Default: sort by status (expiry time) ASC
+                        list.sortedWith(compareBy {
+                            it.rentStartDateTimestamp + (it.rentDurationDays * 24L * 60 * 60 * 1000)
+                        })
+                    } else {
+                        val comparator = when (col) {
+                            "col_name" -> compareBy<Renter> { it.name.lowercase() }
+                            "col_phone" -> compareBy<Renter> { it.phoneNumber }
+                            "col_scooter" -> compareBy<Renter> { it.scooterName ?: "" }
+                            "col_start" -> compareBy<Renter> { it.rentStartDateTimestamp }
+                            "col_end" -> compareBy<Renter> { it.rentStartDateTimestamp + (it.rentDurationDays * 24L * 60 * 60 * 1000) }
+                            "col_balance" -> compareBy<Renter> { it.balance }
+                            else -> compareBy<Renter> { it.rentStartDateTimestamp }
+                        }
+                        if (state == SortState.ASCENDING) list.sortedWith(comparator)
+                        else list.sortedWith(comparator.reversed())
+                    }
                 }
 
                 RenterTable(
                     renters = filteredRenters,
                     selected = selectedRenters,
-                    sortColumn = sortColumn,
-                    sortDirection = sortDirection,
-                    onSort = { col ->
-                        if (sortColumn == col) {
-                            sortDirection =
-                                if (sortDirection == SortDirection.ASC) SortDirection.DESC else SortDirection.ASC
-                        } else {
-                            sortColumn = col
-                            sortDirection = SortDirection.ASC
-                        }
+                    sortState = renterSortState,
+                    onSortClick = { colId ->
+                        renterSortState = renterSortState.click(colId)
                     },
                     onSelect = { id, checked ->
                         val newSet = selectedRenters.toMutableSet()
@@ -804,16 +859,27 @@ fun MainScreen(
                     }
                 )
             } else {
-                // Вкладка «Скутеры»
-                OutlinedTextField(
-                    value = searchQuery,
-                    onValueChange = { searchQuery = it },
-                    placeholder = { Text("Skuter qidirish") },
-                    leadingIcon = { Icon(Icons.Default.Search, contentDescription = "Qidirish") },
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(16.dp),
-                    shape = RoundedCornerShape(12.dp)
+                // Вкладка «Скутеры» — unified search bar
+                UnifiedSearchBar(
+                    query = searchQuery,
+                    onQueryChange = { searchQuery = it },
+                    placeholder = "Skuter qidirish",
+                    onCalendarClick = null,  // у скутеров нет дат — календарь не нужен
+                    onFilterClick = { showScooterFilterPanel = true },
+                    filterActive = scooterFilterValues.any { it.value.isNotBlank() }
+                )
+
+                // Filter side panel
+                FilterSidePanel(
+                    columns = scooterFilterColumns,
+                    filterValues = scooterFilterValues,
+                    onFilterChange = { colId, value ->
+                        scooterFilterValues = scooterFilterValues.toMutableMap().apply { put(colId, value) }
+                    },
+                    onSearch = { /* filters applied reactively */ },
+                    onReset = { scooterFilterValues = emptyMap() },
+                    onDismiss = { showScooterFilterPanel = false },
+                    visible = showScooterFilterPanel
                 )
 
                 if (selectedScooters.isNotEmpty()) {
@@ -839,27 +905,43 @@ fun MainScreen(
                     }
                 }
 
-                val filteredScooters = scooters.filter {
-                    it.name.contains(searchQuery, ignoreCase = true)
-                }.sortedWith { a, b ->
-                    val r = if (scooterSortColumn == SortColumn.NAME) a.name.compareTo(b.name, true) else 0
-                    if (scooterSortDirection == SortDirection.ASC) r else -r
+                val filteredScooters = scooters.filter { scooter ->
+                    val textMatch = scooter.name.contains(searchQuery, ignoreCase = true)
+                    val filterMatch = scooterFilterValues.all { (colId, filterText) ->
+                        if (filterText.isBlank()) true
+                        else when (colId) {
+                            "col_name" -> scooter.name.contains(filterText, ignoreCase = true)
+                            "col_doc" -> (scooter.documentedNumber ?: "").contains(filterText, ignoreCase = true)
+                            "col_status" -> {
+                                val status = scooterStatusLabel(scooterStatusOf(scooter.id, renters))
+                                status.contains(filterText, ignoreCase = true)
+                            }
+                            else -> true
+                        }
+                    }
+                    textMatch && filterMatch
+                }.let { list ->
+                    val col = scooterSortState.activeColumn
+                    val state = scooterSortState.stateFor(col ?: "")
+                    if (state == SortState.NONE) {
+                        list.sortedBy { it.name.lowercase() }
+                    } else {
+                        val comparator = when (col) {
+                            "col_name" -> compareBy<Scooter> { it.name.lowercase() }
+                            else -> compareBy<Scooter> { it.name.lowercase() }
+                        }
+                        if (state == SortState.ASCENDING) list.sortedWith(comparator)
+                        else list.sortedWith(comparator.reversed())
+                    }
                 }
 
                 ScooterTable(
                     scooters = filteredScooters,
                     renters = renters,
                     selected = selectedScooters,
-                    sortColumn = scooterSortColumn,
-                    sortDirection = scooterSortDirection,
-                    onSort = { col ->
-                        if (scooterSortColumn == col) {
-                            scooterSortDirection =
-                                if (scooterSortDirection == SortDirection.ASC) SortDirection.DESC else SortDirection.ASC
-                        } else {
-                            scooterSortColumn = col
-                            scooterSortDirection = SortDirection.ASC
-                        }
+                    sortState = scooterSortState,
+                    onSortClick = { colId ->
+                        scooterSortState = scooterSortState.click(colId)
                     },
                     onSelect = { id, checked ->
                         val newSet = selectedScooters.toMutableSet()
@@ -1072,53 +1154,16 @@ fun MainScreen(
    ТАБЛИЦА АРЕНДАТОРОВ
    ============================================================================ */
 
-/**
- * Ячейка заголовка таблицы. Должна быть расширением RowScope, чтобы
- * внутри был доступен `Modifier.weight(...)`.
- */
-@Composable
-fun RowScope.HeaderCell(
-    title: String,
-    weightValue: Float,
-    col: SortColumn,
-    currentSortColumn: SortColumn,
-    currentSortDirection: SortDirection,
-    onSortClick: (SortColumn) -> Unit
-) {
-    Row(
-        modifier = Modifier
-            .weight(weightValue)
-            .clickable { onSortClick(col) }
-            .padding(horizontal = 4.dp, vertical = 6.dp),
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        Text(
-            title,
-            style = MaterialTheme.typography.labelSmall,
-            color = ClaudeText,
-            fontWeight = FontWeight.Bold,
-            maxLines = 1
-        )
-        if (currentSortColumn == col) {
-            Icon(
-                if (currentSortDirection == SortDirection.ASC) Icons.Default.ArrowDropUp
-                else Icons.Default.ArrowDropDown,
-                contentDescription = null,
-                tint = ClaudeAccent,
-                modifier = Modifier.size(16.dp)
-            )
-        }
-    }
-}
+// Старый HeaderCell удалён — заменён на SortableHeaderCell / NonSortableHeaderCell
+// из ui.components.UnifiedTable для унификации дизайна во всех таблицах.
 
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
 @Composable
 fun RenterTable(
     renters: List<Renter>,
     selected: Set<Int>,
-    sortColumn: SortColumn,
-    sortDirection: SortDirection,
-    onSort: (SortColumn) -> Unit,
+    sortState: TableSortState,
+    onSortClick: (String) -> Unit,
     onSelect: (Int, Boolean) -> Unit,
     onClick: (Renter) -> Unit
 ) {
@@ -1133,7 +1178,7 @@ fun RenterTable(
     val dateFmt = remember { SimpleDateFormat("dd.MM.yyyy", Locale.getDefault()) }
 
     Column(modifier = Modifier.fillMaxSize()) {
-        // Заголовок
+        // Заголовок — только иконки для быстрой ассоциации
         Surface(
             color = ClaudeCard,
             modifier = Modifier.fillMaxWidth()
@@ -1141,15 +1186,15 @@ fun RenterTable(
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(horizontal = 8.dp, vertical = 8.dp),
+                    .padding(horizontal = 8.dp, vertical = 4.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                HeaderCell("Mijoz",      wName,  SortColumn.NAME,       sortColumn, sortDirection, onSort)
-                HeaderCell("Tel",        wPhone, SortColumn.NAME,       sortColumn, sortDirection, onSort)
-                HeaderCell("Skuter",     wScoot, SortColumn.NAME,       sortColumn, sortDirection, onSort)
-                HeaderCell("Boshlanish", wStart, SortColumn.START_TIME, sortColumn, sortDirection, onSort)
-                HeaderCell("Tugash",     wEnd,   SortColumn.START_TIME, sortColumn, sortDirection, onSort)
-                HeaderCell("Balans",     wDebt,  SortColumn.DEBT,        sortColumn, sortDirection, onSort)
+                SortableHeaderCell(Icons.Default.Person,               wName,  "col_name",      sortState) { onSortClick("col_name") }
+                SortableHeaderCell(Icons.Default.Phone,                wPhone, "col_phone",     sortState) { onSortClick("col_phone") }
+                SortableHeaderCell(Icons.Default.DirectionsBike,       wScoot, "col_scooter",   sortState) { onSortClick("col_scooter") }
+                SortableHeaderCell(Icons.Default.CalendarToday,        wStart, "col_start",     sortState) { onSortClick("col_start") }
+                SortableHeaderCell(Icons.Default.Event,                wEnd,   "col_end",       sortState) { onSortClick("col_end") }
+                SortableHeaderCell(Icons.Default.AccountBalanceWallet, wDebt,  "col_balance",   sortState) { onSortClick("col_balance") }
             }
         }
         HorizontalDivider(color = ClaudeDivider)
@@ -2136,9 +2181,8 @@ fun ScooterTable(
     scooters: List<Scooter>,
     renters: List<Renter>,
     selected: Set<Int>,
-    sortColumn: SortColumn,
-    sortDirection: SortDirection,
-    onSort: (SortColumn) -> Unit,
+    sortState: TableSortState,
+    onSortClick: (String) -> Unit,
     onSelect: (Int, Boolean) -> Unit,
     onClick: (Scooter) -> Unit
 ) {
@@ -2146,25 +2190,16 @@ fun ScooterTable(
     val wStat  = 1.0f
 
     Column(modifier = Modifier.fillMaxSize()) {
-        // Заголовок
+        // Заголовок — только иконки
         Surface(color = ClaudeCard, modifier = Modifier.fillMaxWidth()) {
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(horizontal = 8.dp, vertical = 8.dp),
+                    .padding(horizontal = 8.dp, vertical = 4.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                HeaderCell("Nomi",  wName, SortColumn.NAME, sortColumn, sortDirection, onSort)
-                Text(
-                    "Holat",
-                    modifier = Modifier
-                        .weight(wStat)
-                        .padding(horizontal = 4.dp),
-                    style = MaterialTheme.typography.labelSmall,
-                    color = ClaudeText,
-                    fontWeight = FontWeight.Bold,
-                    textAlign = TextAlign.Center
-                )
+                SortableHeaderCell(Icons.Default.Label, wName, "col_name",  sortState) { onSortClick("col_name") }
+                NonSortableHeaderCell(Icons.Default.Info, wStat, "Holat")
             }
         }
         HorizontalDivider(color = ClaudeDivider)

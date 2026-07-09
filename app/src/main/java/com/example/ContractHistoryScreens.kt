@@ -36,6 +36,13 @@ import com.example.data.ContractHistoryEntry
 import com.example.data.Renter
 import com.example.data.Scooter
 import com.example.ui.ContractHistoryViewModel
+import com.example.ui.components.UnifiedSearchBar
+import com.example.ui.components.FilterSidePanel
+import com.example.ui.components.FilterColumn
+import com.example.ui.components.SortableHeaderCell
+import com.example.ui.components.NonSortableHeaderCell
+import com.example.ui.components.TableSortState
+import com.example.ui.components.SortState
 import com.example.ui.theme.*
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -66,15 +73,57 @@ fun RenterContractHistoryScreen(
     var editingContract by remember { mutableStateOf<ContractHistoryEntry?>(null) }
     var showDeleteConfirm by remember { mutableStateOf(false) }
     var generatingPdfFor by remember { mutableStateOf<Int?>(null) }
+    var sortState by remember { mutableStateOf(TableSortState()) }
+    var showFilterPanel by remember { mutableStateOf(false) }
+    var filterValues by remember { mutableStateOf(mapOf<String, String>()) }
 
     val dateFmt = remember { SimpleDateFormat("dd.MM.yyyy", Locale.getDefault()) }
     val dateTimeFmt = remember { SimpleDateFormat("dd.MM.yyyy HH:mm", Locale.getDefault()) }
 
+    val filterColumns = remember {
+        listOf(
+            FilterColumn("col_id", "Kontrakt #", "#"),
+            FilterColumn("col_date", "Sana", "dd.MM.yyyy"),
+            FilterColumn("col_type", "Tur", "Yaratildi/To'lov/..."),
+            FilterColumn("col_amount", "Summa", "summa"),
+            FilterColumn("col_notes", "Izoh", "matn")
+        )
+    }
+
     val filteredContracts = contracts.filter { c ->
-        c.notes?.contains(searchQuery, ignoreCase = true) == true ||
-        c.renterName.contains(searchQuery, ignoreCase = true) ||
-        c.type.contains(searchQuery, ignoreCase = true) ||
-        (c.scooterName?.contains(searchQuery, ignoreCase = true) == true)
+        val textMatch = c.notes?.contains(searchQuery, ignoreCase = true) == true ||
+            c.renterName.contains(searchQuery, ignoreCase = true) ||
+            c.type.contains(searchQuery, ignoreCase = true) ||
+            (c.scooterName?.contains(searchQuery, ignoreCase = true) == true)
+        val filterMatch = filterValues.all { (colId, filterText) ->
+            if (filterText.isBlank()) true
+            else when (colId) {
+                "col_id" -> c.id.toString().contains(filterText, ignoreCase = true)
+                "col_date" -> dateTimeFmt.format(Date(c.timestamp)).contains(filterText, ignoreCase = true)
+                "col_type" -> contractTypeLabel(c.type).contains(filterText, ignoreCase = true)
+                "col_amount" -> c.amount.toLong().toString().contains(filterText, ignoreCase = true)
+                "col_notes" -> (c.notes ?: "").contains(filterText, ignoreCase = true)
+                else -> true
+            }
+        }
+        textMatch && filterMatch
+    }.let { list ->
+        val col = sortState.activeColumn
+        val state = sortState.stateFor(col ?: "")
+        if (state == SortState.NONE) {
+            list  // default order (DESC by timestamp from DB query)
+        } else {
+            val comparator = when (col) {
+                "col_id" -> compareBy<ContractHistoryEntry> { it.id }
+                "col_date" -> compareBy<ContractHistoryEntry> { it.timestamp }
+                "col_type" -> compareBy<ContractHistoryEntry> { it.type }
+                "col_amount" -> compareBy<ContractHistoryEntry> { it.amount }
+                "col_notes" -> compareBy<ContractHistoryEntry> { it.notes ?: "" }
+                else -> compareBy<ContractHistoryEntry> { it.timestamp }
+            }
+            if (state == SortState.ASCENDING) list.sortedWith(comparator)
+            else list.sortedWith(comparator.reversed())
+        }
     }
 
     Scaffold(
@@ -151,23 +200,26 @@ fun RenterContractHistoryScreen(
                 }
             }
 
-            // ── Поиск ───────────────────────────────────────────────────
-            OutlinedTextField(
-                value = searchQuery,
-                onValueChange = { searchQuery = it },
-                placeholder = { Text("Kontrakt qidirish...", color = ClaudeTextSecondary) },
-                leadingIcon = { Icon(Icons.Default.Search, contentDescription = null, tint = ClaudeTextSecondary) },
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 16.dp, vertical = 8.dp),
-                shape = RoundedCornerShape(24.dp),
-                colors = OutlinedTextFieldDefaults.colors(
-                    unfocusedBorderColor = ClaudeDivider,
-                    focusedBorderColor = ClaudeAccent,
-                    unfocusedContainerColor = ClaudeCard,
-                    focusedContainerColor = ClaudeCard
-                ),
-                singleLine = true
+            // ── Unified search + filter ───────────────────────────────
+            UnifiedSearchBar(
+                query = searchQuery,
+                onQueryChange = { searchQuery = it },
+                placeholder = "Kontrakt qidirish...",
+                onCalendarClick = null,  // contracts не фильтруются по диапазону дат здесь
+                onFilterClick = { showFilterPanel = true },
+                filterActive = filterValues.any { it.value.isNotBlank() }
+            )
+
+            FilterSidePanel(
+                columns = filterColumns,
+                filterValues = filterValues,
+                onFilterChange = { colId, value ->
+                    filterValues = filterValues.toMutableMap().apply { put(colId, value) }
+                },
+                onSearch = { /* applied reactively */ },
+                onReset = { filterValues = emptyMap() },
+                onDismiss = { showFilterPanel = false },
+                visible = showFilterPanel
             )
 
             // ── Панель действий с выбранными ────────────────────────────
@@ -198,7 +250,7 @@ fun RenterContractHistoryScreen(
                 }
             }
 
-            // ── Заголовок таблицы ──────────────────────────────────────
+            // ── Заголовок таблицы — только иконки ──────────────────────
             Surface(
                 color = ClaudeCard,
                 modifier = Modifier.fillMaxWidth(),
@@ -207,23 +259,15 @@ fun RenterContractHistoryScreen(
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(horizontal = 12.dp, vertical = 12.dp),
+                        .padding(horizontal = 12.dp, vertical = 4.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Text("#", modifier = Modifier.weight(0.4f),
-                        style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.Bold, color = ClaudeText)
-                    Text("Sana", modifier = Modifier.weight(1.0f),
-                        style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.Bold, color = ClaudeText)
-                    Text("Tur", modifier = Modifier.weight(1.0f),
-                        style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.Bold, color = ClaudeText)
-                    Text("Muddat", modifier = Modifier.weight(1.2f),
-                        style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.Bold, color = ClaudeText)
-                    Text("Summa", modifier = Modifier.weight(0.9f),
-                        style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.Bold, color = ClaudeText,
-                        textAlign = TextAlign.End)
-                    Text("Amal", modifier = Modifier.weight(1.0f),
-                        style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.Bold, color = ClaudeText,
-                        textAlign = TextAlign.Center)
+                    SortableHeaderCell(Icons.Default.Numbers,  0.4f, "col_id",     sortState) { sortState = sortState.click("col_id") }
+                    SortableHeaderCell(Icons.Default.Schedule, 1.0f, "col_date",   sortState) { sortState = sortState.click("col_date") }
+                    SortableHeaderCell(Icons.Default.Category, 1.0f, "col_type",   sortState) { sortState = sortState.click("col_type") }
+                    SortableHeaderCell(Icons.Default.DateRange,1.2f, "col_period", sortState) { sortState = sortState.click("col_date") }
+                    SortableHeaderCell(Icons.Default.Payments, 0.9f, "col_amount", sortState) { sortState = sortState.click("col_amount") }
+                    NonSortableHeaderCell(Icons.Default.Build, 1.0f, "Amal")
                 }
             }
             HorizontalDivider(color = ClaudeDivider)
@@ -555,12 +599,20 @@ fun ScooterContractHistoryScreen(
     val scope = rememberCoroutineScope()
 
     var generatingPdfFor by remember { mutableStateOf<Int?>(null) }
+    var searchQuery by remember { mutableStateOf("") }
     val dateFmt = remember { SimpleDateFormat("dd.MM.yyyy", Locale.getDefault()) }
     val dateTimeFmt = remember { SimpleDateFormat("dd.MM.yyyy HH:mm", Locale.getDefault()) }
 
     // Кто сейчас арендует этот скутер
     val activeRenter = renters.firstOrNull { it.scooterId == scooter.id && !it.isReturned }
     val pastRenters = renters.filter { it.scooterId == scooter.id && it.isReturned }
+
+    val filteredContracts = contracts.filter { c ->
+        c.notes?.contains(searchQuery, ignoreCase = true) == true ||
+        c.renterName.contains(searchQuery, ignoreCase = true) ||
+        c.type.contains(searchQuery, ignoreCase = true) ||
+        (c.scooterName?.contains(searchQuery, ignoreCase = true) == true)
+    }
 
     Scaffold(
         containerColor = ClaudeBackground,
@@ -654,6 +706,16 @@ fun ScooterContractHistoryScreen(
             }
 
             Spacer(Modifier.height(8.dp))
+
+            // ── Unified search bar ────────────────────────────────────
+            UnifiedSearchBar(
+                query = searchQuery,
+                onQueryChange = { searchQuery = it },
+                placeholder = "Kontrakt qidirish...",
+                onCalendarClick = null,
+                onFilterClick = null
+            )
+
             Text(
                 "Kontraktlar tarixi",
                 modifier = Modifier.padding(horizontal = 16.dp),
@@ -663,7 +725,7 @@ fun ScooterContractHistoryScreen(
             )
 
             // ── Список контрактов ──────────────────────────────────────
-            if (contracts.isEmpty()) {
+            if (filteredContracts.isEmpty()) {
                 Box(
                     modifier = Modifier
                         .fillMaxSize()
@@ -681,7 +743,7 @@ fun ScooterContractHistoryScreen(
                     modifier = Modifier.fillMaxSize(),
                     contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp)
                 ) {
-                    items(contracts, key = { it.id }) { entry ->
+                    items(filteredContracts, key = { it.id }) { entry ->
                         val typeColor = contractTypeColor(entry.type)
                         Card(
                             modifier = Modifier
