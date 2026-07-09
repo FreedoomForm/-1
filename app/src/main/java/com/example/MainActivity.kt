@@ -19,6 +19,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.material.icons.Icons
@@ -60,6 +61,12 @@ import androidx.compose.material.icons.filled.OpenInNew
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Done
 import androidx.compose.material.icons.filled.FilterAlt
+import androidx.compose.material.icons.filled.ExpandLess
+import androidx.compose.material.icons.filled.ExpandMore
+import androidx.compose.material.icons.filled.Home
+import androidx.compose.material.icons.filled.Fingerprint
+import androidx.compose.material.icons.filled.CreditCard
+import androidx.compose.material.icons.filled.Bolt
 import androidx.compose.material.icons.outlined.Notifications
 import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.foundation.ExperimentalFoundationApi
@@ -131,6 +138,8 @@ import com.example.ui.components.SuccessButton
 import com.example.ui.components.DangerButton
 import com.example.ui.components.DangerOutlinedButton
 import com.example.ui.components.TextActionButton
+import com.example.ui.components.SortableHeaderCellFixed
+import com.example.ui.components.NonSortableHeaderCellFixed
 import com.example.worker.NotificationHelper
 import android.util.Log
 import com.example.worker.PaymentCheckWorker
@@ -264,7 +273,10 @@ fun MainScreen(
     var scooterFilterValues by remember { mutableStateOf(mapOf<String, String>()) }
 
     // Filter column definitions (shared between search bar and filter panel)
-    val renterFilterColumns = remember {
+    // Базовые колонки всегда показываются. Опциональные колонки добавляются
+    // динамически ниже (после того, как `renters` объявлен) — только если хотя
+    // бы у одного арендатора есть данные в этом поле.
+    val renterFilterColumnsBase = remember {
         listOf(
             FilterColumn("col_name", "Mijoz", "Ism bo'yicha"),
             FilterColumn("col_phone", "Telefon", "+998..."),
@@ -323,6 +335,21 @@ fun MainScreen(
 
     val renters by viewModel.rentersList.collectAsStateWithLifecycle()
     val history by historyViewModel.history.collectAsStateWithLifecycle()
+
+    // Динамически расширяем список колонок фильтра опциональными PDF-реквизитами,
+    // если хотя бы у одного арендатора есть данные в этом поле. Колонка, по которой
+    // нет данных ни у одного арендатора, скрывается из фильтр-панели (и из таблицы).
+    val renterFilterColumns = remember(renters, renterFilterColumnsBase) {
+        val extra = buildList {
+            if (renters.any { it.passportData.isNotBlank() })           add(FilterColumn("col_passport", "Pasport", "AA 1234567"))
+            if (renters.any { it.address.isNotBlank() })                add(FilterColumn("col_address",  "Manzil", "Manzil bo'yicha"))
+            if (renters.any { it.pinfl.isNotBlank() })                  add(FilterColumn("col_pinfl",    "JSHSHIR", "14 raqam"))
+            if (renters.any { it.vinNumber.isNotBlank() })              add(FilterColumn("col_vin",      "VIN",     "VIN bo'yicha"))
+            if (renters.any { it.engineNumber.isNotBlank() })           add(FilterColumn("col_engine",   "Dvigatel", "Engine #"))
+            if (renters.any { it.scooterSerialNumber.isNotBlank() })    add(FilterColumn("col_serial",   "ID raqam", "ID bo'yicha"))
+        }
+        renterFilterColumnsBase + extra
+    }
 
     // ── Рендер экрана истории контрактов, если активен ─────────────────
     when (val st = navState) {
@@ -760,6 +787,12 @@ fun MainScreen(
                             "col_start" -> dateFmtLocal.format(Date(renter.rentStartDateTimestamp)).contains(filterText, ignoreCase = true)
                             "col_end" -> dateFmtLocal.format(Date(expiryTs)).contains(filterText, ignoreCase = true)
                             "col_balance" -> renter.balance.toLong().toString().contains(filterText, ignoreCase = true)
+                            "col_passport" -> renter.passportData.contains(filterText, ignoreCase = true)
+                            "col_address" -> renter.address.contains(filterText, ignoreCase = true)
+                            "col_pinfl" -> renter.pinfl.contains(filterText, ignoreCase = true)
+                            "col_vin" -> renter.vinNumber.contains(filterText, ignoreCase = true)
+                            "col_engine" -> renter.engineNumber.contains(filterText, ignoreCase = true)
+                            "col_serial" -> renter.scooterSerialNumber.contains(filterText, ignoreCase = true)
                             else -> true
                         }
                     }
@@ -781,6 +814,12 @@ fun MainScreen(
                             "col_start" -> compareBy<Renter> { it.rentStartDateTimestamp }
                             "col_end" -> compareBy<Renter> { it.rentStartDateTimestamp + (it.rentDurationDays * 24L * 60 * 60 * 1000) }
                             "col_balance" -> compareBy<Renter> { it.balance }
+                            "col_passport" -> compareBy<Renter> { it.passportData }
+                            "col_address" -> compareBy<Renter> { it.address }
+                            "col_pinfl" -> compareBy<Renter> { it.pinfl }
+                            "col_vin" -> compareBy<Renter> { it.vinNumber }
+                            "col_engine" -> compareBy<Renter> { it.engineNumber }
+                            "col_serial" -> compareBy<Renter> { it.scooterSerialNumber }
                             else -> compareBy<Renter> { it.rentStartDateTimestamp }
                         }
                         if (state == SortState.ASCENDING) list.sortedWith(comparator)
@@ -1118,34 +1157,72 @@ fun RenterTable(
     onSelect: (Int, Boolean) -> Unit,
     onClick: (Renter) -> Unit
 ) {
-    // Веса колонок подобраны под портретный экран телефона.
-    val wName  = 1.4f
-    val wPhone = 1.2f
-    val wScoot = 1.0f
-    val wStart = 1.1f
-    val wEnd   = 1.1f
-    val wDebt  = 0.8f
+    // Фиксированные ширины колонок в dp. Базовые 6 колонок всегда видны и
+    // помещаются на экране телефона. Опциональные 9 колонок (PDF-реквизиты)
+    // добавляются только если хотя бы у одного арендатора есть данные в этом
+    // поле — иначе колонка скрыта, чтобы не занимать место. Когда опциональные
+    // колонки появляются, таблица становится горизонтально прокручиваемой.
+    val wName     = 110.dp
+    val wPhone    = 100.dp
+    val wScoot    = 80.dp
+    val wStart    = 85.dp
+    val wEnd      = 85.dp
+    val wDebt     = 70.dp
+    val wPassport = 110.dp
+    val wAddress  = 140.dp
+    val wPinfl    = 95.dp
+    val wVin      = 110.dp
+    val wEngine   = 95.dp
+    val wSerial   = 75.dp
+    val wBatt1    = 65.dp
+    val wBatt2    = 65.dp
+    val wInfo     = 120.dp
+
+    // Определяем, какие опциональные колонки нужно показать (хотя бы у одного
+    // арендатора есть непустое значение в этом поле).
+    val hasPassport = remember(renters) { renters.any { it.passportData.isNotBlank() } }
+    val hasAddress  = remember(renters) { renters.any { it.address.isNotBlank() } }
+    val hasPinfl    = remember(renters) { renters.any { it.pinfl.isNotBlank() } }
+    val hasVin      = remember(renters) { renters.any { it.vinNumber.isNotBlank() } }
+    val hasEngine   = remember(renters) { renters.any { it.engineNumber.isNotBlank() } }
+    val hasSerial   = remember(renters) { renters.any { it.scooterSerialNumber.isNotBlank() } }
+    val hasBatt1    = remember(renters) { renters.any { it.batteryId1.isNotBlank() } }
+    val hasBatt2    = remember(renters) { renters.any { it.batteryId2.isNotBlank() } }
+    val hasInfo     = remember(renters) { renters.any { it.additionalInfo.isNotBlank() } }
+    val hasAnyExtra = hasPassport || hasAddress || hasPinfl || hasVin || hasEngine ||
+                     hasSerial || hasBatt1 || hasBatt2 || hasInfo
 
     val dateFmt = remember { SimpleDateFormat("dd.MM.yyyy", Locale.getDefault()) }
+    val hScrollState = rememberScrollState()
 
     Column(modifier = Modifier.fillMaxSize()) {
-        // Заголовок — только иконки для быстрой ассоциации
+        // Заголовок — только иконки для быстрой ассоциации.
+        // Когда есть опциональные колонки, заголовок прокручивается вместе с телом.
         Surface(
             color = ClaudeCard,
-            modifier = Modifier.fillMaxWidth()
+            modifier = if (hasAnyExtra) Modifier.fillMaxWidth() else Modifier.fillMaxWidth()
         ) {
             Row(
                 modifier = Modifier
-                    .fillMaxWidth()
+                    .then(if (hasAnyExtra) Modifier.horizontalScroll(hScrollState) else Modifier)
                     .padding(horizontal = 8.dp, vertical = 4.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                SortableHeaderCell(Icons.Default.Person,               wName,  "col_name",      sortState) { onSortClick("col_name") }
-                SortableHeaderCell(Icons.Default.Phone,                wPhone, "col_phone",     sortState) { onSortClick("col_phone") }
-                SortableHeaderCell(Icons.Default.DirectionsBike,       wScoot, "col_scooter",   sortState) { onSortClick("col_scooter") }
-                SortableHeaderCell(Icons.Default.CalendarToday,        wStart, "col_start",     sortState) { onSortClick("col_start") }
-                SortableHeaderCell(Icons.Default.Event,                wEnd,   "col_end",       sortState) { onSortClick("col_end") }
-                SortableHeaderCell(Icons.Default.AccountBalanceWallet, wDebt,  "col_balance",   sortState) { onSortClick("col_balance") }
+                SortableHeaderCellFixed(Icons.Default.Person,               wName,  "col_name",      sortState) { onSortClick("col_name") }
+                SortableHeaderCellFixed(Icons.Default.Phone,                wPhone, "col_phone",     sortState) { onSortClick("col_phone") }
+                SortableHeaderCellFixed(Icons.Default.DirectionsBike,       wScoot, "col_scooter",   sortState) { onSortClick("col_scooter") }
+                SortableHeaderCellFixed(Icons.Default.CalendarToday,        wStart, "col_start",     sortState) { onSortClick("col_start") }
+                SortableHeaderCellFixed(Icons.Default.Event,                wEnd,   "col_end",       sortState) { onSortClick("col_end") }
+                SortableHeaderCellFixed(Icons.Default.AccountBalanceWallet, wDebt,  "col_balance",   sortState) { onSortClick("col_balance") }
+                if (hasPassport) SortableHeaderCellFixed(Icons.Default.CreditCard,  wPassport, "col_passport", sortState) { onSortClick("col_passport") }
+                if (hasAddress)  SortableHeaderCellFixed(Icons.Default.Home,       wAddress,  "col_address",  sortState) { onSortClick("col_address") }
+                if (hasPinfl)    SortableHeaderCellFixed(Icons.Default.Fingerprint, wPinfl,    "col_pinfl",    sortState) { onSortClick("col_pinfl") }
+                if (hasVin)      SortableHeaderCellFixed(Icons.Default.Numbers,     wVin,      "col_vin",      sortState) { onSortClick("col_vin") }
+                if (hasEngine)   SortableHeaderCellFixed(Icons.Default.Build,       wEngine,   "col_engine",   sortState) { onSortClick("col_engine") }
+                if (hasSerial)   SortableHeaderCellFixed(Icons.Default.Tag,         wSerial,   "col_serial",   sortState) { onSortClick("col_serial") }
+                if (hasBatt1)    NonSortableHeaderCellFixed(Icons.Default.Bolt,     wBatt1,    "Akk 1")
+                if (hasBatt2)    NonSortableHeaderCellFixed(Icons.Default.Bolt,     wBatt2,    "Akk 2")
+                if (hasInfo)     NonSortableHeaderCellFixed(Icons.Default.Info,     wInfo,     "Qo'shimcha")
             }
         }
         HorizontalDivider(color = ClaudeDivider)
@@ -1181,7 +1258,7 @@ fun RenterTable(
                 ) {
                     Row(
                         modifier = Modifier
-                            .fillMaxWidth()
+                            .then(if (hasAnyExtra) Modifier.horizontalScroll(hScrollState) else Modifier.fillMaxWidth())
                             .border(
                                 width = if (isSelected) 2.dp else 1.5.dp,
                                 color = sColor,
@@ -1200,7 +1277,7 @@ fun RenterTable(
                         // Mijoz
                         Text(
                             renter.name,
-                            modifier = Modifier.weight(wName).padding(horizontal = 4.dp),
+                            modifier = Modifier.width(wName).padding(horizontal = 4.dp),
                             style = MaterialTheme.typography.bodyMedium,
                             color = ClaudeText,
                             fontWeight = FontWeight.SemiBold,
@@ -1209,7 +1286,7 @@ fun RenterTable(
                         // Tel
                         Text(
                             renter.phoneNumber,
-                            modifier = Modifier.weight(wPhone).padding(horizontal = 4.dp),
+                            modifier = Modifier.width(wPhone).padding(horizontal = 4.dp),
                             style = MaterialTheme.typography.bodySmall,
                             color = ClaudeTextSecondary,
                             maxLines = 1
@@ -1217,7 +1294,7 @@ fun RenterTable(
                         // Skuter
                         Text(
                             renter.scooterName ?: "—",
-                            modifier = Modifier.weight(wScoot).padding(horizontal = 4.dp),
+                            modifier = Modifier.width(wScoot).padding(horizontal = 4.dp),
                             style = MaterialTheme.typography.bodySmall,
                             color = ClaudeText,
                             maxLines = 1
@@ -1225,7 +1302,7 @@ fun RenterTable(
                         // Boshlanish
                         Text(
                             dateFmt.format(Date(renter.rentStartDateTimestamp)),
-                            modifier = Modifier.weight(wStart).padding(horizontal = 4.dp),
+                            modifier = Modifier.width(wStart).padding(horizontal = 4.dp),
                             style = MaterialTheme.typography.bodySmall,
                             color = ClaudeText,
                             maxLines = 1
@@ -1235,7 +1312,7 @@ fun RenterTable(
                             (renter.rentDurationDays * 24L * 60 * 60 * 1000)
                         Text(
                             dateFmt.format(Date(expiry)),
-                            modifier = Modifier.weight(wEnd).padding(horizontal = 4.dp),
+                            modifier = Modifier.width(wEnd).padding(horizontal = 4.dp),
                             style = MaterialTheme.typography.bodySmall,
                             color = ClaudeText,
                             maxLines = 1
@@ -1248,13 +1325,95 @@ fun RenterTable(
                         }
                         Text(
                             renter.balance.toLong().toString(),
-                            modifier = Modifier.weight(wDebt).padding(horizontal = 4.dp),
+                            modifier = Modifier.width(wDebt).padding(horizontal = 4.dp),
                             style = MaterialTheme.typography.bodyMedium,
                             color = balanceColor,
                             fontWeight = FontWeight.Bold,
                             textAlign = TextAlign.End,
                             maxLines = 1
                         )
+                        // ── Опциональные колонки (только если есть данные) ────
+                        if (hasPassport) {
+                            Text(
+                                renter.passportData.ifBlank { "—" },
+                                modifier = Modifier.width(wPassport).padding(horizontal = 4.dp),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = ClaudeText,
+                                maxLines = 1
+                            )
+                        }
+                        if (hasAddress) {
+                            Text(
+                                renter.address.ifBlank { "—" },
+                                modifier = Modifier.width(wAddress).padding(horizontal = 4.dp),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = ClaudeText,
+                                maxLines = 1
+                            )
+                        }
+                        if (hasPinfl) {
+                            Text(
+                                renter.pinfl.ifBlank { "—" },
+                                modifier = Modifier.width(wPinfl).padding(horizontal = 4.dp),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = ClaudeText,
+                                maxLines = 1
+                            )
+                        }
+                        if (hasVin) {
+                            Text(
+                                renter.vinNumber.ifBlank { "—" },
+                                modifier = Modifier.width(wVin).padding(horizontal = 4.dp),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = ClaudeText,
+                                maxLines = 1
+                            )
+                        }
+                        if (hasEngine) {
+                            Text(
+                                renter.engineNumber.ifBlank { "—" },
+                                modifier = Modifier.width(wEngine).padding(horizontal = 4.dp),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = ClaudeText,
+                                maxLines = 1
+                            )
+                        }
+                        if (hasSerial) {
+                            Text(
+                                renter.scooterSerialNumber.ifBlank { "—" },
+                                modifier = Modifier.width(wSerial).padding(horizontal = 4.dp),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = ClaudeText,
+                                maxLines = 1
+                            )
+                        }
+                        if (hasBatt1) {
+                            Text(
+                                renter.batteryId1.ifBlank { "—" },
+                                modifier = Modifier.width(wBatt1).padding(horizontal = 4.dp),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = ClaudeText,
+                                maxLines = 1
+                            )
+                        }
+                        if (hasBatt2) {
+                            Text(
+                                renter.batteryId2.ifBlank { "—" },
+                                modifier = Modifier.width(wBatt2).padding(horizontal = 4.dp),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = ClaudeText,
+                                maxLines = 1
+                            )
+                        }
+                        if (hasInfo) {
+                            Text(
+                                renter.additionalInfo.ifBlank { "—" },
+                                modifier = Modifier.width(wInfo).padding(horizontal = 4.dp),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = ClaudeText,
+                                maxLines = 1
+                            )
+                        }
                     }
                 }
             }
@@ -1453,6 +1612,17 @@ fun RenterFormDialog(
 
     val scrollState = rememberScrollState()
 
+    // Автоматически разворачиваем блок доп. полей при редактировании, если хотя бы одно поле заполнено
+    val hasAnyExtraPrefilled = remember(initialRenter) {
+        val r = initialRenter
+        r != null && (
+            r.passportData.isNotBlank() || r.address.isNotBlank() || r.pinfl.isNotBlank() ||
+            r.vinNumber.isNotBlank() || r.engineNumber.isNotBlank() || r.scooterSerialNumber.isNotBlank() ||
+            r.batteryId1.isNotBlank() || r.batteryId2.isNotBlank() || r.additionalInfo.isNotBlank()
+        )
+    }
+    var showExtraFields by remember { mutableStateOf(hasAnyExtraPrefilled) }
+
     AlertDialog(
         onDismissRequest = onDismiss,
         title = {
@@ -1494,30 +1664,6 @@ fun RenterFormDialog(
                     label = { Text("Telefon raqami") },
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Phone),
                     visualTransformation = UzPhoneVisualTransformation(),
-                    modifier = Modifier.fillMaxWidth(),
-                    shape = RoundedCornerShape(8.dp)
-                )
-                OutlinedTextField(
-                    value = passportData,
-                    onValueChange = { passportData = it },
-                    label = { Text("Паспорт: серия, рақам, олинган сана") },
-                    placeholder = { Text("Masalan: AA 1234567, 15.01.2023") },
-                    modifier = Modifier.fillMaxWidth(),
-                    shape = RoundedCornerShape(8.dp)
-                )
-                OutlinedTextField(
-                    value = address,
-                    onValueChange = { address = it },
-                    label = { Text("Манзил") },
-                    placeholder = { Text("Masalan: Тошкент ш., Юнусобод тумани, ...") },
-                    modifier = Modifier.fillMaxWidth(),
-                    shape = RoundedCornerShape(8.dp)
-                )
-                OutlinedTextField(
-                    value = pinfl,
-                    onValueChange = { pinfl = it.filter { ch -> ch.isDigit() }.take(14) },
-                    label = { Text("ЖШШИР (ПИНФЛ)") },
-                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
                     modifier = Modifier.fillMaxWidth(),
                     shape = RoundedCornerShape(8.dp)
                 )
@@ -1648,56 +1794,119 @@ fun RenterFormDialog(
                     shape = RoundedCornerShape(8.dp)
                 )
 
+                // ── Кнопка-тумблер: «Қўшимча маълумотлар» ───────────────────
+                // Разворачивает/сворачивает 9 PDF-реквизитов (паспорт, манзил,
+                // ПИНФЛ, VIN, двигатель, ID, аккумы, доп. инфо). По умолчанию
+                // свёрнуты — пользователь сам решает заполнять их или нет.
                 HorizontalDivider(color = ClaudeDivider, thickness = 1.dp)
-                SectionLabel("Скутер ва аккумулятор маълумотлари")
-
-                OutlinedTextField(
-                    value = vinNumber,
-                    onValueChange = { vinNumber = it },
-                    label = { Text("VIN номери") },
-                    modifier = Modifier.fillMaxWidth(),
-                    shape = RoundedCornerShape(8.dp)
-                )
-                OutlinedTextField(
-                    value = engineNumber,
-                    onValueChange = { engineNumber = it },
-                    label = { Text("Двигатель номери") },
-                    modifier = Modifier.fillMaxWidth(),
-                    shape = RoundedCornerShape(8.dp)
-                )
-                OutlinedTextField(
-                    value = scooterSerialNumber,
-                    onValueChange = { scooterSerialNumber = it },
-                    label = { Text("ID номери") },
-                    modifier = Modifier.fillMaxWidth(),
-                    shape = RoundedCornerShape(8.dp)
-                )
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                OutlinedCard(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable { showExtraFields = !showExtraFields },
+                    shape = RoundedCornerShape(8.dp),
+                    border = BorderStroke(1.dp, if (showExtraFields) ClaudeText else ClaudeDivider)
                 ) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 16.dp, vertical = 12.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Icon(
+                            if (showExtraFields) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
+                            contentDescription = null,
+                            tint = ClaudeText
+                        )
+                        Spacer(modifier = Modifier.width(12.dp))
+                        Text(
+                            if (showExtraFields) "Қўшимча маълумотларни яшириш" else "Қўшимча маълумотларни кўрсатиш",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = ClaudeText,
+                            fontWeight = FontWeight.Medium,
+                            modifier = Modifier.weight(1f)
+                        )
+                    }
+                }
+
+                // ── Развёрнутый блок 9 PDF-полей ───────────────────────────
+                if (showExtraFields) {
+                    SectionLabel("Шахсий қўшимча маълумотлар")
                     OutlinedTextField(
-                        value = batteryId1,
-                        onValueChange = { batteryId1 = it },
-                        label = { Text("Аккумулятор ID 1") },
-                        modifier = Modifier.weight(1f),
+                        value = passportData,
+                        onValueChange = { passportData = it },
+                        label = { Text("Паспорт: серия, рақам, олинган сана") },
+                        placeholder = { Text("Masalan: AA 1234567, 15.01.2023") },
+                        modifier = Modifier.fillMaxWidth(),
                         shape = RoundedCornerShape(8.dp)
                     )
                     OutlinedTextField(
-                        value = batteryId2,
-                        onValueChange = { batteryId2 = it },
-                        label = { Text("Аккумулятор ID 2") },
-                        modifier = Modifier.weight(1f),
+                        value = address,
+                        onValueChange = { address = it },
+                        label = { Text("Манзил") },
+                        placeholder = { Text("Masalan: Тошкент ш., Юнусобод тумани, ...") },
+                        modifier = Modifier.fillMaxWidth(),
+                        shape = RoundedCornerShape(8.dp)
+                    )
+                    OutlinedTextField(
+                        value = pinfl,
+                        onValueChange = { pinfl = it.filter { ch -> ch.isDigit() }.take(14) },
+                        label = { Text("ЖШШИР (ПИНФЛ)") },
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                        modifier = Modifier.fillMaxWidth(),
+                        shape = RoundedCornerShape(8.dp)
+                    )
+
+                    HorizontalDivider(color = ClaudeDivider, thickness = 1.dp)
+                    SectionLabel("Скутер ва аккумулятор маълумотлари")
+
+                    OutlinedTextField(
+                        value = vinNumber,
+                        onValueChange = { vinNumber = it },
+                        label = { Text("VIN номери") },
+                        modifier = Modifier.fillMaxWidth(),
+                        shape = RoundedCornerShape(8.dp)
+                    )
+                    OutlinedTextField(
+                        value = engineNumber,
+                        onValueChange = { engineNumber = it },
+                        label = { Text("Двигатель номери") },
+                        modifier = Modifier.fillMaxWidth(),
+                        shape = RoundedCornerShape(8.dp)
+                    )
+                    OutlinedTextField(
+                        value = scooterSerialNumber,
+                        onValueChange = { scooterSerialNumber = it },
+                        label = { Text("ID номери") },
+                        modifier = Modifier.fillMaxWidth(),
+                        shape = RoundedCornerShape(8.dp)
+                    )
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        OutlinedTextField(
+                            value = batteryId1,
+                            onValueChange = { batteryId1 = it },
+                            label = { Text("Аккумулятор ID 1") },
+                            modifier = Modifier.weight(1f),
+                            shape = RoundedCornerShape(8.dp)
+                        )
+                        OutlinedTextField(
+                            value = batteryId2,
+                            onValueChange = { batteryId2 = it },
+                            label = { Text("Аккумулятор ID 2") },
+                            modifier = Modifier.weight(1f),
+                            shape = RoundedCornerShape(8.dp)
+                        )
+                    }
+                    OutlinedTextField(
+                        value = additionalInfo,
+                        onValueChange = { additionalInfo = it },
+                        label = { Text("Қўшимча маълумот") },
+                        modifier = Modifier.fillMaxWidth(),
                         shape = RoundedCornerShape(8.dp)
                     )
                 }
-                OutlinedTextField(
-                    value = additionalInfo,
-                    onValueChange = { additionalInfo = it },
-                    label = { Text("Қўшимча маълумот") },
-                    modifier = Modifier.fillMaxWidth(),
-                    shape = RoundedCornerShape(8.dp)
-                )
             }
         },
         confirmButton = {
@@ -2383,6 +2592,12 @@ fun ScooterFormDialog(
         mutableStateOf(initialScooter?.documentedNumber ?: "")
     }
 
+    // Поле «hujjatlashtirilgan raqami» свёрнуто по умолчанию. При редактировании
+    // существующего скутера автоматически разворачивается, если значение уже есть.
+    var showExtraFields by remember {
+        mutableStateOf(!initialScooter?.documentedNumber.isNullOrBlank())
+    }
+
     AlertDialog(
         onDismissRequest = onDismiss,
         title = {
@@ -2412,14 +2627,47 @@ fun ScooterFormDialog(
                         }
                     }
                 )
-                OutlinedTextField(
-                    value = documentedNumber,
-                    onValueChange = { documentedNumber = it },
-                    label = { Text("Hujjatlashtirilgan raqami (ixtiyoriy)") },
-                    placeholder = { Text("Masalan: 01-234 ABC") },
-                    modifier = Modifier.fillMaxWidth(),
-                    shape = RoundedCornerShape(8.dp)
-                )
+
+                // ── Кнопка-тумблер «Қўшимча маълумотлар» ──────────────────
+                OutlinedCard(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable { showExtraFields = !showExtraFields },
+                    shape = RoundedCornerShape(8.dp),
+                    border = BorderStroke(1.dp, if (showExtraFields) ClaudeText else ClaudeDivider)
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 16.dp, vertical = 12.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Icon(
+                            if (showExtraFields) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
+                            contentDescription = null,
+                            tint = ClaudeText
+                        )
+                        Spacer(modifier = Modifier.width(12.dp))
+                        Text(
+                            if (showExtraFields) "Қўшимча маълумотларни яшириш" else "Қўшимча маълумотларни кўрсатиш",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = ClaudeText,
+                            fontWeight = FontWeight.Medium,
+                            modifier = Modifier.weight(1f)
+                        )
+                    }
+                }
+
+                if (showExtraFields) {
+                    OutlinedTextField(
+                        value = documentedNumber,
+                        onValueChange = { documentedNumber = it },
+                        label = { Text("Hujjatlashtirilgan raqami (ixtiyoriy)") },
+                        placeholder = { Text("Masalan: 01-234 ABC") },
+                        modifier = Modifier.fillMaxWidth(),
+                        shape = RoundedCornerShape(8.dp)
+                    )
+                }
             }
         },
         confirmButton = {

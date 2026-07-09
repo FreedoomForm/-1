@@ -214,6 +214,75 @@ fun RowScope.NonSortableHeaderCell(
     }
 }
 
+// ── Fixed-width variants (for horizontally-scrollable tables) ─────────────
+
+/**
+ * Sortable header cell with FIXED width (instead of weight).
+ *
+ * Use inside Row(Modifier.horizontalScroll(...)) when the table has so many
+ * columns that their total width exceeds the screen — weights would just
+ * squeeze every column to unreadable width, so we use fixed Dp widths and
+ * let the user scroll horizontally to see the rest.
+ */
+@Composable
+fun SortableHeaderCellFixed(
+    icon: ImageVector,
+    widthDp: androidx.compose.ui.unit.Dp,
+    columnId: String,
+    sortState: TableSortState,
+    onClick: () -> Unit
+) {
+    val state = sortState.stateFor(columnId)
+    val iconTint = if (state == SortState.NONE) ClaudeTextSecondary else ClaudeAccent
+
+    Row(
+        modifier = Modifier
+            .width(widthDp)
+            .clip(RoundedCornerShape(6.dp))
+            .clickable { onClick() }
+            .padding(vertical = 6.dp, horizontal = 4.dp),
+        horizontalArrangement = Arrangement.Center,
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Icon(
+            icon,
+            contentDescription = columnId,
+            tint = iconTint,
+            modifier = Modifier.size(18.dp)
+        )
+        Spacer(Modifier.width(3.dp))
+        PhoneReceiverSortIcon(
+            state = state,
+            tint = if (state == SortState.NONE) ClaudeTextSecondary else ClaudeAccent,
+            iconSize = 14
+        )
+    }
+}
+
+/**
+ * Non-sortable header cell with FIXED width.
+ */
+@Composable
+fun NonSortableHeaderCellFixed(
+    icon: ImageVector,
+    widthDp: androidx.compose.ui.unit.Dp,
+    contentDescription: String = ""
+) {
+    Box(
+        modifier = Modifier
+            .width(widthDp)
+            .padding(vertical = 6.dp),
+        contentAlignment = Alignment.Center
+    ) {
+        Icon(
+            icon,
+            contentDescription = contentDescription,
+            tint = ClaudeTextSecondary,
+            modifier = Modifier.size(18.dp)
+        )
+    }
+}
+
 // ── Unified Search Bar (with calendar + filter buttons) ─────────────────────
 
 /**
