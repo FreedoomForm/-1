@@ -85,12 +85,15 @@ object PdfContractGenerator {
             val tenantPinfl = entry.pinfl.ifBlank { renter?.pinfl ?: "" }
 
             // ── Реквизиты скутера для PDF ───────────────────────────────────
-            val scooterVin = entry.vinNumber.ifBlank { renter?.vinNumber ?: "" }
-            val scooterEngine = entry.engineNumber.ifBlank { renter?.engineNumber ?: "" }
-            val scooterSerial = entry.scooterSerialNumber.ifBlank { renter?.scooterSerialNumber ?: "" }
-            val battId1 = entry.batteryId1.ifBlank { renter?.batteryId1 ?: "" }
-            val battId2 = entry.batteryId2.ifBlank { renter?.batteryId2 ?: "" }
-            val extraInfo = entry.additionalInfo.ifBlank { renter?.additionalInfo ?: "" }
+            // Берутся ТОЛЬКО из entry (денормализованы при создании контракта
+            // из сущности Scooter). Renter эти поля больше не хранит — они
+            // описывают скутер, а не арендатора.
+            val scooterVin = entry.vinNumber
+            val scooterEngine = entry.engineNumber
+            val scooterSerial = entry.scooterSerialNumber
+            val battId1 = entry.batteryId1
+            val battId2 = entry.batteryId2
+            val extraInfo = entry.additionalInfo
 
             // Заполнитель для пустых полей (чтобы линия для подписи оставалась)
             fun fill(value: String): String = value.ifBlank { "______________________________" }

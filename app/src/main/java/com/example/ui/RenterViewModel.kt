@@ -20,6 +20,7 @@ import com.example.data.ContractHistoryEntry
 import com.example.data.Renter
 import com.example.data.RenterRepository
 import com.example.data.SettingsRepository
+import com.example.data.Scooter
 import com.example.worker.NotificationHelper
 import com.example.worker.PaymentCheckWorker
 import com.example.worker.SimHelper
@@ -86,14 +87,7 @@ class RenterViewModel(application: Application) : AndroidViewModel(application) 
         // PDF-реквизиты арендатора
         passportData: String = "",
         address: String = "",
-        pinfl: String = "",
-        // PDF-реквизиты скутера
-        vinNumber: String = "",
-        engineNumber: String = "",
-        scooterSerialNumber: String = "",
-        batteryId1: String = "",
-        batteryId2: String = "",
-        additionalInfo: String = ""
+        pinfl: String = ""
     ) {
         viewModelScope.launch {
             val now = System.currentTimeMillis()
@@ -115,15 +109,14 @@ class RenterViewModel(application: Application) : AndroidViewModel(application) 
                 name = name, phoneNumber = phone, debtAmount = finalDebt,
                 rentDurationDays = duration, rentStartDateTimestamp = startTimestamp,
                 scooterId = scooterId, scooterName = scooterName, balance = initialBalance,
-                passportData = passportData, address = address, pinfl = pinfl,
-                vinNumber = vinNumber, engineNumber = engineNumber,
-                scooterSerialNumber = scooterSerialNumber,
-                batteryId1 = batteryId1, batteryId2 = batteryId2,
-                additionalInfo = additionalInfo
+                passportData = passportData, address = address, pinfl = pinfl
             )
 
             val localId = repository.insert(provisional).toInt()
             val savedRenter = provisional.copy(id = localId)
+
+            // ── Подтягиваем реквизиты скутера из БД для PDF-договора ───────
+            val scooter: Scooter? = scooterId?.let { fetchScooterById(it) }
 
             // ── Запись CREATED ──────────────────────────────────────────
             viewModelScope.launch(Dispatchers.IO) {
@@ -143,12 +136,12 @@ class RenterViewModel(application: Application) : AndroidViewModel(application) 
                         passportData = savedRenter.passportData,
                         address = savedRenter.address,
                         pinfl = savedRenter.pinfl,
-                        vinNumber = savedRenter.vinNumber,
-                        engineNumber = savedRenter.engineNumber,
-                        scooterSerialNumber = savedRenter.scooterSerialNumber,
-                        batteryId1 = savedRenter.batteryId1,
-                        batteryId2 = savedRenter.batteryId2,
-                        additionalInfo = savedRenter.additionalInfo
+                        vinNumber = scooter?.vinNumber ?: "",
+                        engineNumber = scooter?.engineNumber ?: "",
+                        scooterSerialNumber = scooter?.scooterSerialNumber ?: "",
+                        batteryId1 = scooter?.batteryId1 ?: "",
+                        batteryId2 = scooter?.batteryId2 ?: "",
+                        additionalInfo = scooter?.additionalInfo ?: ""
                     ))
 
                     // Если просрочка — создаем N записей AUTO_RENEW
@@ -172,12 +165,12 @@ class RenterViewModel(application: Application) : AndroidViewModel(application) 
                                 passportData = savedRenter.passportData,
                                 address = savedRenter.address,
                                 pinfl = savedRenter.pinfl,
-                                vinNumber = savedRenter.vinNumber,
-                                engineNumber = savedRenter.engineNumber,
-                                scooterSerialNumber = savedRenter.scooterSerialNumber,
-                                batteryId1 = savedRenter.batteryId1,
-                                batteryId2 = savedRenter.batteryId2,
-                                additionalInfo = savedRenter.additionalInfo
+                                vinNumber = scooter?.vinNumber ?: "",
+                                engineNumber = scooter?.engineNumber ?: "",
+                                scooterSerialNumber = scooter?.scooterSerialNumber ?: "",
+                                batteryId1 = scooter?.batteryId1 ?: "",
+                                batteryId2 = scooter?.batteryId2 ?: "",
+                                additionalInfo = scooter?.additionalInfo ?: ""
                             ))
                         }
                     }
@@ -430,16 +423,10 @@ class RenterViewModel(application: Application) : AndroidViewModel(application) 
         newScooterName: String?,
         newIsActive: Boolean,
         weeklyPrice: Double,
-        // PDF-реквизиты
+        // PDF-реквизиты арендатора
         passportData: String = existing.passportData,
         address: String = existing.address,
-        pinfl: String = existing.pinfl,
-        vinNumber: String = existing.vinNumber,
-        engineNumber: String = existing.engineNumber,
-        scooterSerialNumber: String = existing.scooterSerialNumber,
-        batteryId1: String = existing.batteryId1,
-        batteryId2: String = existing.batteryId2,
-        additionalInfo: String = existing.additionalInfo
+        pinfl: String = existing.pinfl
     ) {
         viewModelScope.launch(Dispatchers.IO) {
             val effectivePrice = if (weeklyPrice > 0) weeklyPrice else SettingsRepository.DEFAULT_WEEKLY_PRICE
@@ -456,6 +443,9 @@ class RenterViewModel(application: Application) : AndroidViewModel(application) 
 
             val now = System.currentTimeMillis()
             var balanceAdjust = 0.0
+
+            // ── Подтягиваем реквизиты скутера из БД (для новых AUTO_RENEW) ─
+            val scooter: Scooter? = newScooterId?.let { fetchScooterById(it) }
 
             // ── Сдвиг даты назад → дополнительные недели ───────────────────
             if (newStart < oldStart) {
@@ -480,12 +470,12 @@ class RenterViewModel(application: Application) : AndroidViewModel(application) 
                             passportData = passportData,
                             address = address,
                             pinfl = pinfl,
-                            vinNumber = vinNumber,
-                            engineNumber = engineNumber,
-                            scooterSerialNumber = scooterSerialNumber,
-                            batteryId1 = batteryId1,
-                            batteryId2 = batteryId2,
-                            additionalInfo = additionalInfo
+                            vinNumber = scooter?.vinNumber ?: "",
+                            engineNumber = scooter?.engineNumber ?: "",
+                            scooterSerialNumber = scooter?.scooterSerialNumber ?: "",
+                            batteryId1 = scooter?.batteryId1 ?: "",
+                            batteryId2 = scooter?.batteryId2 ?: "",
+                            additionalInfo = scooter?.additionalInfo ?: ""
                         ))
                         balanceAdjust -= realWeeklyPrice
                     }
@@ -529,12 +519,12 @@ class RenterViewModel(application: Application) : AndroidViewModel(application) 
                         passportData = passportData,
                         address = address,
                         pinfl = pinfl,
-                        vinNumber = vinNumber,
-                        engineNumber = engineNumber,
-                        scooterSerialNumber = scooterSerialNumber,
-                        batteryId1 = batteryId1,
-                        batteryId2 = batteryId2,
-                        additionalInfo = additionalInfo
+                        vinNumber = scooter?.vinNumber ?: "",
+                        engineNumber = scooter?.engineNumber ?: "",
+                        scooterSerialNumber = scooter?.scooterSerialNumber ?: "",
+                        batteryId1 = scooter?.batteryId1 ?: "",
+                        batteryId2 = scooter?.batteryId2 ?: "",
+                        additionalInfo = scooter?.additionalInfo ?: ""
                     ))
                     balanceAdjust -= realWeeklyPrice
                 }
@@ -554,16 +544,15 @@ class RenterViewModel(application: Application) : AndroidViewModel(application) 
                 isOverdueSmsSent = if (newIsActive && newStart != oldStart) false else existing.isOverdueSmsSent,
                 passportData = passportData,
                 address = address,
-                pinfl = pinfl,
-                vinNumber = vinNumber,
-                engineNumber = engineNumber,
-                scooterSerialNumber = scooterSerialNumber,
-                batteryId1 = batteryId1,
-                batteryId2 = batteryId2,
-                additionalInfo = additionalInfo
+                pinfl = pinfl
             )
             repository.update(updated)
         }
+    }
+
+    /** Подгружает скутер из БД по его id (для денормализации в ContractHistoryEntry). */
+    private suspend fun fetchScooterById(id: Int): Scooter? {
+        return AppDatabase.getDatabase(getApplication()).scooterDao().getScooterById(id)
     }
 
     fun deleteRenter(id: Int) {
@@ -640,6 +629,7 @@ class RenterViewModel(application: Application) : AndroidViewModel(application) 
             isOverdueSmsSent = false
         )
         repository.update(updated)
+        val scooter: Scooter? = renter.scooterId?.let { fetchScooterById(it) }
         val entry = ContractHistoryEntry(
             renterId = renter.id, timestamp = now,
             type = ContractHistoryEntry.TYPE_PAYMENT, amount = effectivePrice, notes = effectiveNotes,
@@ -650,12 +640,12 @@ class RenterViewModel(application: Application) : AndroidViewModel(application) 
             passportData = renter.passportData,
             address = renter.address,
             pinfl = renter.pinfl,
-            vinNumber = renter.vinNumber,
-            engineNumber = renter.engineNumber,
-            scooterSerialNumber = renter.scooterSerialNumber,
-            batteryId1 = renter.batteryId1,
-            batteryId2 = renter.batteryId2,
-            additionalInfo = renter.additionalInfo
+            vinNumber = scooter?.vinNumber ?: "",
+            engineNumber = scooter?.engineNumber ?: "",
+            scooterSerialNumber = scooter?.scooterSerialNumber ?: "",
+            batteryId1 = scooter?.batteryId1 ?: "",
+            batteryId2 = scooter?.batteryId2 ?: "",
+            additionalInfo = scooter?.additionalInfo ?: ""
         )
         historyRepository.insert(entry)
     }
@@ -666,6 +656,7 @@ class RenterViewModel(application: Application) : AndroidViewModel(application) 
         val updated = renter.copy(debtAmount = maxOf(0.0, -newBalance), balance = newBalance,
             isReturned = true, lastPaymentTimestamp = System.currentTimeMillis(), isOverdueSmsSent = false)
         repository.update(updated)
+        val scooter: Scooter? = renter.scooterId?.let { fetchScooterById(it) }
         val entry = ContractHistoryEntry(
             renterId = renter.id, timestamp = System.currentTimeMillis(),
             type = ContractHistoryEntry.TYPE_TERMINATED, amount = effectivePrice, notes = "Kontrakt tugatildi",
@@ -676,12 +667,12 @@ class RenterViewModel(application: Application) : AndroidViewModel(application) 
             passportData = renter.passportData,
             address = renter.address,
             pinfl = renter.pinfl,
-            vinNumber = renter.vinNumber,
-            engineNumber = renter.engineNumber,
-            scooterSerialNumber = renter.scooterSerialNumber,
-            batteryId1 = renter.batteryId1,
-            batteryId2 = renter.batteryId2,
-            additionalInfo = renter.additionalInfo
+            vinNumber = scooter?.vinNumber ?: "",
+            engineNumber = scooter?.engineNumber ?: "",
+            scooterSerialNumber = scooter?.scooterSerialNumber ?: "",
+            batteryId1 = scooter?.batteryId1 ?: "",
+            batteryId2 = scooter?.batteryId2 ?: "",
+            additionalInfo = scooter?.additionalInfo ?: ""
         )
         historyRepository.insert(entry)
     }

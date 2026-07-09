@@ -25,9 +25,27 @@ class ScooterViewModel(application: Application) : AndroidViewModel(application)
         )
     }
 
-    fun addScooter(name: String, documentedNumber: String?) {
+    fun addScooter(
+        name: String,
+        documentedNumber: String?,
+        vinNumber: String = "",
+        engineNumber: String = "",
+        scooterSerialNumber: String = "",
+        batteryId1: String = "",
+        batteryId2: String = "",
+        additionalInfo: String = ""
+    ) {
         viewModelScope.launch {
-            val scooter = Scooter(name = name, documentedNumber = documentedNumber)
+            val scooter = Scooter(
+                name = name,
+                documentedNumber = documentedNumber,
+                vinNumber = vinNumber,
+                engineNumber = engineNumber,
+                scooterSerialNumber = scooterSerialNumber,
+                batteryId1 = batteryId1,
+                batteryId2 = batteryId2,
+                additionalInfo = additionalInfo
+            )
             repository.insert(scooter)
         }
     }

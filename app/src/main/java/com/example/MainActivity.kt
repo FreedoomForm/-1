@@ -344,9 +344,6 @@ fun MainScreen(
             if (renters.any { it.passportData.isNotBlank() })           add(FilterColumn("col_passport", "Pasport", "AA 1234567"))
             if (renters.any { it.address.isNotBlank() })                add(FilterColumn("col_address",  "Manzil", "Manzil bo'yicha"))
             if (renters.any { it.pinfl.isNotBlank() })                  add(FilterColumn("col_pinfl",    "JSHSHIR", "14 raqam"))
-            if (renters.any { it.vinNumber.isNotBlank() })              add(FilterColumn("col_vin",      "VIN",     "VIN bo'yicha"))
-            if (renters.any { it.engineNumber.isNotBlank() })           add(FilterColumn("col_engine",   "Dvigatel", "Engine #"))
-            if (renters.any { it.scooterSerialNumber.isNotBlank() })    add(FilterColumn("col_serial",   "ID raqam", "ID bo'yicha"))
         }
         renterFilterColumnsBase + extra
     }
@@ -384,13 +381,7 @@ fun MainScreen(
                                 newIsActive = result.isActive, weeklyPrice = weekly,
                                 passportData = result.passportData,
                                 address = result.address,
-                                pinfl = result.pinfl,
-                                vinNumber = result.vinNumber,
-                                engineNumber = result.engineNumber,
-                                scooterSerialNumber = result.scooterSerialNumber,
-                                batteryId1 = result.batteryId1,
-                                batteryId2 = result.batteryId2,
-                                additionalInfo = result.additionalInfo
+                                pinfl = result.pinfl
                             )
                         }
                         renterToEdit = null
@@ -412,8 +403,21 @@ fun MainScreen(
                     initialScooter = scooterToEdit,
                     existingScooters = scooters,
                     onDismiss = { scooterToEdit = null },
-                    onSave = { name, docNum ->
-                        scooterToEdit?.let { scooterViewModel.updateScooter(it.copy(name = name, documentedNumber = docNum)) }
+                    onSave = { name, docNum, vin, engine, serial, batt1, batt2, extra ->
+                        scooterToEdit?.let {
+                            scooterViewModel.updateScooter(
+                                it.copy(
+                                    name = name,
+                                    documentedNumber = docNum,
+                                    vinNumber = vin,
+                                    engineNumber = engine,
+                                    scooterSerialNumber = serial,
+                                    batteryId1 = batt1,
+                                    batteryId2 = batt2,
+                                    additionalInfo = extra
+                                )
+                            )
+                        }
                         scooterToEdit = null
                     }
                 )
@@ -790,9 +794,6 @@ fun MainScreen(
                             "col_passport" -> renter.passportData.contains(filterText, ignoreCase = true)
                             "col_address" -> renter.address.contains(filterText, ignoreCase = true)
                             "col_pinfl" -> renter.pinfl.contains(filterText, ignoreCase = true)
-                            "col_vin" -> renter.vinNumber.contains(filterText, ignoreCase = true)
-                            "col_engine" -> renter.engineNumber.contains(filterText, ignoreCase = true)
-                            "col_serial" -> renter.scooterSerialNumber.contains(filterText, ignoreCase = true)
                             else -> true
                         }
                     }
@@ -817,9 +818,6 @@ fun MainScreen(
                             "col_passport" -> compareBy<Renter> { it.passportData }
                             "col_address" -> compareBy<Renter> { it.address }
                             "col_pinfl" -> compareBy<Renter> { it.pinfl }
-                            "col_vin" -> compareBy<Renter> { it.vinNumber }
-                            "col_engine" -> compareBy<Renter> { it.engineNumber }
-                            "col_serial" -> compareBy<Renter> { it.scooterSerialNumber }
                             else -> compareBy<Renter> { it.rentStartDateTimestamp }
                         }
                         if (state == SortState.ASCENDING) list.sortedWith(comparator)
@@ -978,13 +976,7 @@ fun MainScreen(
                                 weeklyPrice = weekly,
                                 passportData = result.passportData,
                                 address = result.address,
-                                pinfl = result.pinfl,
-                                vinNumber = result.vinNumber,
-                                engineNumber = result.engineNumber,
-                                scooterSerialNumber = result.scooterSerialNumber,
-                                batteryId1 = result.batteryId1,
-                                batteryId2 = result.batteryId2,
-                                additionalInfo = result.additionalInfo
+                                pinfl = result.pinfl
                             )
                         }
                     } else {
@@ -999,13 +991,7 @@ fun MainScreen(
                             weeklyPrice = weekly,
                             passportData = result.passportData,
                             address = result.address,
-                            pinfl = result.pinfl,
-                            vinNumber = result.vinNumber,
-                            engineNumber = result.engineNumber,
-                            scooterSerialNumber = result.scooterSerialNumber,
-                            batteryId1 = result.batteryId1,
-                            batteryId2 = result.batteryId2,
-                            additionalInfo = result.additionalInfo
+                            pinfl = result.pinfl
                         )
                     }
                     showAddDialog = false
@@ -1023,15 +1009,33 @@ fun MainScreen(
                     showAddScooterDialog = false
                     scooterToEdit = null
                 },
-                onSave = { name, docNum ->
+                onSave = { name, docNum, vin, engine, serial, batt1, batt2, extra ->
                     if (isEditScooter) {
                         scooterToEdit?.let {
                             scooterViewModel.updateScooter(
-                                it.copy(name = name, documentedNumber = docNum)
+                                it.copy(
+                                    name = name,
+                                    documentedNumber = docNum,
+                                    vinNumber = vin,
+                                    engineNumber = engine,
+                                    scooterSerialNumber = serial,
+                                    batteryId1 = batt1,
+                                    batteryId2 = batt2,
+                                    additionalInfo = extra
+                                )
                             )
                         }
                     } else {
-                        scooterViewModel.addScooter(name, docNum)
+                        scooterViewModel.addScooter(
+                            name = name,
+                            documentedNumber = docNum,
+                            vinNumber = vin,
+                            engineNumber = engine,
+                            scooterSerialNumber = serial,
+                            batteryId1 = batt1,
+                            batteryId2 = batt2,
+                            additionalInfo = extra
+                        )
                     }
                     showAddScooterDialog = false
                     scooterToEdit = null
@@ -1171,26 +1175,13 @@ fun RenterTable(
     val wPassport = 110.dp
     val wAddress  = 140.dp
     val wPinfl    = 95.dp
-    val wVin      = 110.dp
-    val wEngine   = 95.dp
-    val wSerial   = 75.dp
-    val wBatt1    = 65.dp
-    val wBatt2    = 65.dp
-    val wInfo     = 120.dp
 
     // Определяем, какие опциональные колонки нужно показать (хотя бы у одного
     // арендатора есть непустое значение в этом поле).
     val hasPassport = remember(renters) { renters.any { it.passportData.isNotBlank() } }
     val hasAddress  = remember(renters) { renters.any { it.address.isNotBlank() } }
     val hasPinfl    = remember(renters) { renters.any { it.pinfl.isNotBlank() } }
-    val hasVin      = remember(renters) { renters.any { it.vinNumber.isNotBlank() } }
-    val hasEngine   = remember(renters) { renters.any { it.engineNumber.isNotBlank() } }
-    val hasSerial   = remember(renters) { renters.any { it.scooterSerialNumber.isNotBlank() } }
-    val hasBatt1    = remember(renters) { renters.any { it.batteryId1.isNotBlank() } }
-    val hasBatt2    = remember(renters) { renters.any { it.batteryId2.isNotBlank() } }
-    val hasInfo     = remember(renters) { renters.any { it.additionalInfo.isNotBlank() } }
-    val hasAnyExtra = hasPassport || hasAddress || hasPinfl || hasVin || hasEngine ||
-                     hasSerial || hasBatt1 || hasBatt2 || hasInfo
+    val hasAnyExtra = hasPassport || hasAddress || hasPinfl
 
     val dateFmt = remember { SimpleDateFormat("dd.MM.yyyy", Locale.getDefault()) }
     val hScrollState = rememberScrollState()
@@ -1217,12 +1208,6 @@ fun RenterTable(
                 if (hasPassport) SortableHeaderCellFixed(Icons.Default.CreditCard,  wPassport, "col_passport", sortState) { onSortClick("col_passport") }
                 if (hasAddress)  SortableHeaderCellFixed(Icons.Default.Home,       wAddress,  "col_address",  sortState) { onSortClick("col_address") }
                 if (hasPinfl)    SortableHeaderCellFixed(Icons.Default.Fingerprint, wPinfl,    "col_pinfl",    sortState) { onSortClick("col_pinfl") }
-                if (hasVin)      SortableHeaderCellFixed(Icons.Default.Numbers,     wVin,      "col_vin",      sortState) { onSortClick("col_vin") }
-                if (hasEngine)   SortableHeaderCellFixed(Icons.Default.Build,       wEngine,   "col_engine",   sortState) { onSortClick("col_engine") }
-                if (hasSerial)   SortableHeaderCellFixed(Icons.Default.Tag,         wSerial,   "col_serial",   sortState) { onSortClick("col_serial") }
-                if (hasBatt1)    NonSortableHeaderCellFixed(Icons.Default.Bolt,     wBatt1,    "Akk 1")
-                if (hasBatt2)    NonSortableHeaderCellFixed(Icons.Default.Bolt,     wBatt2,    "Akk 2")
-                if (hasInfo)     NonSortableHeaderCellFixed(Icons.Default.Info,     wInfo,     "Qo'shimcha")
             }
         }
         HorizontalDivider(color = ClaudeDivider)
@@ -1355,60 +1340,6 @@ fun RenterTable(
                             Text(
                                 renter.pinfl.ifBlank { "—" },
                                 modifier = Modifier.width(wPinfl).padding(horizontal = 4.dp),
-                                style = MaterialTheme.typography.bodySmall,
-                                color = ClaudeText,
-                                maxLines = 1
-                            )
-                        }
-                        if (hasVin) {
-                            Text(
-                                renter.vinNumber.ifBlank { "—" },
-                                modifier = Modifier.width(wVin).padding(horizontal = 4.dp),
-                                style = MaterialTheme.typography.bodySmall,
-                                color = ClaudeText,
-                                maxLines = 1
-                            )
-                        }
-                        if (hasEngine) {
-                            Text(
-                                renter.engineNumber.ifBlank { "—" },
-                                modifier = Modifier.width(wEngine).padding(horizontal = 4.dp),
-                                style = MaterialTheme.typography.bodySmall,
-                                color = ClaudeText,
-                                maxLines = 1
-                            )
-                        }
-                        if (hasSerial) {
-                            Text(
-                                renter.scooterSerialNumber.ifBlank { "—" },
-                                modifier = Modifier.width(wSerial).padding(horizontal = 4.dp),
-                                style = MaterialTheme.typography.bodySmall,
-                                color = ClaudeText,
-                                maxLines = 1
-                            )
-                        }
-                        if (hasBatt1) {
-                            Text(
-                                renter.batteryId1.ifBlank { "—" },
-                                modifier = Modifier.width(wBatt1).padding(horizontal = 4.dp),
-                                style = MaterialTheme.typography.bodySmall,
-                                color = ClaudeText,
-                                maxLines = 1
-                            )
-                        }
-                        if (hasBatt2) {
-                            Text(
-                                renter.batteryId2.ifBlank { "—" },
-                                modifier = Modifier.width(wBatt2).padding(horizontal = 4.dp),
-                                style = MaterialTheme.typography.bodySmall,
-                                color = ClaudeText,
-                                maxLines = 1
-                            )
-                        }
-                        if (hasInfo) {
-                            Text(
-                                renter.additionalInfo.ifBlank { "—" },
-                                modifier = Modifier.width(wInfo).padding(horizontal = 4.dp),
                                 style = MaterialTheme.typography.bodySmall,
                                 color = ClaudeText,
                                 maxLines = 1
@@ -1567,13 +1498,9 @@ fun RenterFormDialog(
     var address by remember { mutableStateOf(initialRenter?.address ?: "") }
     var pinfl by remember { mutableStateOf(initialRenter?.pinfl ?: "") }
 
-    // ── PDF-реквизиты скутера ───────────────────────────────────────────
-    var vinNumber by remember { mutableStateOf(initialRenter?.vinNumber ?: "") }
-    var engineNumber by remember { mutableStateOf(initialRenter?.engineNumber ?: "") }
-    var scooterSerialNumber by remember { mutableStateOf(initialRenter?.scooterSerialNumber ?: "") }
-    var batteryId1 by remember { mutableStateOf(initialRenter?.batteryId1 ?: "") }
-    var batteryId2 by remember { mutableStateOf(initialRenter?.batteryId2 ?: "") }
-    var additionalInfo by remember { mutableStateOf(initialRenter?.additionalInfo ?: "") }
+    // Примечание: реквизиты скутера (VIN, двигатель, ID, аккумы, доп. инфо)
+    // заполняются в ScooterFormDialog — это атрибуты скутера, а не арендатора.
+    // При создании контракта они автоматически подтягиваются из БД по scooterId.
 
     val durationOptions = listOf(
         "1 Hafta" to 7, "2 Hafta" to 14, "3 Hafta" to 21,
@@ -1616,9 +1543,7 @@ fun RenterFormDialog(
     val hasAnyExtraPrefilled = remember(initialRenter) {
         val r = initialRenter
         r != null && (
-            r.passportData.isNotBlank() || r.address.isNotBlank() || r.pinfl.isNotBlank() ||
-            r.vinNumber.isNotBlank() || r.engineNumber.isNotBlank() || r.scooterSerialNumber.isNotBlank() ||
-            r.batteryId1.isNotBlank() || r.batteryId2.isNotBlank() || r.additionalInfo.isNotBlank()
+            r.passportData.isNotBlank() || r.address.isNotBlank() || r.pinfl.isNotBlank()
         )
     }
     var showExtraFields by remember { mutableStateOf(hasAnyExtraPrefilled) }
@@ -1855,57 +1780,6 @@ fun RenterFormDialog(
                         modifier = Modifier.fillMaxWidth(),
                         shape = RoundedCornerShape(8.dp)
                     )
-
-                    HorizontalDivider(color = ClaudeDivider, thickness = 1.dp)
-                    SectionLabel("Скутер ва аккумулятор маълумотлари")
-
-                    OutlinedTextField(
-                        value = vinNumber,
-                        onValueChange = { vinNumber = it },
-                        label = { Text("VIN номери") },
-                        modifier = Modifier.fillMaxWidth(),
-                        shape = RoundedCornerShape(8.dp)
-                    )
-                    OutlinedTextField(
-                        value = engineNumber,
-                        onValueChange = { engineNumber = it },
-                        label = { Text("Двигатель номери") },
-                        modifier = Modifier.fillMaxWidth(),
-                        shape = RoundedCornerShape(8.dp)
-                    )
-                    OutlinedTextField(
-                        value = scooterSerialNumber,
-                        onValueChange = { scooterSerialNumber = it },
-                        label = { Text("ID номери") },
-                        modifier = Modifier.fillMaxWidth(),
-                        shape = RoundedCornerShape(8.dp)
-                    )
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
-                        OutlinedTextField(
-                            value = batteryId1,
-                            onValueChange = { batteryId1 = it },
-                            label = { Text("Аккумулятор ID 1") },
-                            modifier = Modifier.weight(1f),
-                            shape = RoundedCornerShape(8.dp)
-                        )
-                        OutlinedTextField(
-                            value = batteryId2,
-                            onValueChange = { batteryId2 = it },
-                            label = { Text("Аккумулятор ID 2") },
-                            modifier = Modifier.weight(1f),
-                            shape = RoundedCornerShape(8.dp)
-                        )
-                    }
-                    OutlinedTextField(
-                        value = additionalInfo,
-                        onValueChange = { additionalInfo = it },
-                        label = { Text("Қўшимча маълумот") },
-                        modifier = Modifier.fillMaxWidth(),
-                        shape = RoundedCornerShape(8.dp)
-                    )
                 }
             }
         },
@@ -1931,13 +1805,7 @@ fun RenterFormDialog(
                                 isActive = isActive,
                                 passportData = passportData.trim(),
                                 address = address.trim(),
-                                pinfl = pinfl.trim(),
-                                vinNumber = vinNumber.trim(),
-                                engineNumber = engineNumber.trim(),
-                                scooterSerialNumber = scooterSerialNumber.trim(),
-                                batteryId1 = batteryId1.trim(),
-                                batteryId2 = batteryId2.trim(),
-                                additionalInfo = additionalInfo.trim()
+                                pinfl = pinfl.trim()
                             )
                         )
                     }
@@ -2000,13 +1868,7 @@ data class RenterFormResult(
     val isActive: Boolean,
     val passportData: String,
     val address: String,
-    val pinfl: String,
-    val vinNumber: String,
-    val engineNumber: String,
-    val scooterSerialNumber: String,
-    val batteryId1: String,
-    val batteryId2: String,
-    val additionalInfo: String
+    val pinfl: String
 )
 
 @Composable
@@ -2575,7 +2437,16 @@ fun ScooterFormDialog(
     initialScooter: Scooter?,
     existingScooters: List<Scooter>,
     onDismiss: () -> Unit,
-    onSave: (String, String?) -> Unit
+    onSave: (
+        name: String,
+        documentedNumber: String?,
+        vinNumber: String,
+        engineNumber: String,
+        scooterSerialNumber: String,
+        batteryId1: String,
+        batteryId2: String,
+        additionalInfo: String
+    ) -> Unit
 ) {
     val initialName = remember(initialScooter, existingScooters) {
         if (initialScooter != null) {
@@ -2592,11 +2463,28 @@ fun ScooterFormDialog(
         mutableStateOf(initialScooter?.documentedNumber ?: "")
     }
 
-    // Поле «hujjatlashtirilgan raqami» свёрнуто по умолчанию. При редактировании
-    // существующего скутера автоматически разворачивается, если значение уже есть.
-    var showExtraFields by remember {
-        mutableStateOf(!initialScooter?.documentedNumber.isNullOrBlank())
+    // ── Реквизиты скутера и аккумуляторов для PDF-договора ──────────────
+    var vinNumber by remember { mutableStateOf(initialScooter?.vinNumber ?: "") }
+    var engineNumber by remember { mutableStateOf(initialScooter?.engineNumber ?: "") }
+    var scooterSerialNumber by remember { mutableStateOf(initialScooter?.scooterSerialNumber ?: "") }
+    var batteryId1 by remember { mutableStateOf(initialScooter?.batteryId1 ?: "") }
+    var batteryId2 by remember { mutableStateOf(initialScooter?.batteryId2 ?: "") }
+    var additionalInfo by remember { mutableStateOf(initialScooter?.additionalInfo ?: "") }
+
+    // Все доп. поля свёрнуты по умолчанию. При редактировании существующего
+    // скутера автоматически разворачиваются, если хотя бы одно значение уже есть.
+    val hasAnyExtraPrefilled = remember(initialScooter) {
+        val s = initialScooter
+        s != null && (
+            !s.documentedNumber.isNullOrBlank() ||
+            s.vinNumber.isNotBlank() || s.engineNumber.isNotBlank() ||
+            s.scooterSerialNumber.isNotBlank() || s.batteryId1.isNotBlank() ||
+            s.batteryId2.isNotBlank() || s.additionalInfo.isNotBlank()
+        )
     }
+    var showExtraFields by remember { mutableStateOf(hasAnyExtraPrefilled) }
+
+    val scrollState = rememberScrollState()
 
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -2610,7 +2498,12 @@ fun ScooterFormDialog(
         containerColor = ClaudeCard,
         textContentColor = ClaudeText,
         text = {
-            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .verticalScroll(scrollState),
+                verticalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
                 OutlinedTextField(
                     value = name,
                     onValueChange = { name = it },
@@ -2659,11 +2552,60 @@ fun ScooterFormDialog(
                 }
 
                 if (showExtraFields) {
+                    SectionLabel("Скутер ва аккумулятор маълумотлари")
+
                     OutlinedTextField(
                         value = documentedNumber,
                         onValueChange = { documentedNumber = it },
                         label = { Text("Hujjatlashtirilgan raqami (ixtiyoriy)") },
                         placeholder = { Text("Masalan: 01-234 ABC") },
+                        modifier = Modifier.fillMaxWidth(),
+                        shape = RoundedCornerShape(8.dp)
+                    )
+                    OutlinedTextField(
+                        value = vinNumber,
+                        onValueChange = { vinNumber = it },
+                        label = { Text("VIN номери") },
+                        modifier = Modifier.fillMaxWidth(),
+                        shape = RoundedCornerShape(8.dp)
+                    )
+                    OutlinedTextField(
+                        value = engineNumber,
+                        onValueChange = { engineNumber = it },
+                        label = { Text("Двигатель номери") },
+                        modifier = Modifier.fillMaxWidth(),
+                        shape = RoundedCornerShape(8.dp)
+                    )
+                    OutlinedTextField(
+                        value = scooterSerialNumber,
+                        onValueChange = { scooterSerialNumber = it },
+                        label = { Text("ID номери") },
+                        modifier = Modifier.fillMaxWidth(),
+                        shape = RoundedCornerShape(8.dp)
+                    )
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        OutlinedTextField(
+                            value = batteryId1,
+                            onValueChange = { batteryId1 = it },
+                            label = { Text("Аккумулятор ID 1") },
+                            modifier = Modifier.weight(1f),
+                            shape = RoundedCornerShape(8.dp)
+                        )
+                        OutlinedTextField(
+                            value = batteryId2,
+                            onValueChange = { batteryId2 = it },
+                            label = { Text("Аккумулятор ID 2") },
+                            modifier = Modifier.weight(1f),
+                            shape = RoundedCornerShape(8.dp)
+                        )
+                    }
+                    OutlinedTextField(
+                        value = additionalInfo,
+                        onValueChange = { additionalInfo = it },
+                        label = { Text("Қўшимча маълумот") },
                         modifier = Modifier.fillMaxWidth(),
                         shape = RoundedCornerShape(8.dp)
                     )
@@ -2675,7 +2617,18 @@ fun ScooterFormDialog(
                 label = "Saqla",
                 icon = Icons.Default.Save,
                 onClick = {
-                    if (name.isNotBlank()) onSave(name, documentedNumber.takeIf { it.isNotBlank() })
+                    if (name.isNotBlank()) {
+                        onSave(
+                            name,
+                            documentedNumber.takeIf { it.isNotBlank() },
+                            vinNumber.trim(),
+                            engineNumber.trim(),
+                            scooterSerialNumber.trim(),
+                            batteryId1.trim(),
+                            batteryId2.trim(),
+                            additionalInfo.trim()
+                        )
+                    }
                 }
             )
         },

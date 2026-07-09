@@ -25,19 +25,9 @@ data class Renter(
     /** Адрес проживания. */
     val address: String = "",
     /** ЖШШИР / ПИНФЛ. */
-    val pinfl: String = "",
+    val pinfl: String = ""
 
-    // ── Реквизиты скутера для PDF-договора и далолатнома ───────────────────
-    /** VIN номер скутера. */
-    val vinNumber: String = "",
-    /** Номер двигателя. */
-    val engineNumber: String = "",
-    /** Серийный / внутренний ID номер скутера (отдельно от scooterId FK). */
-    val scooterSerialNumber: String = "",
-    /** ID первого аккумулятора. */
-    val batteryId1: String = "",
-    /** ID второго аккумулятора. */
-    val batteryId2: String = "",
-    /** Дополнительная информация (свободный текст). */
-    val additionalInfo: String = ""
+    // Примечание: реквизиты скутера (VIN, двигатель, ID, аккумы, доп. инфо)
+    // хранятся на самой сущности Scooter и подтягиваются в ContractHistoryEntry
+    // при создании контракта. Это правильно: они описывают скутер, а не арендатора.
 )
