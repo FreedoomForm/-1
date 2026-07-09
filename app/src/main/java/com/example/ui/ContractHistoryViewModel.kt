@@ -107,31 +107,87 @@ class ContractHistoryViewModel(application: Application) : AndroidViewModel(appl
         isPaid: Boolean,
         notes: String?
     ) {
+        createManualContractWithOverrides(
+            renterId = renter.id,
+            renterName = renter.name,
+            renterPhone = renter.phoneNumber,
+            scooterId = renter.scooterId,
+            scooterName = renter.scooterName ?: "",
+            passportData = renter.passportData,
+            address = renter.address,
+            pinfl = renter.pinfl,
+            weekStart = weekStart,
+            weekEnd = weekEnd,
+            amount = amount,
+            isPaid = isPaid,
+            notes = notes,
+            // Переопределения скутера — пустые строки → будут взяты из БД по scooterId
+            overrideVin = "", overrideEngine = "", overrideSerial = "",
+            overrideBatt1 = "", overrideBatt2 = "", overrideExtra = ""
+        )
+    }
+
+    /**
+     * Создаёт новый контракт вручную с ПОЛНЫМ набором переопределяемых полей
+     * арендатора и скутера. Используется диалогом создания контракта, где
+     * пользователь может выбрать любого арендатора/скутер из выпадающего
+     * списка и вручную отредактировать любое поле для PDF.
+     *
+     * Если передан [scooterId] и хотя бы одно поле скутера пустое — поле
+     * берётся из БД по этому ID. Это позволяет не требовать от пользователя
+     * заполнять все 6 полей скутера вручную.
+     */
+    fun createManualContractWithOverrides(
+        renterId: Int,
+        renterName: String,
+        renterPhone: String,
+        scooterId: Int?,
+        scooterName: String,
+        passportData: String,
+        address: String,
+        pinfl: String,
+        weekStart: Long,
+        weekEnd: Long,
+        amount: Double,
+        isPaid: Boolean,
+        notes: String?,
+        overrideVin: String,
+        overrideEngine: String,
+        overrideSerial: String,
+        overrideBatt1: String,
+        overrideBatt2: String,
+        overrideExtra: String
+    ) {
         viewModelScope.launch(Dispatchers.IO) {
-            val scooter: Scooter? = renter.scooterId?.let {
+            val scooter: Scooter? = scooterId?.let {
                 AppDatabase.getDatabase(getApplication()).scooterDao().getScooterById(it)
             }
+            // Для каждого поля скутера: приоритет у пользовательского ввода,
+            // затем — значение из БД, затем пустая строка.
+            fun pickScooterField(override: String, dbValue: String?): String =
+                override.ifBlank { dbValue ?: "" }
+
             val entry = ContractHistoryEntry(
-                renterId = renter.id,
+                renterId = renterId,
                 timestamp = System.currentTimeMillis(),
                 type = ContractHistoryEntry.TYPE_AUTO_RENEW,
                 amount = amount,
                 notes = notes?.ifBlank { null },
-                renterName = renter.name,
-                renterPhone = renter.phoneNumber,
-                scooterName = renter.scooterName,
+                renterName = renterName,
+                renterPhone = renterPhone,
+                scooterName = scooterName.ifBlank { scooter?.name ?: "" },
                 weekStart = weekStart,
                 weekEnd = weekEnd,
                 weeklyPrice = amount,
-                passportData = renter.passportData,
-                address = renter.address,
-                pinfl = renter.pinfl,
-                vinNumber = scooter?.vinNumber ?: "",
-                engineNumber = scooter?.engineNumber ?: "",
-                scooterSerialNumber = scooter?.scooterSerialNumber ?: "",
-                batteryId1 = scooter?.batteryId1 ?: "",
-                batteryId2 = scooter?.batteryId2 ?: "",
-                additionalInfo = scooter?.additionalInfo ?: "",
+                passportData = passportData,
+                address = address,
+                pinfl = pinfl,
+                vinNumber = pickScooterField(overrideVin, scooter?.vinNumber),
+                engineNumber = pickScooterField(overrideEngine, scooter?.engineNumber),
+                scooterSerialNumber = pickScooterField(overrideSerial, scooter?.scooterSerialNumber),
+                batteryId1 = pickScooterField(overrideBatt1, scooter?.batteryId1),
+                batteryId2 = pickScooterField(overrideBatt2, scooter?.batteryId2),
+                additionalInfo = pickScooterField(overrideExtra, scooter?.additionalInfo),
                 isPaid = isPaid
             )
             repo.insert(entry)

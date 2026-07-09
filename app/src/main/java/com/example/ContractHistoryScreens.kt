@@ -472,8 +472,12 @@ fun RenterContractHistoryScreen(
             renter = renter,
             defaultAmount = SettingsRepository(context).weeklyPrice
                 .let { if (it > 0) it else SettingsRepository.DEFAULT_WEEKLY_PRICE },
+            allRenters = allRenters,
+            allScooters = allScooters,
             onDismiss = { showCreateDialog = false },
             onCreate = { weekStart, weekEnd, amount, isPaid, notes ->
+                // Обратная совместимость — не используется в новой версии диалога,
+                // но оставлен как fallback на случай, если кто-то вызовет старый путь.
                 contractHistoryViewModel.createManualContract(
                     renter = renter,
                     weekStart = weekStart,
@@ -481,6 +485,34 @@ fun RenterContractHistoryScreen(
                     amount = amount,
                     isPaid = isPaid,
                     notes = notes
+                )
+                Toast.makeText(context, "Kontrakt yaratildi", Toast.LENGTH_SHORT).show()
+                showCreateDialog = false
+            },
+            onCreateWithOverrides = { renterId, rName, rPhone, sId, sName,
+                                       passport, addr, pin,
+                                       wStart, wEnd, amt, paid, noteText,
+                                       vin, engine, serial, batt1, batt2, extra ->
+                contractHistoryViewModel.createManualContractWithOverrides(
+                    renterId = renterId,
+                    renterName = rName,
+                    renterPhone = rPhone,
+                    scooterId = sId,
+                    scooterName = sName,
+                    passportData = passport,
+                    address = addr,
+                    pinfl = pin,
+                    weekStart = wStart,
+                    weekEnd = wEnd,
+                    amount = amt,
+                    isPaid = paid,
+                    notes = noteText,
+                    overrideVin = vin,
+                    overrideEngine = engine,
+                    overrideSerial = serial,
+                    overrideBatt1 = batt1,
+                    overrideBatt2 = batt2,
+                    overrideExtra = extra
                 )
                 Toast.makeText(context, "Kontrakt yaratildi", Toast.LENGTH_SHORT).show()
                 showCreateDialog = false
@@ -927,11 +959,22 @@ private fun InfoRow(label: String, value: String) {
  * Диалог ручного создания контракта с экрана истории контрактов.
  *
  * Позволяет задать:
+ *   • Реквизиты арендатора (имя, телефон, паспорт, адрес, JSHSHIR)
+ *     с выпадающим списком всех арендаторов — при выборе поля
+ *     автозаполняются.
+ *   • Реквизиты скутера (имя, VIN, двигатель, ID, аккумы 1/2, доп. инфо)
+ *     с выпадающим списком всех скутеров — при выборе поля
+ *     автозаполняются.
  *   • Дату начала недели (по умолчанию — сегодня)
  *   • Дату конца недели (по умолчанию — начало + 7 дней)
  *   • Сумму (по умолчанию — weeklyPrice из настроек)
  *   • Статус: To'langan (зелёный) / To'lanmagan (красный)
  *   • Примечание (опционально)
+ *
+ * Структура полностью повторяет EditContractDialog: три секции
+ * Mijoz / Skuter / Kontrakt. При выборе арендатора или скутера из
+ * выпадающего списка все связанные поля автозаполняются, но пользователь
+ * может их доредактировать вручную перед созданием контракта.
  *
  * Баланс арендатора НЕ меняется — пользователь может управлять балансом
  * через кнопку "To'lov" на основной таблице.
@@ -941,8 +984,19 @@ private fun InfoRow(label: String, value: String) {
 private fun CreateContractDialog(
     renter: Renter,
     defaultAmount: Double,
+    allRenters: List<Renter>,
+    allScooters: List<Scooter>,
     onDismiss: () -> Unit,
-    onCreate: (weekStart: Long, weekEnd: Long, amount: Double, isPaid: Boolean, notes: String?) -> Unit
+    onCreate: (weekStart: Long, weekEnd: Long, amount: Double, isPaid: Boolean, notes: String?) -> Unit,
+    onCreateWithOverrides: (
+        renterId: Int, renterName: String, renterPhone: String,
+        scooterId: Int?, scooterName: String,
+        passportData: String, address: String, pinfl: String,
+        weekStart: Long, weekEnd: Long, amount: Double, isPaid: Boolean,
+        notes: String?,
+        vinNumber: String, engineNumber: String, scooterSerialNumber: String,
+        batteryId1: String, batteryId2: String, additionalInfo: String
+    ) -> Unit
 ) {
     val dateFmt = remember { SimpleDateFormat("dd.MM.yyyy", Locale.getDefault()) }
     val now = System.currentTimeMillis()
@@ -957,6 +1011,32 @@ private fun CreateContractDialog(
     var notes by remember { mutableStateOf("") }
     var showStartPicker by remember { mutableStateOf(false) }
     var showEndPicker by remember { mutableStateOf(false) }
+
+    // ── Реквизиты арендатора (предзаполнены из renter, но редактируемы) ──
+    var selectedRenterId by remember { mutableStateOf(renter.id) }
+    var renterName by remember { mutableStateOf(renter.name) }
+    var renterPhone by remember { mutableStateOf(renter.phoneNumber) }
+    var passportData by remember { mutableStateOf(renter.passportData) }
+    var address by remember { mutableStateOf(renter.address) }
+    var pinfl by remember { mutableStateOf(renter.pinfl) }
+
+    // ── Реквизиты скутера (предзаполнены из renter.scooterName, но редактируемы) ──
+    var selectedScooterId by remember { mutableStateOf(renter.scooterId) }
+    var scooterName by remember { mutableStateOf(renter.scooterName ?: "") }
+    var vinNumber by remember { mutableStateOf("") }
+    var engineNumber by remember { mutableStateOf("") }
+    var scooterSerialNumber by remember { mutableStateOf("") }
+    var batteryId1 by remember { mutableStateOf("") }
+    var batteryId2 by remember { mutableStateOf("") }
+    var additionalInfo by remember { mutableStateOf("") }
+
+    // ── Выпадающие списки арендаторов и скутеров ─────────────────────────
+    // При выборе арендатора/скутера из списка все их реквизиты автоматически
+    // подтягиваются в соответствующие поля. Пользователь может их
+    // доредактировать вручную после выбора.
+    var expandedRenter by remember { mutableStateOf(false) }
+    var expandedScooter by remember { mutableStateOf(false) }
+    val scrollState = rememberScrollState()
 
     val startPickerState = rememberDatePickerState(initialSelectedDateMillis = weekStart)
     val endPickerState = rememberDatePickerState(initialSelectedDateMillis = weekEnd)
@@ -1026,19 +1106,195 @@ private fun CreateContractDialog(
         },
         containerColor = ClaudeCard,
         text = {
-            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                // Информация об арендаторе
-                Card(
-                    modifier = Modifier.fillMaxWidth(),
-                    colors = CardDefaults.cardColors(containerColor = ClaudeBackground),
-                    shape = RoundedCornerShape(8.dp)
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .verticalScroll(scrollState),
+                verticalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                // ── Секция: Арендатор (с выпадающим списком) ────────────
+                Text("Mijoz", style = MaterialTheme.typography.titleSmall,
+                    color = ClaudeAccent, fontWeight = FontWeight.SemiBold)
+
+                ExposedDropdownMenuBox(
+                    expanded = expandedRenter,
+                    onExpandedChange = { expandedRenter = !expandedRenter }
                 ) {
-                    Column(modifier = Modifier.padding(12.dp)) {
-                        InfoRow("Mijoz", renter.name)
-                        InfoRow("Telefon", renter.phoneNumber)
-                        InfoRow("Skuter", renter.scooterName ?: "—")
+                    OutlinedTextField(
+                        value = renterName,
+                        onValueChange = { renterName = it },
+                        label = { Text("Mijoz ismi") },
+                        trailingIcon = {
+                            ExposedDropdownMenuDefaults.TrailingIcon(expanded = expandedRenter)
+                        },
+                        modifier = Modifier.menuAnchor().fillMaxWidth(),
+                        shape = RoundedCornerShape(8.dp)
+                    )
+                    ExposedDropdownMenu(
+                        expanded = expandedRenter,
+                        onDismissRequest = { expandedRenter = false }
+                    ) {
+                        allRenters.take(50).forEach { r ->
+                            DropdownMenuItem(
+                                text = { Text("${r.name}  •  ${r.phoneNumber}") },
+                                onClick = {
+                                    // Автозаполнение всех полей арендатора из выбранной записи
+                                    selectedRenterId = r.id
+                                    renterName = r.name
+                                    renterPhone = r.phoneNumber
+                                    passportData = r.passportData
+                                    address = r.address
+                                    pinfl = r.pinfl
+                                    // Также подтягиваем скутер этого арендатора, если есть
+                                    if (r.scooterId != null && r.scooterName != null) {
+                                        selectedScooterId = r.scooterId
+                                        scooterName = r.scooterName ?: ""
+                                        // Поля скутера (vin и т.д.) будут заполнены из БД
+                                        // при создании контракта через createManualContractWithOverrides.
+                                        // Сбрасываем локальные поля, чтобы подставились данные БД.
+                                        val scoot = allScooters.find { it.id == r.scooterId }
+                                        if (scoot != null) {
+                                            vinNumber = scoot.vinNumber
+                                            engineNumber = scoot.engineNumber
+                                            scooterSerialNumber = scoot.scooterSerialNumber
+                                            batteryId1 = scoot.batteryId1
+                                            batteryId2 = scoot.batteryId2
+                                            additionalInfo = scoot.additionalInfo
+                                        }
+                                    }
+                                    expandedRenter = false
+                                }
+                            )
+                        }
                     }
                 }
+
+                OutlinedTextField(
+                    value = renterPhone,
+                    onValueChange = { renterPhone = it },
+                    label = { Text("Telefon") },
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(8.dp)
+                )
+                OutlinedTextField(
+                    value = passportData,
+                    onValueChange = { passportData = it },
+                    label = { Text("Pasport ma'lumotlari") },
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(8.dp)
+                )
+                OutlinedTextField(
+                    value = address,
+                    onValueChange = { address = it },
+                    label = { Text("Manzil") },
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(8.dp)
+                )
+                OutlinedTextField(
+                    value = pinfl,
+                    onValueChange = { pinfl = it },
+                    label = { Text("JSHSHIR (PINFL)") },
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(8.dp)
+                )
+
+                HorizontalDivider(color = ClaudeDivider)
+
+                // ── Секция: Скутер (с выпадающим списком) ───────────────
+                Text("Skuter", style = MaterialTheme.typography.titleSmall,
+                    color = ClaudeAccent, fontWeight = FontWeight.SemiBold)
+
+                ExposedDropdownMenuBox(
+                    expanded = expandedScooter,
+                    onExpandedChange = { expandedScooter = !expandedScooter }
+                ) {
+                    OutlinedTextField(
+                        value = scooterName,
+                        onValueChange = { scooterName = it },
+                        label = { Text("Skuter nomi") },
+                        trailingIcon = {
+                            ExposedDropdownMenuDefaults.TrailingIcon(expanded = expandedScooter)
+                        },
+                        modifier = Modifier.menuAnchor().fillMaxWidth(),
+                        shape = RoundedCornerShape(8.dp)
+                    )
+                    ExposedDropdownMenu(
+                        expanded = expandedScooter,
+                        onDismissRequest = { expandedScooter = false }
+                    ) {
+                        allScooters.take(50).forEach { s ->
+                            DropdownMenuItem(
+                                text = { Text(s.name) },
+                                onClick = {
+                                    // Автозаполнение всех полей скутера из выбранной записи
+                                    selectedScooterId = s.id
+                                    scooterName = s.name
+                                    vinNumber = s.vinNumber
+                                    engineNumber = s.engineNumber
+                                    scooterSerialNumber = s.scooterSerialNumber
+                                    batteryId1 = s.batteryId1
+                                    batteryId2 = s.batteryId2
+                                    additionalInfo = s.additionalInfo
+                                    expandedScooter = false
+                                }
+                            )
+                        }
+                    }
+                }
+
+                OutlinedTextField(
+                    value = vinNumber,
+                    onValueChange = { vinNumber = it },
+                    label = { Text("VIN") },
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(8.dp)
+                )
+                OutlinedTextField(
+                    value = engineNumber,
+                    onValueChange = { engineNumber = it },
+                    label = { Text("Dvigatel raqami") },
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(8.dp)
+                )
+                OutlinedTextField(
+                    value = scooterSerialNumber,
+                    onValueChange = { scooterSerialNumber = it },
+                    label = { Text("ID raqami") },
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(8.dp)
+                )
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    OutlinedTextField(
+                        value = batteryId1,
+                        onValueChange = { batteryId1 = it },
+                        label = { Text("Akkum. 1") },
+                        modifier = Modifier.weight(1f),
+                        shape = RoundedCornerShape(8.dp)
+                    )
+                    OutlinedTextField(
+                        value = batteryId2,
+                        onValueChange = { batteryId2 = it },
+                        label = { Text("Akkum. 2") },
+                        modifier = Modifier.weight(1f),
+                        shape = RoundedCornerShape(8.dp)
+                    )
+                }
+                OutlinedTextField(
+                    value = additionalInfo,
+                    onValueChange = { additionalInfo = it },
+                    label = { Text("Qo'shimcha ma'lumot") },
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(8.dp)
+                )
+
+                HorizontalDivider(color = ClaudeDivider)
+
+                // ── Секция: Контракт ────────────────────────────────────
+                Text("Kontrakt", style = MaterialTheme.typography.titleSmall,
+                    color = ClaudeAccent, fontWeight = FontWeight.SemiBold)
 
                 // Дата начала
                 OutlinedTextField(
@@ -1127,7 +1383,18 @@ private fun CreateContractDialog(
                 icon = Icons.Default.Add,
                 onClick = {
                     val parsedAmount = amount.toDoubleOrNull() ?: defaultAmount
-                    onCreate(weekStart, weekEnd, parsedAmount, isPaid, notes)
+                    // Создаём контракт с полным набором переопределённых полей —
+                    // это гарантирует, что в PDF попадут именно те данные,
+                    // которые пользователь видел в диалоге.
+                    onCreateWithOverrides(
+                        selectedRenterId, renterName, renterPhone,
+                        selectedScooterId, scooterName,
+                        passportData, address, pinfl,
+                        weekStart, weekEnd, parsedAmount, isPaid,
+                        notes,
+                        vinNumber, engineNumber, scooterSerialNumber,
+                        batteryId1, batteryId2, additionalInfo
+                    )
                 }
             )
         },

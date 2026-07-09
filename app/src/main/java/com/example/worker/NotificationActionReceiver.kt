@@ -10,6 +10,9 @@ import androidx.work.OneTimeWorkRequestBuilder
 import androidx.work.WorkManager
 import androidx.work.workDataOf
 import com.example.data.AppDatabase
+import com.example.data.ContractHistoryEntry
+import com.example.data.Renter
+import com.example.data.Scooter
 import com.example.data.SettingsRepository
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -25,9 +28,15 @@ import java.util.concurrent.TimeUnit
  *
  * Поддерживает два действия:
  *  • ACTION_PAYMENT_RECEIVED   — «To'lov qabul qilindi»:
- *      долг -= weeklyPrice, скутер остаётся у клиента.
+ *      увеличивает balance на weeklyPrice (баланс ≥ 0 — предоплата, < 0 —
+ *      гашение долга). Создаёт запись PAYMENT. При предоплате создаёт
+ *      новый оплаченный контракт AUTO_RENEW. Использует ту же логику, что
+ *      и RenterViewModel.applyWeeklyPayment() — это гарантирует
+ *      корректное состояние баланса и истории контрактов.
  *  • ACTION_TERMINATE_CONTRACT — «Kontraktni uzish»:
- *      долг -= weeklyPrice, isReturned = true (контракт закрыт).
+ *      помечает арендатора как вернувшего скутер (isReturned = true),
+ *      создаёт запись TERMINATED в истории. Баланс НЕ меняется —
+ *      скутер просто возвращается на базу.
  */
 class NotificationActionReceiver : BroadcastReceiver() {
 
@@ -49,29 +58,161 @@ class NotificationActionReceiver : BroadcastReceiver() {
     }
 
     /**
-     * «To'lov qabul qilindi»: списываем недельный тариф из долга.
-     * Скутер у клиента НЕ забираем.
+     * «To'lov qabul qilindi»: обрабатываем оплату одной недели.
+     *
+     * Логика полностью совпадает с RenterViewModel.applyWeeklyPayment():
+     *   • Если balance < 0 (есть долг) — гасим самый ранний неоплаченный
+     *     контракт: помечаем isPaid = true. Баланс растёт на weeklyPrice.
+     *     Если после этого баланс ≥ 0 — арендатор снова активен.
+     *   • Если balance ≥ 0 (предоплата) — создаём новый оплаченный контракт
+     *     AUTO_RENEW. Применяется логика «>7 дней с последнего контракта»:
+     *     если последний контракт закончился больше недели назад, новый
+     *     начинается с сегодняшнего дня. Арендатор возвращается в активное
+     *     состояние (isReturned = false).
+     *
+     * В обоих случаях создаётся запись PAYMENT для истории транзакций.
      */
     private fun handlePaymentReceived(context: Context, renterId: Int) {
         val pending = goAsync()
         CoroutineScope(Dispatchers.IO).launch {
             try {
                 val db = AppDatabase.getDatabase(context)
-                val renter = db.renterDao().getRenterById(renterId) ?: return@launch
+                val renter = db.renterDao().getRenterById(renterId)
+                if (renter == null) {
+                    Log.w(TAG, "Renter #$renterId not found, ignoring payment")
+                    return@launch
+                }
 
                 val weeklyPrice = SettingsRepository(context).weeklyPrice
-                val newDebt = maxOf(0.0, renter.debtAmount - weeklyPrice)
-                Log.d(TAG, "Payment: renter #$renterId " +
-                    "debt ${renter.debtAmount} → $newDebt (weekly=$weeklyPrice), scooter stays")
+                    .let { if (it > 0) it else SettingsRepository.DEFAULT_WEEKLY_PRICE }
+                val newBalance = renter.balance + weeklyPrice
+                val now = System.currentTimeMillis()
+                val dayMs = 24L * 60 * 60 * 1000
+                val weekMs = 7L * dayMs
 
-                db.renterDao().updateRenter(
-                    renter.copy(
-                        debtAmount = newDebt,
-                        lastPaymentTimestamp = System.currentTimeMillis(),
-                        isOverdueSmsSent = false
+                // Подтягиваем скутер для денормализованных полей
+                val scooter: Scooter? = renter.scooterId?.let {
+                    db.scooterDao().getScooterById(it)
+                }
+                val sVin = scooter?.vinNumber ?: ""
+                val sEngine = scooter?.engineNumber ?: ""
+                val sSerial = scooter?.scooterSerialNumber ?: ""
+                val sBat1 = scooter?.batteryId1 ?: ""
+                val sBat2 = scooter?.batteryId2 ?: ""
+                val sExtra = scooter?.additionalInfo ?: ""
+
+                if (renter.balance < 0) {
+                    // ── Гашение долга: помечаем самый ранний неоплаченный контракт ──
+                    val unpaid = db.contractHistoryDao().getEarliestUnpaidContract(renter.id)
+                    if (unpaid != null) {
+                        db.contractHistoryDao().update(unpaid.copy(isPaid = true))
+                    }
+                    db.contractHistoryDao().insert(
+                        ContractHistoryEntry(
+                            renterId = renter.id, timestamp = now,
+                            type = ContractHistoryEntry.TYPE_PAYMENT, amount = weeklyPrice,
+                            notes = "To'lov qabul qilindi (bildirishnoma)",
+                            renterName = renter.name, renterPhone = renter.phoneNumber,
+                            scooterName = renter.scooterName,
+                            weekStart = unpaid?.weekStart,
+                            weekEnd = unpaid?.weekEnd,
+                            weeklyPrice = weeklyPrice,
+                            passportData = renter.passportData,
+                            address = renter.address,
+                            pinfl = renter.pinfl,
+                            vinNumber = sVin, engineNumber = sEngine,
+                            scooterSerialNumber = sSerial,
+                            batteryId1 = sBat1, batteryId2 = sBat2,
+                            additionalInfo = sExtra
+                        )
                     )
-                )
-                // Удаляем уведомление из шторки — действие обработано.
+                    val updated = renter.copy(
+                        balance = newBalance,
+                        debtAmount = maxOf(0.0, -newBalance),
+                        lastPaymentTimestamp = now,
+                        isOverdueSmsSent = false,
+                        // Если после гашения баланс стал ≥ 0 — возвращаем в активное
+                        isReturned = if (newBalance >= 0) false else renter.isReturned
+                    )
+                    db.renterDao().updateRenter(updated)
+                    Log.d(TAG, "Payment (debt): renter #$renterId " +
+                        "balance ${renter.balance} → $newBalance, " +
+                        "unpaid contract ${unpaid?.id} marked paid")
+                } else {
+                    // ── Предоплата: создаём новый оплаченный контракт ──
+                    val latestPaid = db.contractHistoryDao().getLatestPaidContract(renter.id)
+                    val lastWeekEnd = latestPaid?.weekEnd
+                        ?: (renter.rentStartDateTimestamp + renter.rentDurationDays * dayMs)
+                    val effectiveLastEnd = lastWeekEnd
+                        ?: (renter.rentStartDateTimestamp + renter.rentDurationDays * dayMs)
+                    val effectiveGapMs = now - effectiveLastEnd
+                    val shouldStartFromNow = effectiveGapMs > weekMs
+
+                    val baseStart = when {
+                        shouldStartFromNow -> now
+                        lastWeekEnd != null && lastWeekEnd >= now -> lastWeekEnd
+                        else -> now
+                    }
+                    val weekStart = baseStart
+                    val weekEnd = baseStart + weekMs
+
+                    val contractNotes = when {
+                        renter.isReturned -> "Qayta faollashtirildi (bildirishnoma)"
+                        shouldStartFromNow && lastWeekEnd != null ->
+                            "Yangi hafta (eski kontrakt muddati o'tgan)"
+                        else -> "Oldindan to'lov (bildirishnoma)"
+                    }
+
+                    db.contractHistoryDao().insert(
+                        ContractHistoryEntry(
+                            renterId = renter.id, timestamp = now,
+                            type = ContractHistoryEntry.TYPE_AUTO_RENEW,
+                            amount = weeklyPrice, notes = contractNotes,
+                            renterName = renter.name, renterPhone = renter.phoneNumber,
+                            scooterName = renter.scooterName,
+                            weekStart = weekStart, weekEnd = weekEnd,
+                            weeklyPrice = weeklyPrice,
+                            passportData = renter.passportData,
+                            address = renter.address, pinfl = renter.pinfl,
+                            vinNumber = sVin, engineNumber = sEngine,
+                            scooterSerialNumber = sSerial,
+                            batteryId1 = sBat1, batteryId2 = sBat2,
+                            additionalInfo = sExtra,
+                            isPaid = true
+                        )
+                    )
+                    db.contractHistoryDao().insert(
+                        ContractHistoryEntry(
+                            renterId = renter.id, timestamp = now,
+                            type = ContractHistoryEntry.TYPE_PAYMENT, amount = weeklyPrice,
+                            notes = "To'lov qabul qilindi (bildirishnoma)",
+                            renterName = renter.name, renterPhone = renter.phoneNumber,
+                            scooterName = renter.scooterName,
+                            weekStart = weekStart, weekEnd = weekEnd,
+                            weeklyPrice = weeklyPrice,
+                            passportData = renter.passportData,
+                            address = renter.address, pinfl = renter.pinfl,
+                            vinNumber = sVin, engineNumber = sEngine,
+                            scooterSerialNumber = sSerial,
+                            batteryId1 = sBat1, batteryId2 = sBat2,
+                            additionalInfo = sExtra
+                        )
+                    )
+                    val updated = renter.copy(
+                        balance = newBalance,
+                        debtAmount = maxOf(0.0, -newBalance),
+                        rentStartDateTimestamp = weekStart,
+                        rentDurationDays = 7,
+                        lastPaymentTimestamp = now,
+                        isOverdueSmsSent = false,
+                        isReturned = false  // реактивация
+                    )
+                    db.renterDao().updateRenter(updated)
+                    Log.d(TAG, "Payment (prepay): renter #$renterId " +
+                        "balance ${renter.balance} → $newBalance, " +
+                        "new contract $weekStart..$weekEnd")
+                }
+
                 NotificationManagerCompat.from(context).cancel(renterId)
                 Log.d(TAG, "Notification #$renterId dismissed after payment")
             } catch (e: Exception) {
@@ -83,31 +224,59 @@ class NotificationActionReceiver : BroadcastReceiver() {
     }
 
     /**
-     * «Kontraktni uzish»: списываем недельный тариф из долга и помечаем
-     * арендатора как вернувшего скутер.
+     * «Kontraktni uzish»: помечает арендатора как вернувшего скутер
+     * (isReturned = true) и создаёт запись TERMINATED в истории.
+     *
+     * Баланс НЕ меняется — кнопка «узish» только закрывает контракт
+     * (логически скутер вернулся на базу). Если арендатор был должен,
+     * долг остаётся в истории; если был аванс — аванс остаётся.
      */
     private fun handleTerminateContract(context: Context, renterId: Int) {
         val pending = goAsync()
         CoroutineScope(Dispatchers.IO).launch {
             try {
                 val db = AppDatabase.getDatabase(context)
-                val renter = db.renterDao().getRenterById(renterId) ?: return@launch
+                val renter = db.renterDao().getRenterById(renterId)
+                if (renter == null) {
+                    Log.w(TAG, "Renter #$renterId not found, ignoring terminate")
+                    return@launch
+                }
 
-                val weeklyPrice = SettingsRepository(context).weeklyPrice
-                val newDebt = maxOf(0.0, renter.debtAmount - weeklyPrice)
-                Log.d(TAG, "Terminate: renter #$renterId " +
-                    "debt ${renter.debtAmount} → $newDebt, mark returned")
-
-                db.renterDao().updateRenter(
-                    renter.copy(
-                        debtAmount = newDebt,
-                        isReturned = true,
-                        lastPaymentTimestamp = System.currentTimeMillis(),
-                        isOverdueSmsSent = false
+                val now = System.currentTimeMillis()
+                val scooter: Scooter? = renter.scooterId?.let {
+                    db.scooterDao().getScooterById(it)
+                }
+                db.contractHistoryDao().insert(
+                    ContractHistoryEntry(
+                        renterId = renter.id, timestamp = now,
+                        type = ContractHistoryEntry.TYPE_TERMINATED,
+                        amount = 0.0,
+                        notes = "Kontrakt uzildi (bildirishnoma)",
+                        renterName = renter.name, renterPhone = renter.phoneNumber,
+                        scooterName = renter.scooterName,
+                        weekStart = renter.rentStartDateTimestamp,
+                        weekEnd = now,
+                        weeklyPrice = 0.0,
+                        passportData = renter.passportData,
+                        address = renter.address, pinfl = renter.pinfl,
+                        vinNumber = scooter?.vinNumber ?: "",
+                        engineNumber = scooter?.engineNumber ?: "",
+                        scooterSerialNumber = scooter?.scooterSerialNumber ?: "",
+                        batteryId1 = scooter?.batteryId1 ?: "",
+                        batteryId2 = scooter?.batteryId2 ?: "",
+                        additionalInfo = scooter?.additionalInfo ?: ""
                     )
                 )
+
+                val updated = renter.copy(
+                    isReturned = true,
+                    lastPaymentTimestamp = now,
+                    isOverdueSmsSent = false
+                )
+                db.renterDao().updateRenter(updated)
                 NotificationManagerCompat.from(context).cancel(renterId)
-                Log.d(TAG, "Notification #$renterId dismissed after terminate")
+                Log.d(TAG, "Terminate: renter #$renterId marked returned, " +
+                    "balance unchanged ${renter.balance}")
             } catch (e: Exception) {
                 Log.e(TAG, "handleTerminateContract failed", e)
             } finally {

@@ -5,12 +5,16 @@ import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
@@ -24,6 +28,8 @@ import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.example.ui.theme.*
@@ -358,16 +364,106 @@ data class FilterColumn(
 )
 
 /**
+ * One row in the FilterSidePanel: an OutlinedTextField with a colored
+ * status line underneath (green = column visible, red = column hidden).
+ *
+ * Long-press on the row toggles column visibility. Normal tap on the
+ * field still allows typing filter text (when the column is visible).
+ *
+ * Visual language mirrors the renter table row status border:
+ *   • StatusOk (green-600) when visible
+ *   • StatusOverdue (red-600) when hidden
+ */
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+private fun FilterFieldRow(
+    col: FilterColumn,
+    value: String,
+    onValueChange: (String) -> Unit,
+    isVisible: Boolean,
+    statusColor: Color,
+    interactionSource: MutableInteractionSource,
+    onToggleVisibility: () -> Unit
+) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(8.dp))
+            .combinedClickable(
+                interactionSource = interactionSource,
+                indication = null,
+                onClick = { /* normal tap does nothing — typing is via the field */ },
+                onLongClick = onToggleVisibility
+            )
+    ) {
+        OutlinedTextField(
+            value = value,
+            onValueChange = onValueChange,
+            label = { Text(col.label) },
+            placeholder = { Text(col.placeholder) },
+            modifier = Modifier.fillMaxWidth(),
+            shape = RoundedCornerShape(8.dp),
+            singleLine = true,
+            enabled = isVisible,  // disabled when hidden — no point filtering a hidden column
+            keyboardOptions = KeyboardOptions(keyboardType = col.keyboardType),
+            colors = OutlinedTextFieldDefaults.colors(
+                unfocusedBorderColor = ClaudeDivider,
+                focusedBorderColor = statusColor,
+                unfocusedContainerColor = Color.White,
+                focusedContainerColor = Color.White,
+                disabledBorderColor = ClaudeDivider,
+                disabledContainerColor = Color(0xFFFAFAFA),
+                disabledLabelColor = ClaudeTextSecondary,
+                disabledTextColor = ClaudeTextSecondary
+            ),
+            trailingIcon = {
+                // Eye icon shows current visibility state at a glance
+                Icon(
+                    if (isVisible) Icons.Default.Visibility else Icons.Default.VisibilityOff,
+                    contentDescription = if (isVisible) "Ko'rinmoqda" else "Yashirilgan",
+                    tint = statusColor,
+                    modifier = Modifier.size(18.dp)
+                )
+            }
+        )
+        // ── Status line under the field (green/red, 2dp) ──
+        // Same visual language as the renter table row status border.
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(top = 2.dp)
+                .height(2.dp)
+                .clip(RoundedCornerShape(1.dp))
+                .background(statusColor)
+        )
+        Spacer(Modifier.height(2.dp))
+        Text(
+            if (isVisible) "Ko'rinmoqda  •  uzun bosing — yashirish"
+              else "Yashirilgan  •  uzun bosing — ko'rsatish",
+            style = MaterialTheme.typography.labelSmall,
+            color = statusColor,
+            fontWeight = FontWeight.Medium
+        )
+    }
+}
+
+/**
  * Side panel that slides in from the right edge.
  *
- * Two sections:
- *   1. "Ustunlarni ko'rsatish" — checkboxes for column visibility
- *      (default: all checked). Unchecked columns are hidden from the table.
- *   2. "Filtrlash" — text field per column for content filtering.
+ * Single integrated list of filter fields, one per column. Each field has:
+ *   • A colored status line UNDER the input (green = column visible,
+ *     red = column hidden) — same visual language as the renter table
+ *     status line.
+ *   • Long-press on the field toggles column visibility. Long-press again
+ *     toggles back.
+ *   • Normal tap / typing still works for filtering.
  *
- * User toggles checkboxes and types filter values, then clicks "Qidirish"
- * to apply all filters simultaneously. The visibility state is exposed via
- * [visibleColumns] and observed live by the parent table.
+ * User types filter values then clicks "Qidirish" to apply. Visibility
+ * changes apply instantly via [onColumnVisibilityChange].
+ *
+ * The visibility state is owned by the caller (parent screen) and passed
+ * in via [columnVisibility]. Default for any column not in the map is
+ * `true` (visible).
  */
 @Composable
 fun FilterSidePanel(
@@ -380,7 +476,7 @@ fun FilterSidePanel(
     visible: Boolean,
     /** Map of columnId -> isCurrentlyVisible. Caller must persist this state. */
     columnVisibility: Map<String, Boolean> = emptyMap(),
-    /** Called when user toggles a column's visibility checkbox. */
+    /** Called when user toggles a column's visibility (via long-press). */
     onColumnVisibilityChange: (String, Boolean) -> Unit = { _, _ -> }
 ) {
     if (!visible) return
@@ -426,94 +522,50 @@ fun FilterSidePanel(
                     }
                 }
 
-                Spacer(Modifier.height(8.dp))
-                HorizontalDivider(color = ClaudeDivider)
-                Spacer(Modifier.height(12.dp))
-
-                // ── Section 1: Column visibility checkboxes ────────────────
+                Spacer(Modifier.height(4.dp))
                 Text(
-                    "Ustunlarni ko'rsatish",
-                    style = MaterialTheme.typography.titleSmall,
-                    color = ClaudeText,
-                    fontWeight = FontWeight.Bold
+                    "Uzun bosib ustunni yashirish/ko'rsatish",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = ClaudeTextSecondary
                 )
                 Spacer(Modifier.height(8.dp))
-
-                LazyColumn(
-                    modifier = Modifier.weight(0.4f),
-                    verticalArrangement = Arrangement.spacedBy(2.dp)
-                ) {
-                    items(columns, key = { it.id }) { col ->
-                        val isChecked = columnVisibility[col.id] ?: true
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .clip(RoundedCornerShape(6.dp))
-                                .clickable { onColumnVisibilityChange(col.id, !isChecked) }
-                                .padding(horizontal = 8.dp, vertical = 6.dp),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Checkbox(
-                                checked = isChecked,
-                                onCheckedChange = { onColumnVisibilityChange(col.id, it) },
-                                modifier = Modifier.size(28.dp),
-                                colors = androidx.compose.material3.CheckboxDefaults.colors(
-                                    checkedColor = ClaudeAccent,
-                                    uncheckedColor = ClaudeTextSecondary,
-                                    checkmarkColor = Color.White
-                                )
-                            )
-                            Spacer(Modifier.width(8.dp))
-                            Text(
-                                col.label,
-                                style = MaterialTheme.typography.bodyMedium,
-                                color = if (isChecked) ClaudeText else ClaudeTextSecondary,
-                                fontWeight = if (isChecked) FontWeight.Medium else FontWeight.Normal
-                            )
-                        }
-                    }
-                }
-
-                Spacer(Modifier.height(8.dp))
                 HorizontalDivider(color = ClaudeDivider)
-                Spacer(Modifier.height(12.dp))
-
-                // ── Section 2: Filter text fields ──────────────────────────
-                Text(
-                    "Filtrlash",
-                    style = MaterialTheme.typography.titleSmall,
-                    color = ClaudeText,
-                    fontWeight = FontWeight.Bold
-                )
                 Spacer(Modifier.height(8.dp))
 
+                // ── Single integrated list of filter fields ───────────────
+                // Each field has a colored status line underneath:
+                //   green = column visible, red = column hidden.
+                // Long-press toggles visibility.
                 LazyColumn(
-                    modifier = Modifier.weight(0.6f),
-                    verticalArrangement = Arrangement.spacedBy(12.dp)
+                    modifier = Modifier.weight(1f),
+                    verticalArrangement = Arrangement.spacedBy(10.dp)
                 ) {
                     items(columns, key = { it.id }) { col ->
-                        OutlinedTextField(
+                        val isVisible = columnVisibility[col.id] ?: true
+                        // Color of the status line: green when visible, red when hidden.
+                        // Same palette as the renter table status line.
+                        val statusColor = if (isVisible) StatusOk else StatusOverdue
+
+                        // Long-press toggles column visibility
+                        val interactionSource = remember { MutableInteractionSource() }
+                        val haptics = LocalHapticFeedback.current
+
+                        FilterFieldRow(
+                            col = col,
                             value = filterValues[col.id] ?: "",
                             onValueChange = { onFilterChange(col.id, it) },
-                            label = { Text(col.label) },
-                            placeholder = { Text(col.placeholder) },
-                            modifier = Modifier.fillMaxWidth(),
-                            shape = RoundedCornerShape(12.dp),
-                            singleLine = true,
-                            keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(
-                                keyboardType = col.keyboardType
-                            ),
-                            colors = OutlinedTextFieldDefaults.colors(
-                                unfocusedBorderColor = ClaudeDivider,
-                                focusedBorderColor = ClaudeAccent,
-                                unfocusedContainerColor = Color.White,
-                                focusedContainerColor = Color.White
-                            )
+                            isVisible = isVisible,
+                            statusColor = statusColor,
+                            interactionSource = interactionSource,
+                            onToggleVisibility = {
+                                haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+                                onColumnVisibilityChange(col.id, !isVisible)
+                            }
                         )
                     }
                 }
 
-                Spacer(Modifier.height(16.dp))
+                Spacer(Modifier.height(12.dp))
 
                 // Active filter count
                 val activeCount = filterValues.count { it.value.isNotBlank() }
