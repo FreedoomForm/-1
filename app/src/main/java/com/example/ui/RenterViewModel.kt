@@ -82,7 +82,18 @@ class RenterViewModel(application: Application) : AndroidViewModel(application) 
      */
     fun addRenter(
         name: String, phone: String, debt: Double, duration: Int,
-        startTimestamp: Long, scooterId: Int?, scooterName: String?, weeklyPrice: Double
+        startTimestamp: Long, scooterId: Int?, scooterName: String?, weeklyPrice: Double,
+        // PDF-реквизиты арендатора
+        passportData: String = "",
+        address: String = "",
+        pinfl: String = "",
+        // PDF-реквизиты скутера
+        vinNumber: String = "",
+        engineNumber: String = "",
+        scooterSerialNumber: String = "",
+        batteryId1: String = "",
+        batteryId2: String = "",
+        additionalInfo: String = ""
     ) {
         viewModelScope.launch {
             val now = System.currentTimeMillis()
@@ -103,7 +114,12 @@ class RenterViewModel(application: Application) : AndroidViewModel(application) 
             val provisional = Renter(
                 name = name, phoneNumber = phone, debtAmount = finalDebt,
                 rentDurationDays = duration, rentStartDateTimestamp = startTimestamp,
-                scooterId = scooterId, scooterName = scooterName, balance = initialBalance
+                scooterId = scooterId, scooterName = scooterName, balance = initialBalance,
+                passportData = passportData, address = address, pinfl = pinfl,
+                vinNumber = vinNumber, engineNumber = engineNumber,
+                scooterSerialNumber = scooterSerialNumber,
+                batteryId1 = batteryId1, batteryId2 = batteryId2,
+                additionalInfo = additionalInfo
             )
 
             val localId = repository.insert(provisional).toInt()
@@ -123,7 +139,16 @@ class RenterViewModel(application: Application) : AndroidViewModel(application) 
                         scooterName = savedRenter.scooterName,
                         weekStart = savedRenter.rentStartDateTimestamp,
                         weekEnd = savedRenter.rentStartDateTimestamp + savedRenter.rentDurationDays * 24L * 60 * 60 * 1000,
-                        weeklyPrice = effectiveWeeklyPrice
+                        weeklyPrice = effectiveWeeklyPrice,
+                        passportData = savedRenter.passportData,
+                        address = savedRenter.address,
+                        pinfl = savedRenter.pinfl,
+                        vinNumber = savedRenter.vinNumber,
+                        engineNumber = savedRenter.engineNumber,
+                        scooterSerialNumber = savedRenter.scooterSerialNumber,
+                        batteryId1 = savedRenter.batteryId1,
+                        batteryId2 = savedRenter.batteryId2,
+                        additionalInfo = savedRenter.additionalInfo
                     ))
 
                     // Если просрочка — создаем N записей AUTO_RENEW
@@ -143,7 +168,16 @@ class RenterViewModel(application: Application) : AndroidViewModel(application) 
                                 scooterName = savedRenter.scooterName,
                                 weekStart = weekStart,
                                 weekEnd = weekEnd,
-                                weeklyPrice = effectiveWeeklyPrice
+                                weeklyPrice = effectiveWeeklyPrice,
+                                passportData = savedRenter.passportData,
+                                address = savedRenter.address,
+                                pinfl = savedRenter.pinfl,
+                                vinNumber = savedRenter.vinNumber,
+                                engineNumber = savedRenter.engineNumber,
+                                scooterSerialNumber = savedRenter.scooterSerialNumber,
+                                batteryId1 = savedRenter.batteryId1,
+                                batteryId2 = savedRenter.batteryId2,
+                                additionalInfo = savedRenter.additionalInfo
                             ))
                         }
                     }
@@ -395,7 +429,17 @@ class RenterViewModel(application: Application) : AndroidViewModel(application) 
         newScooterId: Int?,
         newScooterName: String?,
         newIsActive: Boolean,
-        weeklyPrice: Double
+        weeklyPrice: Double,
+        // PDF-реквизиты
+        passportData: String = existing.passportData,
+        address: String = existing.address,
+        pinfl: String = existing.pinfl,
+        vinNumber: String = existing.vinNumber,
+        engineNumber: String = existing.engineNumber,
+        scooterSerialNumber: String = existing.scooterSerialNumber,
+        batteryId1: String = existing.batteryId1,
+        batteryId2: String = existing.batteryId2,
+        additionalInfo: String = existing.additionalInfo
     ) {
         viewModelScope.launch(Dispatchers.IO) {
             val effectivePrice = if (weeklyPrice > 0) weeklyPrice else SettingsRepository.DEFAULT_WEEKLY_PRICE
@@ -432,7 +476,16 @@ class RenterViewModel(application: Application) : AndroidViewModel(application) 
                             scooterName = newScooterName,
                             weekStart = weekStart,
                             weekEnd = weekEnd,
-                            weeklyPrice = realWeeklyPrice
+                            weeklyPrice = realWeeklyPrice,
+                            passportData = passportData,
+                            address = address,
+                            pinfl = pinfl,
+                            vinNumber = vinNumber,
+                            engineNumber = engineNumber,
+                            scooterSerialNumber = scooterSerialNumber,
+                            batteryId1 = batteryId1,
+                            batteryId2 = batteryId2,
+                            additionalInfo = additionalInfo
                         ))
                         balanceAdjust -= realWeeklyPrice
                     }
@@ -472,7 +525,16 @@ class RenterViewModel(application: Application) : AndroidViewModel(application) 
                         scooterName = newScooterName,
                         weekStart = weekStart,
                         weekEnd = weekEnd,
-                        weeklyPrice = realWeeklyPrice
+                        weeklyPrice = realWeeklyPrice,
+                        passportData = passportData,
+                        address = address,
+                        pinfl = pinfl,
+                        vinNumber = vinNumber,
+                        engineNumber = engineNumber,
+                        scooterSerialNumber = scooterSerialNumber,
+                        batteryId1 = batteryId1,
+                        batteryId2 = batteryId2,
+                        additionalInfo = additionalInfo
                     ))
                     balanceAdjust -= realWeeklyPrice
                 }
@@ -489,7 +551,16 @@ class RenterViewModel(application: Application) : AndroidViewModel(application) 
                 scooterName = newScooterName,
                 isReturned = !newIsActive,
                 balance = newBalance,
-                isOverdueSmsSent = if (newIsActive && newStart != oldStart) false else existing.isOverdueSmsSent
+                isOverdueSmsSent = if (newIsActive && newStart != oldStart) false else existing.isOverdueSmsSent,
+                passportData = passportData,
+                address = address,
+                pinfl = pinfl,
+                vinNumber = vinNumber,
+                engineNumber = engineNumber,
+                scooterSerialNumber = scooterSerialNumber,
+                batteryId1 = batteryId1,
+                batteryId2 = batteryId2,
+                additionalInfo = additionalInfo
             )
             repository.update(updated)
         }
@@ -575,7 +646,16 @@ class RenterViewModel(application: Application) : AndroidViewModel(application) 
             renterName = renter.name, renterPhone = renter.phoneNumber, scooterName = renter.scooterName,
             weekStart = weekStart,
             weekEnd = weekEnd,
-            weeklyPrice = effectivePrice
+            weeklyPrice = effectivePrice,
+            passportData = renter.passportData,
+            address = renter.address,
+            pinfl = renter.pinfl,
+            vinNumber = renter.vinNumber,
+            engineNumber = renter.engineNumber,
+            scooterSerialNumber = renter.scooterSerialNumber,
+            batteryId1 = renter.batteryId1,
+            batteryId2 = renter.batteryId2,
+            additionalInfo = renter.additionalInfo
         )
         historyRepository.insert(entry)
     }
@@ -592,7 +672,16 @@ class RenterViewModel(application: Application) : AndroidViewModel(application) 
             renterName = renter.name, renterPhone = renter.phoneNumber, scooterName = renter.scooterName,
             weekStart = renter.rentStartDateTimestamp,
             weekEnd = System.currentTimeMillis(),
-            weeklyPrice = effectivePrice
+            weeklyPrice = effectivePrice,
+            passportData = renter.passportData,
+            address = renter.address,
+            pinfl = renter.pinfl,
+            vinNumber = renter.vinNumber,
+            engineNumber = renter.engineNumber,
+            scooterSerialNumber = renter.scooterSerialNumber,
+            batteryId1 = renter.batteryId1,
+            batteryId2 = renter.batteryId2,
+            additionalInfo = renter.additionalInfo
         )
         historyRepository.insert(entry)
     }

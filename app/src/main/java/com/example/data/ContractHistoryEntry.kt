@@ -13,9 +13,11 @@ import androidx.room.PrimaryKey
  *  • TERMINATED  — досрочном расторжении
  *  • RETURNED    — возврате скутера
  *
- * Поля `renterName`, `renterPhone`, `scooterName`, `weekStart`, `weekEnd` денормализованы
- * специально для генерации PDF-документа по контракту — даже если арендатор/скутер
- * будет удалён, PDF всё равно можно сгенерировать корректно.
+ * Поля `renterName`, `renterPhone`, `scooterName`, `weekStart`, `weekEnd` и все
+ * `passport*` / `address` / `pinfl` / `vin*` / `engine*` / `battery*` поля
+ * денормализованы специально для генерации PDF-документа по контракту —
+ * даже если арендатор/скутер будет удалён, PDF всё равно можно сгенерировать
+ * корректно без пустых полей.
  */
 @Entity(tableName = "contract_history")
 data class ContractHistoryEntry(
@@ -36,7 +38,20 @@ data class ContractHistoryEntry(
     /** Конец недели (для AUTO_RENEW) или дата окончания аренды (для CREATED). */
     val weekEnd: Long? = null,
     /** Использованная недельная ставка на момент создания записи. */
-    val weeklyPrice: Double = 0.0
+    val weeklyPrice: Double = 0.0,
+
+    // ── Реквизиты арендатора (для PDF) ────────────────────────────────────
+    val passportData: String = "",
+    val address: String = "",
+    val pinfl: String = "",
+
+    // ── Реквизиты скутера (для PDF) ───────────────────────────────────────
+    val vinNumber: String = "",
+    val engineNumber: String = "",
+    val scooterSerialNumber: String = "",
+    val batteryId1: String = "",
+    val batteryId2: String = "",
+    val additionalInfo: String = ""
 ) {
     companion object {
         const val TYPE_CREATED = "CREATED"

@@ -15,8 +15,10 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.material.icons.Icons
@@ -345,14 +347,23 @@ fun MainScreen(
                     scooters = scooters,
                     activeRenters = renters,
                     onDismiss = { renterToEdit = null },
-                    onSave = { name, phone, debt, duration, startTimestamp, scooterId, scooterName, active ->
+                    onSave = { result ->
                         renterToEdit?.let {
                             viewModel.updateRenterWithContracts(
                                 existing = it,
-                                newName = name, newPhone = phone, newDebt = debt,
-                                newDuration = duration, newStartTimestamp = startTimestamp,
-                                newScooterId = scooterId, newScooterName = scooterName,
-                                newIsActive = active, weeklyPrice = weekly
+                                newName = result.name, newPhone = result.phone, newDebt = result.debt,
+                                newDuration = result.duration, newStartTimestamp = result.startTimestamp,
+                                newScooterId = result.scooterId, newScooterName = result.scooterName,
+                                newIsActive = result.isActive, weeklyPrice = weekly,
+                                passportData = result.passportData,
+                                address = result.address,
+                                pinfl = result.pinfl,
+                                vinNumber = result.vinNumber,
+                                engineNumber = result.engineNumber,
+                                scooterSerialNumber = result.scooterSerialNumber,
+                                batteryId1 = result.batteryId1,
+                                batteryId2 = result.batteryId2,
+                                additionalInfo = result.additionalInfo
                             )
                         }
                         renterToEdit = null
@@ -911,33 +922,51 @@ fun MainScreen(
                     showAddDialog = false
                     renterToEdit = null
                 },
-                onSave = { name, phone, debt, duration, startTimestamp, scooterId, scooterName, active ->
+                onSave = { result ->
                     if (isEdit) {
                         renterToEdit?.let {
                             // Используем новую функцию с авто-корректировкой контрактов
                             viewModel.updateRenterWithContracts(
                                 existing = it,
-                                newName = name,
-                                newPhone = phone,
-                                newDebt = debt,
-                                newDuration = duration,
-                                newStartTimestamp = startTimestamp,
-                                newScooterId = scooterId,
-                                newScooterName = scooterName,
-                                newIsActive = active,
-                                weeklyPrice = weekly
+                                newName = result.name,
+                                newPhone = result.phone,
+                                newDebt = result.debt,
+                                newDuration = result.duration,
+                                newStartTimestamp = result.startTimestamp,
+                                newScooterId = result.scooterId,
+                                newScooterName = result.scooterName,
+                                newIsActive = result.isActive,
+                                weeklyPrice = weekly,
+                                passportData = result.passportData,
+                                address = result.address,
+                                pinfl = result.pinfl,
+                                vinNumber = result.vinNumber,
+                                engineNumber = result.engineNumber,
+                                scooterSerialNumber = result.scooterSerialNumber,
+                                batteryId1 = result.batteryId1,
+                                batteryId2 = result.batteryId2,
+                                additionalInfo = result.additionalInfo
                             )
                         }
                     } else {
                         viewModel.addRenter(
-                            name = name,
-                            phone = phone,
-                            debt = debt,
-                            duration = duration,
-                            startTimestamp = startTimestamp,
-                            scooterId = scooterId,
-                            scooterName = scooterName,
-                            weeklyPrice = weekly
+                            name = result.name,
+                            phone = result.phone,
+                            debt = result.debt,
+                            duration = result.duration,
+                            startTimestamp = result.startTimestamp,
+                            scooterId = result.scooterId,
+                            scooterName = result.scooterName,
+                            weeklyPrice = weekly,
+                            passportData = result.passportData,
+                            address = result.address,
+                            pinfl = result.pinfl,
+                            vinNumber = result.vinNumber,
+                            engineNumber = result.engineNumber,
+                            scooterSerialNumber = result.scooterSerialNumber,
+                            batteryId1 = result.batteryId1,
+                            batteryId2 = result.batteryId2,
+                            additionalInfo = result.additionalInfo
                         )
                     }
                     showAddDialog = false
@@ -1349,7 +1378,7 @@ fun RenterFormDialog(
     scooters: List<Scooter> = emptyList(),
     activeRenters: List<Renter> = emptyList(),
     onDismiss: () -> Unit,
-    onSave: (String, String, Double, Int, Long, Int?, String?, Boolean) -> Unit
+    onSave: (RenterFormResult) -> Unit
 ) {
     var name by remember { mutableStateOf(initialRenter?.name ?: "") }
     var phone by remember {
@@ -1373,6 +1402,19 @@ fun RenterFormDialog(
     val startDatePickerState = rememberDatePickerState(
         initialSelectedDateMillis = startTimestamp
     )
+
+    // ── PDF-реквизиты арендатора ────────────────────────────────────────
+    var passportData by remember { mutableStateOf(initialRenter?.passportData ?: "") }
+    var address by remember { mutableStateOf(initialRenter?.address ?: "") }
+    var pinfl by remember { mutableStateOf(initialRenter?.pinfl ?: "") }
+
+    // ── PDF-реквизиты скутера ───────────────────────────────────────────
+    var vinNumber by remember { mutableStateOf(initialRenter?.vinNumber ?: "") }
+    var engineNumber by remember { mutableStateOf(initialRenter?.engineNumber ?: "") }
+    var scooterSerialNumber by remember { mutableStateOf(initialRenter?.scooterSerialNumber ?: "") }
+    var batteryId1 by remember { mutableStateOf(initialRenter?.batteryId1 ?: "") }
+    var batteryId2 by remember { mutableStateOf(initialRenter?.batteryId2 ?: "") }
+    var additionalInfo by remember { mutableStateOf(initialRenter?.additionalInfo ?: "") }
 
     val durationOptions = listOf(
         "1 Hafta" to 7, "2 Hafta" to 14, "3 Hafta" to 21,
@@ -1409,6 +1451,8 @@ fun RenterFormDialog(
         }
     }
 
+    val scrollState = rememberScrollState()
+
     AlertDialog(
         onDismissRequest = onDismiss,
         title = {
@@ -1422,11 +1466,19 @@ fun RenterFormDialog(
         textContentColor = ClaudeText,
         titleContentColor = ClaudeText,
         text = {
-            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .verticalScroll(scrollState),
+                verticalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                // ── Секция: Шахсий маълумотлар ──────────────────────────
+                SectionLabel("Шахсий маълумотлар")
+
                 OutlinedTextField(
                     value = name,
                     onValueChange = { name = it },
-                    label = { Text("To'liq ism") },
+                    label = { Text("To'liq ism (ФИШ)") },
                     modifier = Modifier.fillMaxWidth(),
                     shape = RoundedCornerShape(8.dp),
                     colors = OutlinedTextFieldDefaults.colors(
@@ -1445,6 +1497,33 @@ fun RenterFormDialog(
                     modifier = Modifier.fillMaxWidth(),
                     shape = RoundedCornerShape(8.dp)
                 )
+                OutlinedTextField(
+                    value = passportData,
+                    onValueChange = { passportData = it },
+                    label = { Text("Паспорт: серия, рақам, олинган сана") },
+                    placeholder = { Text("Masalan: AA 1234567, 15.01.2023") },
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(8.dp)
+                )
+                OutlinedTextField(
+                    value = address,
+                    onValueChange = { address = it },
+                    label = { Text("Манзил") },
+                    placeholder = { Text("Masalan: Тошкент ш., Юнусобод тумани, ...") },
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(8.dp)
+                )
+                OutlinedTextField(
+                    value = pinfl,
+                    onValueChange = { pinfl = it.filter { ch -> ch.isDigit() }.take(14) },
+                    label = { Text("ЖШШИР (ПИНФЛ)") },
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(8.dp)
+                )
+
+                HorizontalDivider(color = ClaudeDivider, thickness = 1.dp)
+                SectionLabel("Ижара шартлари")
 
                 // Кнопка выбора даты начала аренды
                 OutlinedCard(
@@ -1568,6 +1647,57 @@ fun RenterFormDialog(
                     modifier = Modifier.fillMaxWidth(),
                     shape = RoundedCornerShape(8.dp)
                 )
+
+                HorizontalDivider(color = ClaudeDivider, thickness = 1.dp)
+                SectionLabel("Скутер ва аккумулятор маълумотлари")
+
+                OutlinedTextField(
+                    value = vinNumber,
+                    onValueChange = { vinNumber = it },
+                    label = { Text("VIN номери") },
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(8.dp)
+                )
+                OutlinedTextField(
+                    value = engineNumber,
+                    onValueChange = { engineNumber = it },
+                    label = { Text("Двигатель номери") },
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(8.dp)
+                )
+                OutlinedTextField(
+                    value = scooterSerialNumber,
+                    onValueChange = { scooterSerialNumber = it },
+                    label = { Text("ID номери") },
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(8.dp)
+                )
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    OutlinedTextField(
+                        value = batteryId1,
+                        onValueChange = { batteryId1 = it },
+                        label = { Text("Аккумулятор ID 1") },
+                        modifier = Modifier.weight(1f),
+                        shape = RoundedCornerShape(8.dp)
+                    )
+                    OutlinedTextField(
+                        value = batteryId2,
+                        onValueChange = { batteryId2 = it },
+                        label = { Text("Аккумулятор ID 2") },
+                        modifier = Modifier.weight(1f),
+                        shape = RoundedCornerShape(8.dp)
+                    )
+                }
+                OutlinedTextField(
+                    value = additionalInfo,
+                    onValueChange = { additionalInfo = it },
+                    label = { Text("Қўшимча маълумот") },
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(8.dp)
+                )
             }
         },
         confirmButton = {
@@ -1581,8 +1711,25 @@ fun RenterFormDialog(
                     val scooterName = scooters.find { it.id == selectedScooterId }?.name
                     if (name.isNotBlank() && phone.isNotBlank()) {
                         onSave(
-                            name, phoneToSave, debtValue, durationValue,
-                            startTimestamp, selectedScooterId, scooterName, isActive
+                            RenterFormResult(
+                                name = name,
+                                phone = phoneToSave,
+                                debt = debtValue,
+                                duration = durationValue,
+                                startTimestamp = startTimestamp,
+                                scooterId = selectedScooterId,
+                                scooterName = scooterName,
+                                isActive = isActive,
+                                passportData = passportData.trim(),
+                                address = address.trim(),
+                                pinfl = pinfl.trim(),
+                                vinNumber = vinNumber.trim(),
+                                engineNumber = engineNumber.trim(),
+                                scooterSerialNumber = scooterSerialNumber.trim(),
+                                batteryId1 = batteryId1.trim(),
+                                batteryId2 = batteryId2.trim(),
+                                additionalInfo = additionalInfo.trim()
+                            )
                         )
                     }
                 }
@@ -1622,6 +1769,36 @@ fun RenterFormDialog(
         }
     }
 }
+
+@Composable
+private fun SectionLabel(text: String) {
+    Text(
+        text = text,
+        style = MaterialTheme.typography.titleSmall,
+        color = ClaudeAccent,
+        fontWeight = FontWeight.SemiBold
+    )
+}
+
+data class RenterFormResult(
+    val name: String,
+    val phone: String,
+    val debt: Double,
+    val duration: Int,
+    val startTimestamp: Long,
+    val scooterId: Int?,
+    val scooterName: String?,
+    val isActive: Boolean,
+    val passportData: String,
+    val address: String,
+    val pinfl: String,
+    val vinNumber: String,
+    val engineNumber: String,
+    val scooterSerialNumber: String,
+    val batteryId1: String,
+    val batteryId2: String,
+    val additionalInfo: String
+)
 
 @Composable
 fun SettingsDialog(

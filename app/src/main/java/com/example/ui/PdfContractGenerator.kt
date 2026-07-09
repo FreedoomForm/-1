@@ -79,6 +79,23 @@ object PdfContractGenerator {
                 ?: renter?.let { 0.0 } ?: 0.0
             val dailyAmount = if (weeklyAmount > 0) weeklyAmount / 7.0 else 0.0
 
+            // ── Реквизиты арендатора для PDF (entry → renter fallback) ──────
+            val tenantPassport = entry.passportData.ifBlank { renter?.passportData ?: "" }
+            val tenantAddress = entry.address.ifBlank { renter?.address ?: "" }
+            val tenantPinfl = entry.pinfl.ifBlank { renter?.pinfl ?: "" }
+
+            // ── Реквизиты скутера для PDF ───────────────────────────────────
+            val scooterVin = entry.vinNumber.ifBlank { renter?.vinNumber ?: "" }
+            val scooterEngine = entry.engineNumber.ifBlank { renter?.engineNumber ?: "" }
+            val scooterSerial = entry.scooterSerialNumber.ifBlank { renter?.scooterSerialNumber ?: "" }
+            val battId1 = entry.batteryId1.ifBlank { renter?.batteryId1 ?: "" }
+            val battId2 = entry.batteryId2.ifBlank { renter?.batteryId2 ?: "" }
+            val extraInfo = entry.additionalInfo.ifBlank { renter?.additionalInfo ?: "" }
+
+            // Заполнитель для пустых полей (чтобы линия для подписи оставалась)
+            fun fill(value: String): String = value.ifBlank { "______________________________" }
+            fun shortFill(value: String): String = value.ifBlank { "________" }
+
             // ── Paints ───────────────────────────────────────────────────────
             val titlePaint = TextPaint().apply {
                 color = Color.BLACK
@@ -119,11 +136,11 @@ object PdfContractGenerator {
                     bodyPaint, spaceAfter = 8f
                 ))
                 add(Paragraph(
-                    "Манзил: ______________________________ да яшовчи фуқаро ФИШ $tenantName",
+                    "Манзил: ${fill(tenantAddress)} да яшовчи фуқаро ФИШ $tenantName",
                     bodyPaint, spaceAfter = 4f
                 ))
                 add(Paragraph(
-                    "(Паспорт серия, рақам, олинган сана) ______________________________",
+                    "(Паспорт серия, рақам, олинган сана) ${fill(tenantPassport)}",
                     bodyPaint, spaceAfter = 4f
                 ))
                 add(Paragraph(
@@ -146,7 +163,7 @@ object PdfContractGenerator {
                     bodyPaint, indent = 12f, spaceAfter = 4f
                 ))
                 add(Paragraph(
-                    "2) Аккумуляторлар (ID: ___, ID: ___) билан биргаликда «Ижарага олувчи»га топшириш, «Ижарага олувчи» эса вақтинча фойдаланиш учун уни ижарага олиш ва ижара ҳақини тўлаш мажбуриятини олади.",
+                    "2) Аккумуляторлар (ID: ${shortFill(battId1)}, ID: ${shortFill(battId2)}) билан биргаликда «Ижарага олувчи»га топшириш, «Ижарага олувчи» эса вақтинча фойдаланиш учун уни ижарага олиш ва ижара ҳақини тўлаш мажбуриятини олади.",
                     bodyPaint, indent = 12f, spaceAfter = 4f
                 ))
                 add(Paragraph(
@@ -248,9 +265,9 @@ object PdfContractGenerator {
 
                 add(Paragraph("«Ижарага Олувчи»:", bodyPaint.applyBold(), spaceAfter = 4f))
                 add(Paragraph("ФИШ: $tenantName", bodyPaint, spaceAfter = 2f))
-                add(Paragraph("Паспорт маълумотлари: ______________________________", bodyPaint, spaceAfter = 2f))
-                add(Paragraph("Манзил: ______________________________", bodyPaint, spaceAfter = 2f))
-                add(Paragraph("ЖШШИР: ______________________________", bodyPaint, spaceAfter = 2f))
+                add(Paragraph("Паспорт маълумотлари: ${fill(tenantPassport)}", bodyPaint, spaceAfter = 2f))
+                add(Paragraph("Манзил: ${fill(tenantAddress)}", bodyPaint, spaceAfter = 2f))
+                add(Paragraph("ЖШШИР: ${fill(tenantPinfl)}", bodyPaint, spaceAfter = 2f))
                 add(Paragraph("Телефон: $tenantPhone", bodyPaint, spaceAfter = 8f))
 
                 add(Paragraph(
@@ -272,11 +289,11 @@ object PdfContractGenerator {
                     bodyPaint, spaceAfter = 8f
                 ))
                 add(Paragraph("Модель: $scooterName", bodyPaint, spaceAfter = 2f))
-                add(Paragraph("VIN №: ______________________________", bodyPaint, spaceAfter = 2f))
-                add(Paragraph("Двигатель рақами: ______________________________", bodyPaint, spaceAfter = 2f))
-                add(Paragraph("ID рақами: ______________________________", bodyPaint, spaceAfter = 2f))
-                add(Paragraph("Аккумулятор ID рақамлари: ID: ___ ID: ___", bodyPaint, spaceAfter = 2f))
-                add(Paragraph("Қўшимча маълумот: ______________________________", bodyPaint, spaceAfter = 8f))
+                add(Paragraph("VIN №: ${fill(scooterVin)}", bodyPaint, spaceAfter = 2f))
+                add(Paragraph("Двигатель рақами: ${fill(scooterEngine)}", bodyPaint, spaceAfter = 2f))
+                add(Paragraph("ID рақами: ${fill(scooterSerial)}", bodyPaint, spaceAfter = 2f))
+                add(Paragraph("Аккумулятор ID рақамлари: ID: ${shortFill(battId1)}  ID: ${shortFill(battId2)}", bodyPaint, spaceAfter = 2f))
+                add(Paragraph("Қўшимча маълумот: ${fill(extraInfo)}", bodyPaint, spaceAfter = 8f))
                 add(Paragraph(
                     "Ижарага берувчи юқорида кўрсатилган мототранспорт воситасини кўздан кечирганда қуйидаги ҳолатлар аниқланди:",
                     bodyPaint, spaceAfter = 4f

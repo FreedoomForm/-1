@@ -121,7 +121,16 @@ class PaymentCheckWorker(
                 scooterName = renter.scooterName,
                 weekStart = weekStart,
                 weekEnd = weekEnd,
-                weeklyPrice = weeklyPrice
+                weeklyPrice = weeklyPrice,
+                passportData = renter.passportData,
+                address = renter.address,
+                pinfl = renter.pinfl,
+                vinNumber = renter.vinNumber,
+                engineNumber = renter.engineNumber,
+                scooterSerialNumber = renter.scooterSerialNumber,
+                batteryId1 = renter.batteryId1,
+                batteryId2 = renter.batteryId2,
+                additionalInfo = renter.additionalInfo
             )
         )
         Log.d(TAG, "Auto-renewed renter #${renter.id} for 1 week, balance ${renter.balance} → $newBalance")
