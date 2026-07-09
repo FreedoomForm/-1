@@ -74,6 +74,12 @@ class RenterViewModel(application: Application) : AndroidViewModel(application) 
     fun startAutoSync() { /* no-op: local-only mode */ }
     fun stopAutoSync() { /* no-op: local-only mode */ }
 
+    /**
+     * Создаёт нового арендатора. Одновременно создаёт одну запись CREATED в истории
+     * контрактов, а при просрочке на старте — дополнительно N записей AUTO_RENEW
+     * (по одной на каждую просроченную неделю), чтобы в истории сразу были видны
+     * все недели долга.
+     */
     fun addRenter(
         name: String, phone: String, debt: Double, duration: Int,
         startTimestamp: Long, scooterId: Int?, scooterName: String?, weeklyPrice: Double
@@ -103,6 +109,47 @@ class RenterViewModel(application: Application) : AndroidViewModel(application) 
             val localId = repository.insert(provisional).toInt()
             val savedRenter = provisional.copy(id = localId)
 
+            // ── Запись CREATED ──────────────────────────────────────────
+            viewModelScope.launch(Dispatchers.IO) {
+                try {
+                    historyRepository.insert(ContractHistoryEntry(
+                        renterId = savedRenter.id,
+                        timestamp = now,
+                        type = ContractHistoryEntry.TYPE_CREATED,
+                        amount = effectiveWeeklyPrice,
+                        notes = if (isOverdueAtCreation) "Kechikkan holda yaratildi" else "Yaratildi",
+                        renterName = savedRenter.name,
+                        renterPhone = savedRenter.phoneNumber,
+                        scooterName = savedRenter.scooterName,
+                        weekStart = savedRenter.rentStartDateTimestamp,
+                        weekEnd = savedRenter.rentStartDateTimestamp + savedRenter.rentDurationDays * 24L * 60 * 60 * 1000,
+                        weeklyPrice = effectiveWeeklyPrice
+                    ))
+
+                    // Если просрочка — создаем N записей AUTO_RENEW
+                    if (isOverdueAtCreation) {
+                        val overdueWeeks = ((now - expiryTime) / (7L * 24 * 60 * 60 * 1000)).toInt().coerceAtLeast(1)
+                        for (i in 1..overdueWeeks) {
+                            val weekStart = expiryTime + (i - 1) * 7L * 24 * 60 * 60 * 1000
+                            val weekEnd = weekStart + 7L * 24 * 60 * 60 * 1000
+                            historyRepository.insert(ContractHistoryEntry(
+                                renterId = savedRenter.id,
+                                timestamp = now,
+                                type = ContractHistoryEntry.TYPE_AUTO_RENEW,
+                                amount = effectiveWeeklyPrice,
+                                notes = "$i-hafta avtomatik yangilangan (kechikish)",
+                                renterName = savedRenter.name,
+                                renterPhone = savedRenter.phoneNumber,
+                                scooterName = savedRenter.scooterName,
+                                weekStart = weekStart,
+                                weekEnd = weekEnd,
+                                weeklyPrice = effectiveWeeklyPrice
+                            ))
+                        }
+                    }
+                } catch (e: Exception) { Log.w(TAG, "History save xato", e) }
+            }
+
             if (isOverdueAtCreation) {
                 val context = getApplication<Application>()
                 try {
@@ -125,29 +172,11 @@ class RenterViewModel(application: Application) : AndroidViewModel(application) 
                 wm.enqueueUniquePeriodicWork("PaymentCheckWork", androidx.work.ExistingPeriodicWorkPolicy.KEEP,
                     androidx.work.PeriodicWorkRequestBuilder<PaymentCheckWorker>(1, java.util.concurrent.TimeUnit.HOURS).build())
             }
-
-            viewModelScope.launch(Dispatchers.IO) {
-                val renterIdForSync = savedRenter.id
-                try {
-                    historyRepository.insert(ContractHistoryEntry(
-                        renterId = renterIdForSync, timestamp = now,
-                        type = ContractHistoryEntry.TYPE_CREATED, amount = effectiveWeeklyPrice,
-                        notes = if (isOverdueAtCreation) "Kechikkan holda yaratildi" else "Yaratildi"
-                    ))
-                } catch (e: Exception) { Log.w(TAG, "History save xato", e) }
-            }
         }
     }
 
     /**
-     * SMS yuborish — 3 ta usul bilan ketma-ket uriniladi:
-     *
-     * 1-urinish: getSmsManagerForSubscriptionId(subId) + PendingIntent
-     * 2-urinish: getSystemService/getDefault + PendingIntent
-     * 3-urinish: getDefault() + FIRE-AND-FORGET (PendingIntentsiz)
-     *
-     * Har bir urinishda sendMultipartTextMessage ishlatiladi
-     * (xabar 160 belgidan uzun bo'lsa).
+     * SMS yuborish — 3 ta usul bilan ketma-ket uriniladi.
      */
     private fun sendSmsWithFullRetry(
         context: android.content.Context,
@@ -156,14 +185,12 @@ class RenterViewModel(application: Application) : AndroidViewModel(application) 
         now: Long,
         initialBalance: Double
     ) {
-        // 1. Permission
         if (ContextCompat.checkSelfPermission(context, android.Manifest.permission.SEND_SMS) != PackageManager.PERMISSION_GRANTED) {
             _smsResults.tryEmit(SmsResult(false, "SMS yuborilmadi: ruxsat berilmagan", "SMS_PERMISSION_DENIED", "SecurityException", "SEND_SMS ruxsati berilmagan"))
             WorkManager.getInstance(context).enqueue(OneTimeWorkRequestBuilder<SmsWorker>().build())
             return
         }
 
-        // 2. Raqam normallashtirish
         val rawPhone = renter.phoneNumber
         val phone = SimHelper.normalizePhoneNumber(rawPhone)
         if (phone.isBlank()) {
@@ -171,16 +198,11 @@ class RenterViewModel(application: Application) : AndroidViewModel(application) 
             return
         }
 
-        // 3. Xabar shakllantirish
         val settingsRepo = SettingsRepository(context)
-        val message = settingsRepo.smsTemplate
-            .replace("{name}", renter.name)
-            .replace("{days}", (((now - expiryTime) / (1000L * 60 * 60 * 24)).toInt()).toString())
-            .replace("{debt}", (-initialBalance).toBigDecimal().stripTrailingZeros().toPlainString())
+        val message = formatSmsMessage(settingsRepo, renter, expiryTime, now, -initialBalance)
 
         Log.d(TAG, "SMS yuborish boshlandi: to=$phone (${rawPhone}→$phone), ${message.length} chars")
 
-        // 4. Barcha SmsManager larni olish
         val attempts = SimHelper.getAllSmsManagers(context)
         val validAttempts = attempts.filter { it.smsManager != null }
 
@@ -191,13 +213,35 @@ class RenterViewModel(application: Application) : AndroidViewModel(application) 
             return
         }
 
-        // 5. Ketma-ket urinishlar
         trySmsAttempts(context, renter, phone, message, validAttempts, 0)
     }
 
     /**
-     * Ketma-ket SMS urinishlari — biri muvaffaq bo'lgunga qadar yoki hammasi xato bo'lgunga qadar.
+     * Формирует текст SMS с подстановкой всех тегов:
+     * {name}, {days}, {debt}, {payme}, {call}.
+     *
+     * Имя приводится к нижнему регистру первой буквы — так, как в примере пользователя
+     * (озодбек).
      */
+    fun formatSmsMessage(
+        settingsRepo: SettingsRepository,
+        renter: Renter,
+        expiryTime: Long,
+        now: Long,
+        debtAmount: Double
+    ): String {
+        val days = if (now > expiryTime) ((now - expiryTime) / (1000L * 60 * 60 * 24)).toInt() else 0
+        val debt = debtAmount.toBigDecimal().setScale(0, java.math.RoundingMode.HALF_UP)
+            .stripTrailingZeros().toPlainString()
+        val nameLower = renter.name.trim().lowercase()
+        return settingsRepo.smsTemplate
+            .replace("{name}", nameLower)
+            .replace("{days}", maxOf(1, days).toString())
+            .replace("{debt}", debt)
+            .replace("{payme}", settingsRepo.paymeLink)
+            .replace("{call}", settingsRepo.callCenter)
+    }
+
     private fun trySmsAttempts(
         context: android.content.Context,
         renter: Renter,
@@ -207,7 +251,6 @@ class RenterViewModel(application: Application) : AndroidViewModel(application) 
         currentIndex: Int
     ) {
         if (currentIndex >= attempts.size) {
-            // Barcha urinishlar muvaffaqiyatsiz — fire-and-forget bilan so'nggi urinish
             val lastManager = attempts.last().smsManager ?: return
             Log.w(TAG, "Barcha PendingIntentli urinishlar xato — fire-and-forget bilan urinilmoqda")
             val sent = SimHelper.sendSmsFireAndForget(lastManager, phone, message)
@@ -238,11 +281,9 @@ class RenterViewModel(application: Application) : AndroidViewModel(application) 
         val attempt = attempts[currentIndex]
         val smsManager = attempt.smsManager ?: return trySmsAttempts(context, renter, phone, message, attempts, currentIndex + 1)
 
-        // Oxirgi urinish bo'lsa — fire-and-forget (PendingIntentsiz)
         val isLastAttempt = currentIndex == attempts.size - 1
 
         if (isLastAttempt) {
-            // Oxirgi urinish — PendingIntentsiz fire-and-forget
             val sent = SimHelper.sendSmsFireAndForget(smsManager, phone, message)
             if (sent) {
                 viewModelScope.launch(Dispatchers.IO) {
@@ -250,7 +291,6 @@ class RenterViewModel(application: Application) : AndroidViewModel(application) 
                 }
                 _smsResults.tryEmit(SmsResult(true, "SMS yuborildi (${attempt.method}): $phone"))
             } else {
-                // Fire-and-forget ham ishlamadi — xato
                 val diag = SimHelper.getDiagnostics(context, phone)
                 _smsResults.tryEmit(SmsResult(false,
                     "SMS yuborilmadi: barcha usullar xato",
@@ -269,7 +309,6 @@ class RenterViewModel(application: Application) : AndroidViewModel(application) 
             return
         }
 
-        // O'rta urinishlar — PendingIntent bilan
         val actionId = "com.example.SMS_SENT_${++smsSendCounter}_A${attempt.attempt}"
         val sentIntent = PendingIntent.getBroadcast(
             context, smsSendCounter, Intent(actionId),
@@ -288,12 +327,10 @@ class RenterViewModel(application: Application) : AndroidViewModel(application) 
                     }
                     _smsResults.tryEmit(SmsResult(true, "SMS muvaffaqiyatli yuborildi (${attempt.method}): $phone"))
                 } else if (code == SmsManager.RESULT_ERROR_GENERIC_FAILURE) {
-                    // GENERIC_FAILURE — keyingi usul bilan urinish
                     Log.w(TAG, "GENERIC_FAILURE [${attempt.method}] → keyingi usulga o'tilmoqda")
                     _smsResults.tryEmit(SmsResult(true, "SMS usul ${attempt.attempt} xato, keyingi usul sinab ko'rilmoca..."))
                     trySmsAttempts(context, renter, phone, message, attempts, currentIndex + 1)
                 } else {
-                    // Boshqa xato — keyingi usul bilan urinish
                     val (errorName, _) = smsErrorCodeToText(code)
                     Log.w(TAG, "$errorName [${attempt.method}] → keyingi usulga o'tilmoqda")
                     trySmsAttempts(context, renter, phone, message, attempts, currentIndex + 1)
@@ -332,18 +369,148 @@ class RenterViewModel(application: Application) : AndroidViewModel(application) 
         viewModelScope.launch { repository.update(renter) }
     }
 
+    /**
+     * Обновление арендатора с автоматической корректировкой контрактов.
+     *
+     * Если арендодатель изменил дату начала аренды **назад** (старая дата новее новой),
+     * то на каждый дополнительный период в 7 дней:
+     *   • создаётся одна запись AUTO_RENEW в истории контрактов
+     *   • баланс уменьшается на weeklyPrice
+     *
+     * Если дата сдвинута **вперёд** — наоборот, AUTO_RENEW-записи за эти недели
+     * удаляются (последние N), баланс восстанавливается.
+     *
+     * Если изменилась длительность (без смены даты) — аналогично для новых недель.
+     */
+    fun updateRenterWithContracts(
+        existing: Renter,
+        newName: String,
+        newPhone: String,
+        newDebt: Double,
+        newDuration: Int,
+        newStartTimestamp: Long,
+        newScooterId: Int?,
+        newScooterName: String?,
+        newIsActive: Boolean,
+        weeklyPrice: Double
+    ) {
+        viewModelScope.launch(Dispatchers.IO) {
+            val effectivePrice = if (weeklyPrice > 0) weeklyPrice else SettingsRepository.DEFAULT_WEEKLY_PRICE
+            val settingsRepo = SettingsRepository(getApplication())
+            val realWeeklyPrice = if (settingsRepo.weeklyPrice > 0) settingsRepo.weeklyPrice else effectivePrice
+
+            val oldStart = existing.rentStartDateTimestamp
+            val newStart = newStartTimestamp
+            val oldDuration = existing.rentDurationDays
+            val newDuration = newDuration
+
+            val oldEnd = oldStart + oldDuration * 24L * 60 * 60 * 1000
+            val newEnd = newStart + newDuration * 24L * 60 * 60 * 1000
+
+            val now = System.currentTimeMillis()
+            var balanceAdjust = 0.0
+
+            // ── Сдвиг даты назад → дополнительные недели ───────────────────
+            if (newStart < oldStart) {
+                val deltaMillis = oldStart - newStart
+                val extraWeeks = ((deltaMillis + 7L * 24 * 60 * 60 * 1000 - 1) / (7L * 24 * 60 * 60 * 1000)).toInt()
+                if (extraWeeks > 0) {
+                    for (i in 1..extraWeeks) {
+                        val weekStart = newStart + (i - 1) * 7L * 24 * 60 * 60 * 1000
+                        val weekEnd = weekStart + 7L * 24 * 60 * 60 * 1000
+                        historyRepository.insert(ContractHistoryEntry(
+                            renterId = existing.id,
+                            timestamp = now,
+                            type = ContractHistoryEntry.TYPE_AUTO_RENEW,
+                            amount = realWeeklyPrice,
+                            notes = "$i-hafta (muddat orqaga surildi)",
+                            renterName = newName,
+                            renterPhone = newPhone,
+                            scooterName = newScooterName,
+                            weekStart = weekStart,
+                            weekEnd = weekEnd,
+                            weeklyPrice = realWeeklyPrice
+                        ))
+                        balanceAdjust -= realWeeklyPrice
+                    }
+                }
+            }
+
+            // ── Сдвиг даты вперёд → возврат баланса за «лишние» недели ──────
+            if (newStart > oldStart) {
+                val deltaMillis = newStart - oldStart
+                val removedWeeks = (deltaMillis / (7L * 24 * 60 * 60 * 1000)).toInt()
+                if (removedWeeks > 0) {
+                    val history = historyRepository.getForRenterOnce(existing.id)
+                    val autoRenew = history.filter { it.type == ContractHistoryEntry.TYPE_AUTO_RENEW }
+                        .sortedByDescending { it.timestamp }.take(removedWeeks)
+                    autoRenew.forEach { entry ->
+                        historyRepository.deleteById(entry.id)
+                        balanceAdjust += realWeeklyPrice
+                    }
+                }
+            }
+
+            // ── Изменение длительности ─────────────────────────────────────
+            if (oldStart == newStart && newDuration > oldDuration) {
+                val deltaDays = newDuration - oldDuration
+                val extraWeeks = ((deltaDays + 6) / 7).coerceAtLeast(1)
+                for (i in 1..extraWeeks) {
+                    val weekStart = oldEnd + (i - 1) * 7L * 24 * 60 * 60 * 1000
+                    val weekEnd = weekStart + 7L * 24 * 60 * 60 * 1000
+                    historyRepository.insert(ContractHistoryEntry(
+                        renterId = existing.id,
+                        timestamp = now,
+                        type = ContractHistoryEntry.TYPE_AUTO_RENEW,
+                        amount = realWeeklyPrice,
+                        notes = "$i-hafta (muddat uzaytirildi)",
+                        renterName = newName,
+                        renterPhone = newPhone,
+                        scooterName = newScooterName,
+                        weekStart = weekStart,
+                        weekEnd = weekEnd,
+                        weeklyPrice = realWeeklyPrice
+                    ))
+                    balanceAdjust -= realWeeklyPrice
+                }
+            }
+
+            val newBalance = existing.balance + balanceAdjust
+            val updated = existing.copy(
+                name = newName,
+                phoneNumber = newPhone,
+                debtAmount = maxOf(newDebt, -newBalance.coerceAtMost(0.0)),
+                rentDurationDays = newDuration,
+                rentStartDateTimestamp = newStart,
+                scooterId = newScooterId,
+                scooterName = newScooterName,
+                isReturned = !newIsActive,
+                balance = newBalance,
+                isOverdueSmsSent = if (newIsActive && newStart != oldStart) false else existing.isOverdueSmsSent
+            )
+            repository.update(updated)
+        }
+    }
+
     fun deleteRenter(id: Int) {
-        viewModelScope.launch { repository.delete(id) }
+        viewModelScope.launch {
+            historyRepository.deleteForRenter(id)
+            repository.delete(id)
+        }
     }
 
     fun markPaymentReceived(renter: Renter) {
         viewModelScope.launch { applyWeeklyPayment(renter, "Bitta to'lov") }
     }
 
+    /**
+     * Пакетная оплата одной недели для выбранных арендаторов.
+     * Баланс каждого увеличивается на weeklyPrice, создаётся запись PAYMENT.
+     */
     fun payWeeklyForRenters(renterIds: Set<Int>) {
         viewModelScope.launch {
             val weeklyPrice = SettingsRepository(getApplication()).weeklyPrice
-            renterIds.forEach { id -> repository.getById(id)?.let { applyWeeklyPayment(it, "Ommaviy to'lov", weeklyPrice) } }
+            renterIds.forEach { id -> repository.getById(id)?.let { applyWeeklyPayment(it, "Ommaviy to'lov (1 hafta)", weeklyPrice) } }
         }
     }
 
@@ -361,8 +528,14 @@ class RenterViewModel(application: Application) : AndroidViewModel(application) 
         val updated = renter.copy(debtAmount = maxOf(0.0, -newBalance), balance = newBalance,
             lastPaymentTimestamp = System.currentTimeMillis(), isOverdueSmsSent = false)
         repository.update(updated)
-        val entry = ContractHistoryEntry(renterId = renter.id, timestamp = System.currentTimeMillis(),
-            type = ContractHistoryEntry.TYPE_PAYMENT, amount = effectivePrice, notes = notes)
+        val entry = ContractHistoryEntry(
+            renterId = renter.id, timestamp = System.currentTimeMillis(),
+            type = ContractHistoryEntry.TYPE_PAYMENT, amount = effectivePrice, notes = notes,
+            renterName = renter.name, renterPhone = renter.phoneNumber, scooterName = renter.scooterName,
+            weekStart = System.currentTimeMillis(),
+            weekEnd = System.currentTimeMillis() + 7L * 24 * 60 * 60 * 1000,
+            weeklyPrice = effectivePrice
+        )
         historyRepository.insert(entry)
     }
 
@@ -372,8 +545,14 @@ class RenterViewModel(application: Application) : AndroidViewModel(application) 
         val updated = renter.copy(debtAmount = maxOf(0.0, -newBalance), balance = newBalance,
             isReturned = true, lastPaymentTimestamp = System.currentTimeMillis(), isOverdueSmsSent = false)
         repository.update(updated)
-        val entry = ContractHistoryEntry(renterId = renter.id, timestamp = System.currentTimeMillis(),
-            type = ContractHistoryEntry.TYPE_TERMINATED, amount = effectivePrice, notes = "Kontrakt tugatildi")
+        val entry = ContractHistoryEntry(
+            renterId = renter.id, timestamp = System.currentTimeMillis(),
+            type = ContractHistoryEntry.TYPE_TERMINATED, amount = effectivePrice, notes = "Kontrakt tugatildi",
+            renterName = renter.name, renterPhone = renter.phoneNumber, scooterName = renter.scooterName,
+            weekStart = renter.rentStartDateTimestamp,
+            weekEnd = System.currentTimeMillis(),
+            weeklyPrice = effectivePrice
+        )
         historyRepository.insert(entry)
     }
 

@@ -24,6 +24,8 @@ import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.ArrowDropDown
 import androidx.compose.material.icons.filled.ArrowDropUp
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material.icons.filled.PictureAsPdf
 import androidx.compose.material.icons.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.List
 import androidx.compose.material.icons.filled.DirectionsBike
@@ -71,12 +73,21 @@ import com.example.ui.RenterViewModel
 import com.example.ui.SettingsViewModel
 import com.example.ui.ScooterViewModel
 import com.example.ui.theme.ClaudeAccent
+import com.example.ui.theme.ClaudeAccentBg
+import com.example.ui.theme.ClaudeAccentMuted
 import com.example.ui.theme.ClaudeBackground
 import com.example.ui.theme.ClaudeCard
 import com.example.ui.theme.ClaudeDivider
 import com.example.ui.theme.ClaudeText
 import com.example.ui.theme.ClaudeTextSecondary
 import com.example.ui.theme.MyApplicationTheme
+import com.example.ui.theme.StatusInfo
+import com.example.ui.theme.StatusOk
+import com.example.ui.theme.StatusOkBg
+import com.example.ui.theme.StatusOverdue
+import com.example.ui.theme.StatusOverdueBg
+import com.example.ui.theme.StatusReturned
+import com.example.ui.theme.StatusReturnedBg
 import com.example.worker.NotificationHelper
 import android.util.Log
 import com.example.worker.PaymentCheckWorker
@@ -140,6 +151,18 @@ enum class SortColumn {
 enum class SortDirection { ASC, DESC }
 
 /**
+ * Состояние навигации верхнего уровня.
+ *   • MainView         — список арендаторов / скутеров с табами
+ *   • RenterHistory    — история контрактов конкретного арендатора
+ *   • ScooterHistory   — история контрактов конкретного скутера
+ */
+sealed class NavigationState {
+    data object MainView : NavigationState()
+    data class RenterHistory(val renter: Renter) : NavigationState()
+    data class ScooterHistory(val scooter: Scooter) : NavigationState()
+}
+
+/**
  * Цвет статус-индикатора:
  *   • серый  — арендатор вернул скутер
  *   • красный — есть долг (просрочена оплата)
@@ -154,9 +177,9 @@ private fun statusOf(renter: Renter): RenterStatus = when {
 }
 
 private fun statusColor(s: RenterStatus): Color = when (s) {
-    RenterStatus.RETURNED -> Color(0xFF8E8E93) // серый
-    RenterStatus.OVERDUE  -> Color(0xFFE05B44) // красный
-    RenterStatus.OK       -> Color(0xFF34C759) // зелёный
+    RenterStatus.RETURNED -> StatusReturned
+    RenterStatus.OVERDUE  -> StatusOverdue
+    RenterStatus.OK       -> StatusOk
 }
 
 private fun statusLabel(s: RenterStatus): String = when (s) {
@@ -187,6 +210,9 @@ fun MainScreen(
     val dateRangePickerState = rememberDateRangePickerState()
     var showHistoryDialog by remember { mutableStateOf(false) }
     var showContractHistoryDialog by remember { mutableStateOf(false) }
+
+    // ── Навигация ────────────────────────────────────────────────────
+    var navState by remember { mutableStateOf<NavigationState>(NavigationState.MainView) }
 
     var sortColumn by remember { mutableStateOf(SortColumn.STATUS) }
     var sortDirection by remember { mutableStateOf(SortDirection.ASC) }
@@ -235,6 +261,69 @@ fun MainScreen(
     val renters by viewModel.rentersList.collectAsStateWithLifecycle()
     val history by historyViewModel.history.collectAsStateWithLifecycle()
     val contractHistory by contractHistoryViewModel.history.collectAsStateWithLifecycle()
+
+    // ── Рендер экрана истории контрактов, если активен ─────────────────
+    when (val st = navState) {
+        is NavigationState.RenterHistory -> {
+            // Получаем свежего renter из БД (на случай если он изменился)
+            val currentRenter = renters.firstOrNull { it.id == st.renter.id } ?: st.renter
+            RenterContractHistoryScreen(
+                renter = currentRenter,
+                onBack = { navState = NavigationState.MainView },
+                onEditRenter = { renterToEdit = currentRenter },
+                contractHistoryViewModel = contractHistoryViewModel,
+                renterViewModel = viewModel
+            )
+            // Диалог редактирования арендатора (поверх экрана истории)
+            if (renterToEdit != null) {
+                val weekly by settingsViewModel.weeklyPrice.collectAsStateWithLifecycle()
+                val monthly by settingsViewModel.monthlyPrice.collectAsStateWithLifecycle()
+                RenterFormDialog(
+                    initialRenter = renterToEdit,
+                    weeklyPrice = weekly,
+                    monthlyPrice = monthly,
+                    scooters = scooters,
+                    activeRenters = renters,
+                    onDismiss = { renterToEdit = null },
+                    onSave = { name, phone, debt, duration, startTimestamp, scooterId, scooterName, active ->
+                        renterToEdit?.let {
+                            viewModel.updateRenterWithContracts(
+                                existing = it,
+                                newName = name, newPhone = phone, newDebt = debt,
+                                newDuration = duration, newStartTimestamp = startTimestamp,
+                                newScooterId = scooterId, newScooterName = scooterName,
+                                newIsActive = active, weeklyPrice = weekly
+                            )
+                        }
+                        renterToEdit = null
+                    }
+                )
+            }
+            return
+        }
+        is NavigationState.ScooterHistory -> {
+            ScooterContractHistoryScreen(
+                scooter = st.scooter,
+                renters = renters,
+                onBack = { navState = NavigationState.MainView },
+                onEditScooter = { scooterToEdit = st.scooter },
+                contractHistoryViewModel = contractHistoryViewModel
+            )
+            if (scooterToEdit != null) {
+                ScooterFormDialog(
+                    initialScooter = scooterToEdit,
+                    existingScooters = scooters,
+                    onDismiss = { scooterToEdit = null },
+                    onSave = { name, docNum ->
+                        scooterToEdit?.let { scooterViewModel.updateScooter(it.copy(name = name, documentedNumber = docNum)) }
+                        scooterToEdit = null
+                    }
+                )
+            }
+            return
+        }
+        NavigationState.MainView -> { /* продолжаем — основной Scaffold ниже */ }
+    }
 
     Scaffold(
         modifier = Modifier.fillMaxSize(),
@@ -347,7 +436,7 @@ fun MainScreen(
                         unselectedIconColor = ClaudeTextSecondary,
                         selectedTextColor = ClaudeAccent,
                         unselectedTextColor = ClaudeTextSecondary,
-                        indicatorColor = ClaudeCard
+                        indicatorColor = ClaudeAccentBg
                     )
                 )
                 NavigationBarItem(
@@ -360,7 +449,7 @@ fun MainScreen(
                         unselectedIconColor = ClaudeTextSecondary,
                         selectedTextColor = ClaudeAccent,
                         unselectedTextColor = ClaudeTextSecondary,
-                        indicatorColor = ClaudeCard
+                        indicatorColor = ClaudeAccentBg
                     )
                 )
             }
@@ -591,9 +680,11 @@ fun MainScreen(
                                     val daysOverdue = elapsedDays - renter.rentDurationDays
                                     val phone = com.example.worker.SimHelper.normalizePhoneNumber(renter.phoneNumber)
                                     val message = settingsRepo.smsTemplate
-                                        .replace("{name}", renter.name)
-                                        .replace("{days}", maxOf(0, daysOverdue).toString())
-                                        .replace("{debt}", renter.debtAmount.toString())
+                                        .replace("{name}", renter.name.trim().lowercase())
+                                        .replace("{days}", maxOf(1, daysOverdue).toString())
+                                        .replace("{debt}", renter.debtAmount.toLong().toString())
+                                        .replace("{payme}", settingsRepo.paymeLink)
+                                        .replace("{call}", settingsRepo.callCenter)
                                     val smsManager = com.example.worker.SimHelper.getSmsManagerForSim(localContext)
                                     if (smsManager != null) {
                                         try {
@@ -705,7 +796,10 @@ fun MainScreen(
                         if (checked) newSet.add(id) else newSet.remove(id)
                         selectedRenters = newSet
                     },
-                    onClick = { renterToEdit = it }
+                    onClick = { renter ->
+                        // Клик по строке → экран истории контрактов
+                        navState = NavigationState.RenterHistory(renter)
+                    }
                 )
             } else {
                 // Вкладка «Скутеры»
@@ -770,7 +864,10 @@ fun MainScreen(
                         if (checked) newSet.add(id) else newSet.remove(id)
                         selectedScooters = newSet
                     },
-                    onClick = { scooterToEdit = it }
+                    onClick = { scooter ->
+                        // Клик по скутеру → экран истории контрактов скутера
+                        navState = NavigationState.ScooterHistory(scooter)
+                    }
                 )
             }
         }
@@ -794,26 +891,18 @@ fun MainScreen(
                 onSave = { name, phone, debt, duration, startTimestamp, scooterId, scooterName, active ->
                     if (isEdit) {
                         renterToEdit?.let {
-                            var newTimestamp = it.rentStartDateTimestamp
-                            var returned = !active
-                            if (it.isReturned && active) {
-                                newTimestamp = startTimestamp
-                                returned = false
-                            } else if (!it.isReturned && active) {
-                                newTimestamp = startTimestamp
-                            }
-                            viewModel.updateRenter(
-                                it.copy(
-                                    name = name,
-                                    phoneNumber = phone,
-                                    debtAmount = debt,
-                                    rentDurationDays = duration,
-                                    rentStartDateTimestamp = newTimestamp,
-                                    scooterId = scooterId,
-                                    scooterName = scooterName,
-                                    isReturned = returned,
-                                    isOverdueSmsSent = if (it.isReturned && active) false else it.isOverdueSmsSent
-                                )
+                            // Используем новую функцию с авто-корректировкой контрактов
+                            viewModel.updateRenterWithContracts(
+                                existing = it,
+                                newName = name,
+                                newPhone = phone,
+                                newDebt = debt,
+                                newDuration = duration,
+                                newStartTimestamp = startTimestamp,
+                                newScooterId = scooterId,
+                                newScooterName = scooterName,
+                                newIsActive = active,
+                                weeklyPrice = weekly
                             )
                         }
                     } else {
@@ -882,7 +971,7 @@ fun MainScreen(
                     }
                 },
                 onDismiss = { showSettings = false },
-                onSave = { newTemplate, newWeekly, newMonthly ->
+                onSave = { newTemplate, newWeekly, newMonthly, _, _ ->
                     settingsViewModel.updateTemplate(newTemplate)
                     settingsViewModel.updatePrices(newWeekly, newMonthly)
                     showSettings = false
@@ -1561,7 +1650,7 @@ fun SettingsDialog(
     updateState: InAppUpdateState = InAppUpdateState.Idle,
     onStartUpdate: (UpdateInfo) -> Unit = {},
     onDismiss: () -> Unit,
-    onSave: (String, Double, Double) -> Unit,
+    onSave: (String, Double, Double, String, String) -> Unit,
     onLogout: () -> Unit = {},
     onCheckUpdate: () -> Unit = {}
 ) {
@@ -1573,6 +1662,9 @@ fun SettingsDialog(
         mutableStateOf(if (currentMonthlyPrice > 0) currentMonthlyPrice.toString() else "")
     }
     val settingsContext = LocalContext.current
+    val settingsRepo = remember { com.example.data.SettingsRepository(settingsContext) }
+    var paymeLink by remember { mutableStateOf(settingsRepo.paymeLink) }
+    var callCenter by remember { mutableStateOf(settingsRepo.callCenter) }
 
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -1605,7 +1697,7 @@ fun SettingsDialog(
                 Column {
                     Text("SMS Shabloni", style = MaterialTheme.typography.labelMedium, color = ClaudeText)
                     Text(
-                        "Mavjud teglar: {name}, {days}, {debt}",
+                        "Mavjud teglar: {name}, {days}, {debt}, {payme}, {call}",
                         style = MaterialTheme.typography.bodyMedium,
                         color = ClaudeTextSecondary
                     )
@@ -1621,6 +1713,24 @@ fun SettingsDialog(
                             unfocusedBorderColor = ClaudeDivider,
                             focusedBorderColor = ClaudeTextSecondary
                         )
+                    )
+                    Spacer(modifier = Modifier.height(8.dp))
+                    OutlinedTextField(
+                        value = paymeLink,
+                        onValueChange = { paymeLink = it },
+                        label = { Text("Payme to'lov havolasi ({payme})") },
+                        modifier = Modifier.fillMaxWidth(),
+                        shape = RoundedCornerShape(8.dp),
+                        singleLine = true
+                    )
+                    Spacer(modifier = Modifier.height(8.dp))
+                    OutlinedTextField(
+                        value = callCenter,
+                        onValueChange = { callCenter = it },
+                        label = { Text("Call center raqami ({call})") },
+                        modifier = Modifier.fillMaxWidth(),
+                        shape = RoundedCornerShape(8.dp),
+                        singleLine = true
                     )
                 }
 
@@ -1928,12 +2038,18 @@ fun SettingsDialog(
                 onClick = {
                     val wPrice = weekly.toDoubleOrNull() ?: 0.0
                     val mPrice = monthly.toDoubleOrNull() ?: 0.0
-                    onSave(template, wPrice, mPrice)
+                    settingsRepo.paymeLink = paymeLink.trim().ifBlank {
+                        com.example.data.SettingsRepository.DEFAULT_PAYME_LINK
+                    }
+                    settingsRepo.callCenter = callCenter.trim().ifBlank {
+                        com.example.data.SettingsRepository.DEFAULT_CALL_CENTER
+                    }
+                    onSave(template, wPrice, mPrice, paymeLink, callCenter)
                 },
-                colors = ButtonDefaults.buttonColors(containerColor = ClaudeText),
+                colors = ButtonDefaults.buttonColors(containerColor = ClaudeAccent),
                 shape = RoundedCornerShape(8.dp)
             ) {
-                Text("Saqlash", color = ClaudeCard)
+                Text("Saqlash", color = Color.White)
             }
         },
         dismissButton = {
@@ -1995,8 +2111,8 @@ private fun scooterStatusOf(scooterId: Int, renters: List<Renter>): ScooterStatu
 }
 
 private fun scooterStatusColor(s: ScooterStatus): Color = when (s) {
-    ScooterStatus.RENTED  -> Color(0xFFE05B44) // красный — в аренде
-    ScooterStatus.IN_BASE -> Color(0xFF34C759) // зелёный — в базе
+    ScooterStatus.RENTED  -> StatusOverdue
+    ScooterStatus.IN_BASE -> StatusOk
 }
 
 private fun scooterStatusLabel(s: ScooterStatus): String = when (s) {

@@ -13,10 +13,14 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
     private val _smsTemplate = MutableStateFlow(repository.smsTemplate)
     val smsTemplate: StateFlow<String> = _smsTemplate.asStateFlow()
 
-    private val _weeklyPrice = MutableStateFlow(repository.weeklyPrice)
+    private val _weeklyPrice = MutableStateFlow(
+        if (repository.weeklyPrice > 0) repository.weeklyPrice else SettingsRepository.DEFAULT_WEEKLY_PRICE
+    )
     val weeklyPrice: StateFlow<Double> = _weeklyPrice.asStateFlow()
 
-    private val _monthlyPrice = MutableStateFlow(repository.monthlyPrice)
+    private val _monthlyPrice = MutableStateFlow(
+        if (repository.monthlyPrice > 0) repository.monthlyPrice else SettingsRepository.DEFAULT_MONTHLY_PRICE
+    )
     val monthlyPrice: StateFlow<Double> = _monthlyPrice.asStateFlow()
 
     fun updateTemplate(newTemplate: String) {
@@ -25,9 +29,11 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
     }
 
     fun updatePrices(weekly: Double, monthly: Double) {
-        repository.weeklyPrice = weekly
-        repository.monthlyPrice = monthly
-        _weeklyPrice.value = weekly
-        _monthlyPrice.value = monthly
+        val effectiveWeekly = if (weekly > 0) weekly else SettingsRepository.DEFAULT_WEEKLY_PRICE
+        val effectiveMonthly = if (monthly > 0) monthly else SettingsRepository.DEFAULT_MONTHLY_PRICE
+        repository.weeklyPrice = effectiveWeekly
+        repository.monthlyPrice = effectiveMonthly
+        _weeklyPrice.value = effectiveWeekly
+        _monthlyPrice.value = effectiveMonthly
     }
 }

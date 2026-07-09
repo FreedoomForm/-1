@@ -4,6 +4,7 @@ import androidx.room.Dao
 import androidx.room.Insert
 import androidx.room.OnConflictStrategy
 import androidx.room.Query
+import androidx.room.Update
 import kotlinx.coroutines.flow.Flow
 
 @Dao
@@ -17,8 +18,29 @@ interface ContractHistoryDao {
     @Query("SELECT * FROM contract_history WHERE renterId = :renterId ORDER BY timestamp DESC")
     suspend fun getForRenter(renterId: Int): List<ContractHistoryEntry>
 
+    @Query("SELECT * FROM contract_history WHERE renterId = :renterId ORDER BY timestamp DESC")
+    fun getForRenterFlow(renterId: Int): Flow<List<ContractHistoryEntry>>
+
+    @Query("SELECT * FROM contract_history WHERE scooterName = :scooterName ORDER BY timestamp DESC")
+    fun getForScooterFlow(scooterName: String): Flow<List<ContractHistoryEntry>>
+
+    @Query("SELECT * FROM contract_history WHERE id = :id LIMIT 1")
+    suspend fun getById(id: Int): ContractHistoryEntry?
+
     @Insert(onConflict = OnConflictStrategy.IGNORE)
-    suspend fun insert(entry: ContractHistoryEntry)
+    suspend fun insert(entry: ContractHistoryEntry): Long
+
+    @Update
+    suspend fun update(entry: ContractHistoryEntry)
+
+    @Query("DELETE FROM contract_history WHERE id = :id")
+    suspend fun deleteById(id: Int)
+
+    @Query("DELETE FROM contract_history WHERE id IN (:ids)")
+    suspend fun deleteByIds(ids: List<Int>)
+
+    @Query("DELETE FROM contract_history WHERE renterId = :renterId")
+    suspend fun deleteForRenter(renterId: Int)
 
     @Query("DELETE FROM contract_history")
     suspend fun clear()

@@ -10,6 +10,9 @@
     <uses-permission android:name="android.permission.READ_PHONE_NUMBERS" />
     <!-- Для установки обновлений из приложения (Android 8+) -->
     <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
+    <!-- Для сохранения PDF-договоров в общую папку Documents (Android 9 и ниже) -->
+    <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE"
+        android:maxSdkVersion="28" />
 
     <application
         android:allowBackup="true"
@@ -40,6 +43,17 @@
                 <action android:name="com.example.ACTION_TERMINATE_CONTRACT" />
             </intent-filter>
         </receiver>
+
+        <!-- FileProvider для генерации и расшаривания PDF-договоров -->
+        <provider
+            android:name="androidx.core.content.FileProvider"
+            android:authorities="${applicationId}.fileprovider"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/file_paths" />
+        </provider>
 
     </application>
 

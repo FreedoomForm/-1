@@ -1,29 +1,116 @@
 package com.example.ui
 
 import android.app.Application
+import android.content.Context
+import android.net.Uri
+import android.util.Log
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.data.AppDatabase
 import com.example.data.ContractHistoryEntry
 import com.example.data.ContractHistoryRepository
+import com.example.data.Renter
+import com.example.data.RenterRepository
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 
 class ContractHistoryViewModel(application: Application) : AndroidViewModel(application) {
     private val repo: ContractHistoryRepository
+    private val renterRepo: RenterRepository
     val history: StateFlow<List<ContractHistoryEntry>>
 
     init {
         val db = AppDatabase.getDatabase(application)
         repo = ContractHistoryRepository(db.contractHistoryDao())
+        renterRepo = RenterRepository(db.renterDao())
         history = repo.allHistory.stateIn(
             viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList()
         )
     }
 
+    fun forRenter(renterId: Int): StateFlow<List<ContractHistoryEntry>> =
+        repo.forRenter(renterId).stateIn(
+            viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList()
+        )
+
+    fun forScooter(scooterName: String): StateFlow<List<ContractHistoryEntry>> =
+        repo.forScooter(scooterName).stateIn(
+            viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList()
+        )
+
     fun clear() {
         viewModelScope.launch { repo.clear() }
+    }
+
+    fun deleteContract(id: Int) {
+        viewModelScope.launch(Dispatchers.IO) { repo.deleteById(id) }
+    }
+
+    fun deleteContracts(ids: List<Int>) {
+        viewModelScope.launch(Dispatchers.IO) { repo.deleteByIds(ids) }
+    }
+
+    /**
+     * Обновляет запись контракта.
+     * При изменении `amount` для PAYMENT/AUTO_RENEW также корректируется баланс арендатора:
+     *   • PAYMENT     — старая сумма вычитается, новая добавляется
+     *   • AUTO_RENEW  — старая сумма добавляется, новая вычитается
+     */
+    fun updateContract(entry: ContractHistoryEntry) {
+        viewModelScope.launch(Dispatchers.IO) {
+            val old = repo.getById(entry.id)
+            if (old == null) {
+                repo.update(entry)
+                return@launch
+            }
+            // Корректировка баланса при изменении суммы
+            if (old.amount != entry.amount) {
+                val renter = renterRepo.getById(entry.renterId) ?: return@launch
+                val delta = when (old.type) {
+                    ContractHistoryEntry.TYPE_PAYMENT    -> entry.amount - old.amount        // +delta
+                    ContractHistoryEntry.TYPE_AUTO_RENEW -> -(entry.amount - old.amount)    // -delta (долг вырос)
+                    else                                 -> 0.0
+                }
+                if (delta != 0.0) {
+                    val newBalance = renter.balance + delta
+                    val updated = renter.copy(
+                        balance = newBalance,
+                        debtAmount = maxOf(0.0, -newBalance)
+                    )
+                    renterRepo.update(updated)
+                }
+            }
+            repo.update(entry)
+        }
+    }
+
+    /**
+     * Генерирует PDF-документ для контракта [contractId] и сохраняет в каталог
+     * `Documents/ScooterContracts/` приложения. Возвращает file:// Uri.
+     *
+     * Использует android.graphics.pdf.PdfDocument — встроенный API, без сторонних библиотек.
+     */
+    suspend fun generateContractPdf(contractId: Int): Uri? = withContext(Dispatchers.IO) {
+        try {
+            val entry = repo.getById(contractId) ?: return@withContext null
+            val renter = renterRepo.getById(entry.renterId)
+            PdfContractGenerator.generate(getApplication(), entry, renter)
+        } catch (e: Exception) {
+            Log.e(TAG, "PDF generation failed", e)
+            null
+        }
+    }
+
+    companion object {
+        private const val TAG = "ContractHistoryVM"
     }
 }

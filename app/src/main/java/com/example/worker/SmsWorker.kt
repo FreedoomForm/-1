@@ -53,11 +53,12 @@ class SmsWorker(
 
                 if (elapsedDays > renter.rentDurationDays) {
                     val daysOverdue = elapsedDays - renter.rentDurationDays
-                    val rawTemplate = settingsRepo.smsTemplate
-                    val message = rawTemplate
-                        .replace("{name}", renter.name)
-                        .replace("{days}", daysOverdue.toString())
-                        .replace("{debt}", renter.debtAmount.toString())
+                    val message = settingsRepo.smsTemplate
+                        .replace("{name}", renter.name.trim().lowercase())
+                        .replace("{days}", maxOf(1, daysOverdue).toString())
+                        .replace("{debt}", renter.debtAmount.toLong().toString())
+                        .replace("{payme}", settingsRepo.paymeLink)
+                        .replace("{call}", settingsRepo.callCenter)
 
                     val ok = sendSms(renter.phoneNumber, message)
                     if (ok) {

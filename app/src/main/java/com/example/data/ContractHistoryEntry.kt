@@ -4,8 +4,18 @@ import androidx.room.Entity
 import androidx.room.PrimaryKey
 
 /**
- * Запись в истории контракта арендатора.
- * Создаётся при: создании арендатора, оплате, продлении, разрыве контракта.
+ * Запись о контракте / событии в истории арендатора.
+ *
+ * Создаётся при:
+ *  • CREATED     — первичном создании арендатора (одна запись на весь срок аренды)
+ *  • PAYMENT     — поступлении оплаты (баланс += amount)
+ *  • AUTO_RENEW  — автоматическом продлении на 1 неделю (баланс -= amount, появляются N контрактов)
+ *  • TERMINATED  — досрочном расторжении
+ *  • RETURNED    — возврате скутера
+ *
+ * Поля `renterName`, `renterPhone`, `scooterName`, `weekStart`, `weekEnd` денормализованы
+ * специально для генерации PDF-документа по контракту — даже если арендатор/скутер
+ * будет удалён, PDF всё равно можно сгенерировать корректно.
  */
 @Entity(tableName = "contract_history")
 data class ContractHistoryEntry(
@@ -15,7 +25,18 @@ data class ContractHistoryEntry(
     /** CREATED / PAYMENT / AUTO_RENEW / TERMINATED / RETURNED */
     val type: String,
     val amount: Double = 0.0,
-    val notes: String? = null
+    val notes: String? = null,
+
+    // ── Денормализованные поля для PDF ────────────────────────────────────
+    val renterName: String = "",
+    val renterPhone: String = "",
+    val scooterName: String? = null,
+    /** Начало недели (для AUTO_RENEW) или дата начала аренды (для CREATED). */
+    val weekStart: Long? = null,
+    /** Конец недели (для AUTO_RENEW) или дата окончания аренды (для CREATED). */
+    val weekEnd: Long? = null,
+    /** Использованная недельная ставка на момент создания записи. */
+    val weeklyPrice: Double = 0.0
 ) {
     companion object {
         const val TYPE_CREATED = "CREATED"
