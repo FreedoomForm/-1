@@ -529,15 +529,52 @@ class RenterViewModel(application: Application) : AndroidViewModel(application) 
         val weeklyPrice = weeklyPriceOverride ?: SettingsRepository(getApplication()).weeklyPrice
         val effectivePrice = if (weeklyPrice > 0) weeklyPrice else SettingsRepository.DEFAULT_WEEKLY_PRICE
         val newBalance = renter.balance + effectivePrice
-        val updated = renter.copy(debtAmount = maxOf(0.0, -newBalance), balance = newBalance,
-            lastPaymentTimestamp = System.currentTimeMillis(), isOverdueSmsSent = false)
+
+        // ── Branching by balance BEFORE this payment ─────────────────────────
+        // balance < 0  → payment covers old debt (existing behavior).
+        // balance >= 0 → PREPAYMENT for next week; new contract spans from the
+        //                last contract's weekEnd (or now if no prior contract) to +7 days.
+        val now = System.currentTimeMillis()
+        val weekStart: Long
+        val weekEnd: Long
+        val effectiveNotes: String
+
+        if (renter.balance < 0) {
+            // Debt coverage — keep current contract dates
+            weekStart = now
+            weekEnd = now + 7L * 24 * 60 * 60 * 1000
+            effectiveNotes = notes
+        } else {
+            // Prepayment — extend from last contract's end
+            val history = historyRepository.getForRenterOnce(renter.id)
+            val lastWeekEnd = history
+                .mapNotNull { it.weekEnd }
+                .maxOrNull()
+                ?: renter.rentStartDateTimestamp + renter.rentDurationDays * 24L * 60 * 60 * 1000
+            // If last contract already ended in the past, start from now instead
+            val baseStart = if (lastWeekEnd < now) now else lastWeekEnd
+            weekStart = baseStart
+            weekEnd = baseStart + 7L * 24 * 60 * 60 * 1000
+            effectiveNotes = "Oldindan to'lov (keyingi hafta): $notes"
+        }
+
+        val updated = renter.copy(
+            debtAmount = maxOf(0.0, -newBalance),
+            balance = newBalance,
+            // For prepayment case: shift rental period to the new week window.
+            // For debt coverage: keep original dates.
+            rentStartDateTimestamp = if (renter.balance >= 0) weekStart else renter.rentStartDateTimestamp,
+            rentDurationDays = if (renter.balance >= 0) 7 else renter.rentDurationDays,
+            lastPaymentTimestamp = now,
+            isOverdueSmsSent = false
+        )
         repository.update(updated)
         val entry = ContractHistoryEntry(
-            renterId = renter.id, timestamp = System.currentTimeMillis(),
-            type = ContractHistoryEntry.TYPE_PAYMENT, amount = effectivePrice, notes = notes,
+            renterId = renter.id, timestamp = now,
+            type = ContractHistoryEntry.TYPE_PAYMENT, amount = effectivePrice, notes = effectiveNotes,
             renterName = renter.name, renterPhone = renter.phoneNumber, scooterName = renter.scooterName,
-            weekStart = System.currentTimeMillis(),
-            weekEnd = System.currentTimeMillis() + 7L * 24 * 60 * 60 * 1000,
+            weekStart = weekStart,
+            weekEnd = weekEnd,
             weeklyPrice = effectivePrice
         )
         historyRepository.insert(entry)

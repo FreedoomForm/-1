@@ -32,14 +32,9 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
-import com.example.ui.theme.ClaudeAccent
-import com.example.ui.theme.ClaudeBackground
 import com.example.ui.theme.ClaudeCard
 import com.example.ui.theme.ClaudeDivider
 import com.example.ui.theme.ClaudeText
-import com.example.ui.theme.ClaudeTextSecondary
-import com.example.ui.theme.StatusOk
-import com.example.ui.theme.StatusOverdue
 
 /* ============================================================================
    UNIFIED BUTTON COMPONENT
@@ -109,14 +104,15 @@ fun UnifiedButton(
         label = "iconScale"
     )
 
-    // Resolve colors by variant
+    // Resolve colors by variant — black-and-white palette per user spec
+    // (status colors are reserved for the table; all UI controls are grayscale)
     val (containerColor, contentColor, border) = when (variant) {
-        UnifiedButtonVariant.PRIMARY -> Triple(ClaudeAccent, Color.White, null)
-        UnifiedButtonVariant.SECONDARY -> Triple(ClaudeCard, ClaudeText, BorderStroke(1.dp, ClaudeDivider))
-        UnifiedButtonVariant.SUCCESS -> Triple(StatusOk, Color.White, null)
-        UnifiedButtonVariant.DANGER -> Triple(StatusOverdue, Color.White, null)
-        UnifiedButtonVariant.DANGER_OUTLINED -> Triple(ClaudeCard, StatusOverdue, BorderStroke(1.dp, StatusOverdue))
-        UnifiedButtonVariant.TEXT -> Triple(Color.Transparent, ClaudeAccent, null)
+        UnifiedButtonVariant.PRIMARY -> Triple(ClaudeText, Color.White, null)            // black bg, white text
+        UnifiedButtonVariant.SECONDARY -> Triple(ClaudeCard, ClaudeText, BorderStroke(1.dp, ClaudeDivider)) // white + gray border
+        UnifiedButtonVariant.SUCCESS -> Triple(ClaudeText, Color.White, null)            // black (same as primary)
+        UnifiedButtonVariant.DANGER -> Triple(ClaudeText, Color.White, null)             // black (same as primary)
+        UnifiedButtonVariant.DANGER_OUTLINED -> Triple(ClaudeCard, ClaudeText, BorderStroke(1.dp, ClaudeText)) // white + black border
+        UnifiedButtonVariant.TEXT -> Triple(Color.Transparent, ClaudeText, null)
     }
 
     val disabledAlpha = if (enabled) 1f else 0.45f

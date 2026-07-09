@@ -249,8 +249,6 @@ fun MainScreen(
     var searchQuery by remember { mutableStateOf("") }
     var showDateRangePicker by remember { mutableStateOf(false) }
     val dateRangePickerState = rememberDateRangePickerState()
-    var showHistoryDialog by remember { mutableStateOf(false) }
-    var showContractHistoryDialog by remember { mutableStateOf(false) }
 
     // ── Навигация ────────────────────────────────────────────────────
     var navState by remember { mutableStateOf<NavigationState>(NavigationState.MainView) }
@@ -323,7 +321,6 @@ fun MainScreen(
 
     val renters by viewModel.rentersList.collectAsStateWithLifecycle()
     val history by historyViewModel.history.collectAsStateWithLifecycle()
-    val contractHistory by contractHistoryViewModel.history.collectAsStateWithLifecycle()
 
     // ── Рендер экрана истории контрактов, если активен ─────────────────
     when (val st = navState) {
@@ -405,53 +402,6 @@ fun MainScreen(
                     actionIconContentColor = ClaudeText
                 ),
                 actions = {
-                    // Колокольчик — история уведомлений
-                    IconButton(
-                        onClick = { showHistoryDialog = true },
-                        modifier = Modifier
-                            .padding(end = 4.dp)
-                            .size(40.dp)
-                            .background(Color.White, CircleShape)
-                            .border(1.dp, ClaudeDivider, CircleShape)
-                    ) {
-                        Box {
-                            Icon(
-                                Icons.Outlined.Notifications,
-                                contentDescription = "Bildirishnomalar tarixi",
-                                modifier = Modifier.size(20.dp)
-                            )
-                            if (history.isNotEmpty()) {
-                                Box(
-                                    modifier = Modifier
-                                        .align(Alignment.TopEnd)
-                                        .size(16.dp)
-                                        .background(Color(0xFFE05B44), CircleShape),
-                                    contentAlignment = Alignment.Center
-                                ) {
-                                    Text(
-                                        history.size.coerceAtMost(99).toString(),
-                                        color = Color.White,
-                                        style = MaterialTheme.typography.labelSmall
-                                    )
-                                }
-                            }
-                        }
-                    }
-                    // 📜 Контрактлар тарихи (рядом с ⚙️)
-                    IconButton(
-                        onClick = { showContractHistoryDialog = true },
-                        modifier = Modifier
-                            .padding(end = 4.dp, start = 4.dp)
-                            .size(40.dp)
-                            .background(Color.White, CircleShape)
-                            .border(1.dp, ClaudeDivider, CircleShape)
-                    ) {
-                        Icon(
-                            Icons.Default.DateRange,
-                            contentDescription = "Kontraktlar tarixi",
-                            modifier = Modifier.size(20.dp)
-                        )
-                    }
                     IconButton(
                         onClick = { showSettings = true },
                         modifier = Modifier
@@ -534,22 +484,22 @@ fun MainScreen(
                         modifier = Modifier
                             .fillMaxWidth()
                             .padding(horizontal = 16.dp, vertical = 8.dp),
-                        colors = CardDefaults.cardColors(containerColor = Color(0xFFE3F2FD)),
+                        colors = CardDefaults.cardColors(containerColor = Color(0xFFF0F0F0)),
                         shape = RoundedCornerShape(10.dp)
                     ) {
                         Column(modifier = Modifier.padding(12.dp)) {
                             Text(
                                 "Yangilash yuklab olinmoqda... ${(st.progress * 100).toInt()}%",
                                 style = MaterialTheme.typography.labelMedium,
-                                color = Color(0xFF1565C0),
+                                color = Color(0xFF000000),
                                 fontWeight = FontWeight.Bold
                             )
                             Spacer(modifier = Modifier.height(4.dp))
                             LinearProgressIndicator(
                                 progress = { st.progress },
                                 modifier = Modifier.fillMaxWidth(),
-                                color = Color(0xFF1565C0),
-                                trackColor = Color(0xFFBBDEFB)
+                                color = Color(0xFF000000),
+                                trackColor = Color(0xFFE5E5E5)
                             )
                         }
                     }
@@ -559,7 +509,7 @@ fun MainScreen(
                         modifier = Modifier
                             .fillMaxWidth()
                             .padding(horizontal = 16.dp, vertical = 8.dp),
-                        colors = CardDefaults.cardColors(containerColor = Color(0xFFE3F2FD)),
+                        colors = CardDefaults.cardColors(containerColor = Color(0xFFF0F0F0)),
                         shape = RoundedCornerShape(10.dp)
                     ) {
                         Row(
@@ -568,14 +518,14 @@ fun MainScreen(
                         ) {
                             CircularProgressIndicator(
                                 modifier = Modifier.size(20.dp),
-                                color = Color(0xFF1565C0),
+                                color = Color(0xFF000000),
                                 strokeWidth = 2.dp
                             )
                             Spacer(modifier = Modifier.width(12.dp))
                             Text(
                                 "O'rnatilmoqda...",
                                 style = MaterialTheme.typography.labelMedium,
-                                color = Color(0xFF1565C0)
+                                color = Color(0xFF000000)
                             )
                         }
                     }
@@ -585,7 +535,7 @@ fun MainScreen(
                         modifier = Modifier
                             .fillMaxWidth()
                             .padding(horizontal = 16.dp, vertical = 8.dp),
-                        colors = CardDefaults.cardColors(containerColor = Color(0xFFFFEBEE)),
+                        colors = CardDefaults.cardColors(containerColor = Color(0xFFF0F0F0)),
                         shape = RoundedCornerShape(10.dp)
                     ) {
                         Row(
@@ -596,7 +546,7 @@ fun MainScreen(
                             Text(
                                 st.message,
                                 style = MaterialTheme.typography.labelMedium,
-                                color = Color(0xFFC62828),
+                                color = Color(0xFF000000),
                                 modifier = Modifier.weight(1f)
                             )
                             TextActionButton(
@@ -627,7 +577,7 @@ fun MainScreen(
                                         }
                                     }
                                 },
-                            colors = CardDefaults.cardColors(containerColor = Color(0xFFE8F5E9)),
+                            colors = CardDefaults.cardColors(containerColor = Color(0xFFF0F0F0)),
                             shape = RoundedCornerShape(10.dp)
                         ) {
                             Row(
@@ -637,7 +587,7 @@ fun MainScreen(
                                 Icon(
                                     Icons.Default.Refresh,
                                     contentDescription = null,
-                                    tint = Color(0xFF2E7D32),
+                                    tint = Color(0xFF000000),
                                     modifier = Modifier.size(24.dp)
                                 )
                                 Spacer(modifier = Modifier.width(8.dp))
@@ -645,13 +595,13 @@ fun MainScreen(
                                     Text(
                                         "Yangi versiya: v${updateInfo!!.versionName}",
                                         style = MaterialTheme.typography.labelMedium,
-                                        color = Color(0xFF2E7D32),
+                                        color = Color(0xFF000000),
                                         fontWeight = FontWeight.Bold
                                     )
                                     Text(
                                         "Bosing — bir tugma bilan yangilash",
                                         style = MaterialTheme.typography.bodySmall,
-                                        color = Color(0xFF388E3C)
+                                        color = Color(0xFF000000)
                                     )
                                 }
                             }
@@ -1107,31 +1057,6 @@ fun MainScreen(
                     headline = { Text("Davrni tanlang", modifier = Modifier.padding(16.dp)) }
                 )
             }
-        }
-
-        // ===== Диалог истории уведомлений (внутри приложения) =====
-        if (showHistoryDialog) {
-            NotificationHistoryDialog(
-                history = history,
-                onDismiss = { showHistoryDialog = false },
-                onClear = {
-                    historyViewModel.clear()
-                    Toast.makeText(localContext, "Tozalandi", Toast.LENGTH_SHORT).show()
-                }
-            )
-        }
-
-        // Окно истории контрактов
-        if (showContractHistoryDialog) {
-            ContractHistoryDialog(
-                history = contractHistory,
-                renters = renters,
-                onDismiss = { showContractHistoryDialog = false },
-                onClear = {
-                    contractHistoryViewModel.clear()
-                    Toast.makeText(localContext, "Tozalandi", Toast.LENGTH_SHORT).show()
-                }
-            )
         }
 
         // SMS natijalari — dialog o'chirildi, faqat Toast ko'rsatiladi
@@ -1825,14 +1750,14 @@ fun SettingsDialog(
                         if (!hasPermission) {
                             Card(
                                 modifier = Modifier.fillMaxWidth(),
-                                colors = CardDefaults.cardColors(containerColor = Color(0xFFFFF3E0)),
+                                colors = CardDefaults.cardColors(containerColor = Color(0xFFF0F0F0)),
                                 shape = RoundedCornerShape(8.dp)
                             ) {
                                 Column(modifier = Modifier.padding(12.dp)) {
                                     Text(
                                         "SIM ma'lumotlarini olish uchun ruxsat kerak",
                                         style = MaterialTheme.typography.bodySmall,
-                                        color = Color(0xFFE65100)
+                                        color = Color(0xFF000000)
                                     )
                                     Spacer(modifier = Modifier.height(8.dp))
                                     SecondaryButton(
@@ -1863,7 +1788,7 @@ fun SettingsDialog(
                         Text(
                             "✓ ${simCards[0].fullDisplayName} (avto-tanlangan)",
                             style = MaterialTheme.typography.bodyMedium,
-                            color = Color(0xFF2E7D32)
+                            color = Color(0xFF000000)
                         )
                     } else {
                         // 2+ ta SIM — tanlash
@@ -1873,7 +1798,7 @@ fun SettingsDialog(
                                 modifier = Modifier
                                     .fillMaxWidth()
                                     .clip(RoundedCornerShape(8.dp))
-                                    .background(if (isSelected) Color(0xFFE8F5E9) else Color.Transparent)
+                                    .background(if (isSelected) Color(0xFFF0F0F0) else Color.Transparent)
                                     .clickable {
                                         selectedSimSubId = sim.subscriptionId
                                         settingsRepo.selectedSimSubscriptionId = sim.subscriptionId
@@ -1888,7 +1813,7 @@ fun SettingsDialog(
                                         settingsRepo.selectedSimSubscriptionId = sim.subscriptionId
                                     },
                                     colors = RadioButtonDefaults.colors(
-                                        selectedColor = Color(0xFF2E7D32)
+                                        selectedColor = Color(0xFF000000)
                                     )
                                 )
                                 Spacer(modifier = Modifier.width(8.dp))
@@ -1897,7 +1822,7 @@ fun SettingsDialog(
                                         sim.displayName,
                                         style = MaterialTheme.typography.bodyMedium,
                                         fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal,
-                                        color = if (isSelected) Color(0xFF2E7D32) else ClaudeText
+                                        color = if (isSelected) Color(0xFF000000) else ClaudeText
                                     )
                                     if (!sim.phoneNumber.isNullOrBlank()) {
                                         Text(
@@ -1927,21 +1852,21 @@ fun SettingsDialog(
                         is InAppUpdateState.Downloading -> {
                             Card(
                                 modifier = Modifier.fillMaxWidth(),
-                                colors = CardDefaults.cardColors(containerColor = Color(0xFFE3F2FD)),
+                                colors = CardDefaults.cardColors(containerColor = Color(0xFFF0F0F0)),
                                 shape = RoundedCornerShape(8.dp)
                             ) {
                                 Column(modifier = Modifier.padding(12.dp)) {
                                     Text(
                                         "Yuklab olinmoqda... ${(updateState.progress * 100).toInt()}%",
                                         style = MaterialTheme.typography.labelMedium,
-                                        color = Color(0xFF1565C0)
+                                        color = Color(0xFF000000)
                                     )
                                     Spacer(modifier = Modifier.height(4.dp))
                                     LinearProgressIndicator(
                                         progress = { updateState.progress },
                                         modifier = Modifier.fillMaxWidth(),
-                                        color = Color(0xFF1565C0),
-                                        trackColor = Color(0xFFBBDEFB)
+                                        color = Color(0xFF000000),
+                                        trackColor = Color(0xFFE5E5E5)
                                     )
                                 }
                             }
@@ -1949,7 +1874,7 @@ fun SettingsDialog(
                         is InAppUpdateState.Installing -> {
                             Card(
                                 modifier = Modifier.fillMaxWidth(),
-                                colors = CardDefaults.cardColors(containerColor = Color(0xFFE3F2FD)),
+                                colors = CardDefaults.cardColors(containerColor = Color(0xFFF0F0F0)),
                                 shape = RoundedCornerShape(8.dp)
                             ) {
                                 Row(
@@ -1958,24 +1883,24 @@ fun SettingsDialog(
                                 ) {
                                     CircularProgressIndicator(
                                         modifier = Modifier.size(18.dp),
-                                        color = Color(0xFF1565C0),
+                                        color = Color(0xFF000000),
                                         strokeWidth = 2.dp
                                     )
                                     Spacer(modifier = Modifier.width(8.dp))
-                                    Text("O'rnatilmoqda...", color = Color(0xFF1565C0))
+                                    Text("O'rnatilmoqda...", color = Color(0xFF000000))
                                 }
                             }
                         }
                         is InAppUpdateState.Error -> {
                             Card(
                                 modifier = Modifier.fillMaxWidth(),
-                                colors = CardDefaults.cardColors(containerColor = Color(0xFFFFEBEE)),
+                                colors = CardDefaults.cardColors(containerColor = Color(0xFFF0F0F0)),
                                 shape = RoundedCornerShape(8.dp)
                             ) {
                                 Text(
                                     updateState.message,
                                     modifier = Modifier.padding(12.dp),
-                                    color = Color(0xFFC62828),
+                                    color = Color(0xFF000000),
                                     style = MaterialTheme.typography.bodySmall
                                 )
                             }
@@ -1986,20 +1911,20 @@ fun SettingsDialog(
                                 // Доступно обновление
                                 Card(
                                     modifier = Modifier.fillMaxWidth(),
-                                    colors = CardDefaults.cardColors(containerColor = Color(0xFFE8F5E9)),
+                                    colors = CardDefaults.cardColors(containerColor = Color(0xFFF0F0F0)),
                                     shape = RoundedCornerShape(8.dp)
                                 ) {
                                     Column(modifier = Modifier.padding(12.dp)) {
                                         Text(
                                             "Yangi versiya: v${updateInfo.versionName}",
                                             style = MaterialTheme.typography.labelMedium,
-                                            color = Color(0xFF2E7D32)
+                                            color = Color(0xFF000000)
                                         )
                                         if (updateInfo.releaseNotes.isNotBlank()) {
                                             Text(
                                                 updateInfo.releaseNotes.take(200),
                                                 style = MaterialTheme.typography.bodySmall,
-                                                color = Color(0xFF388E3C)
+                                                color = Color(0xFF000000)
                                             )
                                         }
                                         Spacer(modifier = Modifier.height(8.dp))
@@ -2015,7 +1940,7 @@ fun SettingsDialog(
                                 // Приложение актуально
                                 Card(
                                     modifier = Modifier.fillMaxWidth(),
-                                    colors = CardDefaults.cardColors(containerColor = Color(0xFFF1F8E9)),
+                                    colors = CardDefaults.cardColors(containerColor = Color(0xFFF0F0F0)),
                                     shape = RoundedCornerShape(8.dp)
                                 ) {
                                     Row(
@@ -2025,13 +1950,13 @@ fun SettingsDialog(
                                         Icon(
                                             Icons.Default.Refresh,
                                             contentDescription = null,
-                                            tint = Color(0xFF33691E),
+                                            tint = Color(0xFF000000),
                                             modifier = Modifier.size(18.dp)
                                         )
                                         Spacer(modifier = Modifier.width(8.dp))
                                         Text(
                                             "Ilova eng so'nggi versiyada",
-                                            color = Color(0xFF33691E),
+                                            color = Color(0xFF000000),
                                             style = MaterialTheme.typography.bodySmall
                                         )
                                     }
