@@ -19,36 +19,14 @@ class SettingsRepository(context: Context) {
         get() = prefs.getFloat("monthly_price", 0f).toDouble()
         set(value) = prefs.edit().putFloat("monthly_price", value.toFloat()).apply()
 
-    /** URL бэкенда Vercel, например https://my-app.vercel.app. */
-    var apiBaseUrl: String
-        get() = prefs.getString("api_base_url", DEFAULT_SERVER_URL) ?: DEFAULT_SERVER_URL
-        set(value) = prefs.edit().putString("api_base_url", value).apply()
-
-    /** Локальный пароль senior admin (fallback, если backend недоступен). */
-    var adminPassword: String
-        get() = prefs.getString("admin_password", "admin") ?: "admin"
-        set(value) = prefs.edit().putString("admin_password", value).apply()
-
-    /** Локальный пароль junior admin (fallback). */
-    var viewerPassword: String
-        get() = prefs.getString("viewer_password", "viewer") ?: "viewer"
-        set(value) = prefs.edit().putString("viewer_password", value).apply()
-
     /** Tanlangan SIM kartaning subscription ID (-1 = tanlanmagan) */
     var selectedSimSubscriptionId: Int
         get() = prefs.getInt("selected_sim_sub_id", -1)
         set(value) = prefs.edit().putInt("selected_sim_sub_id", value).apply()
 
-    var currentRole: String?
-        get() = prefs.getString("current_role", null)
-        set(value) = prefs.edit().putString("current_role", value).apply()
-
     companion object {
-        const val DEFAULT_SERVER_URL = "https://city1bike.vercel.app"
         const val DEFAULT_WEEKLY_PRICE = 150_000.0
         const val DEFAULT_TEMPLATE = """Assalomu alaykum {name}, sizning skuter ijarangiz {days} kunga kechikdi. Iltimos, to'lovni o'z vaqtida kiriting. Umumiy qarz: {debt}.
-
-https://transfer.paycom.uz/680a40043fc0407a2e48e8fe
 
 Call center: 71 200 55 56."""
     }

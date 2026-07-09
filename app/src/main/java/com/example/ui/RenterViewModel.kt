@@ -15,26 +15,21 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import androidx.work.OneTimeWorkRequestBuilder
 import androidx.work.WorkManager
-import androidx.room.withTransaction
 import com.example.data.AppDatabase
 import com.example.data.ContractHistoryEntry
 import com.example.data.Renter
 import com.example.data.RenterRepository
 import com.example.data.SettingsRepository
-import com.example.data.remote.SyncManager
 import com.example.worker.NotificationHelper
 import com.example.worker.PaymentCheckWorker
 import com.example.worker.SimHelper
 import com.example.worker.SmsWorker
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.Job
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.stateIn
-import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 
 data class SmsResult(
@@ -56,10 +51,8 @@ data class SmsResult(
 class RenterViewModel(application: Application) : AndroidViewModel(application) {
     private val repository: RenterRepository
     private val historyRepository: com.example.data.ContractHistoryRepository
-    private val sync: SyncManager
     val rentersList: StateFlow<List<Renter>>
 
-    private var autoSyncJob: Job? = null
     private var smsSendCounter = 0
 
     private val _smsResults = MutableSharedFlow<SmsResult>(extraBufferCapacity = 10)
@@ -71,7 +64,6 @@ class RenterViewModel(application: Application) : AndroidViewModel(application) 
         historyRepository = com.example.data.ContractHistoryRepository(
             database.contractHistoryDao()
         )
-        sync = SyncManager(application)
         rentersList = repository.allRenters.stateIn(
             scope = viewModelScope,
             started = SharingStarted.WhileSubscribed(5000),
@@ -79,20 +71,8 @@ class RenterViewModel(application: Application) : AndroidViewModel(application) 
         )
     }
 
-    fun startAutoSync() {
-        if (autoSyncJob?.isActive == true) return
-        autoSyncJob = viewModelScope.launch(Dispatchers.IO) {
-            while (isActive) {
-                try { sync.pushOnly() } catch (e: Exception) { Log.w(TAG, "Auto-sync failed", e) }
-                delay(30_000)
-            }
-        }
-    }
-
-    fun stopAutoSync() {
-        autoSyncJob?.cancel()
-        autoSyncJob = null
-    }
+    fun startAutoSync() { /* no-op: local-only mode */ }
+    fun stopAutoSync() { /* no-op: local-only mode */ }
 
     fun addRenter(
         name: String, phone: String, debt: Double, duration: Int,
@@ -149,30 +129,12 @@ class RenterViewModel(application: Application) : AndroidViewModel(application) 
             viewModelScope.launch(Dispatchers.IO) {
                 val renterIdForSync = savedRenter.id
                 try {
-                    val serverId = sync.pushRenter(provisional)
-                    if (serverId != null && serverId != localId) {
-                        val db = AppDatabase.getDatabase(getApplication<Application>())
-                        db.withTransaction {
-                            db.renterDao().updateRenterId(localId, serverId)
-                            db.contractHistoryDao().updateRenterId(localId, serverId)
-                            db.notificationHistoryDao().updateRenterId(localId, serverId)
-                        }
-                    }
-                } catch (e: Exception) { Log.w(TAG, "pushRenter failed", e) }
-
-                try {
                     historyRepository.insert(ContractHistoryEntry(
                         renterId = renterIdForSync, timestamp = now,
                         type = ContractHistoryEntry.TYPE_CREATED, amount = effectiveWeeklyPrice,
                         notes = if (isOverdueAtCreation) "Kechikkan holda yaratildi" else "Yaratildi"
                     ))
                 } catch (e: Exception) { Log.w(TAG, "History save xato", e) }
-
-                try { sync.pushContractHistory(ContractHistoryEntry(
-                    renterId = renterIdForSync, timestamp = now,
-                    type = ContractHistoryEntry.TYPE_CREATED, amount = effectiveWeeklyPrice,
-                    notes = if (isOverdueAtCreation) "Kechikkan holda yaratildi" else "Yaratildi"
-                )) } catch (e: Exception) { Log.w(TAG, "pushHistory xato", e) }
             }
         }
     }
@@ -367,11 +329,11 @@ class RenterViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     fun updateRenter(renter: Renter) {
-        viewModelScope.launch { repository.update(renter); sync.pushRenterUpdate(renter) }
+        viewModelScope.launch { repository.update(renter) }
     }
 
     fun deleteRenter(id: Int) {
-        viewModelScope.launch { repository.delete(id); sync.pushRenterDelete(id) }
+        viewModelScope.launch { repository.delete(id) }
     }
 
     fun markPaymentReceived(renter: Renter) {
@@ -398,10 +360,10 @@ class RenterViewModel(application: Application) : AndroidViewModel(application) 
         val newBalance = renter.balance + effectivePrice
         val updated = renter.copy(debtAmount = maxOf(0.0, -newBalance), balance = newBalance,
             lastPaymentTimestamp = System.currentTimeMillis(), isOverdueSmsSent = false)
-        repository.update(updated); sync.pushRenterUpdate(updated)
+        repository.update(updated)
         val entry = ContractHistoryEntry(renterId = renter.id, timestamp = System.currentTimeMillis(),
             type = ContractHistoryEntry.TYPE_PAYMENT, amount = effectivePrice, notes = notes)
-        historyRepository.insert(entry); sync.pushContractHistory(entry)
+        historyRepository.insert(entry)
     }
 
     private suspend fun applyTermination(renter: Renter, weeklyPrice: Double) {
@@ -409,10 +371,10 @@ class RenterViewModel(application: Application) : AndroidViewModel(application) 
         val newBalance = renter.balance + effectivePrice
         val updated = renter.copy(debtAmount = maxOf(0.0, -newBalance), balance = newBalance,
             isReturned = true, lastPaymentTimestamp = System.currentTimeMillis(), isOverdueSmsSent = false)
-        repository.update(updated); sync.pushRenterUpdate(updated)
+        repository.update(updated)
         val entry = ContractHistoryEntry(renterId = renter.id, timestamp = System.currentTimeMillis(),
             type = ContractHistoryEntry.TYPE_TERMINATED, amount = effectivePrice, notes = "Kontrakt tugatildi")
-        historyRepository.insert(entry); sync.pushContractHistory(entry)
+        historyRepository.insert(entry)
     }
 
     companion object {

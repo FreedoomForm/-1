@@ -1,6 +1,0 @@
-{
-  "name": "Scooter Rent",
-  "description": "App to track scooter rentals, debts, and automatically send SMS upon overdue payment.",
-  "requestFramePermissions": [],
-  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
-}

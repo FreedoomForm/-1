@@ -5,8 +5,6 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.data.AppDatabase
 import com.example.data.NotificationHistoryEntity
-import com.example.data.remote.SyncManager
-import com.example.worker.NotificationHelper
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.stateIn
@@ -14,7 +12,6 @@ import kotlinx.coroutines.launch
 
 class NotificationHistoryViewModel(application: Application) : AndroidViewModel(application) {
     private val repo = AppDatabase.getDatabase(application).notificationHistoryDao()
-    private val sync = SyncManager(application)
     val history: StateFlow<List<NotificationHistoryEntity>>
 
     init {
@@ -26,7 +23,6 @@ class NotificationHistoryViewModel(application: Application) : AndroidViewModel(
     fun saveAndPush(entry: NotificationHistoryEntity) {
         viewModelScope.launch {
             repo.insert(entry)
-            sync.pushNotification(entry)
         }
     }
 

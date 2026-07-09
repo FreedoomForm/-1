@@ -60,21 +60,16 @@ import androidx.work.WorkManager
 import com.example.data.NotificationHistoryEntity
 import com.example.data.Renter
 import com.example.data.Scooter
-import com.example.data.remote.SyncManager
-import com.example.data.remote.SyncResult
 import com.example.data.remote.InAppUpdateManager
 import com.example.data.remote.InAppUpdateState
 import com.example.data.remote.UpdateCheckResult
 import com.example.data.remote.UpdateChecker
 import com.example.data.remote.UpdateInfo
 import com.example.ui.ContractHistoryViewModel
-import com.example.ui.LoginState
-import com.example.ui.LoginViewModel
 import com.example.ui.NotificationHistoryViewModel
 import com.example.ui.RenterViewModel
 import com.example.ui.SettingsViewModel
 import com.example.ui.ScooterViewModel
-import com.example.ui.UserRole
 import com.example.ui.theme.ClaudeAccent
 import com.example.ui.theme.ClaudeBackground
 import com.example.ui.theme.ClaudeCard
@@ -132,26 +127,7 @@ class MainActivity : ComponentActivity() {
                     permissionLauncher.launch(Manifest.permission.READ_PHONE_STATE)
                 }
 
-                val loginViewModel: LoginViewModel = viewModel()
-                val role by loginViewModel.role.collectAsStateWithLifecycle()
-                val loginState by loginViewModel.state.collectAsStateWithLifecycle()
-
-                when (role) {
-                    UserRole.NONE -> LoginScreen(
-                        state = loginState,
-                        onLogin = { url, email, pwd ->
-                            loginViewModel.login(url, email, pwd)
-                        },
-                        onRegister = { url, email, pwd ->
-                            loginViewModel.register(url, email, pwd)
-                        },
-                        onErrorShown = { loginViewModel.resetError() }
-                    )
-                    else -> MainScreen(
-                        userRole = role,
-                        loginViewModel = loginViewModel
-                    )
-                }
+                MainScreen()
             }
         }
     }
@@ -192,8 +168,6 @@ private fun statusLabel(s: RenterStatus): String = when (s) {
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun MainScreen(
-    userRole: UserRole,
-    loginViewModel: LoginViewModel,
     viewModel: RenterViewModel = viewModel(),
     settingsViewModel: SettingsViewModel = viewModel(),
     scooterViewModel: ScooterViewModel = viewModel(),
@@ -218,8 +192,6 @@ fun MainScreen(
     var sortDirection by remember { mutableStateOf(SortDirection.ASC) }
     var scooterSortColumn by remember { mutableStateOf(SortColumn.NAME) }
     var scooterSortDirection by remember { mutableStateOf(SortDirection.ASC) }
-    var isSyncing by remember { mutableStateOf(false) }
-    var syncResult by remember { mutableStateOf<SyncResult?>(null) }
     var updateInfo by remember { mutableStateOf<UpdateInfo?>(null) }
     var isCheckingUpdate by remember { mutableStateOf(false) }
     var isUpToDate by remember { mutableStateOf(false) } // Приложение актуально — не показываем уведомление
@@ -227,12 +199,6 @@ fun MainScreen(
     val updateManager = remember { InAppUpdateManager(localContext) }
     val updateState by updateManager.state.collectAsStateWithLifecycle()
     val coroutineScope = rememberCoroutineScope()
-
-    // Авто-синхронизация (smart merge, каждые 30 секунд)
-    DisposableEffect(Unit) {
-        viewModel.startAutoSync()
-        onDispose { viewModel.stopAutoSync() }
-    }
 
     val scooters by scooterViewModel.scootersList.collectAsStateWithLifecycle()
 
@@ -319,39 +285,6 @@ fun MainScreen(
                             }
                         }
                     }
-                    // 🔄 Синхронизация
-                    IconButton(
-                        onClick = {
-                            if (!isSyncing) {
-                                isSyncing = true
-                                coroutineScope.launch {
-                                    val sync = SyncManager(localContext)
-                                    syncResult = sync.syncAll()
-                                    isSyncing = false
-                                }
-                            }
-                        },
-                        modifier = Modifier
-                            .padding(end = 4.dp, start = 4.dp)
-                            .size(40.dp)
-                            .background(Color.White, CircleShape)
-                            .border(1.dp, ClaudeDivider, CircleShape)
-                    ) {
-                        if (isSyncing) {
-                            CircularProgressIndicator(
-                                modifier = Modifier.size(18.dp),
-                                color = ClaudeAccent,
-                                strokeWidth = 2.dp
-                            )
-                        } else {
-                            Icon(
-                                Icons.Default.Refresh,
-                                contentDescription = "Sinxronizatsiya",
-                                modifier = Modifier.size(20.dp),
-                                tint = ClaudeText
-                            )
-                        }
-                    }
                     // 📜 Контрактлар тарихи (рядом с ⚙️)
                     IconButton(
                         onClick = { showContractHistoryDialog = true },
@@ -385,23 +318,21 @@ fun MainScreen(
             )
         },
         floatingActionButton = {
-            if (userRole == UserRole.ADMIN) {
-                FloatingActionButton(
-                    onClick = {
-                        if (currentTab == 0) showAddDialog = true
-                        else showAddScooterDialog = true
-                    },
-                    containerColor = ClaudeAccent,
-                    contentColor = Color.White,
-                    shape = RoundedCornerShape(18.dp),
-                    modifier = Modifier.size(64.dp)
-                ) {
-                    Icon(
-                        Icons.Default.Add,
-                        contentDescription = if (currentTab == 0) "Ijarachi qo'shish" else "Skuter qo'shish",
-                        modifier = Modifier.size(32.dp)
-                    )
-                }
+            FloatingActionButton(
+                onClick = {
+                    if (currentTab == 0) showAddDialog = true
+                    else showAddScooterDialog = true
+                },
+                containerColor = ClaudeAccent,
+                contentColor = Color.White,
+                shape = RoundedCornerShape(18.dp),
+                modifier = Modifier.size(64.dp)
+            ) {
+                Icon(
+                    Icons.Default.Add,
+                    contentDescription = if (currentTab == 0) "Ijarachi qo'shish" else "Skuter qo'shish",
+                    modifier = Modifier.size(32.dp)
+                )
             }
         },
         bottomBar = {
@@ -606,7 +537,7 @@ fun MainScreen(
                     singleLine = true
                 )
 
-                if (selectedRenters.isNotEmpty() && userRole == UserRole.ADMIN) {
+                if (selectedRenters.isNotEmpty()) {
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
@@ -958,7 +889,6 @@ fun MainScreen(
                 },
                 onLogout = {
                     showSettings = false
-                    loginViewModel.logout()
                 },
                 onCheckUpdate = {
                     if (!isCheckingUpdate) {
@@ -984,13 +914,6 @@ fun MainScreen(
                         }
                     }
                 }
-            )
-        }
-
-        if (syncResult != null) {
-            SyncResultDialog(
-                result = syncResult!!,
-                onDismiss = { syncResult = null }
             )
         }
 
@@ -2024,87 +1947,6 @@ fun SettingsDialog(
     )
 }
 
-@Composable
-fun SyncResultDialog(
-    result: SyncResult,
-    onDismiss: () -> Unit
-) {
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = {
-            Text(
-                if (result.isFullSuccess) "Sinxronizatsiya muvaffaqiyatli"
-                else if (result.success) "Sinxronizatsiya tugadi"
-                else "Sinxronizatsiya xatosi",
-                style = MaterialTheme.typography.titleLarge
-            )
-        },
-        containerColor = ClaudeCard,
-        text = {
-            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                if (result.errorMessage != null) {
-                    Text(
-                        result.errorMessage!!,
-                        color = Color(0xFFE05B44),
-                        style = MaterialTheme.typography.bodyMedium
-                    )
-                }
-                Text(
-                    "Yuborilgan: ${result.totalPushed} ta yozuv",
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = ClaudeText
-                )
-                if (result.totalFailed > 0) {
-                    Text(
-                        "Xatolik: ${result.totalFailed} ta yozuv",
-                        color = Color(0xFFE05B44),
-                        style = MaterialTheme.typography.bodyMedium
-                    )
-                }
-                HorizontalDivider()
-                Text(
-                    "Skuterlar: ${result.scootersPushed} yuborildi" +
-                            if (result.scootersFailed > 0) ", ${result.scootersFailed} xato" else "",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = ClaudeTextSecondary
-                )
-                Text(
-                    "Ijarachilar: ${result.rentersPushed} yuborildi" +
-                            if (result.rentersFailed > 0) ", ${result.rentersFailed} xato" else "",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = ClaudeTextSecondary
-                )
-                Text(
-                    "Kontraktlar: ${result.historyPushed} yuborildi" +
-                            if (result.historyFailed > 0) ", ${result.historyFailed} xato" else "",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = ClaudeTextSecondary
-                )
-                Text(
-                    "Bildirishnomalar: ${result.notificationsPushed} yuborildi" +
-                            if (result.notificationsFailed > 0) ", ${result.notificationsFailed} xato" else "",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = ClaudeTextSecondary
-                )
-                HorizontalDivider()
-                Text(
-                    if (result.pullSuccess) "Serverdan ma'lumotlar yuklandi" else "Serverdan yuklash xatosi",
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = if (result.pullSuccess) Color(0xFF34C759) else Color(0xFFE05B44)
-                )
-            }
-        },
-        confirmButton = {
-            Button(
-                onClick = onDismiss,
-                colors = ButtonDefaults.buttonColors(containerColor = ClaudeText),
-                shape = RoundedCornerShape(8.dp)
-            ) {
-                Text("OK", color = ClaudeCard)
-            }
-        }
-    )
-}
 
 class UzPhoneVisualTransformation : VisualTransformation {
     override fun filter(text: AnnotatedString): TransformedText {
@@ -2366,157 +2208,6 @@ fun ScooterFormDialog(
     )
 }
 
-/* ============================================================================
-   ЛОГИН-ЭКРАН
-   ============================================================================ */
-
-@OptIn(ExperimentalMaterial3Api::class)
-@Composable
-fun LoginScreen(
-    state: LoginState,
-    onLogin: (String, String, String) -> Unit,
-    onRegister: (String, String, String) -> Unit,
-    onErrorShown: () -> Unit
-) {
-    val context = LocalContext.current
-    val settingsRepo = remember { com.example.data.SettingsRepository(context.applicationContext) }
-    var serverUrl by remember { mutableStateOf(settingsRepo.apiBaseUrl) }
-    var email by remember { mutableStateOf("") }
-    var password by remember { mutableStateOf("") }
-    var registerMode by remember { mutableStateOf(false) }
-
-    Box(
-        modifier = Modifier
-            .fillMaxSize()
-            .background(ClaudeBackground),
-        contentAlignment = Alignment.Center
-    ) {
-        Card(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(24.dp),
-            shape = RoundedCornerShape(16.dp),
-            colors = CardDefaults.cardColors(containerColor = ClaudeCard),
-            elevation = CardDefaults.cardElevation(defaultElevation = 4.dp)
-        ) {
-            Column(
-                modifier = Modifier.padding(24.dp),
-                horizontalAlignment = Alignment.CenterHorizontally,
-                verticalArrangement = Arrangement.spacedBy(12.dp)
-            ) {
-                Icon(
-                    Icons.Default.DirectionsBike,
-                    contentDescription = null,
-                    tint = ClaudeAccent,
-                    modifier = Modifier.size(56.dp)
-                )
-                Text(
-                    "Skuter Ijarasi",
-                    style = MaterialTheme.typography.headlineSmall,
-                    color = ClaudeText,
-                    fontWeight = FontWeight.Bold
-                )
-                Text(
-                    if (registerMode) "Ro'yxatdan o'tish" else "Tizimga kirish",
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = ClaudeTextSecondary
-                )
-                OutlinedTextField(
-                    value = serverUrl,
-                    onValueChange = {
-                        serverUrl = it
-                        settingsRepo.apiBaseUrl = it.trim()
-                        onErrorShown()
-                    },
-                    label = { Text("Server URL") },
-                    placeholder = { Text(com.example.data.SettingsRepository.DEFAULT_SERVER_URL) },
-                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri),
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth(),
-                    shape = RoundedCornerShape(8.dp)
-                )
-                OutlinedTextField(
-                    value = email,
-                    onValueChange = {
-                        email = it
-                        onErrorShown()
-                    },
-                    label = { Text("Email") },
-                    placeholder = { Text("admin@example.com") },
-                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Email),
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth(),
-                    shape = RoundedCornerShape(8.dp)
-                )
-                OutlinedTextField(
-                    value = password,
-                    onValueChange = {
-                        password = it
-                        onErrorShown()
-                    },
-                    label = { Text("Parol") },
-                    visualTransformation = androidx.compose.ui.text.input.PasswordVisualTransformation(),
-                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth(),
-                    shape = RoundedCornerShape(8.dp)
-                )
-
-                val isLoading = state is LoginState.Loading
-                Button(
-                    onClick = {
-                        if (serverUrl.isBlank() || email.isBlank() || password.isBlank()) return@Button
-                        if (registerMode) {
-                            onRegister(serverUrl.trim(), email.trim(), password)
-                        } else {
-                            onLogin(serverUrl.trim(), email.trim(), password)
-                        }
-                    },
-                    enabled = !isLoading &&
-                        serverUrl.isNotBlank() && email.isNotBlank() && password.isNotBlank(),
-                    modifier = Modifier.fillMaxWidth(),
-                    colors = ButtonDefaults.buttonColors(containerColor = ClaudeAccent),
-                    shape = RoundedCornerShape(8.dp)
-                ) {
-                    if (isLoading) {
-                        CircularProgressIndicator(
-                            modifier = Modifier.size(20.dp),
-                            color = Color.White,
-                            strokeWidth = 2.dp
-                        )
-                    } else {
-                        Text(if (registerMode) "Ro'yxatdan o'tish" else "Kirish", color = Color.White)
-                    }
-                }
-
-                if (state is LoginState.Error) {
-                    Text(
-                        state.message,
-                        color = Color(0xFFE05B44),
-                        style = MaterialTheme.typography.bodySmall
-                    )
-                }
-
-                TextButton(
-                    onClick = { registerMode = !registerMode; onErrorShown() }
-                ) {
-                    Text(
-                        if (registerMode) "Kirishga o'tish"
-                        else "Akkauntingiz yo'qmi? Ro'yxatdan o'ting",
-                        color = ClaudeAccent,
-                        style = MaterialTheme.typography.labelMedium
-                    )
-                }
-
-                Text(
-                    "Birinchi ro'yxatdan o'tgan foydalanuvchi admin bo'ladi.",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = ClaudeTextSecondary
-                )
-            }
-        }
-    }
-}
 
 /* ============================================================================
    ДИАЛОГ ИСТОРИИ КОНТРАКТОВ

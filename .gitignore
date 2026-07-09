@@ -19,6 +19,5 @@ debug.keystore
 .env.production
 tool-results/
 skills/
-repo-debug/
-repo-latest/
 download/
+node_modules/
