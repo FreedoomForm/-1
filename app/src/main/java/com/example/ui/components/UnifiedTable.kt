@@ -359,8 +359,15 @@ data class FilterColumn(
 
 /**
  * Side panel that slides in from the right edge.
- * Contains a text field for each column; user types values and clicks
- * "Qidirish" to apply all filters simultaneously.
+ *
+ * Two sections:
+ *   1. "Ustunlarni ko'rsatish" — checkboxes for column visibility
+ *      (default: all checked). Unchecked columns are hidden from the table.
+ *   2. "Filtrlash" — text field per column for content filtering.
+ *
+ * User toggles checkboxes and types filter values, then clicks "Qidirish"
+ * to apply all filters simultaneously. The visibility state is exposed via
+ * [visibleColumns] and observed live by the parent table.
  */
 @Composable
 fun FilterSidePanel(
@@ -370,7 +377,11 @@ fun FilterSidePanel(
     onSearch: () -> Unit,
     onReset: () -> Unit,
     onDismiss: () -> Unit,
-    visible: Boolean
+    visible: Boolean,
+    /** Map of columnId -> isCurrentlyVisible. Caller must persist this state. */
+    columnVisibility: Map<String, Boolean> = emptyMap(),
+    /** Called when user toggles a column's visibility checkbox. */
+    onColumnVisibilityChange: (String, Boolean) -> Unit = { _, _ -> }
 ) {
     if (!visible) return
 
@@ -417,11 +428,67 @@ fun FilterSidePanel(
 
                 Spacer(Modifier.height(8.dp))
                 HorizontalDivider(color = ClaudeDivider)
-                Spacer(Modifier.height(16.dp))
+                Spacer(Modifier.height(12.dp))
 
-                // Filter fields
+                // ── Section 1: Column visibility checkboxes ────────────────
+                Text(
+                    "Ustunlarni ko'rsatish",
+                    style = MaterialTheme.typography.titleSmall,
+                    color = ClaudeText,
+                    fontWeight = FontWeight.Bold
+                )
+                Spacer(Modifier.height(8.dp))
+
                 LazyColumn(
-                    modifier = Modifier.weight(1f),
+                    modifier = Modifier.weight(0.4f),
+                    verticalArrangement = Arrangement.spacedBy(2.dp)
+                ) {
+                    items(columns, key = { it.id }) { col ->
+                        val isChecked = columnVisibility[col.id] ?: true
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clip(RoundedCornerShape(6.dp))
+                                .clickable { onColumnVisibilityChange(col.id, !isChecked) }
+                                .padding(horizontal = 8.dp, vertical = 6.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Checkbox(
+                                checked = isChecked,
+                                onCheckedChange = { onColumnVisibilityChange(col.id, it) },
+                                modifier = Modifier.size(28.dp),
+                                colors = androidx.compose.material3.CheckboxDefaults.colors(
+                                    checkedColor = ClaudeAccent,
+                                    uncheckedColor = ClaudeTextSecondary,
+                                    checkmarkColor = Color.White
+                                )
+                            )
+                            Spacer(Modifier.width(8.dp))
+                            Text(
+                                col.label,
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = if (isChecked) ClaudeText else ClaudeTextSecondary,
+                                fontWeight = if (isChecked) FontWeight.Medium else FontWeight.Normal
+                            )
+                        }
+                    }
+                }
+
+                Spacer(Modifier.height(8.dp))
+                HorizontalDivider(color = ClaudeDivider)
+                Spacer(Modifier.height(12.dp))
+
+                // ── Section 2: Filter text fields ──────────────────────────
+                Text(
+                    "Filtrlash",
+                    style = MaterialTheme.typography.titleSmall,
+                    color = ClaudeText,
+                    fontWeight = FontWeight.Bold
+                )
+                Spacer(Modifier.height(8.dp))
+
+                LazyColumn(
+                    modifier = Modifier.weight(0.6f),
                     verticalArrangement = Arrangement.spacedBy(12.dp)
                 ) {
                     items(columns, key = { it.id }) { col ->

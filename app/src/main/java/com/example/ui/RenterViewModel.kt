@@ -642,11 +642,32 @@ class RenterViewModel(application: Application) : AndroidViewModel(application) 
             val latestPaid = historyRepository.getLatestPaidContract(renter.id)
             val lastWeekEnd = latestPaid?.weekEnd
                 ?: (renter.rentStartDateTimestamp + renter.rentDurationDays * 24L * 60 * 60 * 1000)
-            // Если последний оплаченный контракт уже закончился в прошлом —
-            // начинаем новый с текущего момента, иначе продолжаем с weekEnd.
-            val baseStart = if (lastWeekEnd < now) now else lastWeekEnd
+            val dayMs = 24L * 60 * 60 * 1000
+            val weekMs = 7L * dayMs
+
+            // ── НОВАЯ ЛОГИКА: проверка давности последнего контракта ──────
+            // Если последний оплаченный контракт закончился БОЛЬШЕ 7 дней назад
+            // (т.е. (now - lastWeekEnd) > 7 дней), то новый контракт начинается
+            // с ТЕКУЩЕГО дня, а не с lastWeekEnd. Это работает одинаково и для
+            // активных, и для пассивных арендаторов.
+            //
+            // Дополнительно: если арендатор был в пассивном состоянии
+            // (isReturned = true — скутер возвращён, аренда завершена), то при
+            // создании нового контракта он возвращается в активное состояние.
+            // Если lastWeekEnd == null (нет оплаченных контрактов) — используем
+            // rentStartDate + duration как «последнюю дату», и ту же логику >7 дней.
+            val effectiveLastEnd = lastWeekEnd
+                ?: (renter.rentStartDateTimestamp + renter.rentDurationDays * dayMs)
+            val effectiveGapMs = now - effectiveLastEnd
+            val shouldStartFromNow = effectiveGapMs > weekMs
+
+            val baseStart = when {
+                shouldStartFromNow -> now
+                lastWeekEnd != null && lastWeekEnd >= now -> lastWeekEnd
+                else -> now
+            }
             val weekStart = baseStart
-            val weekEnd = baseStart + 7L * 24 * 60 * 60 * 1000
+            val weekEnd = baseStart + weekMs
 
             val scooter: Scooter? = renter.scooterId?.let { fetchScooterById(it) }
             val scooterVin = scooter?.vinNumber ?: ""
@@ -656,11 +677,18 @@ class RenterViewModel(application: Application) : AndroidViewModel(application) 
             val scooterBat2 = scooter?.batteryId2 ?: ""
             val scooterExtra = scooter?.additionalInfo ?: ""
 
+            // Описание для нового контракта
+            val contractNotes = when {
+                renter.isReturned -> "Qayta faollashtirildi (1 hafta to'lov)"
+                shouldStartFromNow && lastWeekEnd != null -> "Yangi hafta (eski kontrakt muddati o'tgan)"
+                else -> "Oldindan to'lov (keyingi hafta)"
+            }
+
             // Новый контракт-неделя, сразу оплаченный (зелёный)
             val newContract = ContractHistoryEntry(
                 renterId = renter.id, timestamp = now,
                 type = ContractHistoryEntry.TYPE_AUTO_RENEW, amount = effectivePrice,
-                notes = "Oldindan to'lov (keyingi hafta)",
+                notes = contractNotes,
                 renterName = renter.name, renterPhone = renter.phoneNumber, scooterName = renter.scooterName,
                 weekStart = weekStart, weekEnd = weekEnd,
                 weeklyPrice = effectivePrice,
@@ -696,14 +724,20 @@ class RenterViewModel(application: Application) : AndroidViewModel(application) 
             )
             historyRepository.insert(paymentEntry)
 
-            // Обновляем арендатора: баланс растёт, сдвигаем rent period на новую неделю
+            // Обновляем арендатора:
+            //   • баланс растёт (предоплата)
+            //   • rentStartDateTimestamp = weekStart (новая неделя)
+            //   • rentDurationDays = 7 (одна неделя)
+            //   • isReturned = false — реактивация, если был в пассивном состоянии
+            //   • isOverdueSmsSent = false — сбрасываем флаг просрочки
             val updated = renter.copy(
                 debtAmount = maxOf(0.0, -newBalance),
                 balance = newBalance,
                 rentStartDateTimestamp = weekStart,
                 rentDurationDays = 7,
                 lastPaymentTimestamp = now,
-                isOverdueSmsSent = false
+                isOverdueSmsSent = false,
+                isReturned = false  // ← реактивация пассивного арендатора
             )
             repository.update(updated)
         }

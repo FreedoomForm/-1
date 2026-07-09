@@ -271,26 +271,40 @@ fun MainScreen(
     var showScooterFilterPanel by remember { mutableStateOf(false) }
     var renterFilterValues by remember { mutableStateOf(mapOf<String, String>()) }
     var scooterFilterValues by remember { mutableStateOf(mapOf<String, String>()) }
+    // Column visibility state (default: all visible). When user unchecks a
+    // column in the filter side panel, the column disappears from the table
+    // even if it has data — this replaces the old "auto-hide empty columns"
+    // logic. User now has full manual control.
+    var renterColumnVisibility by remember { mutableStateOf(mapOf<String, Boolean>()) }
+    var scooterColumnVisibility by remember { mutableStateOf(mapOf<String, Boolean>()) }
 
     // Filter column definitions (shared between search bar and filter panel)
-    // Базовые колонки всегда показываются. Опциональные колонки добавляются
-    // динамически ниже (после того, как `renters` объявлен) — только если хотя
-    // бы у одного арендатора есть данные в этом поле.
-    val renterFilterColumnsBase = remember {
+    // Базовые колонки + ВСЕ опциональные колонки. Видимость каждой управляется
+    // чекбоксом в FilterSidePanel — по умолчанию все включены.
+    val renterFilterColumns = remember {
         listOf(
-            FilterColumn("col_name", "Mijoz", "Ism bo'yicha"),
-            FilterColumn("col_phone", "Telefon", "+998..."),
-            FilterColumn("col_scooter", "Skuter", "Skuter nomi"),
-            FilterColumn("col_start", "Boshlanish sanasi", "dd.MM.yyyy"),
-            FilterColumn("col_end", "Tugash sanasi", "dd.MM.yyyy"),
-            FilterColumn("col_balance", "Balans", "summa")
+            FilterColumn("col_name",     "Mijoz",            "Ism bo'yicha"),
+            FilterColumn("col_phone",    "Telefon",          "+998..."),
+            FilterColumn("col_scooter",  "Skuter",           "Skuter nomi"),
+            FilterColumn("col_start",    "Boshlanish sanasi","dd.MM.yyyy"),
+            FilterColumn("col_end",      "Tugash sanasi",    "dd.MM.yyyy"),
+            FilterColumn("col_balance",  "Balans",           "summa"),
+            FilterColumn("col_passport", "Pasport",          "AA 1234567"),
+            FilterColumn("col_address",  "Manzil",           "Manzil bo'yicha"),
+            FilterColumn("col_pinfl",    "JSHSHIR",          "14 raqam")
         )
     }
     val scooterFilterColumns = remember {
         listOf(
-            FilterColumn("col_name", "Nomi", "Skuter nomi"),
-            FilterColumn("col_doc", "Hujjat raqami", "Doc #"),
-            FilterColumn("col_status", "Holat", "Ijarada / Bosh")
+            FilterColumn("col_name",    "Nomi",            "Skuter nomi"),
+            FilterColumn("col_doc",     "Hujjat raqami",   "Doc #"),
+            FilterColumn("col_vin",     "VIN",             "VIN raqami"),
+            FilterColumn("col_engine",  "Dvigatel",        "Dvigatel raqami"),
+            FilterColumn("col_serial",  "ID raqami",       "ID"),
+            FilterColumn("col_batt1",   "Akkumulyator 1",  "Batt ID 1"),
+            FilterColumn("col_batt2",   "Akkumulyator 2",  "Batt ID 2"),
+            FilterColumn("col_extra",   "Qo'shimcha",      "Qo'shimcha ma'lumot"),
+            FilterColumn("col_status",  "Holat",           "Ijarada / Bosh")
         )
     }
     var updateInfo by remember { mutableStateOf<UpdateInfo?>(null) }
@@ -335,18 +349,6 @@ fun MainScreen(
 
     val renters by viewModel.rentersList.collectAsStateWithLifecycle()
     val history by historyViewModel.history.collectAsStateWithLifecycle()
-
-    // Динамически расширяем список колонок фильтра опциональными PDF-реквизитами,
-    // если хотя бы у одного арендатора есть данные в этом поле. Колонка, по которой
-    // нет данных ни у одного арендатора, скрывается из фильтр-панели (и из таблицы).
-    val renterFilterColumns = remember(renters, renterFilterColumnsBase) {
-        val extra = buildList {
-            if (renters.any { it.passportData.isNotBlank() })           add(FilterColumn("col_passport", "Pasport", "AA 1234567"))
-            if (renters.any { it.address.isNotBlank() })                add(FilterColumn("col_address",  "Manzil", "Manzil bo'yicha"))
-            if (renters.any { it.pinfl.isNotBlank() })                  add(FilterColumn("col_pinfl",    "JSHSHIR", "14 raqam"))
-        }
-        renterFilterColumnsBase + extra
-    }
 
     // ── Рендер экрана истории контрактов, если активен ─────────────────
     when (val st = navState) {
@@ -674,7 +676,11 @@ fun MainScreen(
                     onSearch = { /* filters already applied reactively */ },
                     onReset = { renterFilterValues = emptyMap() },
                     onDismiss = { showRenterFilterPanel = false },
-                    visible = showRenterFilterPanel
+                    visible = showRenterFilterPanel,
+                    columnVisibility = renterColumnVisibility,
+                    onColumnVisibilityChange = { colId, isVisible ->
+                        renterColumnVisibility = renterColumnVisibility.toMutableMap().apply { put(colId, isVisible) }
+                    }
                 )
 
                 if (selectedRenters.isNotEmpty()) {
@@ -829,6 +835,7 @@ fun MainScreen(
                     renters = filteredRenters,
                     selected = selectedRenters,
                     sortState = renterSortState,
+                    columnVisibility = renterColumnVisibility,
                     onSortClick = { colId ->
                         renterSortState = renterSortState.click(colId)
                     },
@@ -863,7 +870,11 @@ fun MainScreen(
                     onSearch = { /* filters applied reactively */ },
                     onReset = { scooterFilterValues = emptyMap() },
                     onDismiss = { showScooterFilterPanel = false },
-                    visible = showScooterFilterPanel
+                    visible = showScooterFilterPanel,
+                    columnVisibility = scooterColumnVisibility,
+                    onColumnVisibilityChange = { colId, isVisible ->
+                        scooterColumnVisibility = scooterColumnVisibility.toMutableMap().apply { put(colId, isVisible) }
+                    }
                 )
 
                 if (selectedScooters.isNotEmpty()) {
@@ -897,8 +908,14 @@ fun MainScreen(
                     val filterMatch = scooterFilterValues.all { (colId, filterText) ->
                         if (filterText.isBlank()) true
                         else when (colId) {
-                            "col_name" -> scooter.name.contains(filterText, ignoreCase = true)
-                            "col_doc" -> (scooter.documentedNumber ?: "").contains(filterText, ignoreCase = true)
+                            "col_name"   -> scooter.name.contains(filterText, ignoreCase = true)
+                            "col_doc"    -> (scooter.documentedNumber ?: "").contains(filterText, ignoreCase = true)
+                            "col_vin"    -> scooter.vinNumber.contains(filterText, ignoreCase = true)
+                            "col_engine" -> scooter.engineNumber.contains(filterText, ignoreCase = true)
+                            "col_serial" -> scooter.scooterSerialNumber.contains(filterText, ignoreCase = true)
+                            "col_batt1"  -> scooter.batteryId1.contains(filterText, ignoreCase = true)
+                            "col_batt2"  -> scooter.batteryId2.contains(filterText, ignoreCase = true)
+                            "col_extra"  -> scooter.additionalInfo.contains(filterText, ignoreCase = true)
                             "col_status" -> {
                                 val status = scooterStatusLabel(scooterStatusOf(scooter.id, renters))
                                 status.contains(filterText, ignoreCase = true)
@@ -927,6 +944,7 @@ fun MainScreen(
                     renters = renters,
                     selected = selectedScooters,
                     sortState = scooterSortState,
+                    columnVisibility = scooterColumnVisibility,
                     onSortClick = { colId ->
                         scooterSortState = scooterSortState.click(colId)
                     },
@@ -1157,17 +1175,33 @@ fun RenterTable(
     renters: List<Renter>,
     selected: Set<Int>,
     sortState: TableSortState,
+    columnVisibility: Map<String, Boolean>,
     onSortClick: (String) -> Unit,
     onSelect: (Int, Boolean) -> Unit,
     onClick: (Renter) -> Unit
 ) {
-    // ── Две компоновки ───────────────────────────────────────────────────
-    // 1) БЕЗ опциональных колонок: weight-based Row, БЕЗ горизонтального
-    //    скролла. Все 6 базовых колонок (Name, Phone, Scooter, Start, End,
-    //    Balance) умещаются на экране телефона пропорционально. Так
-    //    Balans и Tugash (= data poslednego kontrakta) всегда видны.
-    // 2) С опциональными колонками: fixed widths + horizontalScroll.
-    //    Базовые 6 + Passport/Address/Pinfl — пользователь скроллит вправо.
+    // ── Видимость столбцов ───────────────────────────────────────────────
+    // Каждая колонка по умолчанию видна (true), если в columnVisibility нет
+    // явного значения false. Пользователь управляет видимостью через
+    // FilterSidePanel (чекбоксы). Это заменяет старую логику "скрыть столбец
+    // если все значения пустые" — теперь пользователь сам решает что видеть.
+    fun isColVisible(colId: String): Boolean = columnVisibility[colId] ?: true
+    val showName     = isColVisible("col_name")
+    val showPhone    = isColVisible("col_phone")
+    val showScooter  = isColVisible("col_scooter")
+    val showStart    = isColVisible("col_start")
+    val showEnd      = isColVisible("col_end")
+    val showBalance  = isColVisible("col_balance")
+    val showPassport = isColVisible("col_passport")
+    val showAddress  = isColVisible("col_address")
+    val showPinfl    = isColVisible("col_pinfl")
+
+    // ── Компоновка ──────────────────────────────────────────────────────
+    // Если видны только 6 базовых колонок (без extras) — используем
+    // weight-based Row без скролла. Если видна хотя бы одна extra-колонка —
+    // fixed widths + горизонтальный скролл.
+    val hasAnyExtraVisible = showPassport || showAddress || showPinfl
+
     val wName     = 110.dp
     val wPhone    = 100.dp
     val wScoot    = 80.dp
@@ -1186,13 +1220,6 @@ fun RenterTable(
     val fEnd   = 1.1f
     val fDebt  = 0.9f
 
-    // Определяем, какие опциональные колонки нужно показать (хотя бы у одного
-    // арендатора есть непустое значение в этом поле).
-    val hasPassport = remember(renters) { renters.any { it.passportData.isNotBlank() } }
-    val hasAddress  = remember(renters) { renters.any { it.address.isNotBlank() } }
-    val hasPinfl    = remember(renters) { renters.any { it.pinfl.isNotBlank() } }
-    val hasAnyExtra = hasPassport || hasAddress || hasPinfl
-
     val dateFmt = remember { SimpleDateFormat("dd.MM.yyyy", Locale.getDefault()) }
     val hScrollState = rememberScrollState()
 
@@ -1201,29 +1228,27 @@ fun RenterTable(
         Surface(color = ClaudeCard, modifier = Modifier.fillMaxWidth()) {
             Row(
                 modifier = Modifier
-                    .then(if (hasAnyExtra) Modifier.horizontalScroll(hScrollState) else Modifier)
+                    .then(if (hasAnyExtraVisible) Modifier.horizontalScroll(hScrollState) else Modifier)
                     .padding(horizontal = 8.dp, vertical = 4.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                if (hasAnyExtra) {
-                    // Fixed-width версия — со скроллом
-                    SortableHeaderCellFixed(Icons.Default.Person,               wName,  "col_name",      sortState) { onSortClick("col_name") }
-                    SortableHeaderCellFixed(Icons.Default.Phone,                wPhone, "col_phone",     sortState) { onSortClick("col_phone") }
-                    SortableHeaderCellFixed(Icons.Default.DirectionsBike,       wScoot, "col_scooter",   sortState) { onSortClick("col_scooter") }
-                    SortableHeaderCellFixed(Icons.Default.CalendarToday,        wStart, "col_start",     sortState) { onSortClick("col_start") }
-                    SortableHeaderCellFixed(Icons.Default.Event,                wEnd,   "col_end",       sortState) { onSortClick("col_end") }
-                    SortableHeaderCellFixed(Icons.Default.AccountBalanceWallet, wDebt,  "col_balance",   sortState) { onSortClick("col_balance") }
-                    if (hasPassport) SortableHeaderCellFixed(Icons.Default.CreditCard,  wPassport, "col_passport", sortState) { onSortClick("col_passport") }
-                    if (hasAddress)  SortableHeaderCellFixed(Icons.Default.Home,       wAddress,  "col_address",  sortState) { onSortClick("col_address") }
-                    if (hasPinfl)    SortableHeaderCellFixed(Icons.Default.Fingerprint, wPinfl,    "col_pinfl",    sortState) { onSortClick("col_pinfl") }
+                if (hasAnyExtraVisible) {
+                    if (showName)     SortableHeaderCellFixed(Icons.Default.Person,               wName,     "col_name",     sortState) { onSortClick("col_name") }
+                    if (showPhone)    SortableHeaderCellFixed(Icons.Default.Phone,                wPhone,    "col_phone",    sortState) { onSortClick("col_phone") }
+                    if (showScooter)  SortableHeaderCellFixed(Icons.Default.DirectionsBike,       wScoot,    "col_scooter",  sortState) { onSortClick("col_scooter") }
+                    if (showStart)    SortableHeaderCellFixed(Icons.Default.CalendarToday,        wStart,    "col_start",    sortState) { onSortClick("col_start") }
+                    if (showEnd)      SortableHeaderCellFixed(Icons.Default.Event,                wEnd,      "col_end",      sortState) { onSortClick("col_end") }
+                    if (showBalance)  SortableHeaderCellFixed(Icons.Default.AccountBalanceWallet, wDebt,     "col_balance",  sortState) { onSortClick("col_balance") }
+                    if (showPassport) SortableHeaderCellFixed(Icons.Default.CreditCard,           wPassport, "col_passport", sortState) { onSortClick("col_passport") }
+                    if (showAddress)  SortableHeaderCellFixed(Icons.Default.Home,                 wAddress,  "col_address",  sortState) { onSortClick("col_address") }
+                    if (showPinfl)    SortableHeaderCellFixed(Icons.Default.Fingerprint,          wPinfl,    "col_pinfl",    sortState) { onSortClick("col_pinfl") }
                 } else {
-                    // Weight-based версия — все 6 базовых колонок помещаются на экране
-                    SortableHeaderCell(Icons.Default.Person,               fName,  "col_name",      sortState) { onSortClick("col_name") }
-                    SortableHeaderCell(Icons.Default.Phone,                fPhone, "col_phone",     sortState) { onSortClick("col_phone") }
-                    SortableHeaderCell(Icons.Default.DirectionsBike,       fScoot, "col_scooter",   sortState) { onSortClick("col_scooter") }
-                    SortableHeaderCell(Icons.Default.CalendarToday,        fStart, "col_start",     sortState) { onSortClick("col_start") }
-                    SortableHeaderCell(Icons.Default.Event,                fEnd,   "col_end",       sortState) { onSortClick("col_end") }
-                    SortableHeaderCell(Icons.Default.AccountBalanceWallet, fDebt,  "col_balance",   sortState) { onSortClick("col_balance") }
+                    if (showName)     SortableHeaderCell(Icons.Default.Person,               fName,  "col_name",     sortState) { onSortClick("col_name") }
+                    if (showPhone)    SortableHeaderCell(Icons.Default.Phone,                fPhone, "col_phone",    sortState) { onSortClick("col_phone") }
+                    if (showScooter)  SortableHeaderCell(Icons.Default.DirectionsBike,       fScoot, "col_scooter",  sortState) { onSortClick("col_scooter") }
+                    if (showStart)    SortableHeaderCell(Icons.Default.CalendarToday,        fStart, "col_start",    sortState) { onSortClick("col_start") }
+                    if (showEnd)      SortableHeaderCell(Icons.Default.Event,                fEnd,   "col_end",      sortState) { onSortClick("col_end") }
+                    if (showBalance)  SortableHeaderCell(Icons.Default.AccountBalanceWallet, fDebt,  "col_balance",  sortState) { onSortClick("col_balance") }
                 }
             }
         }
@@ -1258,7 +1283,7 @@ fun RenterTable(
                 ) {
                     Row(
                         modifier = Modifier
-                            .then(if (hasAnyExtra) Modifier.horizontalScroll(hScrollState) else Modifier.fillMaxWidth())
+                            .then(if (hasAnyExtraVisible) Modifier.horizontalScroll(hScrollState) else Modifier.fillMaxWidth())
                             .border(
                                 width = if (isSelected) 2.dp else 1.5.dp,
                                 color = sColor,
@@ -1275,77 +1300,89 @@ fun RenterTable(
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         // Mijoz
-                        Text(
-                            renter.name,
-                            modifier = Modifier
-                                .then(if (hasAnyExtra) Modifier.width(wName) else Modifier.weight(fName))
-                                .padding(horizontal = 4.dp),
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = ClaudeText,
-                            fontWeight = FontWeight.SemiBold,
-                            maxLines = 1
-                        )
-                        // Tel
-                        Text(
-                            renter.phoneNumber,
-                            modifier = Modifier
-                                .then(if (hasAnyExtra) Modifier.width(wPhone) else Modifier.weight(fPhone))
-                                .padding(horizontal = 4.dp),
-                            style = MaterialTheme.typography.bodySmall,
-                            color = ClaudeTextSecondary,
-                            maxLines = 1
-                        )
-                        // Skuter
-                        Text(
-                            renter.scooterName ?: "—",
-                            modifier = Modifier
-                                .then(if (hasAnyExtra) Modifier.width(wScoot) else Modifier.weight(fScoot))
-                                .padding(horizontal = 4.dp),
-                            style = MaterialTheme.typography.bodySmall,
-                            color = ClaudeText,
-                            maxLines = 1
-                        )
-                        // Boshlanish
-                        Text(
-                            dateFmt.format(Date(renter.rentStartDateTimestamp)),
-                            modifier = Modifier
-                                .then(if (hasAnyExtra) Modifier.width(wStart) else Modifier.weight(fStart))
-                                .padding(horizontal = 4.dp),
-                            style = MaterialTheme.typography.bodySmall,
-                            color = ClaudeText,
-                            maxLines = 1
-                        )
-                        // Tugash (= data poslednego kontrakta)
-                        val expiry = renter.rentStartDateTimestamp +
-                            (renter.rentDurationDays * 24L * 60 * 60 * 1000)
-                        Text(
-                            dateFmt.format(Date(expiry)),
-                            modifier = Modifier
-                                .then(if (hasAnyExtra) Modifier.width(wEnd) else Modifier.weight(fEnd))
-                                .padding(horizontal = 4.dp),
-                            style = MaterialTheme.typography.bodySmall,
-                            color = ClaudeText,
-                            maxLines = 1
-                        )
-                        // Balans (может быть отрицательным = долг, положительным = аванс)
-                        val balanceColor = when {
-                            renter.balance < 0 -> StatusOverdue
-                            renter.balance > 0 -> StatusOk
-                            else -> ClaudeText
+                        if (showName) {
+                            Text(
+                                renter.name,
+                                modifier = Modifier
+                                    .then(if (hasAnyExtraVisible) Modifier.width(wName) else Modifier.weight(fName))
+                                    .padding(horizontal = 4.dp),
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = ClaudeText,
+                                fontWeight = FontWeight.SemiBold,
+                                maxLines = 1
+                            )
                         }
-                        Text(
-                            renter.balance.toLong().toString(),
-                            modifier = Modifier
-                                .then(if (hasAnyExtra) Modifier.width(wDebt) else Modifier.weight(fDebt))
-                                .padding(horizontal = 4.dp),
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = balanceColor,
-                            fontWeight = FontWeight.Bold,
-                            textAlign = TextAlign.End,
-                            maxLines = 1
-                        )
-                        // ── Опциональные колонки (только если есть данные) ────
-                        if (hasPassport) {
+                        // Tel
+                        if (showPhone) {
+                            Text(
+                                renter.phoneNumber,
+                                modifier = Modifier
+                                    .then(if (hasAnyExtraVisible) Modifier.width(wPhone) else Modifier.weight(fPhone))
+                                    .padding(horizontal = 4.dp),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = ClaudeTextSecondary,
+                                maxLines = 1
+                            )
+                        }
+                        // Skuter
+                        if (showScooter) {
+                            Text(
+                                renter.scooterName ?: "—",
+                                modifier = Modifier
+                                    .then(if (hasAnyExtraVisible) Modifier.width(wScoot) else Modifier.weight(fScoot))
+                                    .padding(horizontal = 4.dp),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = ClaudeText,
+                                maxLines = 1
+                            )
+                        }
+                        // Boshlanish
+                        if (showStart) {
+                            Text(
+                                dateFmt.format(Date(renter.rentStartDateTimestamp)),
+                                modifier = Modifier
+                                    .then(if (hasAnyExtraVisible) Modifier.width(wStart) else Modifier.weight(fStart))
+                                    .padding(horizontal = 4.dp),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = ClaudeText,
+                                maxLines = 1
+                            )
+                        }
+                        // Tugash (= data poslednego kontrakta)
+                        if (showEnd) {
+                            val expiry = renter.rentStartDateTimestamp +
+                                (renter.rentDurationDays * 24L * 60 * 60 * 1000)
+                            Text(
+                                dateFmt.format(Date(expiry)),
+                                modifier = Modifier
+                                    .then(if (hasAnyExtraVisible) Modifier.width(wEnd) else Modifier.weight(fEnd))
+                                    .padding(horizontal = 4.dp),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = ClaudeText,
+                                maxLines = 1
+                            )
+                        }
+                        // Balans
+                        if (showBalance) {
+                            val balanceColor = when {
+                                renter.balance < 0 -> StatusOverdue
+                                renter.balance > 0 -> StatusOk
+                                else -> ClaudeText
+                            }
+                            Text(
+                                renter.balance.toLong().toString(),
+                                modifier = Modifier
+                                    .then(if (hasAnyExtraVisible) Modifier.width(wDebt) else Modifier.weight(fDebt))
+                                    .padding(horizontal = 4.dp),
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = balanceColor,
+                                fontWeight = FontWeight.Bold,
+                                textAlign = TextAlign.End,
+                                maxLines = 1
+                            )
+                        }
+                        // ── Опциональные колонки (показываются если включены) ─
+                        if (showPassport) {
                             Text(
                                 renter.passportData.ifBlank { "—" },
                                 modifier = Modifier.width(wPassport).padding(horizontal = 4.dp),
@@ -1354,7 +1391,7 @@ fun RenterTable(
                                 maxLines = 1
                             )
                         }
-                        if (hasAddress) {
+                        if (showAddress) {
                             Text(
                                 renter.address.ifBlank { "—" },
                                 modifier = Modifier.width(wAddress).padding(horizontal = 4.dp),
@@ -1363,7 +1400,7 @@ fun RenterTable(
                                 maxLines = 1
                             )
                         }
-                        if (hasPinfl) {
+                        if (showPinfl) {
                             Text(
                                 renter.pinfl.ifBlank { "—" },
                                 modifier = Modifier.width(wPinfl).padding(horizontal = 4.dp),
@@ -1566,14 +1603,9 @@ fun RenterFormDialog(
 
     val scrollState = rememberScrollState()
 
-    // Автоматически разворачиваем блок доп. полей при редактировании, если хотя бы одно поле заполнено
-    val hasAnyExtraPrefilled = remember(initialRenter) {
-        val r = initialRenter
-        r != null && (
-            r.passportData.isNotBlank() || r.address.isNotBlank() || r.pinfl.isNotBlank()
-        )
-    }
-    var showExtraFields by remember { mutableStateOf(hasAnyExtraPrefilled) }
+    // Дополнительные поля (паспорт/адрес/ПИНФЛ) теперь ВСЕГДА видны и обязательны
+    // — пользователь явно попросил убрать кнопку «More»/«Yashirish» и сделать
+    // эти поля такими же, как остальные обязательные поля формы.
 
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -1746,96 +1778,61 @@ fun RenterFormDialog(
                     shape = RoundedCornerShape(8.dp)
                 )
 
-                // ── Кнопка-тумблер: «Қўшимча маълумотлар» ───────────────────
-                // Разворачивает/сворачивает 9 PDF-реквизитов (паспорт, манзил,
-                // ПИНФЛ, VIN, двигатель, ID, аккумы, доп. инфо). По умолчанию
-                // свёрнуты — пользователь сам решает заполнять их или нет.
+                // ── Реквизиты арендатора для PDF-договора (всегда видны) ────
                 HorizontalDivider(color = ClaudeDivider, thickness = 1.dp)
-                OutlinedCard(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clickable { showExtraFields = !showExtraFields },
-                    shape = RoundedCornerShape(8.dp),
-                    border = BorderStroke(1.dp, if (showExtraFields) ClaudeText else ClaudeDivider)
-                ) {
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(horizontal = 16.dp, vertical = 12.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Icon(
-                            if (showExtraFields) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
-                            contentDescription = null,
-                            tint = ClaudeText
-                        )
-                        Spacer(modifier = Modifier.width(12.dp))
-                        Text(
-                            if (showExtraFields) "Қўшимча маълумотларни яшириш" else "Қўшимча маълумотларни кўрсатиш",
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = ClaudeText,
-                            fontWeight = FontWeight.Medium,
-                            modifier = Modifier.weight(1f)
-                        )
-                    }
-                }
-
-                // ── Развёрнутый блок 9 PDF-полей ───────────────────────────
-                if (showExtraFields) {
-                    SectionLabel("Шахсий қўшимча маълумотлар")
-                    OutlinedTextField(
-                        value = passportData,
-                        onValueChange = { passportData = it },
-                        label = { Text("Паспорт: серия, рақам, олинган сана") },
-                        placeholder = { Text("Masalan: AA 1234567, 15.01.2023") },
-                        modifier = Modifier.fillMaxWidth(),
-                        shape = RoundedCornerShape(8.dp)
-                    )
-                    OutlinedTextField(
-                        value = address,
-                        onValueChange = { address = it },
-                        label = { Text("Манзил") },
-                        placeholder = { Text("Masalan: Тошкент ш., Юнусобод тумани, ...") },
-                        modifier = Modifier.fillMaxWidth(),
-                        shape = RoundedCornerShape(8.dp)
-                    )
-                    OutlinedTextField(
-                        value = pinfl,
-                        onValueChange = { pinfl = it.filter { ch -> ch.isDigit() }.take(14) },
-                        label = { Text("ЖШШИР (ПИНФЛ)") },
-                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                        modifier = Modifier.fillMaxWidth(),
-                        shape = RoundedCornerShape(8.dp)
-                    )
-                }
+                SectionLabel("Шахсий қўшимча маълумотлар")
+                OutlinedTextField(
+                    value = passportData,
+                    onValueChange = { passportData = it },
+                    label = { Text("Паспорт: серия, рақам, олинган сана") },
+                    placeholder = { Text("Masalan: AA 1234567, 15.01.2023") },
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(8.dp)
+                )
+                OutlinedTextField(
+                    value = address,
+                    onValueChange = { address = it },
+                    label = { Text("Манзил") },
+                    placeholder = { Text("Masalan: Тошкент ш., Юнусобод тумани, ...") },
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(8.dp)
+                )
+                OutlinedTextField(
+                    value = pinfl,
+                    onValueChange = { pinfl = it.filter { ch -> ch.isDigit() }.take(14) },
+                    label = { Text("ЖШШИР (ПИНФЛ)") },
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(8.dp)
+                )
             }
         },
         confirmButton = {
             PrimaryButton(
                 label = "Saqla",
                 icon = Icons.Default.Save,
+                enabled = name.isNotBlank() && phone.isNotBlank() &&
+                    passportData.isNotBlank() && address.isNotBlank() && pinfl.isNotBlank(),
                 onClick = {
                     val debtValue = debt.toDoubleOrNull() ?: 0.0
                     val durationValue = duration.toIntOrNull() ?: 7
                     val phoneToSave = "+998$phone"
                     val scooterName = scooters.find { it.id == selectedScooterId }?.name
-                    if (name.isNotBlank() && phone.isNotBlank()) {
-                        onSave(
-                            RenterFormResult(
-                                name = name,
-                                phone = phoneToSave,
-                                debt = debtValue,
-                                duration = durationValue,
-                                startTimestamp = startTimestamp,
-                                scooterId = selectedScooterId,
-                                scooterName = scooterName,
-                                isActive = isActive,
-                                passportData = passportData.trim(),
-                                address = address.trim(),
-                                pinfl = pinfl.trim()
-                            )
+                    onSave(
+                        RenterFormResult(
+                            name = name,
+                            phone = phoneToSave,
+                            debt = debtValue,
+                            duration = durationValue,
+                            startTimestamp = startTimestamp,
+                            scooterId = selectedScooterId,
+                            scooterName = scooterName,
+                            isActive = isActive,
+                            passportData = passportData.trim(),
+                            address = address.trim(),
+                            pinfl = pinfl.trim()
                         )
-                    }
+                    )
                 }
             )
         },
@@ -2352,24 +2349,68 @@ fun ScooterTable(
     renters: List<Renter>,
     selected: Set<Int>,
     sortState: TableSortState,
+    columnVisibility: Map<String, Boolean>,
     onSortClick: (String) -> Unit,
     onSelect: (Int, Boolean) -> Unit,
     onClick: (Scooter) -> Unit
 ) {
-    val wName  = 2.0f
-    val wStat  = 1.0f
+    // ── Видимость столбцов ───────────────────────────────────────────────
+    // По умолчанию все колонки видны. Пользователь может скрывать их через
+    // FilterSidePanel (чекбоксы).
+    fun isColVisible(colId: String): Boolean = columnVisibility[colId] ?: true
+    val showName   = isColVisible("col_name")
+    val showDoc    = isColVisible("col_doc")
+    val showVin    = isColVisible("col_vin")
+    val showEngine = isColVisible("col_engine")
+    val showSerial = isColVisible("col_serial")
+    val showBatt1  = isColVisible("col_batt1")
+    val showBatt2  = isColVisible("col_batt2")
+    val showExtra  = isColVisible("col_extra")
+    val showStatus = isColVisible("col_status")
+
+    // Ширины для fixed-width версии (со скроллом). По умолчанию таблица
+    // использует weight-based компоновку для Name+Status; если включены
+    // доп. колонки — переключаемся на horizontalScroll + fixed widths.
+    val wName   = 110.dp
+    val wDoc    = 110.dp
+    val wVin    = 130.dp
+    val wEngine = 110.dp
+    val wSerial = 90.dp
+    val wBatt1  = 100.dp
+    val wBatt2  = 100.dp
+    val wExtra  = 140.dp
+    val wStat   = 90.dp
+
+    val fName = 2.0f
+    val fStat = 1.0f
+
+    val hasAnyDetailVisible = showDoc || showVin || showEngine || showSerial ||
+        showBatt1 || showBatt2 || showExtra
+    val hScrollState = rememberScrollState()
 
     Column(modifier = Modifier.fillMaxSize()) {
-        // Заголовок — только иконки
+        // Заголовок
         Surface(color = ClaudeCard, modifier = Modifier.fillMaxWidth()) {
             Row(
                 modifier = Modifier
-                    .fillMaxWidth()
+                    .then(if (hasAnyDetailVisible) Modifier.horizontalScroll(hScrollState) else Modifier)
                     .padding(horizontal = 8.dp, vertical = 4.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                SortableHeaderCell(Icons.Default.Label, wName, "col_name",  sortState) { onSortClick("col_name") }
-                NonSortableHeaderCell(Icons.Default.Info, wStat, "Holat")
+                if (hasAnyDetailVisible) {
+                    if (showName)   SortableHeaderCellFixed(Icons.Default.Label,         wName,   "col_name",  sortState) { onSortClick("col_name") }
+                    if (showDoc)    NonSortableHeaderCellFixed(Icons.Default.CreditCard,   wDoc,    "Hujjat raqami")
+                    if (showVin)    NonSortableHeaderCellFixed(Icons.Default.Numbers,      wVin,    "VIN")
+                    if (showEngine) NonSortableHeaderCellFixed(Icons.Default.Build,         wEngine, "Dvigatel")
+                    if (showSerial) NonSortableHeaderCellFixed(Icons.Default.Tag,           wSerial, "ID raqami")
+                    if (showBatt1)  NonSortableHeaderCellFixed(Icons.Default.Bolt,          wBatt1,  "Akkumulyator 1")
+                    if (showBatt2)  NonSortableHeaderCellFixed(Icons.Default.Bolt,          wBatt2,  "Akkumulyator 2")
+                    if (showExtra)  NonSortableHeaderCellFixed(Icons.Default.Info,          wExtra,  "Qo'shimcha")
+                    if (showStatus) NonSortableHeaderCellFixed(Icons.Default.Info,          wStat,   "Holat")
+                } else {
+                    if (showName)   SortableHeaderCell(Icons.Default.Label, fName, "col_name", sortState) { onSortClick("col_name") }
+                    if (showStatus) NonSortableHeaderCell(Icons.Default.Info, fStat, "Holat")
+                }
             }
         }
         HorizontalDivider(color = ClaudeDivider)
@@ -2403,7 +2444,7 @@ fun ScooterTable(
                 ) {
                     Row(
                         modifier = Modifier
-                            .fillMaxWidth()
+                            .then(if (hasAnyDetailVisible) Modifier.horizontalScroll(hScrollState) else Modifier.fillMaxWidth())
                             .border(
                                 width = if (isSelected) 2.dp else 1.5.dp,
                                 color = sColor,
@@ -2417,35 +2458,102 @@ fun ScooterTable(
                             .padding(horizontal = 8.dp, vertical = 12.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Text(
-                            scooter.name,
-                            modifier = Modifier
-                                .weight(wName)
-                                .padding(horizontal = 4.dp),
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = ClaudeText,
-                            fontWeight = FontWeight.SemiBold,
-                            maxLines = 1
-                        )
-                        Row(
-                            modifier = Modifier
-                                .weight(wStat)
-                                .padding(horizontal = 4.dp),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Box(
-                                modifier = Modifier
-                                    .size(10.dp)
-                                    .background(sColor, CircleShape)
-                            )
-                            Spacer(modifier = Modifier.width(6.dp))
+                        if (showName) {
                             Text(
-                                scooterStatusLabel(status),
-                                style = MaterialTheme.typography.labelSmall,
-                                color = sColor,
-                                fontWeight = FontWeight.Bold,
+                                scooter.name,
+                                modifier = Modifier
+                                    .then(if (hasAnyDetailVisible) Modifier.width(wName) else Modifier.weight(fName))
+                                    .padding(horizontal = 4.dp),
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = ClaudeText,
+                                fontWeight = FontWeight.SemiBold,
                                 maxLines = 1
                             )
+                        }
+                        if (showDoc) {
+                            Text(
+                                scooter.documentedNumber ?: "—",
+                                modifier = Modifier.width(wDoc).padding(horizontal = 4.dp),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = ClaudeText,
+                                maxLines = 1
+                            )
+                        }
+                        if (showVin) {
+                            Text(
+                                scooter.vinNumber.ifBlank { "—" },
+                                modifier = Modifier.width(wVin).padding(horizontal = 4.dp),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = ClaudeText,
+                                maxLines = 1
+                            )
+                        }
+                        if (showEngine) {
+                            Text(
+                                scooter.engineNumber.ifBlank { "—" },
+                                modifier = Modifier.width(wEngine).padding(horizontal = 4.dp),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = ClaudeText,
+                                maxLines = 1
+                            )
+                        }
+                        if (showSerial) {
+                            Text(
+                                scooter.scooterSerialNumber.ifBlank { "—" },
+                                modifier = Modifier.width(wSerial).padding(horizontal = 4.dp),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = ClaudeText,
+                                maxLines = 1
+                            )
+                        }
+                        if (showBatt1) {
+                            Text(
+                                scooter.batteryId1.ifBlank { "—" },
+                                modifier = Modifier.width(wBatt1).padding(horizontal = 4.dp),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = ClaudeText,
+                                maxLines = 1
+                            )
+                        }
+                        if (showBatt2) {
+                            Text(
+                                scooter.batteryId2.ifBlank { "—" },
+                                modifier = Modifier.width(wBatt2).padding(horizontal = 4.dp),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = ClaudeText,
+                                maxLines = 1
+                            )
+                        }
+                        if (showExtra) {
+                            Text(
+                                scooter.additionalInfo.ifBlank { "—" },
+                                modifier = Modifier.width(wExtra).padding(horizontal = 4.dp),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = ClaudeText,
+                                maxLines = 1
+                            )
+                        }
+                        if (showStatus) {
+                            Row(
+                                modifier = Modifier
+                                    .then(if (hasAnyDetailVisible) Modifier.width(wStat) else Modifier.weight(fStat))
+                                    .padding(horizontal = 4.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Box(
+                                    modifier = Modifier
+                                        .size(10.dp)
+                                        .background(sColor, CircleShape)
+                                )
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text(
+                                    scooterStatusLabel(status),
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = sColor,
+                                    fontWeight = FontWeight.Bold,
+                                    maxLines = 1
+                                )
+                            }
                         }
                     }
                 }
@@ -2498,18 +2606,9 @@ fun ScooterFormDialog(
     var batteryId2 by remember { mutableStateOf(initialScooter?.batteryId2 ?: "") }
     var additionalInfo by remember { mutableStateOf(initialScooter?.additionalInfo ?: "") }
 
-    // Все доп. поля свёрнуты по умолчанию. При редактировании существующего
-    // скутера автоматически разворачиваются, если хотя бы одно значение уже есть.
-    val hasAnyExtraPrefilled = remember(initialScooter) {
-        val s = initialScooter
-        s != null && (
-            !s.documentedNumber.isNullOrBlank() ||
-            s.vinNumber.isNotBlank() || s.engineNumber.isNotBlank() ||
-            s.scooterSerialNumber.isNotBlank() || s.batteryId1.isNotBlank() ||
-            s.batteryId2.isNotBlank() || s.additionalInfo.isNotBlank()
-        )
-    }
-    var showExtraFields by remember { mutableStateOf(hasAnyExtraPrefilled) }
+    // Все доп. поля теперь ВСЕГДА видны и обязательны — пользователь явно
+    // попросил убрать кнопку «More»/«Yashirish» из диалогов создания и
+    // редактирования скутеров.
 
     val scrollState = rememberScrollState()
 
@@ -2548,114 +2647,85 @@ fun ScooterFormDialog(
                     }
                 )
 
-                // ── Кнопка-тумблер «Қўшимча маълумотлар» ──────────────────
-                OutlinedCard(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clickable { showExtraFields = !showExtraFields },
-                    shape = RoundedCornerShape(8.dp),
-                    border = BorderStroke(1.dp, if (showExtraFields) ClaudeText else ClaudeDivider)
+                // ── Реквизиты скутера и аккумуляторов (всегда видны) ─────────
+                SectionLabel("Скутер ва аккумулятор маълумотлари")
+
+                OutlinedTextField(
+                    value = documentedNumber,
+                    onValueChange = { documentedNumber = it },
+                    label = { Text("Hujjatlashtirilgan raqami") },
+                    placeholder = { Text("Masalan: 01-234 ABC") },
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(8.dp)
+                )
+                OutlinedTextField(
+                    value = vinNumber,
+                    onValueChange = { vinNumber = it },
+                    label = { Text("VIN номери") },
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(8.dp)
+                )
+                OutlinedTextField(
+                    value = engineNumber,
+                    onValueChange = { engineNumber = it },
+                    label = { Text("Двигатель номери") },
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(8.dp)
+                )
+                OutlinedTextField(
+                    value = scooterSerialNumber,
+                    onValueChange = { scooterSerialNumber = it },
+                    label = { Text("ID номери") },
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(8.dp)
+                )
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(horizontal = 16.dp, vertical = 12.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Icon(
-                            if (showExtraFields) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
-                            contentDescription = null,
-                            tint = ClaudeText
-                        )
-                        Spacer(modifier = Modifier.width(12.dp))
-                        Text(
-                            if (showExtraFields) "Қўшимча маълумотларни яшириш" else "Қўшимча маълумотларни кўрсатиш",
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = ClaudeText,
-                            fontWeight = FontWeight.Medium,
-                            modifier = Modifier.weight(1f)
-                        )
-                    }
-                }
-
-                if (showExtraFields) {
-                    SectionLabel("Скутер ва аккумулятор маълумотлари")
-
                     OutlinedTextField(
-                        value = documentedNumber,
-                        onValueChange = { documentedNumber = it },
-                        label = { Text("Hujjatlashtirilgan raqami (ixtiyoriy)") },
-                        placeholder = { Text("Masalan: 01-234 ABC") },
-                        modifier = Modifier.fillMaxWidth(),
+                        value = batteryId1,
+                        onValueChange = { batteryId1 = it },
+                        label = { Text("Аккумулятор ID 1") },
+                        modifier = Modifier.weight(1f),
                         shape = RoundedCornerShape(8.dp)
                     )
                     OutlinedTextField(
-                        value = vinNumber,
-                        onValueChange = { vinNumber = it },
-                        label = { Text("VIN номери") },
-                        modifier = Modifier.fillMaxWidth(),
-                        shape = RoundedCornerShape(8.dp)
-                    )
-                    OutlinedTextField(
-                        value = engineNumber,
-                        onValueChange = { engineNumber = it },
-                        label = { Text("Двигатель номери") },
-                        modifier = Modifier.fillMaxWidth(),
-                        shape = RoundedCornerShape(8.dp)
-                    )
-                    OutlinedTextField(
-                        value = scooterSerialNumber,
-                        onValueChange = { scooterSerialNumber = it },
-                        label = { Text("ID номери") },
-                        modifier = Modifier.fillMaxWidth(),
-                        shape = RoundedCornerShape(8.dp)
-                    )
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
-                        OutlinedTextField(
-                            value = batteryId1,
-                            onValueChange = { batteryId1 = it },
-                            label = { Text("Аккумулятор ID 1") },
-                            modifier = Modifier.weight(1f),
-                            shape = RoundedCornerShape(8.dp)
-                        )
-                        OutlinedTextField(
-                            value = batteryId2,
-                            onValueChange = { batteryId2 = it },
-                            label = { Text("Аккумулятор ID 2") },
-                            modifier = Modifier.weight(1f),
-                            shape = RoundedCornerShape(8.dp)
-                        )
-                    }
-                    OutlinedTextField(
-                        value = additionalInfo,
-                        onValueChange = { additionalInfo = it },
-                        label = { Text("Қўшимча маълумот") },
-                        modifier = Modifier.fillMaxWidth(),
+                        value = batteryId2,
+                        onValueChange = { batteryId2 = it },
+                        label = { Text("Аккумулятор ID 2") },
+                        modifier = Modifier.weight(1f),
                         shape = RoundedCornerShape(8.dp)
                     )
                 }
+                OutlinedTextField(
+                    value = additionalInfo,
+                    onValueChange = { additionalInfo = it },
+                    label = { Text("Қўшимча маълумот") },
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(8.dp)
+                )
             }
         },
         confirmButton = {
             PrimaryButton(
                 label = "Saqla",
                 icon = Icons.Default.Save,
+                enabled = name.isNotBlank() && documentedNumber.isNotBlank() &&
+                    vinNumber.isNotBlank() && engineNumber.isNotBlank() &&
+                    scooterSerialNumber.isNotBlank() && batteryId1.isNotBlank() &&
+                    batteryId2.isNotBlank(),
                 onClick = {
-                    if (name.isNotBlank()) {
-                        onSave(
-                            name,
-                            documentedNumber.takeIf { it.isNotBlank() },
-                            vinNumber.trim(),
-                            engineNumber.trim(),
-                            scooterSerialNumber.trim(),
-                            batteryId1.trim(),
-                            batteryId2.trim(),
-                            additionalInfo.trim()
-                        )
-                    }
+                    onSave(
+                        name,
+                        documentedNumber.takeIf { it.isNotBlank() },
+                        vinNumber.trim(),
+                        engineNumber.trim(),
+                        scooterSerialNumber.trim(),
+                        batteryId1.trim(),
+                        batteryId2.trim(),
+                        additionalInfo.trim()
+                    )
                 }
             )
         },

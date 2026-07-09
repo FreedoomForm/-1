@@ -11,9 +11,11 @@ import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.*
@@ -37,6 +39,7 @@ import com.example.data.Renter
 import com.example.data.Scooter
 import com.example.data.SettingsRepository
 import com.example.ui.ContractHistoryViewModel
+import com.example.ui.ScooterViewModel
 import com.example.ui.components.UnifiedSearchBar
 import com.example.ui.components.FilterSidePanel
 import com.example.ui.components.FilterColumn
@@ -71,11 +74,17 @@ fun RenterContractHistoryScreen(
     onBack: () -> Unit,
     onEditRenter: () -> Unit,
     contractHistoryViewModel: ContractHistoryViewModel = viewModel(),
-    renterViewModel: com.example.ui.RenterViewModel = viewModel()
+    renterViewModel: com.example.ui.RenterViewModel = viewModel(),
+    scooterViewModel: ScooterViewModel = viewModel()
 ) {
     // Только контракты (CREATED + AUTO_RENEW) — отсортированы ASC по weekStart.
     // PAYMENT/TERMINATED/RETURNED — транзакции, не показываются на этом экране.
     val contracts by contractHistoryViewModel.contractsForRenter(renter.id).collectAsStateWithLifecycle()
+    // Полные списки арендаторов и скутеров — для выпадающего поиска в диалоге
+    // редактирования контракта (пользователь выбирает арендатора/скутер, всё
+    // остальное автозаполняется).
+    val allRenters by renterViewModel.rentersList.collectAsStateWithLifecycle()
+    val allScooters by scooterViewModel.scootersList.collectAsStateWithLifecycle()
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
 
@@ -414,6 +423,8 @@ fun RenterContractHistoryScreen(
     editingContract?.let { entry ->
         EditContractDialog(
             entry = entry,
+            allRenters = allRenters,
+            allScooters = allScooters,
             onDismiss = { editingContract = null },
             onSave = { updated ->
                 contractHistoryViewModel.updateContract(updated)
@@ -496,16 +507,99 @@ private fun SummaryColumn(label: String, value: String, valueColor: Color = Clau
     }
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun EditContractDialog(
     entry: ContractHistoryEntry,
+    allRenters: List<Renter>,
+    allScooters: List<Scooter>,
     onDismiss: () -> Unit,
     onSave: (ContractHistoryEntry) -> Unit,
     onDelete: () -> Unit
 ) {
     val dateFmt = remember { SimpleDateFormat("dd.MM.yyyy", Locale.getDefault()) }
+    val dayMs = 24L * 60 * 60 * 1000
+
+    // ── Редактируемые поля (берём начальные значения из entry) ────────────
     var amount by remember { mutableStateOf(entry.amount.toString()) }
     var notes by remember { mutableStateOf(entry.notes ?: "") }
+    var isPaid by remember { mutableStateOf(entry.isPaid) }
+    var weekStart by remember { mutableStateOf(entry.weekStart ?: System.currentTimeMillis()) }
+    var weekEnd by remember { mutableStateOf(entry.weekEnd ?: (System.currentTimeMillis() + 7 * dayMs)) }
+
+    // Реквизиты арендатора (для PDF)
+    var renterName by remember { mutableStateOf(entry.renterName) }
+    var renterPhone by remember { mutableStateOf(entry.renterPhone) }
+    var passportData by remember { mutableStateOf(entry.passportData) }
+    var address by remember { mutableStateOf(entry.address) }
+    var pinfl by remember { mutableStateOf(entry.pinfl) }
+
+    // Реквизиты скутера (для PDF)
+    var scooterName by remember { mutableStateOf(entry.scooterName ?: "") }
+    var vinNumber by remember { mutableStateOf(entry.vinNumber) }
+    var engineNumber by remember { mutableStateOf(entry.engineNumber) }
+    var scooterSerialNumber by remember { mutableStateOf(entry.scooterSerialNumber) }
+    var batteryId1 by remember { mutableStateOf(entry.batteryId1) }
+    var batteryId2 by remember { mutableStateOf(entry.batteryId2) }
+    var additionalInfo by remember { mutableStateOf(entry.additionalInfo) }
+
+    var showStartPicker by remember { mutableStateOf(false) }
+    var showEndPicker by remember { mutableStateOf(false) }
+    val startPickerState = rememberDatePickerState(initialSelectedDateMillis = weekStart)
+    val endPickerState = rememberDatePickerState(initialSelectedDateMillis = weekEnd)
+
+    // ── Выпадающие списки арендаторов и скутеров ─────────────────────────
+    // При выборе арендатора/скутера из списка все его реквизиты автоматически
+    // подтягиваются в соответствующие поля. Пользователь может их
+    // доредактировать вручную после выбора.
+    var expandedRenter by remember { mutableStateOf(false) }
+    var expandedScooter by remember { mutableStateOf(false) }
+    val scrollState = rememberScrollState()
+
+    if (showStartPicker) {
+        DatePickerDialog(
+            onDismissRequest = { showStartPicker = false },
+            confirmButton = {
+                TextActionButton(
+                    label = "Tanlash", icon = Icons.Default.Check,
+                    onClick = {
+                        startPickerState.selectedDateMillis?.let {
+                            weekStart = it
+                            if (weekEnd <= weekStart) weekEnd = weekStart + 7 * dayMs
+                        }
+                        showStartPicker = false
+                    }
+                )
+            },
+            dismissButton = {
+                TextActionButton(
+                    label = "Bekor", icon = Icons.Default.Close,
+                    onClick = { showStartPicker = false }
+                )
+            }
+        ) { DatePicker(state = startPickerState) }
+    }
+
+    if (showEndPicker) {
+        DatePickerDialog(
+            onDismissRequest = { showEndPicker = false },
+            confirmButton = {
+                TextActionButton(
+                    label = "Tanlash", icon = Icons.Default.Check,
+                    onClick = {
+                        endPickerState.selectedDateMillis?.let { weekEnd = it }
+                        showEndPicker = false
+                    }
+                )
+            },
+            dismissButton = {
+                TextActionButton(
+                    label = "Bekor", icon = Icons.Default.Close,
+                    onClick = { showEndPicker = false }
+                )
+            }
+        ) { DatePicker(state = endPickerState) }
+    }
 
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -518,8 +612,13 @@ private fun EditContractDialog(
         },
         containerColor = ClaudeCard,
         text = {
-            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                // Метаданные (read-only)
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .verticalScroll(scrollState),
+                verticalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                // ── Метаданные (read-only) ──────────────────────────────
                 Card(
                     modifier = Modifier.fillMaxWidth(),
                     colors = CardDefaults.cardColors(containerColor = ClaudeBackground),
@@ -528,17 +627,203 @@ private fun EditContractDialog(
                     Column(modifier = Modifier.padding(12.dp)) {
                         InfoRow("Sana", dateFmt.format(Date(entry.timestamp)))
                         InfoRow("Tur", contractTypeLabel(entry.type))
-                        InfoRow("Mijoz", entry.renterName)
-                        InfoRow("Skuter", entry.scooterName ?: "—")
-                        entry.weekStart?.let {
-                            InfoRow("Boshlanish", dateFmt.format(Date(it)))
-                        }
-                        entry.weekEnd?.let {
-                            InfoRow("Tugash", dateFmt.format(Date(it)))
+                    }
+                }
+
+                // ── Секция: Арендатор (с выпадающим списком) ────────────
+                Text("Mijoz", style = MaterialTheme.typography.titleSmall,
+                    color = ClaudeAccent, fontWeight = FontWeight.SemiBold)
+
+                ExposedDropdownMenuBox(
+                    expanded = expandedRenter,
+                    onExpandedChange = { expandedRenter = !expandedRenter }
+                ) {
+                    OutlinedTextField(
+                        value = renterName,
+                        onValueChange = { renterName = it },
+                        label = { Text("Mijoz ismi") },
+                        trailingIcon = {
+                            ExposedDropdownMenuDefaults.TrailingIcon(expanded = expandedRenter)
+                        },
+                        modifier = Modifier.menuAnchor().fillMaxWidth(),
+                        shape = RoundedCornerShape(8.dp)
+                    )
+                    ExposedDropdownMenu(
+                        expanded = expandedRenter,
+                        onDismissRequest = { expandedRenter = false }
+                    ) {
+                        allRenters.take(50).forEach { r ->
+                            DropdownMenuItem(
+                                text = { Text("${r.name}  •  ${r.phoneNumber}") },
+                                onClick = {
+                                    // Автозаполнение всех полей арендатора из выбранной записи
+                                    renterName = r.name
+                                    renterPhone = r.phoneNumber
+                                    passportData = r.passportData
+                                    address = r.address
+                                    pinfl = r.pinfl
+                                    expandedRenter = false
+                                }
+                            )
                         }
                     }
                 }
 
+                OutlinedTextField(
+                    value = renterPhone,
+                    onValueChange = { renterPhone = it },
+                    label = { Text("Telefon") },
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(8.dp)
+                )
+                OutlinedTextField(
+                    value = passportData,
+                    onValueChange = { passportData = it },
+                    label = { Text("Pasport ma'lumotlari") },
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(8.dp)
+                )
+                OutlinedTextField(
+                    value = address,
+                    onValueChange = { address = it },
+                    label = { Text("Manzil") },
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(8.dp)
+                )
+                OutlinedTextField(
+                    value = pinfl,
+                    onValueChange = { pinfl = it },
+                    label = { Text("JSHSHIR (PINFL)") },
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(8.dp)
+                )
+
+                HorizontalDivider(color = ClaudeDivider)
+
+                // ── Секция: Скутер (с выпадающим списком) ───────────────
+                Text("Skuter", style = MaterialTheme.typography.titleSmall,
+                    color = ClaudeAccent, fontWeight = FontWeight.SemiBold)
+
+                ExposedDropdownMenuBox(
+                    expanded = expandedScooter,
+                    onExpandedChange = { expandedScooter = !expandedScooter }
+                ) {
+                    OutlinedTextField(
+                        value = scooterName,
+                        onValueChange = { scooterName = it },
+                        label = { Text("Skuter nomi") },
+                        trailingIcon = {
+                            ExposedDropdownMenuDefaults.TrailingIcon(expanded = expandedScooter)
+                        },
+                        modifier = Modifier.menuAnchor().fillMaxWidth(),
+                        shape = RoundedCornerShape(8.dp)
+                    )
+                    ExposedDropdownMenu(
+                        expanded = expandedScooter,
+                        onDismissRequest = { expandedScooter = false }
+                    ) {
+                        allScooters.take(50).forEach { s ->
+                            DropdownMenuItem(
+                                text = { Text(s.name) },
+                                onClick = {
+                                    // Автозаполнение всех полей скутера из выбранной записи
+                                    scooterName = s.name
+                                    vinNumber = s.vinNumber
+                                    engineNumber = s.engineNumber
+                                    scooterSerialNumber = s.scooterSerialNumber
+                                    batteryId1 = s.batteryId1
+                                    batteryId2 = s.batteryId2
+                                    additionalInfo = s.additionalInfo
+                                    expandedScooter = false
+                                }
+                            )
+                        }
+                    }
+                }
+
+                OutlinedTextField(
+                    value = vinNumber,
+                    onValueChange = { vinNumber = it },
+                    label = { Text("VIN") },
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(8.dp)
+                )
+                OutlinedTextField(
+                    value = engineNumber,
+                    onValueChange = { engineNumber = it },
+                    label = { Text("Dvigatel raqami") },
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(8.dp)
+                )
+                OutlinedTextField(
+                    value = scooterSerialNumber,
+                    onValueChange = { scooterSerialNumber = it },
+                    label = { Text("ID raqami") },
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(8.dp)
+                )
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    OutlinedTextField(
+                        value = batteryId1,
+                        onValueChange = { batteryId1 = it },
+                        label = { Text("Akkum. 1") },
+                        modifier = Modifier.weight(1f),
+                        shape = RoundedCornerShape(8.dp)
+                    )
+                    OutlinedTextField(
+                        value = batteryId2,
+                        onValueChange = { batteryId2 = it },
+                        label = { Text("Akkum. 2") },
+                        modifier = Modifier.weight(1f),
+                        shape = RoundedCornerShape(8.dp)
+                    )
+                }
+                OutlinedTextField(
+                    value = additionalInfo,
+                    onValueChange = { additionalInfo = it },
+                    label = { Text("Qo'shimcha ma'lumot") },
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(8.dp)
+                )
+
+                HorizontalDivider(color = ClaudeDivider)
+
+                // ── Секция: Контракт ────────────────────────────────────
+                Text("Kontrakt", style = MaterialTheme.typography.titleSmall,
+                    color = ClaudeAccent, fontWeight = FontWeight.SemiBold)
+
+                // Дата начала
+                OutlinedTextField(
+                    value = dateFmt.format(Date(weekStart)),
+                    onValueChange = {},
+                    label = { Text("Boshlanish sanasi") },
+                    readOnly = true,
+                    trailingIcon = {
+                        IconButton(onClick = { showStartPicker = true }) {
+                            Icon(Icons.Default.DateRange, contentDescription = "Sanani tanlash")
+                        }
+                    },
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(8.dp)
+                )
+                // Дата конца
+                OutlinedTextField(
+                    value = dateFmt.format(Date(weekEnd)),
+                    onValueChange = {},
+                    label = { Text("Tugash sanasi") },
+                    readOnly = true,
+                    trailingIcon = {
+                        IconButton(onClick = { showEndPicker = true }) {
+                            Icon(Icons.Default.DateRange, contentDescription = "Sanani tanlash")
+                        }
+                    },
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(8.dp)
+                )
+                // Сумма
                 OutlinedTextField(
                     value = amount,
                     onValueChange = { amount = it.filter { ch -> ch.isDigit() || ch == '.' } },
@@ -547,6 +832,29 @@ private fun EditContractDialog(
                     modifier = Modifier.fillMaxWidth(),
                     shape = RoundedCornerShape(8.dp)
                 )
+                // Статус оплаты
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    FilterChip(
+                        selected = isPaid,
+                        onClick = { isPaid = true },
+                        label = { Text("To'langan") },
+                        leadingIcon = {
+                            Box(Modifier.size(8.dp).background(StatusOk, CircleShape))
+                        }
+                    )
+                    FilterChip(
+                        selected = !isPaid,
+                        onClick = { isPaid = false },
+                        label = { Text("To'lanmagan") },
+                        leadingIcon = {
+                            Box(Modifier.size(8.dp).background(StatusOverdue, CircleShape))
+                        }
+                    )
+                }
+                // Примечание
                 OutlinedTextField(
                     value = notes,
                     onValueChange = { notes = it },
@@ -562,7 +870,25 @@ private fun EditContractDialog(
                 icon = Icons.Default.Save,
                 onClick = {
                     val newAmount = amount.toDoubleOrNull() ?: entry.amount
-                    onSave(entry.copy(amount = newAmount, notes = notes.ifBlank { null }))
+                    onSave(entry.copy(
+                        amount = newAmount,
+                        notes = notes.ifBlank { null },
+                        isPaid = isPaid,
+                        weekStart = weekStart,
+                        weekEnd = weekEnd,
+                        renterName = renterName,
+                        renterPhone = renterPhone,
+                        scooterName = scooterName.ifBlank { null },
+                        passportData = passportData,
+                        address = address,
+                        pinfl = pinfl,
+                        vinNumber = vinNumber,
+                        engineNumber = engineNumber,
+                        scooterSerialNumber = scooterSerialNumber,
+                        batteryId1 = batteryId1,
+                        batteryId2 = batteryId2,
+                        additionalInfo = additionalInfo
+                    ))
                 }
             )
         },

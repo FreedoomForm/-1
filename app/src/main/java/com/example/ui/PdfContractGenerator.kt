@@ -14,6 +14,7 @@ import android.util.Log
 import androidx.core.content.FileProvider
 import com.example.data.ContractHistoryEntry
 import com.example.data.Renter
+import com.example.data.Scooter
 import java.io.File
 import java.io.FileOutputStream
 import java.text.SimpleDateFormat
@@ -61,7 +62,8 @@ object PdfContractGenerator {
     fun generate(
         context: Context,
         entry: ContractHistoryEntry,
-        renter: Renter?
+        renter: Renter?,
+        scooter: Scooter? = null
     ): Uri? {
         val doc = PdfDocument()
         try {
@@ -74,7 +76,7 @@ object PdfContractGenerator {
                 ?: (weekStart + 7L * 24 * 60 * 60 * 1000)
             val tenantName = entry.renterName.ifBlank { renter?.name ?: "" }
             val tenantPhone = entry.renterPhone.ifBlank { renter?.phoneNumber ?: "" }
-            val scooterName = entry.scooterName ?: renter?.scooterName ?: ""
+            val scooterName = entry.scooterName ?: renter?.scooterName ?: scooter?.name ?: ""
             val weeklyAmount = entry.weeklyPrice.takeIf { it > 0 }
                 ?: renter?.let { 0.0 } ?: 0.0
             val dailyAmount = if (weeklyAmount > 0) weeklyAmount / 7.0 else 0.0
@@ -84,16 +86,18 @@ object PdfContractGenerator {
             val tenantAddress = entry.address.ifBlank { renter?.address ?: "" }
             val tenantPinfl = entry.pinfl.ifBlank { renter?.pinfl ?: "" }
 
-            // ── Реквизиты скутера для PDF ───────────────────────────────────
-            // Берутся ТОЛЬКО из entry (денормализованы при создании контракта
-            // из сущности Scooter). Renter эти поля больше не хранит — они
-            // описывают скутер, а не арендатора.
-            val scooterVin = entry.vinNumber
-            val scooterEngine = entry.engineNumber
-            val scooterSerial = entry.scooterSerialNumber
-            val battId1 = entry.batteryId1
-            val battId2 = entry.batteryId2
-            val extraInfo = entry.additionalInfo
+            // ── Реквизиты скутера для PDF (entry → scooter fallback) ────────
+            // ВАЖНО: ранее данные скутера брались ТОЛЬКО из entry, и если они
+            // там были пусты (контракт создан до того, как поля скутера стали
+            // обязательными, или scooterId не разрешался) — PDF уходил с пустыми
+            // линиями. Теперь добавлен fallback на саму сущность Scooter, что
+            // гарантирует корректное отображение данных скутера в PDF всегда.
+            val scooterVin = entry.vinNumber.ifBlank { scooter?.vinNumber ?: "" }
+            val scooterEngine = entry.engineNumber.ifBlank { scooter?.engineNumber ?: "" }
+            val scooterSerial = entry.scooterSerialNumber.ifBlank { scooter?.scooterSerialNumber ?: "" }
+            val battId1 = entry.batteryId1.ifBlank { scooter?.batteryId1 ?: "" }
+            val battId2 = entry.batteryId2.ifBlank { scooter?.batteryId2 ?: "" }
+            val extraInfo = entry.additionalInfo.ifBlank { scooter?.additionalInfo ?: "" }
 
             // Заполнитель для пустых полей (чтобы линия для подписи оставалась)
             fun fill(value: String): String = value.ifBlank { "______________________________" }

@@ -185,12 +185,19 @@ class ContractHistoryViewModel(application: Application) : AndroidViewModel(appl
      * `Documents/ScooterContracts/` приложения. Возвращает file:// Uri.
      *
      * Использует android.graphics.pdf.PdfDocument — встроенный API, без сторонних библиотек.
+     *
+     * Скутер подтягивается из БД по entry.renterId → renter.scooterId → Scooter.
+     * Это гарантирует, что данные скутера попадают в PDF, даже если в самой
+     * записи entry они не были денормализованы (старые контракты).
      */
     suspend fun generateContractPdf(contractId: Int): Uri? = withContext(Dispatchers.IO) {
         try {
             val entry = repo.getById(contractId) ?: return@withContext null
             val renter = renterRepo.getById(entry.renterId)
-            PdfContractGenerator.generate(getApplication(), entry, renter)
+            val scooter: Scooter? = renter?.scooterId?.let {
+                AppDatabase.getDatabase(getApplication()).scooterDao().getScooterById(it)
+            }
+            PdfContractGenerator.generate(getApplication(), entry, renter, scooter)
         } catch (e: Exception) {
             Log.e(TAG, "PDF generation failed", e)
             null
