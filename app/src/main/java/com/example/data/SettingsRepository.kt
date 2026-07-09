@@ -38,7 +38,7 @@ class SettingsRepository(context: Context) {
         const val DEFAULT_WEEKLY_PRICE = 420_000.0
         const val DEFAULT_MONTHLY_PRICE = 1_680_000.0
 
-        const val DEFAULT_PAYME_LINK = "https://transfer.paycom/680a40043fc0407a2e48e8fe"
+        const val DEFAULT_PAYME_LINK = "https://transfer.paycom.uz/680a40043fc0407a2e48e8fe"
         const val DEFAULT_CALL_CENTER = "71 200 55 56"
 
         /**
