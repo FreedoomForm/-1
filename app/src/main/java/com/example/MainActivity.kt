@@ -50,6 +50,14 @@ import androidx.compose.material.icons.filled.Build
 import androidx.compose.material.icons.filled.Numbers
 import androidx.compose.material.icons.filled.Label
 import androidx.compose.material.icons.filled.Payments
+import androidx.compose.material.icons.filled.Sms
+import androidx.compose.material.icons.filled.Logout
+import androidx.compose.material.icons.filled.PowerOff
+import androidx.compose.material.icons.filled.Save
+import androidx.compose.material.icons.filled.OpenInNew
+import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.Done
+import androidx.compose.material.icons.filled.FilterAlt
 import androidx.compose.material.icons.outlined.Notifications
 import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.foundation.ExperimentalFoundationApi
@@ -113,6 +121,14 @@ import com.example.ui.components.NonSortableHeaderCell
 import com.example.ui.components.TableSortState
 import com.example.ui.components.SortState
 import com.example.ui.components.applyFilters
+import com.example.ui.components.UnifiedButton
+import com.example.ui.components.UnifiedButtonVariant
+import com.example.ui.components.PrimaryButton
+import com.example.ui.components.SecondaryButton
+import com.example.ui.components.SuccessButton
+import com.example.ui.components.DangerButton
+import com.example.ui.components.DangerOutlinedButton
+import com.example.ui.components.TextActionButton
 import com.example.worker.NotificationHelper
 import android.util.Log
 import com.example.worker.PaymentCheckWorker
@@ -454,20 +470,24 @@ fun MainScreen(
             )
         },
         floatingActionButton = {
-            FloatingActionButton(
+            ExtendedFloatingActionButton(
                 onClick = {
                     if (currentTab == 0) showAddDialog = true
                     else showAddScooterDialog = true
                 },
                 containerColor = ClaudeAccent,
                 contentColor = Color.White,
-                shape = RoundedCornerShape(18.dp),
-                modifier = Modifier.size(64.dp)
+                shape = RoundedCornerShape(18.dp)
             ) {
                 Icon(
                     Icons.Default.Add,
                     contentDescription = if (currentTab == 0) "Ijarachi qo'shish" else "Skuter qo'shish",
-                    modifier = Modifier.size(32.dp)
+                    modifier = Modifier.size(24.dp)
+                )
+                Spacer(modifier = Modifier.width(8.dp))
+                Text(
+                    if (currentTab == 0) "Qo'shish" else "Qo'shish",
+                    fontWeight = FontWeight.SemiBold
                 )
             }
         },
@@ -579,9 +599,11 @@ fun MainScreen(
                                 color = Color(0xFFC62828),
                                 modifier = Modifier.weight(1f)
                             )
-                            TextButton(onClick = { updateManager.reset() }) {
-                                Text("Yopish", color = Color(0xFFC62828))
-                            }
+                            TextActionButton(
+                                label = "Yopish",
+                                icon = Icons.Default.Close,
+                                onClick = { updateManager.reset() }
+                            )
                         }
                     }
                 }
@@ -668,44 +690,33 @@ fun MainScreen(
                         modifier = Modifier
                             .fillMaxWidth()
                             .padding(horizontal = 16.dp, vertical = 8.dp),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Button(
+                        SuccessButton(
+                            label = "To'lov",
+                            icon = Icons.Default.Payments,
                             onClick = {
                                 viewModel.payWeeklyForRenters(selectedRenters)
                                 Toast.makeText(localContext, "To'lov qabul qilindi", Toast.LENGTH_SHORT).show()
                                 selectedRenters = emptySet()
                             },
-                            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF34C759)),
-                            shape = RoundedCornerShape(12.dp),
-                            modifier = Modifier.weight(1.4f).height(48.dp),
-                            contentPadding = PaddingValues(horizontal = 4.dp)
-                        ) {
-                            Text(
-                                "1 hafta to'lov",
-                                color = Color.White,
-                                style = MaterialTheme.typography.labelMedium
-                            )
-                        }
-                        Button(
+                            modifier = Modifier.weight(1.4f)
+                        )
+                        PrimaryButton(
+                            label = "Uzish",
+                            icon = Icons.Default.PowerOff,
                             onClick = {
                                 viewModel.terminateRenters(selectedRenters)
                                 Toast.makeText(localContext, "Kontrakt tugatildi", Toast.LENGTH_SHORT).show()
                                 selectedRenters = emptySet()
                             },
-                            colors = ButtonDefaults.buttonColors(containerColor = ClaudeAccent),
-                            shape = RoundedCornerShape(12.dp),
-                            modifier = Modifier.weight(1.4f).height(48.dp),
-                            contentPadding = PaddingValues(horizontal = 4.dp)
-                        ) {
-                            Text(
-                                "Kontraktni uzish",
-                                color = Color.White,
-                                style = MaterialTheme.typography.labelMedium
-                            )
-                        }
+                            modifier = Modifier.weight(1.2f)
+                        )
                         // SMS yuborish tugmasi — tanlangan mijozlarga
-                        Button(
+                        UnifiedButton(
+                            label = "SMS",
+                            icon = Icons.Default.Sms,
                             onClick = {
                                 val rentersToSend = renters.filter { it.id in selectedRenters }
                                 var sentCount = 0
@@ -747,43 +758,18 @@ fun MainScreen(
                                 }
                                 selectedRenters = emptySet()
                             },
-                            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF007AFF)),
-                            shape = RoundedCornerShape(12.dp),
-                            modifier = Modifier.weight(1.2f).height(48.dp),
-                            contentPadding = PaddingValues(horizontal = 4.dp)
-                        ) {
-                            Icon(
-                                Icons.Default.List,
-                                contentDescription = null,
-                                modifier = Modifier.size(16.dp),
-                                tint = Color.White
-                            )
-                            Spacer(modifier = Modifier.width(4.dp))
-                            Text(
-                                "SMS",
-                                color = Color.White,
-                                style = MaterialTheme.typography.labelMedium
-                            )
-                        }
+                            variant = UnifiedButtonVariant.PRIMARY,
+                            modifier = Modifier.weight(1.0f)
+                        )
                         // O'chirish tugmasi
-                        Button(
+                        DangerOutlinedButton(
+                            label = "O'chir",
+                            icon = Icons.Default.Delete,
                             onClick = {
                                 selectedRenters.forEach { id -> viewModel.deleteRenter(id) }
                                 selectedRenters = emptySet()
-                            },
-                            colors = ButtonDefaults.buttonColors(containerColor = Color.White),
-                            border = BorderStroke(1.dp, ClaudeDivider),
-                            shape = RoundedCornerShape(12.dp),
-                            modifier = Modifier.height(48.dp),
-                            contentPadding = PaddingValues(horizontal = 8.dp)
-                        ) {
-                            Icon(
-                                Icons.Default.Delete,
-                                contentDescription = null,
-                                tint = ClaudeTextSecondary,
-                                modifier = Modifier.size(18.dp)
-                            )
-                        }
+                            }
+                        )
                     }
                 }
 
@@ -888,20 +874,23 @@ fun MainScreen(
                             .fillMaxWidth()
                             .padding(horizontal = 16.dp, vertical = 8.dp),
                         verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.SpaceBetween
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
-                        Text("${selectedScooters.size} ta tanlandi", color = ClaudeText)
-                        Button(
+                        Text(
+                            "${selectedScooters.size} ta tanlandi",
+                            color = ClaudeText,
+                            modifier = Modifier.weight(1f)
+                        )
+                        DangerButton(
+                            label = "O'chir",
+                            icon = Icons.Default.Delete,
                             onClick = {
                                 scooters.filter { it.id in selectedScooters }.forEach {
                                     scooterViewModel.deleteScooter(it)
                                 }
                                 selectedScooters = setOf()
-                            },
-                            colors = ButtonDefaults.buttonColors(containerColor = ClaudeAccent)
-                        ) {
-                            Text("O'chirish", color = ClaudeCard)
-                        }
+                            }
+                        )
                     }
                 }
 
@@ -1094,13 +1083,21 @@ fun MainScreen(
             DatePickerDialog(
                 onDismissRequest = { showDateRangePicker = false },
                 confirmButton = {
-                    TextButton(onClick = { showDateRangePicker = false }) { Text("Tanlash") }
+                    TextActionButton(
+                        label = "Tanlash",
+                        icon = Icons.Default.Check,
+                        onClick = { showDateRangePicker = false }
+                    )
                 },
                 dismissButton = {
-                    TextButton(onClick = {
-                        dateRangePickerState.setSelection(null, null)
-                        showDateRangePicker = false
-                    }) { Text("Tozalash") }
+                    TextActionButton(
+                        label = "Tozalash",
+                        icon = Icons.Default.Clear,
+                        onClick = {
+                            dateRangePickerState.setSelection(null, null)
+                            showDateRangePicker = false
+                        }
+                    )
                 }
             ) {
                 DateRangePicker(
@@ -1398,13 +1395,17 @@ fun NotificationHistoryDialog(
         confirmButton = {
             Row {
                 if (history.isNotEmpty()) {
-                    TextButton(onClick = onClear) {
-                        Text("Tozalash", color = ClaudeTextSecondary)
-                    }
+                    TextActionButton(
+                        label = "Tozalash",
+                        icon = Icons.Default.Clear,
+                        onClick = onClear
+                    )
                 }
-                TextButton(onClick = onDismiss) {
-                    Text("Yopish", color = ClaudeAccent)
-                }
+                TextActionButton(
+                    label = "Yopish",
+                    icon = Icons.Default.Close,
+                    onClick = onDismiss
+                )
             }
         }
     )
@@ -1645,7 +1646,9 @@ fun RenterFormDialog(
             }
         },
         confirmButton = {
-            Button(
+            PrimaryButton(
+                label = "Saqla",
+                icon = Icons.Default.Save,
                 onClick = {
                     val debtValue = debt.toDoubleOrNull() ?: 0.0
                     val durationValue = duration.toIntOrNull() ?: 7
@@ -1657,20 +1660,15 @@ fun RenterFormDialog(
                             startTimestamp, selectedScooterId, scooterName, isActive
                         )
                     }
-                },
-                colors = ButtonDefaults.buttonColors(containerColor = ClaudeText),
-                shape = RoundedCornerShape(8.dp)
-            ) {
-                Text("Saqlash", color = ClaudeCard)
-            }
+                }
+            )
         },
         dismissButton = {
-            TextButton(
-                onClick = onDismiss,
-                colors = ButtonDefaults.textButtonColors(contentColor = ClaudeTextSecondary)
-            ) {
-                Text("Bekor qilish")
-            }
+            TextActionButton(
+                label = "Bekor",
+                icon = Icons.Default.Close,
+                onClick = onDismiss
+            )
         }
     )
 
@@ -1678,15 +1676,21 @@ fun RenterFormDialog(
         DatePickerDialog(
             onDismissRequest = { showStartDatePicker = false },
             confirmButton = {
-                TextButton(onClick = {
-                    startDatePickerState.selectedDateMillis?.let { startTimestamp = it }
-                    showStartDatePicker = false
-                }) { Text("Tanlash") }
+                TextActionButton(
+                    label = "Tanlash",
+                    icon = Icons.Default.Check,
+                    onClick = {
+                        startDatePickerState.selectedDateMillis?.let { startTimestamp = it }
+                        showStartDatePicker = false
+                    }
+                )
             },
             dismissButton = {
-                TextButton(onClick = { showStartDatePicker = false }) {
-                    Text("Bekor qilish")
-                }
+                TextActionButton(
+                    label = "Bekor",
+                    icon = Icons.Default.Close,
+                    onClick = { showStartDatePicker = false }
+                )
             }
         ) {
             DatePicker(state = startDatePickerState)
@@ -1831,7 +1835,9 @@ fun SettingsDialog(
                                         color = Color(0xFFE65100)
                                     )
                                     Spacer(modifier = Modifier.height(8.dp))
-                                    OutlinedButton(
+                                    SecondaryButton(
+                                        label = "Ochish",
+                                        icon = Icons.Default.OpenInNew,
                                         onClick = {
                                             // Permission ni qo'lda so'rash
                                             simContext.startActivity(
@@ -1841,11 +1847,8 @@ fun SettingsDialog(
                                                 )
                                             )
                                         },
-                                        modifier = Modifier.fillMaxWidth(),
-                                        shape = RoundedCornerShape(8.dp)
-                                    ) {
-                                        Text("Sozlamalarni ochish", color = Color(0xFFE65100))
-                                    }
+                                        modifier = Modifier.fillMaxWidth()
+                                    )
                                 }
                             }
                         } else {
@@ -2000,20 +2003,12 @@ fun SettingsDialog(
                                             )
                                         }
                                         Spacer(modifier = Modifier.height(8.dp))
-                                        Button(
+                                        SuccessButton(
+                                            label = "Yangila",
+                                            icon = Icons.Default.Refresh,
                                             onClick = { onStartUpdate(updateInfo) },
-                                            modifier = Modifier.fillMaxWidth(),
-                                            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF34C759)),
-                                            shape = RoundedCornerShape(8.dp)
-                                        ) {
-                                            Icon(
-                                                Icons.Default.Refresh,
-                                                contentDescription = null,
-                                                modifier = Modifier.size(18.dp)
-                                            )
-                                            Spacer(modifier = Modifier.width(4.dp))
-                                            Text("Yangilash", color = Color.White)
-                                        }
+                                            modifier = Modifier.fillMaxWidth()
+                                        )
                                     }
                                 }
                             } else if (isUpToDate) {
@@ -2043,30 +2038,14 @@ fun SettingsDialog(
                                 }
                             } else {
                                 // Ещё не проверяли или ошибка
-                                OutlinedButton(
+                                SecondaryButton(
+                                    label = if (isCheckingUpdate) "Kutish" else "Tekshir",
+                                    icon = Icons.Default.Refresh,
                                     onClick = onCheckUpdate,
                                     enabled = !isCheckingUpdate,
-                                    modifier = Modifier.fillMaxWidth(),
-                                    shape = RoundedCornerShape(8.dp)
-                                ) {
-                                    if (isCheckingUpdate) {
-                                        CircularProgressIndicator(
-                                            modifier = Modifier.size(18.dp),
-                                            color = ClaudeAccent,
-                                            strokeWidth = 2.dp
-                                        )
-                                        Spacer(modifier = Modifier.width(8.dp))
-                                        Text("Tekshirilmoqda...")
-                                    } else {
-                                        Icon(
-                                            Icons.Default.Refresh,
-                                            contentDescription = null,
-                                            modifier = Modifier.size(18.dp)
-                                        )
-                                        Spacer(modifier = Modifier.width(4.dp))
-                                        Text("Yangilanishni tekshirish")
-                                    }
-                                }
+                                    loading = isCheckingUpdate,
+                                    modifier = Modifier.fillMaxWidth()
+                                )
                             }
                         }
                     }
@@ -2074,22 +2053,18 @@ fun SettingsDialog(
 
                 HorizontalDivider()
 
-                OutlinedButton(
+                DangerOutlinedButton(
+                    label = "Chiqish",
+                    icon = Icons.Default.Logout,
                     onClick = { onLogout() },
-                    modifier = Modifier.fillMaxWidth(),
-                    border = BorderStroke(1.dp, Color(0xFFE05B44)),
-                    shape = RoundedCornerShape(8.dp)
-                ) {
-                    Text(
-                        "Chiqish (boshqa akkauntga o'tish)",
-                        color = Color(0xFFE05B44),
-                        style = MaterialTheme.typography.labelMedium
-                    )
-                }
+                    modifier = Modifier.fillMaxWidth()
+                )
             }
         },
         confirmButton = {
-            Button(
+            PrimaryButton(
+                label = "Saqla",
+                icon = Icons.Default.Save,
                 onClick = {
                     val wPrice = weekly.toDoubleOrNull() ?: 0.0
                     val mPrice = monthly.toDoubleOrNull() ?: 0.0
@@ -2100,20 +2075,15 @@ fun SettingsDialog(
                         com.example.data.SettingsRepository.DEFAULT_CALL_CENTER
                     }
                     onSave(template, wPrice, mPrice, paymeLink, callCenter)
-                },
-                colors = ButtonDefaults.buttonColors(containerColor = ClaudeAccent),
-                shape = RoundedCornerShape(8.dp)
-            ) {
-                Text("Saqlash", color = Color.White)
-            }
+                }
+            )
         },
         dismissButton = {
-            TextButton(
-                onClick = onDismiss,
-                colors = ButtonDefaults.textButtonColors(contentColor = ClaudeTextSecondary)
-            ) {
-                Text("Bekor qilish")
-            }
+            TextActionButton(
+                label = "Bekor",
+                icon = Icons.Default.Close,
+                onClick = onDismiss
+            )
         }
     )
 }
@@ -2351,20 +2321,20 @@ fun ScooterFormDialog(
             }
         },
         confirmButton = {
-            Button(
+            PrimaryButton(
+                label = "Saqla",
+                icon = Icons.Default.Save,
                 onClick = {
                     if (name.isNotBlank()) onSave(name, documentedNumber.takeIf { it.isNotBlank() })
-                },
-                colors = ButtonDefaults.buttonColors(containerColor = ClaudeText),
-                shape = RoundedCornerShape(8.dp)
-            ) {
-                Text("Saqlash", color = ClaudeCard)
-            }
+                }
+            )
         },
         dismissButton = {
-            TextButton(onClick = onDismiss) {
-                Text("Bekor qilish", color = ClaudeTextSecondary)
-            }
+            TextActionButton(
+                label = "Bekor",
+                icon = Icons.Default.Close,
+                onClick = onDismiss
+            )
         }
     )
 }
@@ -2477,13 +2447,17 @@ fun ContractHistoryDialog(
         confirmButton = {
             Row {
                 if (history.isNotEmpty()) {
-                    TextButton(onClick = onClear) {
-                        Text("Tozalash", color = ClaudeTextSecondary)
-                    }
+                    TextActionButton(
+                        label = "Tozalash",
+                        icon = Icons.Default.Clear,
+                        onClick = onClear
+                    )
                 }
-                TextButton(onClick = onDismiss) {
-                    Text("Yopish", color = ClaudeAccent)
-                }
+                TextActionButton(
+                    label = "Yopish",
+                    icon = Icons.Default.Close,
+                    onClick = onDismiss
+                )
             }
         }
     )

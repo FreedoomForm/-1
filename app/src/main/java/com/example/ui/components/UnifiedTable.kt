@@ -395,29 +395,21 @@ fun FilterSidePanel(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
-                    OutlinedButton(
+                    SecondaryButton(
+                        label = "Tozalash",
+                        icon = Icons.Default.Clear,
                         onClick = onReset,
-                        modifier = Modifier.weight(1f).height(48.dp),
-                        shape = RoundedCornerShape(12.dp),
-                        border = androidx.compose.foundation.BorderStroke(1.dp, ClaudeDivider)
-                    ) {
-                        Icon(Icons.Default.Clear, contentDescription = null, modifier = Modifier.size(16.dp))
-                        Spacer(Modifier.width(4.dp))
-                        Text("Tozalash")
-                    }
-                    Button(
+                        modifier = Modifier.weight(1f)
+                    )
+                    PrimaryButton(
+                        label = "Qidir",
+                        icon = Icons.Default.Search,
                         onClick = {
                             onSearch()
                             onDismiss()
                         },
-                        modifier = Modifier.weight(1f).height(48.dp),
-                        shape = RoundedCornerShape(12.dp),
-                        colors = ButtonDefaults.buttonColors(containerColor = ClaudeAccent)
-                    ) {
-                        Icon(Icons.Default.Search, contentDescription = null, modifier = Modifier.size(16.dp), tint = Color.White)
-                        Spacer(Modifier.width(4.dp))
-                        Text("Qidirish", color = Color.White)
-                    }
+                        modifier = Modifier.weight(1f)
+                    )
                 }
             }
         }

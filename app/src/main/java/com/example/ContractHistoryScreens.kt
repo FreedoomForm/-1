@@ -43,6 +43,14 @@ import com.example.ui.components.SortableHeaderCell
 import com.example.ui.components.NonSortableHeaderCell
 import com.example.ui.components.TableSortState
 import com.example.ui.components.SortState
+import com.example.ui.components.UnifiedButton
+import com.example.ui.components.UnifiedButtonVariant
+import com.example.ui.components.PrimaryButton
+import com.example.ui.components.SecondaryButton
+import com.example.ui.components.SuccessButton
+import com.example.ui.components.DangerButton
+import com.example.ui.components.DangerOutlinedButton
+import com.example.ui.components.TextActionButton
 import com.example.ui.theme.*
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -237,16 +245,11 @@ fun RenterContractHistoryScreen(
                         style = MaterialTheme.typography.bodyMedium,
                         color = ClaudeText
                     )
-                    Button(
-                        onClick = { showDeleteConfirm = true },
-                        colors = ButtonDefaults.buttonColors(containerColor = StatusOverdue),
-                        shape = RoundedCornerShape(10.dp)
-                    ) {
-                        Icon(Icons.Default.Delete, contentDescription = null,
-                            modifier = Modifier.size(16.dp), tint = Color.White)
-                        Spacer(Modifier.width(4.dp))
-                        Text("O'chirish", color = Color.White)
-                    }
+                    DangerButton(
+                        label = "O'chir",
+                        icon = Icons.Default.Delete,
+                        onClick = { showDeleteConfirm = true }
+                    )
                 }
             }
 
@@ -452,18 +455,23 @@ fun RenterContractHistoryScreen(
             title = { Text("Kontraktlarni o'chirish") },
             text = { Text("${selectedContracts.size} ta kontraktni o'chirmoqchimisz? Bu amalni qaytarib bo'lmaydi.") },
             confirmButton = {
-                Button(
+                DangerButton(
+                    label = "O'chir",
+                    icon = Icons.Default.Delete,
                     onClick = {
                         contractHistoryViewModel.deleteContracts(selectedContracts.toList())
                         Toast.makeText(context, "${selectedContracts.size} ta o'chirildi", Toast.LENGTH_SHORT).show()
                         selectedContracts = emptySet()
                         showDeleteConfirm = false
-                    },
-                    colors = ButtonDefaults.buttonColors(containerColor = StatusOverdue)
-                ) { Text("O'chirish", color = Color.White) }
+                    }
+                )
             },
             dismissButton = {
-                TextButton(onClick = { showDeleteConfirm = false }) { Text("Bekor qilish") }
+                TextActionButton(
+                    label = "Bekor",
+                    icon = Icons.Default.Close,
+                    onClick = { showDeleteConfirm = false }
+                )
             }
         )
     }
@@ -548,21 +556,28 @@ private fun EditContractDialog(
             }
         },
         confirmButton = {
-            Button(
+            PrimaryButton(
+                label = "Saqla",
+                icon = Icons.Default.Save,
                 onClick = {
                     val newAmount = amount.toDoubleOrNull() ?: entry.amount
                     onSave(entry.copy(amount = newAmount, notes = notes.ifBlank { null }))
-                },
-                colors = ButtonDefaults.buttonColors(containerColor = ClaudeAccent),
-                shape = RoundedCornerShape(8.dp)
-            ) { Text("Saqlash", color = Color.White) }
+                }
+            )
         },
         dismissButton = {
             Row {
-                TextButton(onClick = onDelete) {
-                    Text("O'chirish", color = StatusOverdue)
-                }
-                TextButton(onClick = onDismiss) { Text("Bekor") }
+                TextActionButton(
+                    label = "O'chir",
+                    icon = Icons.Default.Delete,
+                    onClick = onDelete
+                )
+                Spacer(Modifier.width(8.dp))
+                TextActionButton(
+                    label = "Bekor",
+                    icon = Icons.Default.Close,
+                    onClick = onDismiss
+                )
             }
         }
     )
@@ -818,7 +833,11 @@ fun ScooterContractHistoryScreen(
                                             color = ClaudeAccent
                                         )
                                     } else {
-                                        TextButton(
+                                        UnifiedButton(
+                                            label = "PDF",
+                                            icon = Icons.Default.PictureAsPdf,
+                                            variant = UnifiedButtonVariant.DANGER_OUTLINED,
+                                            height = 32,
                                             onClick = {
                                                 generatingPdfFor = entry.id
                                                 scope.launch {
@@ -840,12 +859,7 @@ fun ScooterContractHistoryScreen(
                                                     }
                                                 }
                                             }
-                                        ) {
-                                            Icon(Icons.Default.PictureAsPdf, contentDescription = null,
-                                                modifier = Modifier.size(18.dp), tint = StatusOverdue)
-                                            Spacer(Modifier.width(4.dp))
-                                            Text("PDF", color = StatusOverdue)
-                                        }
+                                        )
                                     }
                                 }
                             }
