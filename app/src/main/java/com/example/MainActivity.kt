@@ -1,6 +1,7 @@
 package com.example
 
 import android.Manifest
+import android.content.Intent
 import android.os.Build
 import android.os.Bundle
 import android.widget.Toast
@@ -161,6 +162,16 @@ class MainActivity : ComponentActivity() {
 
         NotificationHelper.createChannel(applicationContext)
 
+        // ── Обработка intent от нативных виджетов ──────────────────────
+        // Виджеты передают extras для:
+        //   open_tab — какая вкладка открыта (0=Ijarachilar, 1=Skuterlar,
+        //              2=Kontraktlar, 3=Tranzaksiya, 4=Otchetlar)
+        //   widget_action — какое действие выполнить (create_renter,
+        //              create_scooter, create_contract, create_transaction,
+        //              send_sms)
+        //   renter_id — ID арендатора для send_sms
+        handleWidgetIntent(intent)
+
         // SMS-воркер для просроченных (как раньше)
         val smsWorkRequest = PeriodicWorkRequestBuilder<SmsWorker>(4, TimeUnit.HOURS).build()
         WorkManager.getInstance(applicationContext).enqueueUniquePeriodicWork(
@@ -198,6 +209,45 @@ class MainActivity : ComponentActivity() {
             }
         }
     }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        handleWidgetIntent(intent)
+    }
+
+    /**
+     * Обрабатывает intent от нативных виджетов:
+     *   open_tab=N — переключает на вкладку N
+     *   widget_action=create_renter/scooter/contract/transaction — открывает диалог создания
+     *   widget_action=send_sms + renter_id — открывает экран арендатора для отправки SMS
+     *
+     * Используется статический объект WidgetActionBus, который MainScreen
+     * читает в LaunchedEffect для выполнения действий после onCreate/onNewIntent.
+     */
+    private fun handleWidgetIntent(intent: Intent?) {
+        if (intent == null) return
+        val openTab = intent.getIntExtra("open_tab", -1)
+        if (openTab in 0..4) {
+            WidgetActionBus.openTab = openTab
+        }
+        val action = intent.getStringExtra("widget_action")
+        if (action != null) {
+            WidgetActionBus.widgetAction = action
+            WidgetActionBus.renterId = intent.getIntExtra("renter_id", -1)
+        }
+    }
+}
+
+/**
+ * Простой шина для передачи действий от виджетов в Composable.
+ * MainScreen читает widgetAction/openTab в LaunchedEffect при запуске
+ * и сбрасывает после обработки.
+ */
+object WidgetActionBus {
+    var openTab: Int = -1
+    var widgetAction: String? = null
+    var renterId: Int = -1
 }
 
 enum class SortColumn {
@@ -364,6 +414,33 @@ fun MainScreen(
     val renters by viewModel.rentersList.collectAsStateWithLifecycle()
     val history by historyViewModel.history.collectAsStateWithLifecycle()
 
+    // ── Обработка действий от нативных виджетов ──────────────────────
+    // Читаем WidgetActionBus при запуске и выполняем соответствующее действие:
+    //   open_tab — переключаемся на нужную вкладку
+    //   widget_action — открываем диалог создания или экран арендатора
+    LaunchedEffect(Unit) {
+        if (WidgetActionBus.openTab in 0..4) {
+            currentTab = WidgetActionBus.openTab
+            WidgetActionBus.openTab = -1
+        }
+        when (WidgetActionBus.widgetAction) {
+            "create_renter" -> showAddDialog = true
+            "create_scooter" -> showAddScooterDialog = true
+            "create_contract" -> contractCreateTrigger++
+            "create_transaction" -> transactionCreateTrigger++
+            "send_sms" -> {
+                // Открываем экран истории арендатора для отправки SMS
+                val rid = WidgetActionBus.renterId
+                if (rid != -1) {
+                    val r = renters.firstOrNull { it.id == rid }
+                    if (r != null) navState = NavigationState.RenterHistory(r)
+                }
+            }
+        }
+        WidgetActionBus.widgetAction = null
+        WidgetActionBus.renterId = -1
+    }
+
     // ── Рендер экрана истории контрактов, если активен ─────────────────
     when (val st = navState) {
         is NavigationState.RenterHistory -> {
@@ -460,11 +537,15 @@ fun MainScreen(
                     actionIconContentColor = ClaudeText
                 ),
                 actions = {
-                    // ── Кнопка «+» — добавление сущности для текущей вкладки ──
-                    // Перенесена сюда из FAB (по просьбе пользователя — все
-                    // кнопки добавления теперь рядом с настройками вверху).
-                    // На вкладке 0 = добавление арендатора, 1 = добавление
-                    // скутера, 2 = создание контракта, 3 = создание транзакции.
+                    // ── Универсальные кнопки верхнего бара ──────────────────────
+                    // +  — добавление сущности для текущей вкладки (всегда активна)
+                    // ✎  — редактирование выбранной строки (активна при выборе 1)
+                    // 🗑  — удаление выбранных строк (активна при выборе ≥1)
+                    // Все три — одного размера, без текста, круглые, единый стиль.
+                    // Кнопка + — залитая акцентом, ✎ и 🗑 — outlined.
+                    // На вкладке «Отчёты» (4) edit/delete не показываются — там
+                    // нет строк для выбора (только виджеты).
+                    // ── Кнопка «+» ──────────────────────────────────────────────
                     IconButton(
                         onClick = {
                             when (currentTab) {
@@ -472,10 +553,11 @@ fun MainScreen(
                                 1 -> showAddScooterDialog = true
                                 2 -> contractCreateTrigger++
                                 3 -> transactionCreateTrigger++
+                                // 4 (Отчёты) — кнопка + не используется
                             }
                         },
                         modifier = Modifier
-                            .padding(end = 8.dp, start = 4.dp)
+                            .padding(end = 6.dp, start = 4.dp)
                             .size(40.dp)
                             .background(ClaudeAccent, CircleShape)
                     ) {
@@ -486,6 +568,87 @@ fun MainScreen(
                             modifier = Modifier.size(22.dp)
                         )
                     }
+
+                    // ── Кнопка «✎ Tahrirlash» — универсальная для всех вкладок ─
+                    if (currentTab < 4) {
+                        val editEnabled = when (currentTab) {
+                            0 -> selectedRenters.size == 1
+                            1 -> selectedScooters.size == 1
+                            else -> false  // Контракты и Транзакции управляют edit сами
+                        }
+                        IconButton(
+                            onClick = {
+                                when (currentTab) {
+                                    0 -> {
+                                        selectedRenters.firstOrNull()?.let { id ->
+                                            renterToEdit = renters.firstOrNull { it.id == id }
+                                        }
+                                    }
+                                    1 -> {
+                                        selectedScooters.firstOrNull()?.let { id ->
+                                            scooterToEdit = scooters.firstOrNull { it.id == id }
+                                        }
+                                    }
+                                }
+                            },
+                            enabled = editEnabled,
+                            modifier = Modifier
+                                .padding(end = 6.dp)
+                                .size(40.dp)
+                                .background(
+                                    if (editEnabled) Color.White else Color.White.copy(alpha = 0.5f),
+                                    CircleShape
+                                )
+                                .border(1.dp, ClaudeDivider, CircleShape)
+                        ) {
+                            Icon(
+                                Icons.Default.Edit,
+                                contentDescription = "Tahrirlash",
+                                tint = if (editEnabled) ClaudeAccent else ClaudeTextSecondary,
+                                modifier = Modifier.size(20.dp)
+                            )
+                        }
+
+                        // ── Кнопка «🗑 O'chir» — универсальная ──────────────────
+                        val deleteEnabled = when (currentTab) {
+                            0 -> selectedRenters.isNotEmpty()
+                            1 -> selectedScooters.isNotEmpty()
+                            else -> false
+                        }
+                        IconButton(
+                            onClick = {
+                                when (currentTab) {
+                                    0 -> {
+                                        selectedRenters.forEach { id -> viewModel.deleteRenter(id) }
+                                        selectedRenters = emptySet()
+                                    }
+                                    1 -> {
+                                        scooters.filter { it.id in selectedScooters }.forEach {
+                                            scooterViewModel.deleteScooter(it)
+                                        }
+                                        selectedScooters = emptySet()
+                                    }
+                                }
+                            },
+                            enabled = deleteEnabled,
+                            modifier = Modifier
+                                .padding(end = 6.dp)
+                                .size(40.dp)
+                                .background(
+                                    if (deleteEnabled) Color.White else Color.White.copy(alpha = 0.5f),
+                                    CircleShape
+                                )
+                                .border(1.dp, if (deleteEnabled) StatusOverdue else ClaudeDivider, CircleShape)
+                        ) {
+                            Icon(
+                                Icons.Default.Delete,
+                                contentDescription = "O'chirish",
+                                tint = if (deleteEnabled) StatusOverdue else ClaudeTextSecondary,
+                                modifier = Modifier.size(20.dp)
+                            )
+                        }
+                    }
+
                     IconButton(
                         onClick = { showSettings = true },
                         modifier = Modifier
@@ -549,6 +712,19 @@ fun MainScreen(
                     onClick = { currentTab = 3 },
                     icon = { Icon(Icons.Default.RequestQuote, contentDescription = "Tranzaksiyalar") },
                     label = { Text("Tranzaksiya") },
+                    colors = NavigationBarItemDefaults.colors(
+                        selectedIconColor = ClaudeAccent,
+                        unselectedIconColor = ClaudeTextSecondary,
+                        selectedTextColor = ClaudeAccent,
+                        unselectedTextColor = ClaudeTextSecondary,
+                        indicatorColor = ClaudeAccentBg
+                    )
+                )
+                NavigationBarItem(
+                    selected = currentTab == 4,
+                    onClick = { currentTab = 4 },
+                    icon = { Icon(Icons.Default.RequestQuote, contentDescription = "Otchetlar") },
+                    label = { Text("Otchetlar") },
                     colors = NavigationBarItemDefaults.colors(
                         selectedIconColor = ClaudeAccent,
                         unselectedIconColor = ClaudeTextSecondary,
@@ -1054,6 +1230,13 @@ fun MainScreen(
                     scooterViewModel = scooterViewModel,
                     contractHistoryViewModel = contractHistoryViewModel,
                     createTrigger = transactionCreateTrigger
+                )
+            } else if (currentTab == 4) {
+                // ── Вкладка «Otchetlar» — дашборд с инфографикой ────────
+                ReportsScreen(
+                    renterViewModel = viewModel,
+                    scooterViewModel = scooterViewModel,
+                    contractHistoryViewModel = contractHistoryViewModel
                 )
             }
         }
@@ -2048,6 +2231,17 @@ fun SettingsDialog(
     val settingsRepo = remember { com.example.data.SettingsRepository(settingsContext) }
     var paymeLink by remember { mutableStateOf(settingsRepo.paymeLink) }
     var callCenter by remember { mutableStateOf(settingsRepo.callCenter) }
+    // ── Поля для страницы Отчёты: стоимость скутера и курс USD ──────────
+    var scooterPriceUsd by remember {
+        mutableStateOf(settingsRepo.scooterPriceUsd.let {
+            if (it > 0) it.toString() else com.example.data.SettingsRepository.DEFAULT_SCOOTER_PRICE_USD.toString()
+        })
+    }
+    var usdToUzsRate by remember {
+        mutableStateOf(settingsRepo.usdToUzsRate.let {
+            if (it > 0) it.toString() else com.example.data.SettingsRepository.DEFAULT_USD_TO_UZS_RATE.toString()
+        })
+    }
 
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -2071,6 +2265,24 @@ fun SettingsDialog(
                         value = monthly,
                         onValueChange = { monthly = it },
                         label = { Text("Oylik tarif narxi") },
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                        modifier = Modifier.fillMaxWidth(),
+                        shape = RoundedCornerShape(8.dp)
+                    )
+                    Spacer(modifier = Modifier.height(8.dp))
+                    OutlinedTextField(
+                        value = scooterPriceUsd,
+                        onValueChange = { scooterPriceUsd = it },
+                        label = { Text("Skuter narxi (USD) — otchetlar uchun") },
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                        modifier = Modifier.fillMaxWidth(),
+                        shape = RoundedCornerShape(8.dp)
+                    )
+                    Spacer(modifier = Modifier.height(8.dp))
+                    OutlinedTextField(
+                        value = usdToUzsRate,
+                        onValueChange = { usdToUzsRate = it },
+                        label = { Text("1 USD = ? UZS (kurs)") },
                         keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
                         modifier = Modifier.fillMaxWidth(),
                         shape = RoundedCornerShape(8.dp)
@@ -2398,6 +2610,11 @@ fun SettingsDialog(
                     settingsRepo.callCenter = callCenter.trim().ifBlank {
                         com.example.data.SettingsRepository.DEFAULT_CALL_CENTER
                     }
+                    // Сохраняем цену скутера и курс USD для страницы Отчётов
+                    settingsRepo.scooterPriceUsd = scooterPriceUsd.toDoubleOrNull()
+                        ?: com.example.data.SettingsRepository.DEFAULT_SCOOTER_PRICE_USD
+                    settingsRepo.usdToUzsRate = usdToUzsRate.toDoubleOrNull()
+                        ?: com.example.data.SettingsRepository.DEFAULT_USD_TO_UZS_RATE
                     onSave(template, wPrice, mPrice, paymeLink, callCenter)
                 }
             )

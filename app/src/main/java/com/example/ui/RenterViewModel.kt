@@ -97,13 +97,28 @@ class RenterViewModel(application: Application) : AndroidViewModel(application) 
             val isOverdueAtCreation = expiryTime < now
             val effectiveWeeklyPrice = if (weeklyPrice > 0) weeklyPrice else SettingsRepository.DEFAULT_WEEKLY_PRICE
 
+            // ── Начальный баланс арендатора ──────────────────────────────────
+            // Логика:
+            //   • Если дата окончания уже в прошлом (isOverdueAtCreation) →
+            //     баланс = -(weeklyPrice × overdueWeeks). Арендатор сразу
+            //     видит красный статус и долг за просроченные недели.
+            //   • Если в форме указан явный долг (debt > 0) → баланс = -debt.
+            //     Пользователь сам ввёл сумму долга при создании.
+            //   • Иначе (создаётся сегодня, без явного долга) → баланс =
+            //     -weeklyPrice. Это означает: первая неделя предоставляется
+            //     «в кредит» — арендатор должен за неё заплатить. Благодаря
+            //     этому на странице «Ijarachilar» сразу виден КРАСНЫЙ статус
+            //     (Qarzdor) и минусовой баланс, а в деталях арендатора
+            //     отображается долг за первую неделю. Контракт создаётся
+            //     неоплаченным (isPaid = false) — при нажатии «To'lov» он
+            //     оплачивается и статус становится зелёным.
             val initialBalance = when {
                 isOverdueAtCreation -> {
                     val overdueWeeks = ((now - expiryTime) / (7L * 24 * 60 * 60 * 1000)).toInt().coerceAtLeast(1)
                     -(effectiveWeeklyPrice * overdueWeeks)
                 }
                 debt > 0 -> -debt
-                else -> 0.0
+                else -> -effectiveWeeklyPrice
             }
             val finalDebt = if (initialBalance < 0) -initialBalance else 0.0
 
@@ -201,6 +216,8 @@ class RenterViewModel(application: Application) : AndroidViewModel(application) 
                 wm.enqueueUniquePeriodicWork("PaymentCheckWork", androidx.work.ExistingPeriodicWorkPolicy.KEEP,
                     androidx.work.PeriodicWorkRequestBuilder<PaymentCheckWorker>(1, java.util.concurrent.TimeUnit.HOURS).build())
             }
+            // Обновляем нативные виджеты Android после создания арендатора
+            try { com.example.widget.WidgetUpdater.updateAll(getApplication()) } catch (_: Exception) {}
         }
     }
 
@@ -561,6 +578,10 @@ class RenterViewModel(application: Application) : AndroidViewModel(application) 
         viewModelScope.launch {
             historyRepository.deleteForRenter(id)
             repository.delete(id)
+            // Обновляем нативные виджеты Android
+            try {
+                com.example.widget.WidgetUpdater.updateAll(getApplication())
+            } catch (_: Exception) {}
         }
     }
 
@@ -680,8 +701,13 @@ class RenterViewModel(application: Application) : AndroidViewModel(application) 
             // ── НОВАЯ ЛОГИКА: проверка давности последнего контракта ──────
             // Если последний оплаченный контракт закончился БОЛЬШЕ 7 дней назад
             // (т.е. (now - lastWeekEnd) > 7 дней), то новый контракт начинается
-            // с ТЕКУЩЕГО дня, а не с lastWeekEnd. Это работает одинаково и для
-            // активных, и для пассивных арендаторов.
+            // с ТЕКУЩЕГО дня, а не с lastWeekEnd.
+            //
+            // Если последний контракт закончился МЕНЬШЕ 7 дней назад (или ещё
+            // не закончился — lastWeekEnd в будущем), то новый контракт начинается
+            // с lastWeekEnd — это обеспечивает НЕПРЕРЫВНОЕ покрытие без дыр.
+            // Например: последний контракт закончился 8 июля, сегодня 10 июля
+            // → новый контракт начинается с 8 июля (10 - 8 = 2 дня < 7 дней).
             //
             // Дополнительно: если арендатор был в пассивном состоянии
             // (isReturned = true — скутер возвращён, аренда завершена), то при
@@ -693,10 +719,13 @@ class RenterViewModel(application: Application) : AndroidViewModel(application) 
             val effectiveGapMs = now - effectiveLastEnd
             val shouldStartFromNow = effectiveGapMs > weekMs
 
-            val baseStart = when {
-                shouldStartFromNow -> now
-                lastWeekEnd != null && lastWeekEnd >= now -> lastWeekEnd
-                else -> now
+            val baseStart = if (shouldStartFromNow) {
+                now
+            } else {
+                // gap <= 7 days → start from last contract end (continuous coverage).
+                // This covers both cases: lastWeekEnd in the past (within 7 days)
+                // and lastWeekEnd in the future (pre-paying for next week).
+                effectiveLastEnd
             }
             val weekStart = baseStart
             val weekEnd = baseStart + weekMs
@@ -800,34 +829,37 @@ class RenterViewModel(application: Application) : AndroidViewModel(application) 
                 isReturned = false  // ← реактивация пассивного арендатора
             )
             repository.update(updated)
+            // Обновляем нативные виджеты Android
+            try { com.example.widget.WidgetUpdater.updateAll(getApplication()) } catch (_: Exception) {}
         }
     }
 
     /**
      * Умное расторжение контракта (кнопка «Uzish»).
      *
-     * НОВАЯ ЛОГИКА (по просьбе пользователя):
-     *   1. Проверяем, есть ли у арендатора неоплаченный контракт (isPaid=false).
-     *   2. Если есть → оплачиваем ТОЛЬКО ЕГО (одну неделю): помечаем isPaid=true,
-     *      создаём PAYMENT-запись в истории + Transaction в таблице транзакций.
-     *      Баланс при этом НЕ растёт (мы не добавляем новую неделю — мы просто
-     *      закрываем существующий долг).
-     *   3. Если неоплаченных контрактов нет → ничего не делаем с контрактами
-     *      и балансом.
-     *   4. В ОБОИХ случаях переводим арендатора в пассивное состояние
-     *      (isReturned = true), создаём запись TERMINATED в истории контрактов
-     *      и Transaction типа TERMINATED в таблице транзакций.
-     *
-     * Удалено: автоматическое добавление weeklyPrice к балансу при расторжении
-     * (это приводило к завышению баланса и ложным «зелёным» контрактам).
+     * ЛОГИКА (по требованию пользователя):
+     *   • Если balance < 0 (арендатор должен) → оплачиваем ОДНУ неоплаченную
+     *     неделю: помечаем самый ранний isPaid=false контракт как оплаченный,
+     *     создаём PAYMENT-запись, но баланс НЕ растёт и НЕ списывается — мы
+     *     просто закрываем один долг. Если неоплаченных контрактов нет, но
+     *     баланс всё равно отрицательный (рассинхрон) — баланс обнуляется
+     *     до 0.
+     *   • Если balance >= 0 (арендатор ничего не должен) → НИЧЕГО не платим,
+     *     НЕ списываем с баланса. Баланс остаётся как есть.
+     *   • В ОБОИХ случаях: isReturned=true, создаём TERMINATED в истории
+     *     контрактов и Transaction TERMINATED в таблице транзакций.
      */
     private suspend fun applyTermination(renter: Renter, weeklyPrice: Double) {
         val effectivePrice = if (weeklyPrice > 0) weeklyPrice else SettingsRepository.DEFAULT_WEEKLY_PRICE
         val now = System.currentTimeMillis()
         val scooter: Scooter? = renter.scooterId?.let { fetchScooterById(it) }
 
-        // ── Шаг 1: проверяем неоплаченный контракт ────────────────────────
-        val unpaid = historyRepository.getEarliestUnpaidContract(renter.id)
+        // ── Шаг 1: решение по балансу ────────────────────────────────────
+        // balance < 0 → у арендатора долг. Оплачиваем одну неделю.
+        // balance >= 0 → ничего не платим, баланс не трогаем.
+        val unpaid = if (renter.balance < 0) {
+            historyRepository.getEarliestUnpaidContract(renter.id)
+        } else null
         var paidContractId: Int? = null
         if (unpaid != null) {
             // Оплачиваем этот контракт (помечаем isPaid=true)
@@ -934,6 +966,8 @@ class RenterViewModel(application: Application) : AndroidViewModel(application) 
         } catch (e: Exception) {
             Log.w("RenterViewModel", "Failed to insert terminated transaction: ${e.message}")
         }
+        // Обновляем нативные виджеты Android
+        try { com.example.widget.WidgetUpdater.updateAll(getApplication()) } catch (_: Exception) {}
     }
 
     companion object {

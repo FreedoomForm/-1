@@ -1,0 +1,132 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:orientation="vertical"
+    android:padding="6dp">
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal">
+
+        <TextView
+            android:id="@+id/renter_name"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:text="—"
+            android:textColor="#251E12"
+            android:textSize="13sp"
+            android:textStyle="bold"
+            android:maxLines="1"
+            android:ellipsize="end" />
+
+        <TextView
+            android:id="@+id/renter_balance"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="0"
+            android:textColor="#251E12"
+            android:textSize="12sp"
+            android:textStyle="bold" />
+    </LinearLayout>
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal"
+        android:layout_marginTop="2dp">
+
+        <TextView
+            android:id="@+id/renter_phone"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="—"
+            android:textColor="#71624B"
+            android:textSize="11sp" />
+
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="  •  "
+            android:textColor="#71624B"
+            android:textSize="11sp" />
+
+        <TextView
+            android:id="@+id/renter_scooter"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:text="—"
+            android:textColor="#71624B"
+            android:textSize="11sp"
+            android:maxLines="1"
+            android:ellipsize="end" />
+    </LinearLayout>
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal"
+        android:layout_marginTop="6dp">
+
+        <Button
+            android:id="@+id/btn_pay"
+            android:layout_width="0dp"
+            android:layout_height="32dp"
+            android:layout_weight="1"
+            android:text="To'lov"
+            android:textColor="#FFFFFF"
+            android:backgroundTint="#16A34A"
+            android:textSize="10sp"
+            android:padding="0dp"
+            android:minWidth="0dp"
+            android:minHeight="0dp" />
+
+        <View android:layout_width="4dp" android:layout_height="match_parent" />
+
+        <Button
+            android:id="@+id/btn_terminate"
+            android:layout_width="0dp"
+            android:layout_height="32dp"
+            android:layout_weight="1"
+            android:text="Uzish"
+            android:textColor="#FFFFFF"
+            android:backgroundTint="#DC2626"
+            android:textSize="10sp"
+            android:padding="0dp"
+            android:minWidth="0dp"
+            android:minHeight="0dp" />
+
+        <View android:layout_width="4dp" android:layout_height="match_parent" />
+
+        <Button
+            android:id="@+id/btn_sms"
+            android:layout_width="0dp"
+            android:layout_height="32dp"
+            android:layout_weight="1"
+            android:text="SMS"
+            android:textColor="#FFFFFF"
+            android:backgroundTint="#C14E24"
+            android:textSize="10sp"
+            android:padding="0dp"
+            android:minWidth="0dp"
+            android:minHeight="0dp" />
+
+        <View android:layout_width="4dp" android:layout_height="match_parent" />
+
+        <Button
+            android:id="@+id/btn_delete"
+            android:layout_width="0dp"
+            android:layout_height="32dp"
+            android:layout_weight="1"
+            android:text="O'chir"
+            android:textColor="#FFFFFF"
+            android:backgroundTint="#71624B"
+            android:textSize="10sp"
+            android:padding="0dp"
+            android:minWidth="0dp"
+            android:minHeight="0dp" />
+    </LinearLayout>
+</LinearLayout>
