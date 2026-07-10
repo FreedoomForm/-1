@@ -104,22 +104,20 @@ class RenterViewModel(application: Application) : AndroidViewModel(application) 
             //     видит красный статус и долг за просроченные недели.
             //   • Если в форме указан явный долг (debt > 0) → баланс = -debt.
             //     Пользователь сам ввёл сумму долга при создании.
-            //   • Иначе (создаётся сегодня, без явного долга) → баланс =
-            //     -weeklyPrice. Это означает: первая неделя предоставляется
-            //     «в кредит» — арендатор должен за неё заплатить. Благодаря
-            //     этому на странице «Ijarachilar» сразу виден КРАСНЫЙ статус
-            //     (Qarzdor) и минусовой баланс, а в деталях арендатора
-            //     отображается долг за первую неделю. Контракт создаётся
-            //     неоплаченным (isPaid = false) — при нажатии «To'lov» он
-            //     оплачивается и статус становится зелёным.
+            //   • Иначе (создаётся сегодня, без явного долга) → контракт
+            //     создаётся ЗАРАНЕЕ ОПЛАЧЕННЫМ: баланс = 0, isPaid = true.
+            //     На странице «Ijarachilar» виден ЗЕЛЁНЫЙ статус (оплачено),
+            //     контракт в истории — зелёный. При наступлении следующей
+            //     недели авто-продление создаст новый неоплаченный контракт.
             val initialBalance = when {
                 isOverdueAtCreation -> {
                     val overdueWeeks = ((now - expiryTime) / (7L * 24 * 60 * 60 * 1000)).toInt().coerceAtLeast(1)
                     -(effectiveWeeklyPrice * overdueWeeks)
                 }
                 debt > 0 -> -debt
-                else -> -effectiveWeeklyPrice
+                else -> 0.0
             }
+            val isPrepaidContract = !isOverdueAtCreation && debt <= 0
             val finalDebt = if (initialBalance < 0) -initialBalance else 0.0
 
             val provisional = Renter(
@@ -143,7 +141,7 @@ class RenterViewModel(application: Application) : AndroidViewModel(application) 
                         timestamp = now,
                         type = ContractHistoryEntry.TYPE_CREATED,
                         amount = effectiveWeeklyPrice,
-                        notes = if (isOverdueAtCreation) "Kechikkan holda yaratildi" else "Yaratildi",
+                        notes = if (isOverdueAtCreation) "Kechikkan holda yaratildi" else "Yaratildi (oldindan to'langan)",
                         renterName = savedRenter.name,
                         renterPhone = savedRenter.phoneNumber,
                         scooterName = savedRenter.scooterName,
@@ -158,7 +156,8 @@ class RenterViewModel(application: Application) : AndroidViewModel(application) 
                         scooterSerialNumber = scooter?.scooterSerialNumber ?: "",
                         batteryId1 = scooter?.batteryId1 ?: "",
                         batteryId2 = scooter?.batteryId2 ?: "",
-                        additionalInfo = scooter?.additionalInfo ?: ""
+                        additionalInfo = scooter?.additionalInfo ?: "",
+                        isPaid = isPrepaidContract
                     ))
 
                     // Если просрочка — создаем N записей AUTO_RENEW
