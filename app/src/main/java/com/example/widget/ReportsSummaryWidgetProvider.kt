@@ -52,6 +52,10 @@ class ReportsSummaryWidgetProvider : AppWidgetProvider() {
                     val renters = db.renterDao().getAllRentersOnce()
                     val scooters = db.scooterDao().getAllScootersOnce()
                     val history = db.contractHistoryDao().getAllOnce()
+                    // Баланс «Glavnaya» карты (id=1) — главный кассовый остаток.
+                    val mainCardBalance = try {
+                        db.virtualCardDao().getCardById(com.example.data.VirtualCard.MAIN_CARD_ID)?.balance ?: 0.0
+                    } catch (_: Exception) { 0.0 }
 
                     val now = System.currentTimeMillis()
                     val dayMs = 24L * 60 * 60 * 1000
@@ -63,6 +67,17 @@ class ReportsSummaryWidgetProvider : AppWidgetProvider() {
                     val paymentsThisMonth = history
                         .filter { it.type == ContractHistoryEntry.TYPE_PAYMENT && it.timestamp >= monthAgo }
                         .sumOf { it.amount }
+
+                    // Если контрактных платежей нет — берём доход из CardTransaction
+                    // (CONTRACT_INCOME на главную карту). Это покрывает случай, когда
+                    // пользователь только начал пользоваться фин. системой.
+                    val effectivePayments = if (paymentsThisMonth > 0) paymentsThisMonth else {
+                        try {
+                            db.cardTransactionDao().getRecentTransactions(100)
+                                .filter { it.type == com.example.data.CardTransaction.TYPE_CONTRACT_INCOME && it.timestamp >= monthAgo }
+                                .sumOf { it.amount }
+                        } catch (_: Exception) { 0.0 }
+                    }
 
                     val activeRenters = renters.count { !it.isReturned }
                     val overdueRenters = renters.count { !it.isReturned && it.balance < 0 }
@@ -80,11 +95,9 @@ class ReportsSummaryWidgetProvider : AppWidgetProvider() {
                         if (it > 0) it else SettingsRepository.DEFAULT_USD_TO_UZS_RATE
                     }
                     val totalInvestment = scooters.size * scooterPriceUsd * usdRate
-                    val roiMultiple = if (totalInvestment > 0) paymentsThisMonth / totalInvestment else 0.0
+                    val roiMultiple = if (totalInvestment > 0) effectivePayments / totalInvestment else 0.0
 
                     // Сравнение текущего месяца с предыдущим — для индикатора роста/падения.
-                    // paymentsPrevMonth = платежи за ПРЕДЫДУЩИЙ месяц (twoMonthsAgo..monthAgo)
-                    // paymentsThisMonthSum = платежи за ТЕКУЩИЙ месяц (monthAgo..now)
                     val paymentsThisMonthSum = history
                         .filter { it.type == ContractHistoryEntry.TYPE_PAYMENT && it.timestamp in monthAgo..now }
                         .sumOf { it.amount }
@@ -97,8 +110,11 @@ class ReportsSummaryWidgetProvider : AppWidgetProvider() {
                     val timeFmt = SimpleDateFormat("HH:mm", Locale.getDefault())
                     val updatedText = timeFmt.format(Date(now))
 
+                    // Чистая прибыль = баланс Glavnaya карты (если есть) иначе paymentsThisMonth
+                    val netProfitDisplay = if (mainCardBalance != 0.0) mainCardBalance else effectivePayments
+
                     val views = RemoteViews(context.packageName, R.layout.widget_reports_summary).apply {
-                        setTextViewText(R.id.widget_net_profit, formatUzs(paymentsThisMonth))
+                        setTextViewText(R.id.widget_net_profit, formatUzs(netProfitDisplay))
                         setTextViewText(R.id.widget_active_renters, activeRenters.toString())
                         setTextViewText(R.id.widget_overdue, overdueRenters.toString())
                         setTextViewText(R.id.widget_occupancy, "$occupancyPct%")

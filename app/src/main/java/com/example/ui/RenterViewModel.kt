@@ -53,6 +53,7 @@ class RenterViewModel(application: Application) : AndroidViewModel(application) 
     private val repository: RenterRepository
     private val historyRepository: com.example.data.ContractHistoryRepository
     private val transactionRepository: com.example.data.TransactionRepository
+    private val virtualCardRepository: com.example.data.VirtualCardRepository
     val rentersList: StateFlow<List<Renter>>
 
     private var smsSendCounter = 0
@@ -67,6 +68,10 @@ class RenterViewModel(application: Application) : AndroidViewModel(application) 
             database.contractHistoryDao()
         )
         transactionRepository = com.example.data.TransactionRepository(database.transactionDao())
+        virtualCardRepository = com.example.data.VirtualCardRepository(
+            database.virtualCardDao(),
+            database.cardTransactionDao()
+        )
         rentersList = repository.allRenters.stateIn(
             scope = viewModelScope,
             started = SharingStarted.WhileSubscribed(5000),
@@ -681,6 +686,18 @@ class RenterViewModel(application: Application) : AndroidViewModel(application) 
                 Log.w("RenterViewModel", "Failed to insert transaction: ${e.message}")
             }
 
+            // ── Авто-зачисление на «Glavnaya» карту (виртуальная касса) ──
+            // Все оплаты контрактов автоматически падают на главную карту
+            // (id=1) — это входящий поток денег в фин. систему приложения.
+            try {
+                virtualCardRepository.depositContractIncome(
+                    amount = effectivePrice,
+                    note = "To'lov: ${renter.name} (qarz yopildi) — $notes"
+                )
+            } catch (e: Exception) {
+                Log.w("RenterViewModel", "depositContractIncome failed: ${e.message}")
+            }
+
             // Обновляем арендатора: баланс растёт, даты аренды НЕ меняются
             val updated = renter.copy(
                 debtAmount = maxOf(0.0, -newBalance),
@@ -812,6 +829,17 @@ class RenterViewModel(application: Application) : AndroidViewModel(application) 
                 Log.w("RenterViewModel", "Failed to insert transaction: ${e.message}")
             }
 
+            // ── Авто-зачисление на «Glavnaya» карту (виртуальная касса) ──
+            // Предоплата тоже падает на главную карту — это входящий поток.
+            try {
+                virtualCardRepository.depositContractIncome(
+                    amount = effectivePrice,
+                    note = "To'lov: ${renter.name} (oldindan) — $notes"
+                )
+            } catch (e: Exception) {
+                Log.w("RenterViewModel", "depositContractIncome failed: ${e.message}")
+            }
+
             // Обновляем арендатора:
             //   • баланс растёт (предоплата)
             //   • rentStartDateTimestamp = weekStart (новая неделя)
@@ -909,6 +937,17 @@ class RenterViewModel(application: Application) : AndroidViewModel(application) 
                 )
             } catch (e: Exception) {
                 Log.w("RenterViewModel", "Failed to insert payment transaction: ${e.message}")
+            }
+
+            // ── Авто-зачисление на «Glavnaya» карту (виртуальная касса) ──
+            // При расторжении с погашением долга — сумма тоже падает на главную карту.
+            try {
+                virtualCardRepository.depositContractIncome(
+                    amount = effectivePrice,
+                    note = "To'lov: ${renter.name} (tugatish vaqtida)"
+                )
+            } catch (e: Exception) {
+                Log.w("RenterViewModel", "depositContractIncome failed: ${e.message}")
             }
         }
         // Если unpaid == null — ничего с контрактами и балансом не делаем.

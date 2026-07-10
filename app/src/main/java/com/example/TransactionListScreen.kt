@@ -77,6 +77,7 @@ fun TransactionListScreen(
     renterViewModel: RenterViewModel = viewModel(),
     scooterViewModel: ScooterViewModel = viewModel(),
     contractHistoryViewModel: ContractHistoryViewModel = viewModel(),
+    finansiViewModel: com.example.ui.FinansiViewModel = viewModel(),
     // Триггер извне: когда MainActivity увеличивает это значение (нажатие «+»
     // в верхней панели), экран открывает диалог создания транзакции. Заменяет
     // внутренний FAB, который раньше был здесь.
@@ -448,6 +449,13 @@ fun TransactionListScreen(
                     }
                 }
             }
+
+            // ── Карточные переводы (из Finansi) ──────────────────────────
+            // Показываем ленту переводов между виртуальными картами
+            // (CardTransaction) под списком контрактных транзакций.
+            // Это объединённая лента — пользователь видит и контрактные
+            // платежи, и перемещения денег между картами в одном месте.
+            CardTransfersSection(finansiViewModel = finansiViewModel)
         }
 
     // ── Диалог редактирования ────────────────────────────────────────────
@@ -1224,4 +1232,146 @@ private fun EditTransactionDialog(
             }
         }
     )
+}
+
+/**
+ * Секция переводов между виртуальными картами.
+ *
+ * Показывается внизу вкладки «Tranzaksiya» — объединяет ленту контрактных
+ * платежей (Transaction) и ленту карточных переводов (CardTransaction)
+ * в едином финансовом потоке.
+ *
+ * Для каждой транзакции отображается:
+ *   • Цветной кружок-источник → цветной кружок-назначение
+ *   • Имена карт-источника и назначения (или «Контракт» для входящих)
+ *   • Сумма и время
+ *   • Примечание (если есть)
+ */
+@Composable
+private fun CardTransfersSection(
+    finansiViewModel: com.example.ui.FinansiViewModel
+) {
+    val cardTxs by finansiViewModel.transactions.collectAsStateWithLifecycle()
+    val cards by finansiViewModel.cards.collectAsStateWithLifecycle()
+    val cardById = remember(cards) { cards.associateBy { it.id } }
+
+    if (cardTxs.isEmpty()) return
+
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 16.dp, vertical = 8.dp)
+    ) {
+        Text(
+            text = "Kartalar o'tkazmalari",
+            style = MaterialTheme.typography.titleMedium,
+            fontWeight = FontWeight.Bold,
+            color = ClaudeText,
+            modifier = Modifier.padding(bottom = 8.dp)
+        )
+
+        Card(
+            modifier = Modifier.fillMaxWidth(),
+            colors = CardDefaults.cardColors(containerColor = ClaudeCard),
+            shape = RoundedCornerShape(12.dp),
+            border = androidx.compose.foundation.BorderStroke(1.dp, ClaudeDivider)
+        ) {
+            Column(modifier = Modifier.padding(8.dp)) {
+                cardTxs.take(20).forEach { tx ->
+                    val from = cardById[tx.fromCardId]
+                    val to = cardById[tx.toCardId]
+                    val time = SimpleDateFormat("dd.MM HH:mm", Locale.getDefault())
+                        .format(Date(tx.timestamp))
+                    val isIncome = tx.type == com.example.data.CardTransaction.TYPE_CONTRACT_INCOME
+                    val fromLabel = if (isIncome || tx.fromCardId == 0) "Kontrakt" else (from?.name ?: "—")
+                    val toLabel = to?.name ?: "—"
+                    val fromColor = if (isIncome || tx.fromCardId == 0) {
+                        Color(0xFF34C759)
+                    } else {
+                        from?.colorHex?.let { parseHexColor(it) } ?: ClaudeDivider
+                    }
+                    val toColor = to?.colorHex?.let { parseHexColor(it) } ?: ClaudeDivider
+
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(vertical = 6.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .size(10.dp)
+                                .background(fromColor, CircleShape)
+                        )
+                        Text(
+                            text = fromLabel,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = ClaudeText,
+                            modifier = Modifier.weight(1f),
+                            maxLines = 1
+                        )
+                        Icon(
+                            imageVector = Icons.Default.ArrowForward,
+                            contentDescription = null,
+                            tint = ClaudeTextSecondary,
+                            modifier = Modifier.size(14.dp)
+                        )
+                        Box(
+                            modifier = Modifier
+                                .size(10.dp)
+                                .background(toColor, CircleShape)
+                        )
+                        Text(
+                            text = toLabel,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = ClaudeText,
+                            modifier = Modifier.weight(1f),
+                            maxLines = 1
+                        )
+                        Column(horizontalAlignment = Alignment.End) {
+                            Text(
+                                text = "+${tx.amount.toLong()}",
+                                style = MaterialTheme.typography.bodyMedium,
+                                fontWeight = FontWeight.Bold,
+                                color = Color(0xFF16A34A)
+                            )
+                            Text(
+                                text = time,
+                                style = MaterialTheme.typography.labelSmall,
+                                color = ClaudeTextSecondary
+                            )
+                        }
+                    }
+                    if (!tx.note.isNullOrBlank()) {
+                        Text(
+                            text = tx.note,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = ClaudeTextSecondary,
+                            modifier = Modifier.padding(start = 16.dp, bottom = 4.dp)
+                        )
+                    }
+                }
+                if (cardTxs.size > 20) {
+                    Text(
+                        text = "Va yana ${cardTxs.size - 20} ta...",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = ClaudeTextSecondary,
+                        modifier = Modifier.padding(top = 4.dp)
+                    )
+                }
+            }
+        }
+    }
+}
+
+/** Парсит hex-строку в Compose Color. */
+private fun parseHexColor(hex: String): Color {
+    return try {
+        val normalized = hex.removePrefix("#")
+        val full = if (normalized.length == 6) "FF$normalized" else normalized
+        Color(full.toLong(16))
+    } catch (_: Exception) {
+        Color.Gray
+    }
 }

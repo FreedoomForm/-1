@@ -302,7 +302,8 @@ fun MainScreen(
     scooterViewModel: ScooterViewModel = viewModel(),
     historyViewModel: NotificationHistoryViewModel = viewModel(),
     contractHistoryViewModel: ContractHistoryViewModel = viewModel(),
-    transactionViewModel: TransactionViewModel = viewModel()
+    transactionViewModel: TransactionViewModel = viewModel(),
+    finansiViewModel: com.example.ui.FinansiViewModel = viewModel()
 ) {
     var currentTab by remember { mutableStateOf(0) }
     var showSettings by remember { mutableStateOf(false) }
@@ -335,6 +336,11 @@ fun MainScreen(
     var contractDeleteTrigger by remember { mutableStateOf(0) }
     var transactionEditTrigger by remember { mutableStateOf(0) }
     var transactionDeleteTrigger by remember { mutableStateOf(0) }
+    // Триггеры для вкладки Finansi: создание/редактирование/удаление карт.
+    var cardCreateTrigger by remember { mutableStateOf(0) }
+    var cardEditTrigger by remember { mutableStateOf(0) }
+    var cardDeleteTrigger by remember { mutableStateOf(0) }
+    var selectedCardIds by remember { mutableStateOf(setOf<Int>()) }
 
     // ── Навигация ────────────────────────────────────────────────────
     var navState by remember { mutableStateOf<NavigationState>(NavigationState.MainView) }
@@ -554,39 +560,43 @@ fun MainScreen(
                     // 🗑  — удаление выбранных строк (активна при выборе ≥1)
                     // Все три — одного размера, без текста, круглые, единый стиль.
                     // Кнопка + — залитая акцентом, ✎ и 🗑 — outlined.
-                    // На вкладке «Отчёты» (4) edit/delete не показываются — там
-                    // нет строк для выбора (только виджеты).
-                    // ── Кнопка «+» ──────────────────────────────────────────────
-                    IconButton(
-                        onClick = {
-                            when (currentTab) {
-                                0 -> showAddDialog = true
-                                1 -> showAddScooterDialog = true
-                                2 -> contractCreateTrigger++
-                                3 -> transactionCreateTrigger++
-                                // 4 (Отчёты) — кнопка + не используется
-                            }
-                        },
-                        modifier = Modifier
-                            .padding(end = 6.dp, start = 4.dp)
-                            .size(40.dp)
-                            .background(ClaudeAccent, CircleShape)
-                    ) {
-                        Icon(
-                            Icons.Default.Add,
-                            contentDescription = "Qo'shish",
-                            tint = Color.White,
-                            modifier = Modifier.size(22.dp)
-                        )
+                    // На вкладке «Отчёты» (4) кнопка + НЕ показывается — там нет
+                    // сущностей для создания (только виджеты). Edit/delete там тоже
+                    // не показываются — нет строк для выбора.
+                    // ── Кнопка «+» — скрыта на вкладке «Отчёты» (4) ──────────────
+                    if (currentTab != 4) {
+                        IconButton(
+                            onClick = {
+                                when (currentTab) {
+                                    0 -> showAddDialog = true
+                                    1 -> showAddScooterDialog = true
+                                    2 -> contractCreateTrigger++
+                                    3 -> transactionCreateTrigger++
+                                    5 -> cardCreateTrigger++
+                                }
+                            },
+                            modifier = Modifier
+                                .padding(end = 6.dp, start = 4.dp)
+                                .size(40.dp)
+                                .background(ClaudeAccent, CircleShape)
+                        ) {
+                            Icon(
+                                Icons.Default.Add,
+                                contentDescription = "Qo'shish",
+                                tint = Color.White,
+                                modifier = Modifier.size(22.dp)
+                            )
+                        }
                     }
 
                     // ── Кнопка «✎ Tahrirlash» — универсальная для всех вкладок ─
-                    if (currentTab < 4) {
+                    if (currentTab != 4) {
                         val editEnabled = when (currentTab) {
                             0 -> selectedRenters.size == 1
                             1 -> selectedScooters.size == 1
                             2 -> selectedContracts.size == 1
                             3 -> selectedTxs.size == 1
+                            5 -> selectedCardIds.size == 1
                             else -> false
                         }
                         IconButton(
@@ -604,6 +614,7 @@ fun MainScreen(
                                     }
                                     2 -> contractEditTrigger++
                                     3 -> transactionEditTrigger++
+                                    5 -> cardEditTrigger++
                                 }
                             },
                             enabled = editEnabled,
@@ -630,6 +641,7 @@ fun MainScreen(
                             1 -> selectedScooters.isNotEmpty()
                             2 -> selectedContracts.isNotEmpty()
                             3 -> selectedTxs.isNotEmpty()
+                            5 -> selectedCardIds.isNotEmpty()
                             else -> false
                         }
                         IconButton(
@@ -647,6 +659,7 @@ fun MainScreen(
                                     }
                                     2 -> contractDeleteTrigger++
                                     3 -> transactionDeleteTrigger++
+                                    5 -> cardDeleteTrigger++
                                 }
                             },
                             enabled = deleteEnabled,
@@ -744,6 +757,19 @@ fun MainScreen(
                     onClick = { currentTab = 4 },
                     icon = { Icon(Icons.Default.RequestQuote, contentDescription = "Otchetlar") },
                     label = { Text("Otchetlar") },
+                    colors = NavigationBarItemDefaults.colors(
+                        selectedIconColor = ClaudeAccent,
+                        unselectedIconColor = ClaudeTextSecondary,
+                        selectedTextColor = ClaudeAccent,
+                        unselectedTextColor = ClaudeTextSecondary,
+                        indicatorColor = ClaudeAccentBg
+                    )
+                )
+                NavigationBarItem(
+                    selected = currentTab == 5,
+                    onClick = { currentTab = 5 },
+                    icon = { Icon(Icons.Default.AccountBalanceWallet, contentDescription = "Finansi") },
+                    label = { Text("Finansi") },
                     colors = NavigationBarItemDefaults.colors(
                         selectedIconColor = ClaudeAccent,
                         unselectedIconColor = ClaudeTextSecondary,
@@ -1221,11 +1247,14 @@ fun MainScreen(
                 )
             } else if (currentTab == 3) {
                 // ── Вкладка «Tranzaksiya» — все транзакции ──────────────
+                // Показывает и платежи по контрактам (Transaction), и переводы
+                // между виртуальными картами (CardTransaction) в одной ленте.
                 TransactionListScreen(
                     transactionViewModel = transactionViewModel,
                     renterViewModel = viewModel,
                     scooterViewModel = scooterViewModel,
                     contractHistoryViewModel = contractHistoryViewModel,
+                    finansiViewModel = finansiViewModel,
                     createTrigger = transactionCreateTrigger,
                     editTrigger = transactionEditTrigger,
                     deleteTrigger = transactionDeleteTrigger,
@@ -1238,7 +1267,18 @@ fun MainScreen(
                     renterViewModel = viewModel,
                     scooterViewModel = scooterViewModel,
                     contractHistoryViewModel = contractHistoryViewModel,
-                    transactionViewModel = transactionViewModel
+                    transactionViewModel = transactionViewModel,
+                    finansiViewModel = finansiViewModel
+                )
+            } else if (currentTab == 5) {
+                // ── Вкладка «Finansi» — виртуальные карты + переводы ────
+                FinansiPanel(
+                    viewModel = finansiViewModel,
+                    externalCreateTrigger = cardCreateTrigger,
+                    externalEditTrigger = cardEditTrigger,
+                    externalDeleteTrigger = cardDeleteTrigger,
+                    selectedCardIds = selectedCardIds,
+                    onSelectedCardIdsChange = { selectedCardIds = it }
                 )
             }
         }

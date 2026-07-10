@@ -1,0 +1,31 @@
+package com.example.data
+
+import androidx.room.Dao
+import androidx.room.Insert
+import androidx.room.OnConflictStrategy
+import androidx.room.Query
+import kotlinx.coroutines.flow.Flow
+
+@Dao
+interface CardTransactionDao {
+    @Query("SELECT * FROM card_transactions ORDER BY timestamp DESC")
+    fun getAllTransactions(): Flow<List<CardTransaction>>
+
+    @Query("SELECT * FROM card_transactions ORDER BY timestamp DESC LIMIT :limit")
+    suspend fun getRecentTransactions(limit: Int): List<CardTransaction>
+
+    @Query("SELECT * FROM card_transactions WHERE fromCardId = :cardId OR toCardId = :cardId ORDER BY timestamp DESC")
+    fun getTransactionsForCard(cardId: Int): Flow<List<CardTransaction>>
+
+    @Query("SELECT * FROM card_transactions WHERE type = :type ORDER BY timestamp DESC")
+    fun getTransactionsByType(type: String): Flow<List<CardTransaction>>
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insertTransaction(tx: CardTransaction): Long
+
+    @Query("DELETE FROM card_transactions WHERE id = :id")
+    suspend fun deleteTransaction(id: Int)
+
+    @Query("DELETE FROM card_transactions")
+    suspend fun deleteAll()
+}

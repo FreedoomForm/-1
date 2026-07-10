@@ -79,7 +79,12 @@ enum class ReportWidgetType(val id: String, val title: String) {
     CONTRACTS_TREND("contracts_trend", "Kontraktlar dinamikasi"),
     OVERDUE_LIST("overdue_list", "Qarzdorlar ro'yxati"),
     TOP_RENTERS("top_renters", "Eng yaxshi ijarachilar"),
-    TOP_SCOOTERS("top_scooters", "Eng daromadli skuterlar")
+    TOP_SCOOTERS("top_scooters", "Eng daromadli skuterlar"),
+    // ── Финансовые виджеты (учитывают логику «Glavnaya = касса») ──
+    CARDS_BALANCES("cards_balances", "Kartalar balansi"),
+    CASH_FLOW("cash_flow", "Pul oqimi (kassa)"),
+    MAIN_CARD_INCOME("main_income", "Glavnaya kartaga tushumlar"),
+    EXPENSE_CARDS("expense_cards", "Rashod kartalari")
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -88,7 +93,8 @@ fun ReportsScreen(
     renterViewModel: RenterViewModel = viewModel(),
     scooterViewModel: ScooterViewModel = viewModel(),
     contractHistoryViewModel: ContractHistoryViewModel = viewModel(),
-    transactionViewModel: TransactionViewModel = viewModel()
+    transactionViewModel: TransactionViewModel = viewModel(),
+    finansiViewModel: com.example.ui.FinansiViewModel = viewModel()
 ) {
     val context = LocalContext.current
 
@@ -96,6 +102,8 @@ fun ReportsScreen(
     val scooters by scooterViewModel.scootersList.collectAsStateWithLifecycle()
     val history by contractHistoryViewModel.history.collectAsStateWithLifecycle()
     val transactions by transactionViewModel.transactions.collectAsStateWithLifecycle()
+    val virtualCards by finansiViewModel.cards.collectAsStateWithLifecycle()
+    val cardTransactions by finansiViewModel.transactions.collectAsStateWithLifecycle()
 
     val settings = remember { SettingsRepository(context) }
     val weeklyPrice = settings.weeklyPrice.let { if (it > 0) it else SettingsRepository.DEFAULT_WEEKLY_PRICE }
@@ -518,7 +526,9 @@ fun ReportsScreen(
                         totalDebt = totalDebt,
                         avgWeeklyCheck = avgWeeklyCheck,
                         transactionTypeData = transactionTypeData,
-                        contractLifecycleData = contractLifecycleData
+                        contractLifecycleData = contractLifecycleData,
+                        cards = virtualCards,
+                        cardTransactions = cardTransactions
                     )
                 )
             }
@@ -589,7 +599,10 @@ data class ReportWidgetData(
     val totalDebt: Double,
     val avgWeeklyCheck: Double,
     val transactionTypeData: List<Pair<String, Float>>,
-    val contractLifecycleData: List<Pair<String, Int>>
+    val contractLifecycleData: List<Pair<String, Int>>,
+    // ── Финансовые поля (для новых виджетов Finansi) ──
+    val cards: List<com.example.data.VirtualCard> = emptyList(),
+    val cardTransactions: List<com.example.data.CardTransaction> = emptyList()
 )
 
 @Composable
@@ -657,6 +670,10 @@ private fun ReportWidgetCard(
                 ReportWidgetType.OVERDUE_LIST -> OverdueTableWidget(data)
                 ReportWidgetType.TOP_RENTERS -> TopRentersWidget(data)
                 ReportWidgetType.TOP_SCOOTERS -> TopScootersWidget(data)
+                ReportWidgetType.CARDS_BALANCES -> CardsBalancesWidget(data)
+                ReportWidgetType.CASH_FLOW -> CashFlowWidget(data)
+                ReportWidgetType.MAIN_CARD_INCOME -> MainCardIncomeWidget(data)
+                ReportWidgetType.EXPENSE_CARDS -> ExpenseCardsWidget(data)
             }
         }
     }
@@ -1271,3 +1288,348 @@ private fun ContractLifecycleWidget(d: ReportWidgetData) {
     }
 }
 
+
+// ════════════════════════════════════════════════════════════════════════════
+// ФИНАНСОВЫЕ ВИДЖЕТЫ (учитывают логику «Glavnaya = касса»)
+// ════════════════════════════════════════════════════════════════════════════
+
+/** Парсит hex-строку вида "#FF1565C0" в Compose Color. */
+private fun parseHexColor(hex: String): Color {
+    return try {
+        val normalized = hex.removePrefix("#")
+        val full = if (normalized.length == 6) "FF$normalized" else normalized
+        Color(full.toLong(16))
+    } catch (_: Exception) {
+        Color(0xFF1565C0)
+    }
+}
+
+/** Форматирует сумму в "1 250 000" или "-350 000". */
+private fun fmtMoney(amount: Double): String {
+    val sign = if (amount < 0) "-" else ""
+    val absValue = kotlin.math.abs(amount).toLong()
+    val formatted = String.format(java.util.Locale.US, "%,d", absValue).replace(',', ' ')
+    return "$sign$formatted"
+}
+
+/**
+ * Виджет «Kartalar balansi» — показывает все виртуальные карты с их балансами.
+ *
+ * Логика:
+ *   • Glavnaya (id=1) — основная касса, в неё падают все контрактные платежи.
+ *   • Остальные карты — «карманы» для расходов (ремонт, штрафы и т.д.).
+ *
+ * Визуально: горизонтальный список мини-карт с цветом, именем и балансом.
+ */
+@Composable
+private fun CardsBalancesWidget(d: ReportWidgetData) {
+    if (d.cards.isEmpty()) {
+        EmptyWidget("Hozircha kartalar yo'q. Finansi bo'limidan yarating.")
+        return
+    }
+    val totalBalance = d.cards.sumOf { it.balance }
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        // Общий баланс всех карт
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(
+                text = "Jami balans:",
+                style = MaterialTheme.typography.bodyMedium,
+                color = ClaudeText
+            )
+            Text(
+                text = "${fmtMoney(totalBalance)} so'm",
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.Bold,
+                color = if (totalBalance >= 0) StatusOk else StatusOverdue
+            )
+        }
+        HorizontalDivider(color = ClaudeDivider)
+        // Список карт
+        d.cards.forEach { card ->
+            val cardColor = parseHexColor(card.colorHex)
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(vertical = 4.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                // Мини-карта (цветной прямоугольник)
+                Box(
+                    modifier = Modifier
+                        .size(width = 40.dp, height = 26.dp)
+                        .background(
+                            brush = Brush.linearGradient(
+                                colors = listOf(cardColor.copy(alpha = 0.85f), cardColor)
+                            ),
+                            shape = RoundedCornerShape(4.dp)
+                        )
+                )
+                Spacer(Modifier.width(12.dp))
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = card.name + if (card.isDefault) " ★" else "",
+                        style = MaterialTheme.typography.bodyMedium,
+                        fontWeight = FontWeight.Medium,
+                        color = ClaudeText
+                    )
+                    Text(
+                        text = card.info ?: "",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = ClaudeTextSecondary,
+                        maxLines = 1
+                    )
+                }
+                Text(
+                    text = "${fmtMoney(card.balance)} so'm",
+                    style = MaterialTheme.typography.bodyMedium,
+                    fontWeight = FontWeight.Bold,
+                    color = if (card.balance >= 0) StatusOk else StatusOverdue
+                )
+            }
+        }
+    }
+}
+
+/**
+ * Виджет «Pul oqimi (kassa)» — показывает движение денег:
+ *   • Приход (входящие на Glavnaya из контрактов)
+ *   • Расход (переводы с Glavnaya на расходные карты)
+ *   • Чистый поток = Приход − Расход
+ */
+@Composable
+private fun CashFlowWidget(d: ReportWidgetData) {
+    val income = d.cardTransactions
+        .filter { it.type == com.example.data.CardTransaction.TYPE_CONTRACT_INCOME }
+        .sumOf { it.amount }
+    val transfers = d.cardTransactions
+        .filter { it.type == com.example.data.CardTransaction.TYPE_CARD_TRANSFER }
+        .sumOf { it.amount }
+    val netFlow = income - transfers
+
+    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            FlowMetricCard(
+                title = "Tushum",
+                value = fmtMoney(income),
+                color = StatusOk,
+                modifier = Modifier.weight(1f)
+            )
+            FlowMetricCard(
+                title = "O'tkazma",
+                value = fmtMoney(transfers),
+                color = StatusOverdue,
+                modifier = Modifier.weight(1f)
+            )
+            FlowMetricCard(
+                title = "Sof oqim",
+                value = fmtMoney(netFlow),
+                color = if (netFlow >= 0) StatusOk else StatusOverdue,
+                modifier = Modifier.weight(1f)
+            )
+        }
+        Text(
+            text = "Glavnaya kartaga tushgan kontrakt to'lovlari va undan rashod kartalariga o'tkazilgan summalarning farqi.",
+            style = MaterialTheme.typography.bodySmall,
+            color = ClaudeTextSecondary
+        )
+    }
+}
+
+@Composable
+private fun FlowMetricCard(
+    title: String,
+    value: String,
+    color: Color,
+    modifier: Modifier = Modifier
+) {
+    Card(
+        modifier = modifier,
+        colors = CardDefaults.cardColors(containerColor = color.copy(alpha = 0.1f)),
+        shape = RoundedCornerShape(8.dp),
+        border = androidx.compose.foundation.BorderStroke(1.dp, color.copy(alpha = 0.3f))
+    ) {
+        Column(
+            modifier = Modifier.padding(8.dp),
+            horizontalAlignment = Alignment.CenterHorizontally
+        ) {
+            Text(
+                text = title,
+                style = MaterialTheme.typography.labelSmall,
+                color = ClaudeTextSecondary
+            )
+            Text(
+                text = value,
+                style = MaterialTheme.typography.bodySmall,
+                fontWeight = FontWeight.Bold,
+                color = color
+            )
+        }
+    }
+}
+
+/**
+ * Виджет «Glavnaya kartaga tushumlar» — лента последних контрактных платежей,
+ * которые автоматически зачислены на главную карту.
+ *
+ * Показывает последние 8 записей CONTRACT_INCOME с датой, суммой и примечанием.
+ */
+@Composable
+private fun MainCardIncomeWidget(d: ReportWidgetData) {
+    val incomes = d.cardTransactions
+        .filter { it.type == com.example.data.CardTransaction.TYPE_CONTRACT_INCOME }
+        .take(8)
+    if (incomes.isEmpty()) {
+        EmptyWidget("Hozircha Glavnaya kartaga tushumlar yo'q.")
+        return
+    }
+    val total = incomes.sumOf { it.amount }
+    val dateFmt = SimpleDateFormat("dd.MM HH:mm", Locale.getDefault())
+    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween
+        ) {
+            Text("Oxirgi ${incomes.size} tushum", style = MaterialTheme.typography.bodySmall, color = ClaudeTextSecondary)
+            Text(
+                "Jami: ${fmtMoney(total)} so'm",
+                style = MaterialTheme.typography.bodySmall,
+                fontWeight = FontWeight.Bold,
+                color = StatusOk
+            )
+        }
+        incomes.forEach { tx ->
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                Box(
+                    modifier = Modifier
+                        .size(8.dp)
+                        .background(StatusOk, CircleShape)
+                )
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = tx.note ?: "Kontrakt to'lovi",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = ClaudeText,
+                        maxLines = 1
+                    )
+                    Text(
+                        text = dateFmt.format(Date(tx.timestamp)),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = ClaudeTextSecondary
+                    )
+                }
+                Text(
+                    text = "+${fmtMoney(tx.amount)}",
+                    style = MaterialTheme.typography.bodyMedium,
+                    fontWeight = FontWeight.Bold,
+                    color = StatusOk
+                )
+            }
+        }
+    }
+}
+
+/**
+ * Виджет «Rashod kartalari» — показывает баланс всех карт КРОМЕ Glavnaya.
+ *
+ * Логика: эти карты играют роль «расходных карманов» — на них переводят деньги
+ * с Glavnaya для целевых расходов (ремонт, штрафы, налоги и т.д.).
+ *
+ * Показывает имя карты, баланс и долю от общего расхода.
+ */
+@Composable
+private fun ExpenseCardsWidget(d: ReportWidgetData) {
+    val expenseCards = d.cards.filter { it.id != com.example.data.VirtualCard.MAIN_CARD_ID }
+    if (expenseCards.isEmpty()) {
+        EmptyWidget("Rashod kartalari yo'q. Finansi bo'limidan yarating.")
+        return
+    }
+    val totalExpenses = expenseCards.sumOf { it.balance }
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween
+        ) {
+            Text(
+                "${expenseCards.size} ta rashod kartasi",
+                style = MaterialTheme.typography.bodyMedium,
+                color = ClaudeText
+            )
+            Text(
+                "Jami: ${fmtMoney(totalExpenses)} so'm",
+                style = MaterialTheme.typography.bodyMedium,
+                fontWeight = FontWeight.Bold,
+                color = if (totalExpenses >= 0) StatusOk else StatusOverdue
+            )
+        }
+        HorizontalDivider(color = ClaudeDivider)
+        expenseCards.forEach { card ->
+            val cardColor = parseHexColor(card.colorHex)
+            val pct = if (totalExpenses != 0.0)
+                (kotlin.math.abs(card.balance) / kotlin.math.abs(totalExpenses) * 100).toInt()
+            else 0
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Box(
+                    modifier = Modifier
+                        .size(width = 36.dp, height = 24.dp)
+                        .background(cardColor, RoundedCornerShape(4.dp))
+                )
+                Spacer(Modifier.width(8.dp))
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = card.name,
+                        style = MaterialTheme.typography.bodyMedium,
+                        fontWeight = FontWeight.Medium,
+                        color = ClaudeText
+                    )
+                    // Progress bar showing relative share
+                    LinearProgressIndicator(
+                        progress = { (pct.toFloat() / 100f).coerceIn(0f, 1f) },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(top = 2.dp),
+                        color = cardColor,
+                        trackColor = ClaudeDivider
+                    )
+                }
+                Spacer(Modifier.width(8.dp))
+                Text(
+                    text = "${fmtMoney(card.balance)}",
+                    style = MaterialTheme.typography.bodyMedium,
+                    fontWeight = FontWeight.Bold,
+                    color = if (card.balance >= 0) ClaudeText else StatusOverdue
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun EmptyWidget(message: String) {
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(16.dp),
+        contentAlignment = Alignment.Center
+    ) {
+        Text(
+            text = message,
+            style = MaterialTheme.typography.bodySmall,
+            color = ClaudeTextSecondary,
+            textAlign = TextAlign.Center
+        )
+    }
+}
