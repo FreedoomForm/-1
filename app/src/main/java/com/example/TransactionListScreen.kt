@@ -192,14 +192,13 @@ fun TransactionListScreen(
     val wType     = 90.dp
     val wAmount   = 85.dp
 
-    Scaffold(
-        containerColor = ClaudeBackground
-    ) { innerPadding ->
-        Column(
-            modifier = Modifier
-                .padding(innerPadding)
-                .fillMaxSize()
-        ) {
+    // ── Содержимое страницы (без собственного Scaffold — вкладка живёт
+    // внутри единого Scaffold в MainActivity, чтобы поисковая строка всех
+    // 4 вкладок находилась на одной вертикали) ─────────────────────────
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+    ) {
             // ── Unified search bar ──────────────────────────────────────
             UnifiedSearchBar(
                 query = searchQuery,
@@ -428,7 +427,6 @@ fun TransactionListScreen(
                 }
             }
         }
-    }
 
     // ── Диалог редактирования ────────────────────────────────────────────
     editingTx?.let { tx ->
