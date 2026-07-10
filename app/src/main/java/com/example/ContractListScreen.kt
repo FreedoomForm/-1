@@ -81,7 +81,17 @@ fun ContractListScreen(
     // Триггер извне: когда MainActivity увеличивает это значение (нажатие «+»
     // в верхней панели), экран открывает диалог создания контракта. Заменяет
     // внутренний FAB, который раньше был здесь.
-    createTrigger: Int = 0
+    createTrigger: Int = 0,
+    // Триггеры универсальных ✎/🗑 из верхней панели MainActivity.
+    // Увеличение значения открывает диалог редактирования (если выбран 1) или
+    // подтверждение удаления (если выбрано ≥1). Заменяют внутренние кнопки
+    // "Tahrirlash / O'chir", которые раньше были над таблицей.
+    editTrigger: Int = 0,
+    deleteTrigger: Int = 0,
+    // Выделение поднято в MainActivity, чтобы универсальные ✎/🗑 в верхней
+    // панели могли его видеть. Раньше было внутренним state этого экрана.
+    selectedContracts: Set<Int> = emptySet(),
+    onSelectedContractsChange: (Set<Int>) -> Unit = {}
 ) {
     val allHistory by contractHistoryViewModel.history.collectAsStateWithLifecycle()
     val allRenters by renterViewModel.rentersList.collectAsStateWithLifecycle()
@@ -89,7 +99,6 @@ fun ContractListScreen(
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
 
-    var selectedContracts by remember { mutableStateOf(setOf<Int>()) }
     var searchQuery by remember { mutableStateOf("") }
     var editingContract by remember { mutableStateOf<ContractHistoryEntry?>(null) }
     var showDeleteConfirm by remember { mutableStateOf(false) }
@@ -109,6 +118,26 @@ fun ContractListScreen(
         allHistory
             .filter { it.type == ContractHistoryEntry.TYPE_CREATED || it.type == ContractHistoryEntry.TYPE_AUTO_RENEW }
             .sortedByDescending { it.weekStart ?: it.timestamp }
+    }
+
+    // ── Реакция на универсальный ✎ из верхней панели ───────────────
+    // Когда MainActivity увеличивает editTrigger (нажата универсальная
+    // кнопка "Tahrirlash" в TopAppBar), открываем диалог редактирования
+    // выбранного контракта. Заменяет внутреннюю кнопку "Tahrirlash" над
+    // таблицей, которая дублировала универсальную.
+    LaunchedEffect(editTrigger) {
+        if (editTrigger > 0 && selectedContracts.size == 1) {
+            editingContract = allContracts.firstOrNull { it.id == selectedContracts.first() }
+        }
+    }
+
+    // ── Реакция на универсальный 🗑 из верхней панели ───────────────
+    // Когда MainActivity увеличивает deleteTrigger (нажата универсальная
+    // кнопка "O'chir" в TopAppBar), открываем подтверждение удаления.
+    LaunchedEffect(deleteTrigger) {
+        if (deleteTrigger > 0 && selectedContracts.isNotEmpty()) {
+            showDeleteConfirm = true
+        }
     }
 
     // ── Filter panel + column visibility ─────────────────────────────────
@@ -265,32 +294,18 @@ fun ContractListScreen(
                 }
             )
 
-            // ── Панель действий — ВСЕГДА ВИДНА ──────────────────────────
-            // Кнопка "Yaratish" убрана — её заменяет "+" в верхней панели.
-            // Tahrirlash активна только при выборе ровно 1 строки.
-            // O'chir активна при выборе ≥1 строки.
+            // ── Счётчик контрактов ────────────────────────────────────
+            // Раньше здесь была панель с кнопками "Tahrirlash / O'chir",
+            // но они дублировали универсальные ✎/🗑 в верхней панели (TopAppBar).
+            // Неуниверсальные кнопки-дубликаты удалены — остался только счётчик.
+            // Создание/редактирование/удаление теперь управляются универсальными
+            // +/✎/🗑 в верхней панели.
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
                     .padding(horizontal = 16.dp, vertical = 6.dp),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                SecondaryButton(
-                    label = "Tahrirlash",
-                    icon = Icons.Default.Edit,
-                    enabled = selectedContracts.size == 1,
-                    onClick = {
-                        val id = selectedContracts.first()
-                        editingContract = allContracts.firstOrNull { it.id == id }
-                    }
-                )
-                DangerButton(
-                    label = "O'chir",
-                    icon = Icons.Default.Delete,
-                    enabled = selectedContracts.isNotEmpty(),
-                    onClick = { showDeleteConfirm = true }
-                )
                 Spacer(Modifier.weight(1f))
                 Text(
                     "Jami: ${filteredContracts.size}",
@@ -366,15 +381,19 @@ fun ContractListScreen(
                                     .combinedClickable(
                                         onClick = {
                                             // Один клик = выбрать/снять выделение.
-                                            // Диалог редактирования открывается ТОЛЬКО
-                                            // кнопкой "Tahrirlash" в панели действий.
-                                            selectedContracts = if (isSelected) selectedContracts - entry.id
-                                            else selectedContracts + entry.id
+                                            // Диалог редактирования открывается универсальной
+                                            // кнопкой ✎ в верхней панели (TopAppBar).
+                                            onSelectedContractsChange(
+                                                if (isSelected) selectedContracts - entry.id
+                                                else selectedContracts + entry.id
+                                            )
                                         },
                                         onLongClick = {
                                             // Долгое нажатие — резервный способ выбора.
-                                            selectedContracts = if (isSelected) selectedContracts - entry.id
-                                            else selectedContracts + entry.id
+                                            onSelectedContractsChange(
+                                                if (isSelected) selectedContracts - entry.id
+                                                else selectedContracts + entry.id
+                                            )
                                         }
                                     )
                                     .padding(horizontal = 8.dp, vertical = 10.dp),
@@ -536,7 +555,7 @@ fun ContractListScreen(
                     onClick = {
                         contractHistoryViewModel.deleteContracts(selectedContracts.toList())
                         Toast.makeText(context, "${selectedContracts.size} ta o'chirildi", Toast.LENGTH_SHORT).show()
-                        selectedContracts = emptySet()
+                        onSelectedContractsChange(emptySet())
                         showDeleteConfirm = false
                     }
                 )

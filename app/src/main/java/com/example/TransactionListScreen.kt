@@ -80,7 +80,17 @@ fun TransactionListScreen(
     // Триггер извне: когда MainActivity увеличивает это значение (нажатие «+»
     // в верхней панели), экран открывает диалог создания транзакции. Заменяет
     // внутренний FAB, который раньше был здесь.
-    createTrigger: Int = 0
+    createTrigger: Int = 0,
+    // Триггеры универсальных ✎/🗑 из верхней панели MainActivity.
+    // Увеличение значения открывает диалог редактирования (если выбран 1) или
+    // подтверждение удаления (если выбрано ≥1). Заменяют внутренние кнопки
+    // "Tahrirlash / O'chir", которые раньше были над таблицей.
+    editTrigger: Int = 0,
+    deleteTrigger: Int = 0,
+    // Выделение поднято в MainActivity, чтобы универсальные ✎/🗑 в верхней
+    // панели могли его видеть. Раньше было внутренним state этого экрана.
+    selectedTxs: Set<Int> = emptySet(),
+    onSelectedTxsChange: (Set<Int>) -> Unit = {}
 ) {
     val transactions by transactionViewModel.transactions.collectAsStateWithLifecycle()
     val allRenters by renterViewModel.rentersList.collectAsStateWithLifecycle()
@@ -88,7 +98,6 @@ fun TransactionListScreen(
     val allHistory by contractHistoryViewModel.history.collectAsStateWithLifecycle()
     val context = LocalContext.current
 
-    var selectedTxs by remember { mutableStateOf(setOf<Int>()) }
     var searchQuery by remember { mutableStateOf("") }
     var editingTx by remember { mutableStateOf<Transaction?>(null) }
     var showDeleteConfirm by remember { mutableStateOf(false) }
@@ -99,6 +108,26 @@ fun TransactionListScreen(
     // Пропускаем начальное значение 0.
     LaunchedEffect(createTrigger) {
         if (createTrigger > 0) showCreateDialog = true
+    }
+
+    // ── Реакция на универсальный ✎ из верхней панели ───────────────
+    // Когда MainActivity увеличивает editTrigger (нажата универсальная
+    // кнопка "Tahrirlash" в TopAppBar), открываем диалог редактирования
+    // выбранной транзакции. Заменяет внутреннюю кнопку "Tahrirlash" над
+    // таблицей, которая дублировала универсальную.
+    LaunchedEffect(editTrigger) {
+        if (editTrigger > 0 && selectedTxs.size == 1) {
+            editingTx = transactions.firstOrNull { it.id == selectedTxs.first() }
+        }
+    }
+
+    // ── Реакция на универсальный 🗑 из верхней панели ───────────────
+    // Когда MainActivity увеличивает deleteTrigger (нажата универсальная
+    // кнопка "O'chir" в TopAppBar), открываем подтверждение удаления.
+    LaunchedEffect(deleteTrigger) {
+        if (deleteTrigger > 0 && selectedTxs.isNotEmpty()) {
+            showDeleteConfirm = true
+        }
     }
 
     // Все контракты (CREATED + AUTO_RENEW) — для выпадающего списка в диалоге
@@ -226,30 +255,18 @@ fun TransactionListScreen(
                 }
             )
 
-            // ── Панель действий — ВСЕГДА ВИДНА ──────────────────────────
-            // Кнопка "Yaratish" убрана — её заменяет "+" в верхней панели.
+            // ── Счётчик транзакций ────────────────────────────────────
+            // Раньше здесь была панель с кнопками "Tahrirlash / O'chir",
+            // но они дублировали универсальные ✎/🗑 в верхней панели (TopAppBar).
+            // Неуниверсальные кнопки-дубликаты удалены — остался только счётчик.
+            // Создание/редактирование/удаление теперь управляются универсальными
+            // +/✎/🗑 в верхней панели.
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
                     .padding(horizontal = 16.dp, vertical = 6.dp),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                SecondaryButton(
-                    label = "Tahrirlash",
-                    icon = Icons.Default.Edit,
-                    enabled = selectedTxs.size == 1,
-                    onClick = {
-                        val id = selectedTxs.first()
-                        editingTx = transactions.firstOrNull { it.id == id }
-                    }
-                )
-                DangerButton(
-                    label = "O'chir",
-                    icon = Icons.Default.Delete,
-                    enabled = selectedTxs.isNotEmpty(),
-                    onClick = { showDeleteConfirm = true }
-                )
                 Spacer(Modifier.weight(1f))
                 Text(
                     "Jami: ${filteredTxs.size}",
@@ -320,14 +337,19 @@ fun TransactionListScreen(
                                     .combinedClickable(
                                         onClick = {
                                             // Один клик = выбрать/снять выделение.
-                                            // Диалог редактирования открывается ТОЛЬКО
-                                            // кнопкой "Tahrirlash" в панели действий.
-                                            selectedTxs = if (isSelected) selectedTxs - tx.id
-                                            else selectedTxs + tx.id
+                                            // Диалог редактирования открывается универсальной
+                                            // кнопкой ✎ в верхней панели (TopAppBar).
+                                            onSelectedTxsChange(
+                                                if (isSelected) selectedTxs - tx.id
+                                                else selectedTxs + tx.id
+                                            )
                                         },
                                         onLongClick = {
-                                            selectedTxs = if (isSelected) selectedTxs - tx.id
-                                            else selectedTxs + tx.id
+                                            // Долгое нажатие — резервный способ выбора.
+                                            onSelectedTxsChange(
+                                                if (isSelected) selectedTxs - tx.id
+                                                else selectedTxs + tx.id
+                                            )
                                         }
                                     )
                                     .padding(horizontal = 8.dp, vertical = 10.dp),
@@ -462,7 +484,7 @@ fun TransactionListScreen(
                     onClick = {
                         transactionViewModel.deleteTransactions(selectedTxs.toList())
                         Toast.makeText(context, "${selectedTxs.size} ta o'chirildi", Toast.LENGTH_SHORT).show()
-                        selectedTxs = emptySet()
+                        onSelectedTxsChange(emptySet())
                         showDeleteConfirm = false
                     }
                 )

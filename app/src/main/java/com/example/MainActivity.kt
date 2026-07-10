@@ -324,6 +324,17 @@ fun MainScreen(
     // Увеличиваем значение → экран внутри открывает свой showCreateDialog.
     var contractCreateTrigger by remember { mutableStateOf(0) }
     var transactionCreateTrigger by remember { mutableStateOf(0) }
+    // Универсальное выделение/редактирование/удаление для вкладок Kontraktlar /
+    // Tranzaksiya. Раньше эти вкладки управляли выделением сами, через внутренние
+    // неуниверсальные кнопки "Tahrirlash / O'chir" над таблицей. Теперь выделение
+    // поднято сюда, чтобы универсальные ✎/🗑 в верхней панели работали на всех
+    // вкладках одинаково, а неуниверсальные кнопки-дубликаты удалены.
+    var selectedContracts by remember { mutableStateOf(setOf<Int>()) }
+    var selectedTxs by remember { mutableStateOf(setOf<Int>()) }
+    var contractEditTrigger by remember { mutableStateOf(0) }
+    var contractDeleteTrigger by remember { mutableStateOf(0) }
+    var transactionEditTrigger by remember { mutableStateOf(0) }
+    var transactionDeleteTrigger by remember { mutableStateOf(0) }
 
     // ── Навигация ────────────────────────────────────────────────────
     var navState by remember { mutableStateOf<NavigationState>(NavigationState.MainView) }
@@ -574,7 +585,9 @@ fun MainScreen(
                         val editEnabled = when (currentTab) {
                             0 -> selectedRenters.size == 1
                             1 -> selectedScooters.size == 1
-                            else -> false  // Контракты и Транзакции управляют edit сами
+                            2 -> selectedContracts.size == 1
+                            3 -> selectedTxs.size == 1
+                            else -> false
                         }
                         IconButton(
                             onClick = {
@@ -589,6 +602,8 @@ fun MainScreen(
                                             scooterToEdit = scooters.firstOrNull { it.id == id }
                                         }
                                     }
+                                    2 -> contractEditTrigger++
+                                    3 -> transactionEditTrigger++
                                 }
                             },
                             enabled = editEnabled,
@@ -613,6 +628,8 @@ fun MainScreen(
                         val deleteEnabled = when (currentTab) {
                             0 -> selectedRenters.isNotEmpty()
                             1 -> selectedScooters.isNotEmpty()
+                            2 -> selectedContracts.isNotEmpty()
+                            3 -> selectedTxs.isNotEmpty()
                             else -> false
                         }
                         IconButton(
@@ -628,6 +645,8 @@ fun MainScreen(
                                         }
                                         selectedScooters = emptySet()
                                     }
+                                    2 -> contractDeleteTrigger++
+                                    3 -> transactionDeleteTrigger++
                                 }
                             },
                             enabled = deleteEnabled,
@@ -988,16 +1007,10 @@ fun MainScreen(
                         variant = UnifiedButtonVariant.PRIMARY,
                         modifier = Modifier.weight(1.0f)
                     )
-                    // O'chirish tugmasi
-                    DangerOutlinedButton(
-                        label = "O'chir",
-                        icon = Icons.Default.Delete,
-                        enabled = hasSelection,
-                        onClick = {
-                            selectedRenters.forEach { id -> viewModel.deleteRenter(id) }
-                            selectedRenters = emptySet()
-                        }
-                    )
+                    // Кнопка "O'chir" удалена — её заменяет универсальная 🗑
+                    // в верхней панели (TopAppBar), которая теперь работает для
+                    // всех вкладок. To'lov / Uzish / SMS остаются — это уникальные
+                    // действия, которых нет в верхней панели.
                 }
 
                 // ===== ТАБЛИЦА АРЕНДАТОРОВ =====
@@ -1108,37 +1121,17 @@ fun MainScreen(
                     }
                 )
 
-                // ── Панель действий — ВСЕГДА ВИДНА ────────────────────
-                // Tahrirlash активна только при выборе ровно 1 скутера.
-                // O'chir активна при выборе ≥1 скутера. Аналогично странице
-                // «Kontraktlar» — те же правила, тот же порядок кнопок.
+                // ── Счётчик скутеров ────────────────────────────────
+                // Раньше здесь была панель с кнопками "Tahrirlash / O'chir",
+                // но они дублировали универсальные ✎/🗑 в верхней панели.
+                // Неуниверсальные кнопки-дубликаты удалены — остался только
+                // счётчик количества скутеров.
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
                         .padding(horizontal = 16.dp, vertical = 6.dp),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    SecondaryButton(
-                        label = "Tahrirlash",
-                        icon = Icons.Default.Edit,
-                        enabled = selectedScooters.size == 1,
-                        onClick = {
-                            val id = selectedScooters.first()
-                            scooterToEdit = scooters.firstOrNull { it.id == id }
-                        }
-                    )
-                    DangerButton(
-                        label = "O'chir",
-                        icon = Icons.Default.Delete,
-                        enabled = selectedScooters.isNotEmpty(),
-                        onClick = {
-                            scooters.filter { it.id in selectedScooters }.forEach {
-                                scooterViewModel.deleteScooter(it)
-                            }
-                            selectedScooters = setOf()
-                        }
-                    )
                     Spacer(Modifier.weight(1f))
                     Text(
                         "Jami: ${scooters.size}",
@@ -1220,7 +1213,11 @@ fun MainScreen(
                     contractHistoryViewModel = contractHistoryViewModel,
                     renterViewModel = viewModel,
                     scooterViewModel = scooterViewModel,
-                    createTrigger = contractCreateTrigger
+                    createTrigger = contractCreateTrigger,
+                    editTrigger = contractEditTrigger,
+                    deleteTrigger = contractDeleteTrigger,
+                    selectedContracts = selectedContracts,
+                    onSelectedContractsChange = { selectedContracts = it }
                 )
             } else if (currentTab == 3) {
                 // ── Вкладка «Tranzaksiya» — все транзакции ──────────────
@@ -1229,7 +1226,11 @@ fun MainScreen(
                     renterViewModel = viewModel,
                     scooterViewModel = scooterViewModel,
                     contractHistoryViewModel = contractHistoryViewModel,
-                    createTrigger = transactionCreateTrigger
+                    createTrigger = transactionCreateTrigger,
+                    editTrigger = transactionEditTrigger,
+                    deleteTrigger = transactionDeleteTrigger,
+                    selectedTxs = selectedTxs,
+                    onSelectedTxsChange = { selectedTxs = it }
                 )
             } else if (currentTab == 4) {
                 // ── Вкладка «Otchetlar» — дашборд с инфографикой ────────
