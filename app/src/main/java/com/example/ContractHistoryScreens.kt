@@ -1520,13 +1520,17 @@ fun ScooterContractHistoryScreen(
                 .fillMaxSize()
         ) {
             // ── Сводка по скутеру ───────────────────────────────────────
+            // Цвет рамки = статус скутера (зелёный = в базе, красный = в аренде).
             Card(
                 modifier = Modifier
                     .fillMaxWidth()
                     .padding(horizontal = 16.dp, vertical = 8.dp),
                 shape = RoundedCornerShape(12.dp),
                 colors = CardDefaults.cardColors(containerColor = ClaudeCard),
-                border = BorderStroke(1.dp, ClaudeDivider)
+                border = BorderStroke(
+                    1.5.dp,
+                    if (activeRenter != null) StatusOverdue else StatusOk
+                )
             ) {
                 Column(modifier = Modifier.padding(16.dp)) {
                     if (scooter.documentedNumber.isNullOrBlank().not()) {
@@ -1639,7 +1643,10 @@ fun ScooterContractHistoryScreen(
                                 .padding(vertical = 4.dp),
                             shape = RoundedCornerShape(10.dp),
                             colors = CardDefaults.cardColors(containerColor = ClaudeCard),
-                            border = BorderStroke(1.dp, ClaudeDivider)
+                            // Цветная рамка статуса (зелёная = оплата, красная
+                            // = долг/просрочка, золотая = создание и т.д.) —
+                            // единое правило для всех страниц с контрактами.
+                            border = BorderStroke(1.5.dp, typeColor)
                         ) {
                             Row(
                                 modifier = Modifier

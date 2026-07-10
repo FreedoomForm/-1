@@ -131,15 +131,44 @@ class UpdateChecker(
      * Скачивает APK файл в кэш приложения.
      * Возвращает File на скачанный APK или null при ошибке.
      * @param onProgress колбэк с прогрессом (0.0 .. 1.0)
+     *
+     * ВНИМАНИЕ: этот метод использует фиксированное имя `update.apk`.
+     * Для новой установки предпочтительнее использовать [downloadApkTo],
+     * который принимает уникальное имя файла — это устраняет конфликт
+     * файлов при повторных загрузках.
      */
     suspend fun downloadApk(
         downloadUrl: String,
         onProgress: (Float) -> Unit = {}
     ): File? = withContext(Dispatchers.IO) {
+        val apkFile = File(context.cacheDir, "update.apk")
+        downloadApkTo(downloadUrl, apkFile, onProgress)
+    }
+
+    /**
+     * Скачивает APK в указанный файл. Используется InAppUpdateManager-ом
+     * с уникальным именем (`update_<timestamp>.apk`) — это устраняет
+     * «конфликт папок», когда старый файл ещё занят предыдущей сессией
+     * PackageInstaller.
+     *
+     * Метод атомарен: пишет во временный `.part` файл, затем переименовывает.
+     * Если загрузка прерывается — временный файл удаляется, частичный APK
+     * никогда не останется в кэше.
+     */
+    suspend fun downloadApkTo(
+        downloadUrl: String,
+        targetFile: File,
+        onProgress: (Float) -> Unit = {}
+    ): File? = withContext(Dispatchers.IO) {
+        val partFile = File(targetFile.parentFile, "${targetFile.name}.part")
         try {
-            val apkFile = File(context.cacheDir, "update.apk")
-            // Удаляем старый файл если есть
-            if (apkFile.exists()) apkFile.delete()
+            // Удаляем старые файлы если есть
+            if (targetFile.exists()) {
+                try { targetFile.delete() } catch (_: Exception) {}
+            }
+            if (partFile.exists()) {
+                try { partFile.delete() } catch (_: Exception) {}
+            }
 
             val connection = URL(downloadUrl).openConnection()
             connection.connectTimeout = 30_000
@@ -149,7 +178,7 @@ class UpdateChecker(
             val fileSize = connection.contentLength.toLong()
 
             connection.getInputStream().buffered().use { input ->
-                apkFile.outputStream().buffered().use { output ->
+                partFile.outputStream().buffered().use { output ->
                     val buffer = ByteArray(8192)
                     var bytesRead: Int
                     var totalRead = 0L
@@ -164,10 +193,23 @@ class UpdateChecker(
                 }
             }
 
-            Log.d(TAG, "APK downloaded: ${apkFile.length()} bytes")
-            apkFile
+            // Атомарный rename: .part → финальное имя
+            if (!partFile.renameTo(targetFile)) {
+                // Если rename не удался (например, кросс-точки монтирования),
+                // копируем вручную и удаляем part.
+                partFile.inputStream().use { input ->
+                    targetFile.outputStream().use { output -> input.copyTo(output) }
+                }
+                try { partFile.delete() } catch (_: Exception) {}
+            }
+
+            Log.d(TAG, "APK downloaded to ${targetFile.name}: ${targetFile.length()} bytes")
+            targetFile
         } catch (e: Exception) {
-            Log.e(TAG, "Failed to download APK", e)
+            Log.e(TAG, "Failed to download APK to ${targetFile.name}", e)
+            // Чистим частичный файл при ошибке
+            try { if (partFile.exists()) partFile.delete() } catch (_: Exception) {}
+            try { if (targetFile.exists()) targetFile.delete() } catch (_: Exception) {}
             null
         }
     }

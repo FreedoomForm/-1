@@ -265,6 +265,11 @@ fun MainScreen(
     var searchQuery by remember { mutableStateOf("") }
     var showDateRangePicker by remember { mutableStateOf(false) }
     val dateRangePickerState = rememberDateRangePickerState()
+    // Separate state for the scooters tab calendar — filters scooters by
+    // their active renter's contract start date. Kept independent so that
+    // switching between tabs does not cross-pollute the date ranges.
+    var showScooterDateRangePicker by remember { mutableStateOf(false) }
+    val scooterDateRangePickerState = rememberDateRangePickerState()
     // Триггеры для открытия диалога создания на вкладках Kontraktlar / Tranzaksiya.
     // Увеличиваем значение → экран внутри открывает свой showCreateDialog.
     var contractCreateTrigger by remember { mutableStateOf(0) }
@@ -898,12 +903,14 @@ fun MainScreen(
                     }
                 )
             } else if (currentTab == 1) {
-                // Вкладка «Скутеры» — unified search bar
+                // Вкладка «Скутеры» — unified search bar с календарём
+                // (фильтр по дате начала активного контракта скутера) и фильтром.
                 UnifiedSearchBar(
                     query = searchQuery,
                     onQueryChange = { searchQuery = it },
                     placeholder = "Skuter qidirish",
-                    onCalendarClick = null,  // у скутеров нет дат — календарь не нужен
+                    onCalendarClick = { showScooterDateRangePicker = true },
+                    calendarActive = scooterDateRangePickerState.selectedStartDateMillis != null,
                     onFilterClick = { showScooterFilterPanel = true },
                     filterActive = scooterFilterValues.any { it.value.isNotBlank() }
                 )
@@ -925,17 +932,26 @@ fun MainScreen(
                     }
                 )
 
-                // ── Панель действий — ВСЕГДА ВИДНА (Task 3) ─────────────
-                // Кнопка O'chir присутствует всегда. Активна только когда
-                // выбран ≥1 скутер. Текст "X ta tanlandi" убран.
+                // ── Панель действий — ВСЕГДА ВИДНА ────────────────────
+                // Tahrirlash активна только при выборе ровно 1 скутера.
+                // O'chir активна при выборе ≥1 скутера. Аналогично странице
+                // «Kontraktlar» — те же правила, тот же порядок кнопок.
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(horizontal = 16.dp, vertical = 8.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        .padding(horizontal = 16.dp, vertical = 6.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Spacer(Modifier.weight(1f))
+                    SecondaryButton(
+                        label = "Tahrirlash",
+                        icon = Icons.Default.Edit,
+                        enabled = selectedScooters.size == 1,
+                        onClick = {
+                            val id = selectedScooters.first()
+                            scooterToEdit = scooters.firstOrNull { it.id == id }
+                        }
+                    )
                     DangerButton(
                         label = "O'chir",
                         icon = Icons.Default.Delete,
@@ -947,10 +963,28 @@ fun MainScreen(
                             selectedScooters = setOf()
                         }
                     )
+                    Spacer(Modifier.weight(1f))
+                    Text(
+                        "Jami: ${scooters.size}",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = ClaudeTextSecondary
+                    )
                 }
 
                 val filteredScooters = scooters.filter { scooter ->
                     val textMatch = scooter.name.contains(searchQuery, ignoreCase = true)
+                    // Calendar filter — by active renter's contract start date.
+                    // A scooter with no active renter never matches a date filter
+                    // (matches the "no contract in this range" semantic).
+                    val scooterStartMillis = renters
+                        .firstOrNull { it.scooterId == scooter.id && !it.isReturned }
+                        ?.rentStartDateTimestamp
+                    val startMillis = scooterDateRangePickerState.selectedStartDateMillis
+                    val endMillis = scooterDateRangePickerState.selectedEndDateMillis
+                    val dateMatch = if (startMillis != null && scooterStartMillis != null) {
+                        if (endMillis != null) scooterStartMillis in startMillis..endMillis
+                        else scooterStartMillis >= startMillis
+                    } else true
                     val filterMatch = scooterFilterValues.all { (colId, filterText) ->
                         if (filterText.isBlank()) true
                         else when (colId) {
@@ -969,7 +1003,7 @@ fun MainScreen(
                             else -> true
                         }
                     }
-                    textMatch && filterMatch
+                    textMatch && dateMatch && filterMatch
                 }.let { list ->
                     val col = scooterSortState.activeColumn
                     val state = scooterSortState.stateFor(col ?: "")
@@ -1207,6 +1241,36 @@ fun MainScreen(
                     state = dateRangePickerState,
                     modifier = Modifier.weight(1f),
                     title = { Text("Muddati bo'yicha filter", modifier = Modifier.padding(16.dp)) },
+                    headline = { Text("Davrni tanlang", modifier = Modifier.padding(16.dp)) }
+                )
+            }
+        }
+
+        if (showScooterDateRangePicker) {
+            DatePickerDialog(
+                onDismissRequest = { showScooterDateRangePicker = false },
+                confirmButton = {
+                    TextActionButton(
+                        label = "Tanlash",
+                        icon = Icons.Default.Check,
+                        onClick = { showScooterDateRangePicker = false }
+                    )
+                },
+                dismissButton = {
+                    TextActionButton(
+                        label = "Tozalash",
+                        icon = Icons.Default.Clear,
+                        onClick = {
+                            scooterDateRangePickerState.setSelection(null, null)
+                            showScooterDateRangePicker = false
+                        }
+                    )
+                }
+            ) {
+                DateRangePicker(
+                    state = scooterDateRangePickerState,
+                    modifier = Modifier.weight(1f),
+                    title = { Text("Kontrakt boshlanishi bo'yicha filter", modifier = Modifier.padding(16.dp)) },
                     headline = { Text("Davrni tanlang", modifier = Modifier.padding(16.dp)) }
                 )
             }

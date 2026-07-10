@@ -40,11 +40,13 @@ val ClaudeDarkText = Color(0xFFF4ECDB)     // dk-text
 val ClaudeDarkMuted = Color(0xA3F4ECDB)    // dk-muted (rgba .64)
 
 // ── Semantic status colors (for table rows: paid/unpaid) ───────────────────
-// Kept saturated enough to read against cream paper.
-val StatusOk = Color(0xFF255E52)           // teal = paid/active (matches palette)
-val StatusOkBg = Color(0xFFD9E8E2)
-val StatusOverdue = Color(0xFFC14E24)      // terracotta = overdue/unpaid (matches palette)
-val StatusOverdueBg = Color(0xFFF6DCC9)
+// Green / red are explicitly kept for status lines per user request — these
+// colours are a universal convention (paid=green, overdue=red) and stay
+// saturated so they remain readable against the cream paper background.
+val StatusOk = Color(0xFF16A34A)           // green-600 — paid / active / in base
+val StatusOkBg = Color(0xFFDCFCE7)
+val StatusOverdue = Color(0xFFDC2626)      // red-600 — overdue / unpaid / rented
+val StatusOverdueBg = Color(0xFFFEE2E2)
 val StatusReturned = Color(0xFF71624B)     // muted brown = returned
 val StatusReturnedBg = Color(0xFFEFE4CD)
 val StatusInfo = Color(0xFFB8862B)         // gold = info
