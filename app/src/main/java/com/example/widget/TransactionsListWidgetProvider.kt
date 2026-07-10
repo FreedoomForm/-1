@@ -21,27 +21,18 @@ import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 
+/**
+ * Виджет-список транзакций. Только отображение — показывает арендатора,
+ * тип, дату и сумму. Кнопок нет.
+ * Клик по строке или по шапке открывает приложение на вкладке Tranzaksiya.
+ */
 class TransactionsListWidgetProvider : AppWidgetProvider() {
     override fun onUpdate(context: Context, appWidgetManager: AppWidgetManager, appWidgetIds: IntArray) {
         appWidgetIds.forEach { updateWidget(context, appWidgetManager, it) }
     }
-    override fun onReceive(context: Context, intent: Intent) {
-        super.onReceive(context, intent)
-        if (intent.action == ACTION_WIDGET_DELETE) {
-            val txId = intent.getIntExtra(EXTRA_TX_ID, -1)
-            if (txId != -1) {
-                kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.IO).launch {
-                    try {
-                        AppDatabase.getDatabase(context).transactionDao().deleteById(txId)
-                        updateAll(context)
-                    } catch (e: Exception) {}
-                }
-            }
-        }
-    }
+
     companion object {
-        const val ACTION_WIDGET_DELETE = "com.example.widget.ACTION_DELETE_TX"
-        const val EXTRA_TX_ID = "tx_id"
+
         fun updateWidget(context: Context, appWidgetManager: AppWidgetManager, appWidgetId: Int) {
             buildAndShow(context, appWidgetManager, appWidgetId, "—")
             CoroutineScope(Dispatchers.IO).launch {
@@ -62,28 +53,31 @@ class TransactionsListWidgetProvider : AppWidgetProvider() {
                 putExtra(AppWidgetManager.EXTRA_APPWIDGET_ID, appWidgetId)
                 data = android.net.Uri.parse(toUri(Intent.URI_INTENT_SCHEME))
             }
+            val openIntent = Intent(context, MainActivity::class.java).apply {
+                action = Intent.ACTION_MAIN
+                putExtra("open_tab", 3)
+                flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
+            }
             val views = RemoteViews(context.packageName, R.layout.widget_transactions_list).apply {
                 setRemoteAdapter(R.id.widget_list, intent)
                 setEmptyView(R.id.widget_list, R.id.widget_empty)
                 setTextViewText(R.id.widget_count, countText)
-                val openIntent = Intent(context, MainActivity::class.java).apply {
-                    action = Intent.ACTION_MAIN
-                    putExtra("open_tab", 3)
-                    flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
-                }
                 val pendingIntent = PendingIntent.getActivity(
                     context, appWidgetId, openIntent,
                     PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
                 )
                 setOnClickPendingIntent(R.id.widget_root, pendingIntent)
             }
-            val delTemplate = Intent(context, TransactionsListWidgetProvider::class.java).apply { action = ACTION_WIDGET_DELETE }
-            val delPending = PendingIntent.getBroadcast(context, 0, delTemplate,
-                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_MUTABLE)
-            views.setPendingIntentTemplate(R.id.widget_list, delPending)
+            // Template для клика по строке списка — открывает приложение.
+            val templatePendingIntent = PendingIntent.getActivity(
+                context, appWidgetId + 1000, openIntent,
+                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_MUTABLE
+            )
+            views.setPendingIntentTemplate(R.id.widget_list, templatePendingIntent)
             appWidgetManager.updateAppWidget(appWidgetId, views)
             appWidgetManager.notifyAppWidgetViewDataChanged(appWidgetId, R.id.widget_list)
         }
+
         fun updateAll(context: Context) {
             val mgr = AppWidgetManager.getInstance(context)
             val ids = mgr.getAppWidgetIds(ComponentName(context, TransactionsListWidgetProvider::class.java))
@@ -128,11 +122,8 @@ class TransactionsListFactory(private val context: Context) : RemoteViewsService
                     else -> if (isPositive) 0xFF16A34A.toInt() else 0xFFDC2626.toInt()
                 }
             )
-            val delIntent = Intent().apply {
-                action = TransactionsListWidgetProvider.ACTION_WIDGET_DELETE
-                putExtra(TransactionsListWidgetProvider.EXTRA_TX_ID, tx.id)
-            }
-            views.setOnClickFillInIntent(R.id.btn_delete, delIntent)
+            // Клик по строке — открывает приложение (template в провайдере)
+            views.setOnClickFillInIntent(R.id.row_root, Intent())
             views
         } catch (e: Exception) {
             android.util.Log.e("TransactionsWidget", "getViewAt($position) failed", e)

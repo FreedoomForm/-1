@@ -1,6 +1,5 @@
 package com.example.widget
 
-import android.appwidget.AppWidgetManager
 import android.content.Intent
 import android.widget.RemoteViews
 import android.widget.RemoteViewsService
@@ -11,11 +10,9 @@ import kotlinx.coroutines.runBlocking
 
 /**
  * Adapter для виджета-списка арендаторов. Загружает всех арендаторов из БД
- * и для каждого создаёт RemoteViews с именем, телефоном, балансом и 4 кнопками.
- *
- * Кнопки используют fillInIntent — это позволяет передавать разные action и
- * renterId для каждой кнопки в каждой строке. Template intent задаётся в
- * провайдере через setPendingIntentTemplate.
+ * и для каждого создаёт RemoteViews с именем, телефоном, балансом.
+ * Кнопок в строках нет — клик по строке открывает приложение
+ * (через fillInIntent на row_root + template в провайдере).
  */
 class RentersListRemoteViewsService : RemoteViewsService() {
     override fun onGetViewFactory(intent: Intent): RemoteViewsFactory {
@@ -45,14 +42,13 @@ class RentersListFactory(private val context: android.content.Context) : RemoteV
         renters = emptyList()
     }
 
-    override fun getCount(): Int = renters.size + 1  // +1 для заголовка-кнопки фильтра
+    override fun getCount(): Int = renters.size + 1  // +1 для заголовка
 
     override fun getViewAt(position: Int): RemoteViews {
         return try {
             buildViewAt(position)
         } catch (e: Exception) {
             android.util.Log.e("RentersWidget", "getViewAt($position) failed", e)
-            // Возвращаем пустую заглушку, чтобы один битый элемент не ронял весь виджет
             RemoteViews(context.packageName, R.layout.widget_renter_item)
         }
     }
@@ -66,7 +62,6 @@ class RentersListFactory(private val context: android.content.Context) : RemoteV
             views.setTextViewText(R.id.header_total, renters.size.toString())
             views.setTextViewText(R.id.header_active, activeCount.toString())
             views.setTextViewText(R.id.header_overdue, overdueCount.toString())
-            // Совместимость со старой версией (на случай, если кто-то ещё читает header_summary)
             views.setTextViewText(
                 R.id.header_summary,
                 "Jami: ${renters.size}  |  Faol: $activeCount  |  Qarzdor: $overdueCount"
@@ -91,40 +86,13 @@ class RentersListFactory(private val context: android.content.Context) : RemoteV
             else -> 0xFF251E12.toInt()
         }
         views.setTextColor(R.id.renter_balance, balanceColor)
-        // Цветной кружок-индикатор статуса: красный при долге, зелёный иначе
         views.setImageViewResource(
             R.id.renter_status_dot,
             if (renter.balance < 0) R.drawable.widget_dot_overdue else R.drawable.widget_dot_ok
         )
 
-        // fillInIntent для кнопки To'lov.
-        // setClassName не нужен — template PendingIntent уже нацелен на провайдер.
-        val payIntent = Intent().apply {
-            action = RentersListWidgetProvider.ACTION_WIDGET_PAY
-            putExtra(RentersListWidgetProvider.EXTRA_RENTER_ID, renter.id)
-        }
-        views.setOnClickFillInIntent(R.id.btn_pay, payIntent)
-
-        // fillInIntent для кнопки Uzish
-        val termIntent = Intent().apply {
-            action = RentersListWidgetProvider.ACTION_WIDGET_TERMINATE
-            putExtra(RentersListWidgetProvider.EXTRA_RENTER_ID, renter.id)
-        }
-        views.setOnClickFillInIntent(R.id.btn_terminate, termIntent)
-
-        // fillInIntent для кнопки SMS
-        val smsIntent = Intent().apply {
-            action = RentersListWidgetProvider.ACTION_WIDGET_SMS
-            putExtra(RentersListWidgetProvider.EXTRA_RENTER_ID, renter.id)
-        }
-        views.setOnClickFillInIntent(R.id.btn_sms, smsIntent)
-
-        // fillInIntent для кнопки O'chir
-        val delIntent = Intent().apply {
-            action = RentersListWidgetProvider.ACTION_WIDGET_DELETE
-            putExtra(RentersListWidgetProvider.EXTRA_RENTER_ID, renter.id)
-        }
-        views.setOnClickFillInIntent(R.id.btn_delete, delIntent)
+        // Клик по строке — открывает приложение (template в провайдере)
+        views.setOnClickFillInIntent(R.id.row_root, Intent())
 
         return views
     }

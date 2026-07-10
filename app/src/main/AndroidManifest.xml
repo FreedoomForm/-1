@@ -83,16 +83,12 @@
                 android:resource="@xml/appwidget_quick_actions" />
         </receiver>
 
-        <!-- Виджет «Список арендаторов» с кнопками To'lov/Uzish/SMS/O'chir -->
+        <!-- Виджет «Список арендаторов» — только отображение, без кнопок -->
         <receiver
             android:name=".widget.RentersListWidgetProvider"
             android:exported="true">
             <intent-filter>
                 <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
-                <action android:name="com.example.widget.ACTION_PAY" />
-                <action android:name="com.example.widget.ACTION_TERMINATE" />
-                <action android:name="com.example.widget.ACTION_SMS" />
-                <action android:name="com.example.widget.ACTION_DELETE" />
             </intent-filter>
             <meta-data
                 android:name="android.appwidget.provider"
@@ -103,13 +99,12 @@
             android:permission="android.permission.BIND_REMOTEVIEWS"
             android:exported="false" />
 
-        <!-- Виджет «Список скутеров» с кнопкой удаления -->
+        <!-- Виджет «Список скутеров» — только отображение -->
         <receiver
             android:name=".widget.ScootersListWidgetProvider"
             android:exported="true">
             <intent-filter>
                 <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
-                <action android:name="com.example.widget.ACTION_DELETE_SCOOTER" />
             </intent-filter>
             <meta-data
                 android:name="android.appwidget.provider"
@@ -120,13 +115,12 @@
             android:permission="android.permission.BIND_REMOTEVIEWS"
             android:exported="false" />
 
-        <!-- Виджет «Список контрактов» с кнопкой удаления -->
+        <!-- Виджет «Список контрактов» — только отображение -->
         <receiver
             android:name=".widget.ContractsListWidgetProvider"
             android:exported="true">
             <intent-filter>
                 <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
-                <action android:name="com.example.widget.ACTION_DELETE_CONTRACT" />
             </intent-filter>
             <meta-data
                 android:name="android.appwidget.provider"
@@ -137,13 +131,12 @@
             android:permission="android.permission.BIND_REMOTEVIEWS"
             android:exported="false" />
 
-        <!-- Виджет «Список транзакций» с кнопкой удаления -->
+        <!-- Виджет «Список транзакций» — только отображение -->
         <receiver
             android:name=".widget.TransactionsListWidgetProvider"
             android:exported="true">
             <intent-filter>
                 <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
-                <action android:name="com.example.widget.ACTION_DELETE_TX" />
             </intent-filter>
             <meta-data
                 android:name="android.appwidget.provider"

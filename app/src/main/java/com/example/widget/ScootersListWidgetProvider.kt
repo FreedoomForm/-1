@@ -17,7 +17,9 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 
 /**
- * Виджет-список существующих скутеров с кнопкой удаления.
+ * Виджет-список существующих скутеров. Только отображение —
+ * показывает имя и статус (Ijarada / Bazada). Кнопок нет.
+ * Клик по строке или по шапке открывает приложение на вкладке Skuterlar.
  */
 class ScootersListWidgetProvider : AppWidgetProvider() {
 
@@ -25,29 +27,7 @@ class ScootersListWidgetProvider : AppWidgetProvider() {
         appWidgetIds.forEach { updateWidget(context, appWidgetManager, it) }
     }
 
-    override fun onReceive(context: Context, intent: Intent) {
-        super.onReceive(context, intent)
-        if (intent.action == ACTION_WIDGET_DELETE) {
-            val scooterId = intent.getIntExtra(EXTRA_SCOOTER_ID, -1)
-            if (scooterId != -1) {
-                kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.IO).launch {
-                    try {
-                        val db = AppDatabase.getDatabase(context)
-                        db.scooterDao().getAllScootersOnce()
-                            .find { it.id == scooterId }
-                            ?.let { db.scooterDao().deleteScooter(it) }
-                        updateAll(context)
-                    } catch (e: Exception) {
-                        android.util.Log.e("ScootersWidget", "Delete failed", e)
-                    }
-                }
-            }
-        }
-    }
-
     companion object {
-        const val ACTION_WIDGET_DELETE = "com.example.widget.ACTION_DELETE_SCOOTER"
-        const val EXTRA_SCOOTER_ID = "scooter_id"
 
         fun updateWidget(context: Context, appWidgetManager: AppWidgetManager, appWidgetId: Int) {
             buildAndShow(context, appWidgetManager, appWidgetId, "—")
@@ -69,29 +49,27 @@ class ScootersListWidgetProvider : AppWidgetProvider() {
                 putExtra(AppWidgetManager.EXTRA_APPWIDGET_ID, appWidgetId)
                 data = android.net.Uri.parse(toUri(Intent.URI_INTENT_SCHEME))
             }
+            val openIntent = Intent(context, MainActivity::class.java).apply {
+                action = Intent.ACTION_MAIN
+                putExtra("open_tab", 1)
+                flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
+            }
             val views = RemoteViews(context.packageName, R.layout.widget_scooters_list).apply {
                 setRemoteAdapter(R.id.widget_list, intent)
                 setEmptyView(R.id.widget_list, R.id.widget_empty)
                 setTextViewText(R.id.widget_count, countText)
-                val openIntent = Intent(context, MainActivity::class.java).apply {
-                    action = Intent.ACTION_MAIN
-                    putExtra("open_tab", 1)
-                    flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
-                }
                 val pendingIntent = PendingIntent.getActivity(
                     context, appWidgetId, openIntent,
                     PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
                 )
                 setOnClickPendingIntent(R.id.widget_root, pendingIntent)
             }
-            val delTemplateIntent = Intent(context, ScootersListWidgetProvider::class.java).apply {
-                action = ACTION_WIDGET_DELETE
-            }
-            val delPending = PendingIntent.getBroadcast(
-                context, 0, delTemplateIntent,
+            // Template для клика по строке списка — открывает приложение.
+            val templatePendingIntent = PendingIntent.getActivity(
+                context, appWidgetId + 1000, openIntent,
                 PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_MUTABLE
             )
-            views.setPendingIntentTemplate(R.id.widget_list, delPending)
+            views.setPendingIntentTemplate(R.id.widget_list, templatePendingIntent)
             appWidgetManager.updateAppWidget(appWidgetId, views)
             appWidgetManager.notifyAppWidgetViewDataChanged(appWidgetId, R.id.widget_list)
         }
@@ -138,11 +116,8 @@ class ScootersListFactory(private val context: Context) : RemoteViewsService.Rem
                 R.id.scooter_status,
                 if (isRented) 0xFFDC2626.toInt() else 0xFF16A34A.toInt()
             )
-            val delIntent = Intent().apply {
-                action = ScootersListWidgetProvider.ACTION_WIDGET_DELETE
-                putExtra(ScootersListWidgetProvider.EXTRA_SCOOTER_ID, scooter.id)
-            }
-            views.setOnClickFillInIntent(R.id.btn_delete, delIntent)
+            // Клик по строке — открывает приложение (template в провайдере)
+            views.setOnClickFillInIntent(R.id.row_root, Intent())
             views
         } catch (e: Exception) {
             android.util.Log.e("ScootersWidget", "getViewAt($position) failed", e)

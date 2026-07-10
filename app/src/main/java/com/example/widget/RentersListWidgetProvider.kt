@@ -10,22 +10,14 @@ import android.widget.RemoteViews
 import com.example.MainActivity
 import com.example.R
 import com.example.data.AppDatabase
-import com.example.worker.NotificationActionReceiver
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 
 /**
- * Виджет-список существующих арендаторов. Для каждого арендатора показывает:
- *   • Имя, телефон, скутер, баланс (красный если < 0, зелёный если > 0)
- *   • Кнопку «To'lov» — оплачивает одну неделю (через broadcast)
- *   • Кнопку «Uzish» — прерывает контракт (через broadcast)
- *   • Кнопку «SMS» — открывает приложение для ручной отправки SMS
- *   • Кнопку «O'chir» — удаляет арендатора
- *
- * Кнопки «To'lov» и «Uzish» используют те же broadcast actions, что и
- * уведомления (NotificationActionReceiver) — это гарантирует, что логика
- * оплаты и расторжения полностью совпадает с логикой в приложении.
+ * Виджет-список существующих арендаторов. Только отображение —
+ * показывает имя, телефон, скутер и баланс. Кнопок в строках нет.
+ * Клик по строке или по шапке открывает приложение на вкладке Ijarachilar.
  */
 class RentersListWidgetProvider : AppWidgetProvider() {
 
@@ -39,76 +31,10 @@ class RentersListWidgetProvider : AppWidgetProvider() {
         }
     }
 
-    override fun onReceive(context: Context, intent: Intent) {
-        super.onReceive(context, intent)
-        // Обработка нажатий кнопок внутри элементов списка
-        when (intent.action) {
-            ACTION_WIDGET_PAY -> {
-                val renterId = intent.getIntExtra(EXTRA_RENTER_ID, -1)
-                if (renterId != -1) {
-                    // Отправляем broadcast в NotificationActionReceiver —
-                    // используется та же логика, что и в уведомлении.
-                    val payIntent = Intent(context, NotificationActionReceiver::class.java).apply {
-                        action = NotificationActionReceiver.ACTION_PAYMENT_RECEIVED
-                        putExtra(NotificationActionReceiver.EXTRA_RENTER_ID, renterId)
-                    }
-                    context.sendBroadcast(payIntent)
-                    // Обновляем виджет с задержкой 1.5с, чтобы broadcast успел
-                    // обработаться и данные в БД обновились.
-                    android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
-                        updateAll(context)
-                    }, 1500)
-                }
-            }
-            ACTION_WIDGET_TERMINATE -> {
-                val renterId = intent.getIntExtra(EXTRA_RENTER_ID, -1)
-                if (renterId != -1) {
-                    val termIntent = Intent(context, NotificationActionReceiver::class.java).apply {
-                        action = NotificationActionReceiver.ACTION_TERMINATE_CONTRACT
-                        putExtra(NotificationActionReceiver.EXTRA_RENTER_ID, renterId)
-                    }
-                    context.sendBroadcast(termIntent)
-                    android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
-                        updateAll(context)
-                    }, 1500)
-                }
-            }
-            ACTION_WIDGET_SMS -> {
-                val renterId = intent.getIntExtra(EXTRA_RENTER_ID, -1)
-                val openIntent = Intent(context, MainActivity::class.java).apply {
-                    flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
-                    putExtra("widget_action", "send_sms")
-                    putExtra("renter_id", renterId)
-                }
-                context.startActivity(openIntent)
-            }
-            ACTION_WIDGET_DELETE -> {
-                val renterId = intent.getIntExtra(EXTRA_RENTER_ID, -1)
-                if (renterId != -1) {
-                    CoroutineScope(Dispatchers.IO).launch {
-                        try {
-                            val db = AppDatabase.getDatabase(context)
-                            db.renterDao().deleteRenter(renterId)
-                            updateAll(context)
-                        } catch (e: Exception) {
-                            android.util.Log.e("RentersWidget", "Delete failed", e)
-                        }
-                    }
-                }
-            }
-        }
-    }
-
     companion object {
-        const val ACTION_WIDGET_PAY = "com.example.widget.ACTION_PAY"
-        const val ACTION_WIDGET_TERMINATE = "com.example.widget.ACTION_TERMINATE"
-        const val ACTION_WIDGET_SMS = "com.example.widget.ACTION_SMS"
-        const val ACTION_WIDGET_DELETE = "com.example.widget.ACTION_DELETE"
-        const val EXTRA_RENTER_ID = "renter_id"
 
         fun updateWidget(context: Context, appWidgetManager: AppWidgetManager, appWidgetId: Int) {
             // Сразу строим виджет с плейсхолдером, чтобы не блокировать главный поток.
-            // Счётчик и список подтянутся асинхронно — лаунчер не ждёт.
             buildAndShow(context, appWidgetManager, appWidgetId, "— / —")
 
             // Асинхронно подтягиваем счётчик арендаторов и обновляем виджет целиком.
@@ -132,26 +58,26 @@ class RentersListWidgetProvider : AppWidgetProvider() {
                 putExtra(AppWidgetManager.EXTRA_APPWIDGET_ID, appWidgetId)
                 data = android.net.Uri.parse(toUri(Intent.URI_INTENT_SCHEME))
             }
+            val openIntent = Intent(context, MainActivity::class.java).apply {
+                action = Intent.ACTION_MAIN
+                putExtra("open_tab", 0)
+                flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
+            }
             val views = RemoteViews(context.packageName, R.layout.widget_renters_list).apply {
                 setRemoteAdapter(R.id.widget_list, intent)
                 setEmptyView(R.id.widget_list, R.id.widget_empty)
                 setTextViewText(R.id.widget_count, countText)
-                val openIntent = Intent(context, MainActivity::class.java).apply {
-                    action = Intent.ACTION_MAIN
-                    putExtra("open_tab", 0)
-                    flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
-                }
+                // Клик по шапке виджета — открывает приложение
                 val pendingIntent = PendingIntent.getActivity(
                     context, appWidgetId, openIntent,
                     PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
                 )
                 setOnClickPendingIntent(R.id.widget_root, pendingIntent)
             }
-            val templateIntent = Intent(context, RentersListWidgetProvider::class.java).apply {
-                action = ACTION_WIDGET_PAY
-            }
-            val templatePendingIntent = PendingIntent.getBroadcast(
-                context, 0, templateIntent,
+            // Template для клика по строке списка — открывает приложение.
+            // fillInIntent на row_root задаётся в фабрике.
+            val templatePendingIntent = PendingIntent.getActivity(
+                context, appWidgetId + 1000, openIntent,
                 PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_MUTABLE
             )
             views.setPendingIntentTemplate(R.id.widget_list, templatePendingIntent)
