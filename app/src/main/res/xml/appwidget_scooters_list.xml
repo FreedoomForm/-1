@@ -7,7 +7,4 @@
     android:resizeMode="horizontal|vertical"
     android:widgetCategory="home_screen"
     android:previewImage="@drawable/preview_scooters_list"
-    android:previewLayout="@layout/widget_scooters_list"
-    android:targetCellWidth="3"
-    android:targetCellHeight="3"
     android:description="@string/widget_scooters_desc" />

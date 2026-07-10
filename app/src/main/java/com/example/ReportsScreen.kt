@@ -29,9 +29,11 @@ import com.example.data.ContractHistoryEntry
 import com.example.data.Renter
 import com.example.data.Scooter
 import com.example.data.SettingsRepository
+import com.example.data.Transaction
 import com.example.ui.ContractHistoryViewModel
 import com.example.ui.RenterViewModel
 import com.example.ui.ScooterViewModel
+import com.example.ui.TransactionViewModel
 import com.example.ui.components.*
 import com.example.ui.components.UnifiedSearchBar
 import com.example.ui.theme.*
@@ -63,17 +65,16 @@ import java.util.Locale
    ============================================================================ */
 
 enum class ReportWidgetType(val id: String, val title: String) {
+    KPI_CARDS("kpi_cards", "KPI ko'rsatkichlar"),
     NET_PROFIT("net_profit", "Sof foyda"),
     PAYMENT_SUM("payment_sum", "Haftalik to'lovlar"),
-    WEEKLY_TREND("weekly_trend", "Daromad dinamikasi"),
-    EXPECTED_NEXT_MONTH("expected", "Keyingi oy prognozi"),
     ACTIVE_RENTERS_COUNT("active_renters", "Ijarachilar tarkibi"),
-    SCOOTER_STATUS("scooter_status", "Skuterlar holati"),
     SCOOTER_OCCUPANCY("occupancy", "Skuter bandligi"),
     IDLE_HEATMAP("idle_heatmap", "Bo'sh turgan kunlar (heatmap)"),
     ROI("roi", "Biznes salomatligi (radar)"),
-    ARPU_LTV("arpu_ltv", "ARPU va LTV"),
     MRR("mrr", "Oylik takroriy daromad (MRR)"),
+    TRANSACTION_TYPES("tx_types", "Tranzaksiya turlari"),
+    CONTRACT_LIFECYCLE("contract_lifecycle", "Kontrakt hayot aylanishi"),
     PAYMENT_DISCIPLINE("discipline", "To'lov intizomi (voronka)"),
     CONTRACTS_TREND("contracts_trend", "Kontraktlar dinamikasi"),
     OVERDUE_LIST("overdue_list", "Qarzdorlar ro'yxati"),
@@ -86,13 +87,15 @@ enum class ReportWidgetType(val id: String, val title: String) {
 fun ReportsScreen(
     renterViewModel: RenterViewModel = viewModel(),
     scooterViewModel: ScooterViewModel = viewModel(),
-    contractHistoryViewModel: ContractHistoryViewModel = viewModel()
+    contractHistoryViewModel: ContractHistoryViewModel = viewModel(),
+    transactionViewModel: TransactionViewModel = viewModel()
 ) {
     val context = LocalContext.current
 
     val renters by renterViewModel.rentersList.collectAsStateWithLifecycle()
     val scooters by scooterViewModel.scootersList.collectAsStateWithLifecycle()
     val history by contractHistoryViewModel.history.collectAsStateWithLifecycle()
+    val transactions by transactionViewModel.transactions.collectAsStateWithLifecycle()
 
     val settings = remember { SettingsRepository(context) }
     val weeklyPrice = settings.weeklyPrice.let { if (it > 0) it else SettingsRepository.DEFAULT_WEEKLY_PRICE }
@@ -323,6 +326,47 @@ fun ReportsScreen(
             .take(8)
     }
 
+    // ── Типы транзакций (для круговой диаграммы) ──────────────────────
+    val transactionTypeData = remember(transactions) {
+        val grouped = transactions.groupBy { it.type }
+        val pairs = mutableListOf<Pair<String, Float>>()
+        val orderedTypes = listOf(
+            Transaction.TYPE_PAYMENT to "To'lov",
+            Transaction.TYPE_PENALTY to "Jarima",
+            Transaction.TYPE_REPAIR to "Ta'mir",
+            Transaction.TYPE_TERMINATED to "Tugatildi",
+            Transaction.TYPE_RETURNED to "Qaytarildi",
+            Transaction.TYPE_CUSTOM to "Boshqa"
+        )
+        for ((type, label) in orderedTypes) {
+            val sum = grouped[type]?.sumOf { it.amount } ?: 0.0
+            if (sum > 0) pairs.add(label to sum.toFloat())
+        }
+        pairs
+    }
+
+    // ── Жизненный цикл контракта (для воронки) ────────────────────────
+    val contractLifecycleData = remember(history) {
+        val created = history.count { it.type == ContractHistoryEntry.TYPE_CREATED }
+        val payments = history.count { it.type == ContractHistoryEntry.TYPE_PAYMENT }
+        val autoRenewed = history.count { it.type == ContractHistoryEntry.TYPE_AUTO_RENEW }
+        val terminated = history.count {
+            it.type == ContractHistoryEntry.TYPE_TERMINATED || it.type == ContractHistoryEntry.TYPE_RETURNED
+        }
+        listOf(
+            "Yaratildi" to created,
+            "To'lov" to payments,
+            "Yangilandi" to autoRenewed,
+            "Tugatildi" to terminated
+        )
+    }
+
+    // ── Средний недельный чек ─────────────────────────────────────────
+    val avgWeeklyCheck = if (activeRenters > 0) weeklyPrice else 0.0
+
+    // ── Общий долг всех арендаторов ───────────────────────────────────
+    val totalDebt = renters.filter { !it.isReturned && it.balance < 0 }.sumOf { -it.balance }
+
     // ── Дельта для KPI-карточек ───────────────────────────────────────
     val sparkData = weeklyPayments.second
     val profitDelta = revenueDeltaPercent
@@ -460,8 +504,6 @@ fun ReportsScreen(
                         weeklyPaymentsSeries = weeklyPayments.first,
                         sparkData = sparkData,
                         monthlyContractsSeries = monthlyContracts,
-                        arpu = arpu,
-                        ltv = ltv,
                         mrr = mrr,
                         targetMrr = targetMrr,
                         churnRate = churnRate,
@@ -472,7 +514,11 @@ fun ReportsScreen(
                         overdueList = overdueList,
                         heatmapRows = heatmapData.first,
                         heatmapCols = heatmapData.second,
-                        heatmapValues = heatmapData.third
+                        heatmapValues = heatmapData.third,
+                        totalDebt = totalDebt,
+                        avgWeeklyCheck = avgWeeklyCheck,
+                        transactionTypeData = transactionTypeData,
+                        contractLifecycleData = contractLifecycleData
                     )
                 )
             }
@@ -525,12 +571,9 @@ data class ReportWidgetData(
     val monthlyPrice: Double,
     val topRenters: List<Pair<String, Double>>,
     val topScooters: List<Pair<String, Double>>,
-    // ── Новые поля ──
     val weeklyPaymentsSeries: List<Pair<String, Float>>,
     val sparkData: List<Float>,
     val monthlyContractsSeries: List<Pair<String, Float>>,
-    val arpu: Double,
-    val ltv: Double,
     val mrr: Double,
     val targetMrr: Double,
     val churnRate: Int,
@@ -541,7 +584,12 @@ data class ReportWidgetData(
     val overdueList: List<Renter>,
     val heatmapRows: List<String>,
     val heatmapCols: List<String>,
-    val heatmapValues: List<List<Float>>
+    val heatmapValues: List<List<Float>>,
+    // ── Новые поля для перестроенных виджетов ──
+    val totalDebt: Double,
+    val avgWeeklyCheck: Double,
+    val transactionTypeData: List<Pair<String, Float>>,
+    val contractLifecycleData: List<Pair<String, Int>>
 )
 
 @Composable
@@ -594,17 +642,16 @@ private fun ReportWidgetCard(
             }
             Spacer(Modifier.height(12.dp))
             when (type) {
+                ReportWidgetType.KPI_CARDS -> KpiCardsWidget(data)
                 ReportWidgetType.NET_PROFIT -> NetProfitWidget(data)
                 ReportWidgetType.PAYMENT_SUM -> PaymentSumBarChartWidget(data)
-                ReportWidgetType.WEEKLY_TREND -> WeeklyTrendLineWidget(data)
-                ReportWidgetType.EXPECTED_NEXT_MONTH -> ExpectedNextMonthWidget(data)
                 ReportWidgetType.ACTIVE_RENTERS_COUNT -> ActiveRentersDonutWidget(data)
-                ReportWidgetType.SCOOTER_STATUS -> ScooterStatusDonutWidget(data)
                 ReportWidgetType.SCOOTER_OCCUPANCY -> OccupancyRingWidget(data)
                 ReportWidgetType.IDLE_HEATMAP -> IdleHeatmapWidget(data)
                 ReportWidgetType.ROI -> RoiRadarWidget(data)
-                ReportWidgetType.ARPU_LTV -> ArpuLtvWidget(data)
                 ReportWidgetType.MRR -> MrrWidget(data)
+                ReportWidgetType.TRANSACTION_TYPES -> TransactionTypesWidget(data)
+                ReportWidgetType.CONTRACT_LIFECYCLE -> ContractLifecycleWidget(data)
                 ReportWidgetType.PAYMENT_DISCIPLINE -> PaymentDisciplineFunnelWidget(data)
                 ReportWidgetType.CONTRACTS_TREND -> ContractsTrendWidget(data)
                 ReportWidgetType.OVERDUE_LIST -> OverdueTableWidget(data)
@@ -629,9 +676,9 @@ private fun Double.fmtMln(): String {
 /** 1. NET_PROFIT — KPI-карточка с дельтой и спарклайном по неделям. */
 @Composable
 private fun NetProfitWidget(d: ReportWidgetData) {
-    val netProfit = d.totalPayments * 0.70
+    val netProfit = d.totalPayments
     KpiCard(
-        title = "Sof foyda (70% marja)",
+        title = "Sof foyda",
         value = netProfit.toLong().fmtUzs(),
         deltaPercent = d.profitDeltaPercent,
         deltaPositive = d.profitDeltaPercent >= 0,
@@ -670,84 +717,10 @@ private fun PaymentSumBarChartWidget(d: ReportWidgetData) {
     }
 }
 
-/** 3. WEEKLY_TREND — линейный график динамики выручки (8 недель). */
-@Composable
-private fun WeeklyTrendLineWidget(d: ReportWidgetData) {
-    Column {
-        Text(
-            "So'nggi 8 hafta to'lovlar dinamikasi",
-            style = MaterialTheme.typography.bodySmall,
-            color = ClaudeTextSecondary
-        )
-        Spacer(Modifier.height(12.dp))
-        LineChart(
-            data = d.weeklyPaymentsSeries,
-            lineColor = ClaudeTeal,
-            fillColor = ClaudeTeal.copy(alpha = 0.15f),
-            height = 160.dp
-        )
-        Spacer(Modifier.height(8.dp))
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween
-        ) {
-            val minV = d.sparkData.minOrNull() ?: 0f
-            val maxV = d.sparkData.maxOrNull() ?: 0f
-            val avgV = if (d.sparkData.isNotEmpty()) d.sparkData.average().toFloat() else 0f
-            Column {
-                Text("Min", fontSize = 10.sp, color = ClaudeTextSecondary)
-                Text("${minV.toLong()} so'm", fontSize = 11.sp, fontWeight = FontWeight.SemiBold, color = ClaudeText)
-            }
-            Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                Text("O'rtacha", fontSize = 10.sp, color = ClaudeTextSecondary)
-                Text("${avgV.toLong()} so'm", fontSize = 11.sp, fontWeight = FontWeight.SemiBold, color = ClaudeAccent)
-            }
-            Column(horizontalAlignment = Alignment.End) {
-                Text("Max", fontSize = 10.sp, color = ClaudeTextSecondary)
-                Text("${maxV.toLong()} so'm", fontSize = 11.sp, fontWeight = FontWeight.SemiBold, color = StatusOk)
-            }
-        }
-    }
-}
+/** 3. WEEKLY_TREND — удалён (дублировал PAYMENT_SUM). */
 
-/** 4. EXPECTED_NEXT_MONTH — KPI с кольцевым прогресс-баром (ожидание vs. цель). */
-@Composable
-private fun ExpectedNextMonthWidget(d: ReportWidgetData) {
-    val target = (d.totalScooters * d.weeklyPrice * 4).coerceAtLeast(1.0)
-    val ratio = (d.expectedNextMonth / target * 100).toInt().coerceIn(0, 100)
-    Row(
-        modifier = Modifier.fillMaxWidth(),
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        Column(modifier = Modifier.weight(1f)) {
-            Text(
-                d.expectedNextMonth.toLong().fmtUzs(),
-                style = MaterialTheme.typography.headlineMedium,
-                fontWeight = FontWeight.Bold,
-                color = ClaudeGold
-            )
-            Spacer(Modifier.height(4.dp))
-            Text(
-                "${d.activeRenters} faol × ${d.weeklyPrice.toLong()} so'm × 4 hafta",
-                style = MaterialTheme.typography.bodySmall,
-                color = ClaudeTextSecondary
-            )
-            Spacer(Modifier.height(8.dp))
-            Text(
-                "To'liq bandlik maqsadi: ${target.toLong().fmtUzs()}",
-                style = MaterialTheme.typography.labelSmall,
-                color = ClaudeTextSecondary
-            )
-        }
-        Spacer(Modifier.width(16.dp))
-        ProgressRing(
-            percent = ratio,
-            color = ClaudeGold,
-            chartSize = 90.dp,
-            label = "maqsad"
-        )
-    }
-}
+/** 4. EXPECTED_NEXT_MONTH — удалён (дублировал MRR). */
+
 
 /** 5. ACTIVE_RENTERS_COUNT — кольцевая диаграмма (active/overdue/returned). */
 @Composable
@@ -773,40 +746,8 @@ private fun ActiveRentersDonutWidget(d: ReportWidgetData) {
     }
 }
 
-/** 6. SCOOTER_STATUS — кольцевая диаграмма (in base / rented). */
-@Composable
-private fun ScooterStatusDonutWidget(d: ReportWidgetData) {
-    Column {
-        Text(
-            "Skuterlar holati:",
-            style = MaterialTheme.typography.bodySmall,
-            color = ClaudeTextSecondary
-        )
-        Spacer(Modifier.height(12.dp))
-        DonutChart(
-            segments = listOf(
-                "Ijarada" to d.scootersRented,
-                "Bazada" to d.scootersInBase
-            ),
-            colors = listOf(StatusOverdue, StatusOk),
-            centerValue = "${d.totalScooters}",
-            centerLabel = "jami",
-            chartSize = 110.dp
-        )
-        Spacer(Modifier.height(8.dp))
-        // Дополнительная метрика: доход на один скутер
-        Row(
-            modifier = Modifier.fillMaxWidth().padding(top = 4.dp),
-            horizontalArrangement = Arrangement.SpaceBetween
-        ) {
-            Text("Har skuter daromadi:", fontSize = 11.sp, color = ClaudeTextSecondary)
-            Text(
-                d.revenuePerScooter.toLong().fmtUzs(),
-                fontSize = 11.sp, fontWeight = FontWeight.Bold, color = ClaudeAccent
-            )
-        }
-    }
-}
+/** 6. SCOOTER_STATUS — удалён (дублировал OCCUPANCY). */
+
 
 /** 7. OCCUPANCY — кольцевой прогресс + горизонтальный stacked bar. */
 @Composable
@@ -942,29 +883,8 @@ private fun RoiRadarWidget(d: ReportWidgetData) {
     }
 }
 
-/** 10. ARPU_LTV — две KPI-карточки рядом. */
-@Composable
-private fun ArpuLtvWidget(d: ReportWidgetData) {
-    Row(
-        modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.spacedBy(10.dp)
-    ) {
-        KpiCard(
-            title = "ARPU (bir ijarachi)",
-            value = d.arpu.toLong().fmtUzs(),
-            icon = Icons.Default.Person,
-            accentColor = ClaudeAccent,
-            modifier = Modifier.weight(1f)
-        )
-        KpiCard(
-            title = "LTV (8 hafta)",
-            value = d.ltv.toLong().fmtUzs(),
-            icon = Icons.Default.Star,
-            accentColor = ClaudeTeal,
-            modifier = Modifier.weight(1f)
-        )
-    }
-}
+/** 10. ARPU_LTV — удалён по просьбе пользователя. */
+
 
 /** 11. MRR — KPI + прогресс к цели (target = все скутеры в аренде). */
 @Composable
@@ -1174,4 +1094,180 @@ private fun TopScootersWidget(d: ReportWidgetData) {
     }
 }
 
+// ════════════════════════════════════════════════════════════════════════════
+// НОВЫЕ ВИДЖЕТЫ (добавлены при перестройке Otchetlar)
+// ════════════════════════════════════════════════════════════════════════════
+
+/** KPI_CARDS — ряд из 6 ключевых метрик. */
+@Composable
+private fun KpiCardsWidget(d: ReportWidgetData) {
+    Column {
+        Text(
+            "Kalit ko'rsatkichlar:",
+            style = MaterialTheme.typography.bodySmall,
+            color = ClaudeTextSecondary
+        )
+        Spacer(Modifier.height(12.dp))
+        // Ряд 1: Выручка | Долг | Активные аренды
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            KpiCard(
+                title = "Jami daromad",
+                value = d.totalPayments.toLong().fmtUzs(),
+                icon = Icons.Default.AccountBalanceWallet,
+                accentColor = StatusOk,
+                modifier = Modifier.weight(1f)
+            )
+            KpiCard(
+                title = "Jami qarz",
+                value = d.totalDebt.toLong().fmtUzs(),
+                icon = Icons.Default.Warning,
+                accentColor = StatusOverdue,
+                modifier = Modifier.weight(1f)
+            )
+            KpiCard(
+                title = "Faol ijaralar",
+                value = "${d.activeRenters}",
+                icon = Icons.Default.People,
+                accentColor = ClaudeAccent,
+                modifier = Modifier.weight(1f)
+            )
+        }
+        Spacer(Modifier.height(8.dp))
+        // Ряд 2: Просрочено | Свободных скутеров | Средний чек
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            KpiCard(
+                title = "Qarzdorlar",
+                value = "${d.overdueRenters}",
+                icon = Icons.Default.Error,
+                accentColor = StatusOverdue,
+                modifier = Modifier.weight(1f)
+            )
+            KpiCard(
+                title = "Bo'sh skuterlar",
+                value = "${d.scootersInBase}",
+                icon = Icons.Default.DirectionsBike,
+                accentColor = ClaudeGold,
+                modifier = Modifier.weight(1f)
+            )
+            KpiCard(
+                title = "O'rtacha haftalik",
+                value = d.avgWeeklyCheck.toLong().fmtUzs(),
+                icon = Icons.Default.Receipt,
+                accentColor = ClaudeTeal,
+                modifier = Modifier.weight(1f)
+            )
+        }
+    }
+}
+
+/** TRANSACTION_TYPES — круговая диаграмма по типам транзакций. */
+@Composable
+private fun TransactionTypesWidget(d: ReportWidgetData) {
+    Column {
+        Text(
+            "Tranzaksiya turlari bo'yicha tuzilma:",
+            style = MaterialTheme.typography.bodySmall,
+            color = ClaudeTextSecondary
+        )
+        Spacer(Modifier.height(12.dp))
+        if (d.transactionTypeData.isEmpty()) {
+            Box(
+                modifier = Modifier.fillMaxWidth().padding(vertical = 24.dp),
+                contentAlignment = Alignment.Center
+            ) {
+                Text("Hozircha tranzaksiyalar yo'q", color = ClaudeTextSecondary, fontSize = 12.sp)
+            }
+        } else {
+            DonutChart(
+                segments = d.transactionTypeData.map { it.first to it.second.toInt() },
+                colors = listOf(StatusOk, StatusOverdue, ClaudeGold, ClaudeTextSecondary, StatusReturned, ClaudeAccent),
+                centerValue = "${d.transactionTypeData.sumOf { it.second.toLong() }.toLong()}",
+                centerLabel = "jami so'm",
+                chartSize = 130.dp
+            )
+            Spacer(Modifier.height(8.dp))
+            // Легенда с суммами
+            d.transactionTypeData.forEachIndexed { idx, (label, value) ->
+                val color = listOf(StatusOk, StatusOverdue, ClaudeGold, ClaudeTextSecondary, StatusReturned, ClaudeAccent)
+                    .getOrElse(idx) { ClaudeAccent }
+                Row(
+                    modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Box(
+                        modifier = Modifier.size(10.dp).background(color, CircleShape)
+                    )
+                    Spacer(Modifier.width(8.dp))
+                    Text(label, fontSize = 11.sp, color = ClaudeText, modifier = Modifier.weight(1f))
+                    Text(value.toLong().fmtUzs(), fontSize = 11.sp, fontWeight = FontWeight.SemiBold, color = color)
+                }
+            }
+        }
+    }
+}
+
+/** CONTRACT_LIFECYCLE — воронка жизненного цикла контракта. */
+@Composable
+private fun ContractLifecycleWidget(d: ReportWidgetData) {
+    Column {
+        Text(
+            "Kontrakt hayot aylanishi:",
+            style = MaterialTheme.typography.bodySmall,
+            color = ClaudeTextSecondary
+        )
+        Spacer(Modifier.height(4.dp))
+        Text(
+            "Yaratildi → To'lov → Yangilandi → Tugatildi",
+            style = MaterialTheme.typography.labelSmall,
+            color = ClaudeTextSecondary
+        )
+        Spacer(Modifier.height(12.dp))
+        val stages = d.contractLifecycleData
+        if (stages.isEmpty() || stages.all { it.second == 0 }) {
+            Box(
+                modifier = Modifier.fillMaxWidth().padding(vertical = 24.dp),
+                contentAlignment = Alignment.Center
+            ) {
+                Text("Hozircha kontraktlar yo'q", color = ClaudeTextSecondary, fontSize = 12.sp)
+            }
+        } else {
+            FunnelChart(
+                stages = stages,
+                colors = listOf(ClaudeAccent, StatusOk, ClaudeGold, StatusOverdue)
+            )
+            Spacer(Modifier.height(8.dp))
+            // Процент конверсии между этапами
+            val created = d.contractLifecycleData.getOrNull(0)?.second ?: 0
+            val renewed = d.contractLifecycleData.getOrNull(2)?.second ?: 0
+            val terminated = d.contractLifecycleData.getOrNull(3)?.second ?: 0
+            if (created > 0) {
+                val renewRate = (renewed.toDouble() / created * 100).toInt()
+                val churnRate = (terminated.toDouble() / created * 100).toInt()
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Text(
+                        "Yangilash: $renewRate%",
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        color = StatusOk
+                    )
+                    Text(
+                        "Tugatish: $churnRate%",
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        color = StatusOverdue
+                    )
+                }
+            }
+        }
+    }
+}
 

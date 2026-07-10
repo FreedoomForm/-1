@@ -79,7 +79,7 @@ class TransactionsListWidgetProvider : AppWidgetProvider() {
             }
             val delTemplate = Intent(context, TransactionsListWidgetProvider::class.java).apply { action = ACTION_WIDGET_DELETE }
             val delPending = PendingIntent.getBroadcast(context, 0, delTemplate,
-                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_MUTABLE)
+                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_MUTABLE)
             views.setPendingIntentTemplate(R.id.widget_list, delPending)
             appWidgetManager.updateAppWidget(appWidgetId, views)
             appWidgetManager.notifyAppWidgetViewDataChanged(appWidgetId, R.id.widget_list)

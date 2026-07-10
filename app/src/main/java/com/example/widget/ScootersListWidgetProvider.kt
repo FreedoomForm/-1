@@ -89,7 +89,7 @@ class ScootersListWidgetProvider : AppWidgetProvider() {
             }
             val delPending = PendingIntent.getBroadcast(
                 context, 0, delTemplateIntent,
-                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_MUTABLE
+                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_MUTABLE
             )
             views.setPendingIntentTemplate(R.id.widget_list, delPending)
             appWidgetManager.updateAppWidget(appWidgetId, views)

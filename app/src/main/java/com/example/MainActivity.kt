@@ -1237,7 +1237,8 @@ fun MainScreen(
                 ReportsScreen(
                     renterViewModel = viewModel,
                     scooterViewModel = scooterViewModel,
-                    contractHistoryViewModel = contractHistoryViewModel
+                    contractHistoryViewModel = contractHistoryViewModel,
+                    transactionViewModel = transactionViewModel
                 )
             }
         }

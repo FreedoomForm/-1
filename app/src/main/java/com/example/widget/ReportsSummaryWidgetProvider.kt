@@ -98,7 +98,7 @@ class ReportsSummaryWidgetProvider : AppWidgetProvider() {
                     val updatedText = timeFmt.format(Date(now))
 
                     val views = RemoteViews(context.packageName, R.layout.widget_reports_summary).apply {
-                        setTextViewText(R.id.widget_net_profit, formatUzs(paymentsThisMonth * 0.70))
+                        setTextViewText(R.id.widget_net_profit, formatUzs(paymentsThisMonth))
                         setTextViewText(R.id.widget_active_renters, activeRenters.toString())
                         setTextViewText(R.id.widget_overdue, overdueRenters.toString())
                         setTextViewText(R.id.widget_occupancy, "$occupancyPct%")

@@ -7,7 +7,4 @@
     android:resizeMode="horizontal|vertical"
     android:widgetCategory="home_screen"
     android:previewImage="@drawable/preview_reports"
-    android:previewLayout="@layout/widget_reports_summary"
-    android:targetCellWidth="3"
-    android:targetCellHeight="2"
     android:description="@string/widget_reports_desc" />

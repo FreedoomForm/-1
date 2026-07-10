@@ -152,7 +152,7 @@ class RentersListWidgetProvider : AppWidgetProvider() {
             }
             val templatePendingIntent = PendingIntent.getBroadcast(
                 context, 0, templateIntent,
-                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_MUTABLE
+                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_MUTABLE
             )
             views.setPendingIntentTemplate(R.id.widget_list, templatePendingIntent)
             appWidgetManager.updateAppWidget(appWidgetId, views)
