@@ -56,12 +56,25 @@ class UpdateChecker(
             Log.d(TAG, "Current: versionCode=$currentVersionCode, versionName=$currentVersionName")
 
             val apiUrl = "https://api.github.com/repos/$REPO_OWNER/$REPO_NAME/releases/latest"
-            val connection = URL(apiUrl).openConnection()
+            val connection = URL(apiUrl).openConnection() as java.net.HttpURLConnection
             connection.setRequestProperty("Accept", "application/vnd.github.v3+json")
+            // GitHub API требует User-Agent, иначе возвращает 403
+            connection.setRequestProperty("User-Agent", "ScooterRent-App-Update-Checker")
             connection.connectTimeout = 10_000
             connection.readTimeout = 15_000
+            connection.instanceFollowRedirects = true
 
-            val json = connection.getInputStream().bufferedReader().use { it.readText() }
+            val responseCode = connection.responseCode
+            if (responseCode != 200) {
+                val errorBody = connection.errorStream?.bufferedReader()?.use { it.readText() } ?: ""
+                Log.e(TAG, "GitHub API returned HTTP $responseCode: $errorBody")
+                if (responseCode == 403 && errorBody.contains("rate limit", ignoreCase = true)) {
+                    Log.w(TAG, "GitHub API rate limit exceeded — update check skipped")
+                }
+                return@withContext Pair(UpdateCheckResult.ERROR, null)
+            }
+
+            val json = connection.inputStream.bufferedReader().use { it.readText() }
             val release = JSONObject(json)
 
             val tagName = release.optString("tag_name", "").removePrefix("v")
@@ -170,9 +183,12 @@ class UpdateChecker(
                 try { partFile.delete() } catch (_: Exception) {}
             }
 
-            val connection = URL(downloadUrl).openConnection()
+            val connection = URL(downloadUrl).openConnection() as java.net.HttpURLConnection
             connection.connectTimeout = 30_000
             connection.readTimeout = 60_000
+            connection.instanceFollowRedirects = true
+            // User-Agent помогает избежать блокировки со стороны GitHub CDN
+            connection.setRequestProperty("User-Agent", "ScooterRent-App-Update-Checker")
             connection.connect()
 
             val fileSize = connection.contentLength.toLong()

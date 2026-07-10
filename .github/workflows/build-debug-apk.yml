@@ -58,17 +58,16 @@ jobs:
       - name: Prepare .env from example
         run: cp .env.example .env
 
-      - name: Generate debug keystore
+      - name: Verify committed debug keystore exists
         run: |
-          keytool -genkeypair \
-            -keystore debug.keystore \
-            -alias androiddebugkey \
-            -storepass android \
-            -keypass android \
-            -keyalg RSA \
-            -keysize 2048 \
-            -validity 10000 \
-            -dname "CN=Android Debug,O=Android,C=US"
+          if [ ! -f debug.keystore ]; then
+            echo "ERROR: debug.keystore not found in repo!"
+            echo "The keystore must be committed to ensure all CI builds use the same signing key."
+            echo "Without it, in-app updates fail with INSTALL_FAILED_UPDATE_INCOMPATIBLE."
+            exit 1
+          fi
+          echo "debug.keystore found:"
+          keytool -list -keystore debug.keystore -storepass android 2>&1 | head -5
 
       - name: Run unit tests
         if: ${{ github.event_name == 'workflow_dispatch' && inputs.run_tests }}
