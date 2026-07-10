@@ -240,7 +240,8 @@ fun TransactionListScreen(
                 }
             )
 
-            // ── Панель действий — ВСЕГДА ВИДНА (Task 3) ─────────────────
+            // ── Панель действий — ВСЕГДА ВИДНА ──────────────────────────
+            // Кнопка "Yaratish" убрана — её заменяет "+" в верхней панели.
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -248,11 +249,6 @@ fun TransactionListScreen(
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                PrimaryButton(
-                    label = "Yaratish",
-                    icon = Icons.Default.Add,
-                    onClick = { showCreateDialog = true }
-                )
                 SecondaryButton(
                     label = "Tahrirlash",
                     icon = Icons.Default.Edit,
@@ -337,11 +333,11 @@ fun TransactionListScreen(
                                     .background(if (isSelected) ClaudeAccentBg else ClaudeCard)
                                     .combinedClickable(
                                         onClick = {
-                                            if (isSelected) {
-                                                selectedTxs = selectedTxs - tx.id
-                                            } else {
-                                                editingTx = tx
-                                            }
+                                            // Один клик = выбрать/снять выделение.
+                                            // Диалог редактирования открывается ТОЛЬКО
+                                            // кнопкой "Tahrirlash" в панели действий.
+                                            selectedTxs = if (isSelected) selectedTxs - tx.id
+                                            else selectedTxs + tx.id
                                         },
                                         onLongClick = {
                                             selectedTxs = if (isSelected) selectedTxs - tx.id

@@ -279,11 +279,10 @@ fun ContractListScreen(
                 }
             )
 
-            // ── Панель действий — ВСЕГДА ВИДНА (Task 3) ─────────────────
-            // Кнопки Yaratish / Tahrirlash / O'chir всегда присутствуют.
+            // ── Панель действий — ВСЕГДА ВИДНА ──────────────────────────
+            // Кнопка "Yaratish" убрана — её заменяет "+" в верхней панели.
             // Tahrirlash активна только при выборе ровно 1 строки.
             // O'chir активна при выборе ≥1 строки.
-            // Текст "X ta tanlandi" убран.
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -291,11 +290,6 @@ fun ContractListScreen(
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                PrimaryButton(
-                    label = "Yaratish",
-                    icon = Icons.Default.Add,
-                    onClick = { showCreateDialog = true }
-                )
                 SecondaryButton(
                     label = "Tahrirlash",
                     icon = Icons.Default.Edit,
@@ -385,13 +379,14 @@ fun ContractListScreen(
                                     .background(if (isSelected) ClaudeAccentBg else ClaudeCard)
                                     .combinedClickable(
                                         onClick = {
-                                            if (isSelected) {
-                                                selectedContracts = selectedContracts - entry.id
-                                            } else {
-                                                editingContract = entry
-                                            }
+                                            // Один клик = выбрать/снять выделение.
+                                            // Диалог редактирования открывается ТОЛЬКО
+                                            // кнопкой "Tahrirlash" в панели действий.
+                                            selectedContracts = if (isSelected) selectedContracts - entry.id
+                                            else selectedContracts + entry.id
                                         },
                                         onLongClick = {
+                                            // Долгое нажатие — резервный способ выбора.
                                             selectedContracts = if (isSelected) selectedContracts - entry.id
                                             else selectedContracts + entry.id
                                         }
