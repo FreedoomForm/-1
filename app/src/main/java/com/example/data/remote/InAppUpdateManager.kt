@@ -6,6 +6,7 @@ import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
 import android.content.pm.PackageInstaller
+import android.content.pm.PackageManager
 import android.os.Build
 import android.util.Log
 import kotlinx.coroutines.Dispatchers
@@ -121,6 +122,24 @@ class InAppUpdateManager(private val context: Context) {
             // сессию, если уже есть активная с тем же packageName — отсюда
             // и «конфликт папок» при повторной установке.
             abandonAllMySessions()
+
+            // ── Предпроверка: APK versionCode должен быть > текущего ────
+            // Если APK имеет тот же или меньший versionCode, Android откажется
+            // устанавливать его поверх существующего приложения с ошибкой
+            // STATUS_FAILURE / INSTALL_FAILED_VERSION_DOWNGRADE. Проверяем
+            // заранее и показываем понятное сообщение вместо загадочного
+            // «O'rnatish muvaffaqiyatsiz».
+            val installedVersionCode = getInstalledVersionCode()
+            val apkVersionCode = getApkVersionCode(apkFile)
+            Log.d(TAG, "Pre-install check: installed=$installedVersionCode, apk=$apkVersionCode, file=${apkFile.name} (${apkFile.length()} bytes)")
+            if (apkVersionCode != null && installedVersionCode != null && apkVersionCode <= installedVersionCode) {
+                _state.value = InAppUpdateState.Error(
+                    "Yangi versiya topildi, lekin APK fayl versionCode ($apkVersionCode) joriy versiyadan kichik yoki teng ($installedVersionCode). " +
+                    "Iltimos, GitHub'dagi so'nggi release-ni qayta yuklang yoki dasturchi bilan bog'laning."
+                )
+                cleanupQuietly()
+                return
+            }
 
             val packageInstaller = context.packageManager.packageInstaller
             val params = PackageInstaller.SessionParams(
@@ -284,14 +303,14 @@ class InAppUpdateManager(private val context: Context) {
                                         "O'rnatish bloklandi. Sozlamalar → Noma'lum manbalar ruxsatini tekshiring."
                                     PackageInstaller.STATUS_FAILURE_ABORTED ->
                                         "O'rnatish bekor qilindi."
-                                    else -> "O'rnatish muvaffaqiyatsiz: $message"
+                                    else -> "O'rnatish muvaffaqiyatsiz (status=$status): $message. Iltimos ilovani qayta ishga tushiring va qayta urinib ko'ring. Xato kodi logcat'da InAppUpdateManager tegi ostida."
                                 }
                                 _state.value = InAppUpdateState.Error(friendlyMessage)
                                 cleanupQuietly()
                             }
                             else -> {
                                 Log.w(TAG, "Unknown install status: $status")
-                                _state.value = InAppUpdateState.Error("Noma'lum xato: $message")
+                                _state.value = InAppUpdateState.Error("Noma'lum xato (status=$status): $message")
                                 cleanupQuietly()
                             }
                         }
@@ -365,6 +384,66 @@ class InAppUpdateManager(private val context: Context) {
 
     fun reset() {
         _state.value = InAppUpdateState.Idle
+    }
+
+    /**
+     * Возвращает versionCode установленного приложения или null при ошибке.
+     */
+    private fun getInstalledVersionCode(): Int? {
+        return try {
+            val packageInfo = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+                context.packageManager.getPackageInfo(
+                    context.packageName,
+                    PackageManager.PackageInfoFlags.of(0)
+                )
+            } else {
+                @Suppress("DEPRECATION")
+                context.packageManager.getPackageInfo(context.packageName, 0)
+            }
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+                packageInfo.longVersionCode.toInt()
+            } else {
+                @Suppress("DEPRECATION")
+                packageInfo.versionCode
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "Could not get installed versionCode", e)
+            null
+        }
+    }
+
+    /**
+     * Читает versionCode из APK-файла через PackageManager.getPackageArchiveInfo.
+     * Возвращает null, если файл не является валидным APK или чтение не удалось.
+     *
+     * Файл временно делается world-readable, потому что getPackageArchiveInfo
+     * выполняется в системном процессе, которому нужен доступ на чтение к APK.
+     * Файлы в cacheDir по умолчанию приватны — без этого вызов вернёт null.
+     */
+    private fun getApkVersionCode(apkFile: File): Int? {
+        return try {
+            apkFile.setReadable(true, false)
+            val packageInfo = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+                context.packageManager.getPackageArchiveInfo(
+                    apkFile.absolutePath,
+                    PackageManager.PackageInfoFlags.of(0)
+                )
+            } else {
+                @Suppress("DEPRECATION")
+                context.packageManager.getPackageArchiveInfo(apkFile.absolutePath, 0)
+            }
+            val code = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+                packageInfo?.longVersionCode?.toInt()
+            } else {
+                @Suppress("DEPRECATION")
+                packageInfo?.versionCode
+            }
+            Log.d(TAG, "APK versionCode from archive: $code, package: ${packageInfo?.packageName}")
+            code
+        } catch (e: Exception) {
+            Log.w(TAG, "Could not read APK versionCode", e)
+            null
+        }
     }
 
     companion object {

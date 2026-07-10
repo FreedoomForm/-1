@@ -74,6 +74,30 @@ jobs:
         run: ./gradlew testDebugUnitTest --no-daemon --stacktrace
         continue-on-error: true
 
+      # ── Внедрение номера сборки в versionCode/versionName ───────────────
+      # ВАЖНО: этот шаг ДОЛЖЕН выполняться ДО assembleDebug, чтобы собранный
+      # APK реально содержал внедрённый versionCode. Раньше шаг шёл ПОСЛЕ
+      # сборки — APK имел versionCode из build.gradle.kts (106), а тело релиза
+      # заявляло versionCode = run_number → PackageInstaller отказывался
+      # устанавливать APK с тем же/меньшим versionCode поверх существующего
+      # приложения → «O'rnatish muvaffaqiyatsiz».
+      - name: Inject build number into versionName and versionCode
+        id: version
+        if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+        run: |
+          BASE_VERSION=$(grep 'versionName' app/build.gradle.kts | head -1 | sed 's/.*versionName.*=.*"\(.*\)".*/\1/')
+          FULL_VERSION="${BASE_VERSION}.${{ github.run_number }}"
+          echo "Base version: $BASE_VERSION"
+          echo "Full version: $FULL_VERSION"
+          # Update versionName to include build number (e.g. "1.2.106" → "1.2.106.131")
+          sed -i "s/versionName = \"$BASE_VERSION\"/versionName = \"$FULL_VERSION\"/" app/build.gradle.kts
+          # Update versionCode to run_number so Android sees it as a newer build
+          sed -i "s/versionCode = [0-9]*/versionCode = ${{ github.run_number }}/" app/build.gradle.kts
+          echo "version=$FULL_VERSION" >> "$GITHUB_OUTPUT"
+          echo "versionCode=${{ github.run_number }}" >> "$GITHUB_OUTPUT"
+          echo "Updated build.gradle.kts:"
+          grep -E 'versionCode|versionName' app/build.gradle.kts
+
       - name: Assemble debug APK
         run: ./gradlew clean assembleDebug --no-daemon --stacktrace
 
@@ -90,6 +114,31 @@ jobs:
           echo "Found APK: $APK_PATH"
           echo "Size: $(du -h "$APK_PATH" | cut -f1)"
 
+      # ── Проверка: убеждаемся, что APK содержит правильный versionCode ──
+      # Это страховка: если шаг внедрения не сработал, сборка упадёт здесь,
+      # а не молча выложит нерабочий релиз.
+      - name: Verify APK versionCode matches run number
+        if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+        run: |
+          AAPT=$(find $ANDROID_HOME/build-tools -name aapt2 -o -name aapt 2>/dev/null | head -1)
+          if [ -z "$AAPT" ]; then
+            echo "WARNING: aapt not found, skipping versionCode verification"
+            exit 0
+          fi
+          APK="${{ steps.locate_apk.outputs.apk_path }}"
+          APK_VERSION_CODE=$($AAPT dump badging "$APK" 2>/dev/null | grep -E "package:.*versionCode" | sed 's/.*versionCode=\x27([0-9]+)\x27.*/\1/' | head -1)
+          APK_VERSION_NAME=$($AAPT dump badging "$APK" 2>/dev/null | grep -E "package:.*versionName" | sed "s/.*versionName='\([^']*\)'.*/\1/" | head -1)
+          echo "APK versionCode: $APK_VERSION_CODE"
+          echo "APK versionName: $APK_VERSION_NAME"
+          echo "Expected versionCode: ${{ github.run_number }}"
+          if [ "$APK_VERSION_CODE" != "${{ github.run_number }}" ]; then
+            echo "ERROR: APK versionCode ($APK_VERSION_CODE) does not match run number (${{ github.run_number }})!"
+            echo "This means the version injection did not take effect before assembleDebug."
+            echo "In-app updates will fail with 'O\\'rnatish muvaffaqiyatsiz'."
+            exit 1
+          fi
+          echo "OK: APK versionCode matches run number."
+
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
         with:
@@ -97,23 +146,6 @@ jobs:
           path: ${{ steps.locate_apk.outputs.apk_path }}
           if-no-files-found: error
           retention-days: 30
-
-      # ── Авто-обновление: создаём GitHub Release с APK ──
-      - name: Inject build number into versionName and versionCode
-        id: version
-        if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
-        run: |
-          BASE_VERSION=$(grep 'versionName' app/build.gradle.kts | head -1 | sed 's/.*versionName.*=.*"\(.*\)".*/\1/')
-          FULL_VERSION="${BASE_VERSION}.${{ github.run_number }}"
-          echo "Base version: $BASE_VERSION"
-          echo "Full version: $FULL_VERSION"
-          # Update versionName to include build number (e.g. "1.1" → "1.1.67")
-          sed -i "s/versionName = \"$BASE_VERSION\"/versionName = \"$FULL_VERSION\"/" app/build.gradle.kts
-          # Update versionCode to run_number so Android sees it as a newer build
-          sed -i "s/versionCode = [0-9]*/versionCode = ${{ github.run_number }}/" app/build.gradle.kts
-          echo "version=$FULL_VERSION" >> "$GITHUB_OUTPUT"
-          echo "Updated build.gradle.kts:"
-          grep -E 'versionCode|versionName' app/build.gradle.kts
 
       - name: Create GitHub Release with APK
         if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
