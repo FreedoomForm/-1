@@ -43,6 +43,12 @@ class TransactionViewModel(application: Application) : AndroidViewModel(applicat
     private val renterRepo: RenterRepository
     val transactions: StateFlow<List<Transaction>>
 
+    // Кэши StateFlow по renterId / scooterId — чтобы не создавать новый flow
+    // на каждую рекомпозицию (аналогично ContractHistoryViewModel).
+    private val renterTxFlows = mutableMapOf<Int, StateFlow<List<Transaction>>>()
+    private val scooterTxFlows = mutableMapOf<Int, StateFlow<List<Transaction>>>()
+    private val txFlowsLock = Any()
+
     init {
         val db = AppDatabase.getDatabase(application)
         repo = TransactionRepository(db.transactionDao())
@@ -51,6 +57,26 @@ class TransactionViewModel(application: Application) : AndroidViewModel(applicat
             viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList()
         )
     }
+
+    /** Все транзакции конкретного арендатора. */
+    fun transactionsForRenter(renterId: Int): StateFlow<List<Transaction>> =
+        synchronized(txFlowsLock) {
+            renterTxFlows.getOrPut(renterId) {
+                repo.forRenter(renterId).stateIn(
+                    viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList()
+                )
+            }
+        }
+
+    /** Все транзакции конкретного скутера. */
+    fun transactionsForScooter(scooterId: Int): StateFlow<List<Transaction>> =
+        synchronized(txFlowsLock) {
+            scooterTxFlows.getOrPut(scooterId) {
+                repo.forScooter(scooterId).stateIn(
+                    viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList()
+                )
+            }
+        }
 
     /**
      * Создаёт новую транзакцию.
@@ -65,6 +91,7 @@ class TransactionViewModel(application: Application) : AndroidViewModel(applicat
         renterId: Int,
         renterName: String,
         renterPhone: String,
+        scooterId: Int?,
         scooterName: String,
         contractLabel: String,
         type: String,
@@ -92,6 +119,7 @@ class TransactionViewModel(application: Application) : AndroidViewModel(applicat
             val tx = Transaction(
                 contractId = contractId,
                 renterId = renterId,
+                scooterId = scooterId ?: renter?.scooterId,
                 timestamp = timestamp,
                 type = type,
                 amount = amount,

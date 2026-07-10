@@ -52,6 +52,7 @@ data class SmsResult(
 class RenterViewModel(application: Application) : AndroidViewModel(application) {
     private val repository: RenterRepository
     private val historyRepository: com.example.data.ContractHistoryRepository
+    private val transactionRepository: com.example.data.TransactionRepository
     val rentersList: StateFlow<List<Renter>>
 
     private var smsSendCounter = 0
@@ -65,6 +66,7 @@ class RenterViewModel(application: Application) : AndroidViewModel(application) 
         historyRepository = com.example.data.ContractHistoryRepository(
             database.contractHistoryDao()
         )
+        transactionRepository = com.example.data.TransactionRepository(database.transactionDao())
         rentersList = repository.allRenters.stateIn(
             scope = viewModelScope,
             started = SharingStarted.WhileSubscribed(5000),
@@ -629,6 +631,36 @@ class RenterViewModel(application: Application) : AndroidViewModel(application) 
             )
             historyRepository.insert(paymentEntry)
 
+            // ── Запись в таблицу transactions (для страницы «Tranzaksiya») ──
+            // Чтобы оплата отображалась не только в истории контрактов, но и в
+            // общем списке транзакций. Привязка к контракту (contractId) —
+            // к оплаченному контракту, если он есть.
+            val dateFmt = java.text.SimpleDateFormat("dd.MM.yyyy", java.util.Locale.getDefault())
+            val contractLabel = unpaid?.let { e ->
+                val ws = e.weekStart?.let { dateFmt.format(java.util.Date(it)) } ?: ""
+                val we = e.weekEnd?.let { dateFmt.format(java.util.Date(it)) } ?: ""
+                "#${e.id}  $ws → $we"
+            } ?: ""
+            try {
+                transactionRepository.insert(
+                    com.example.data.Transaction(
+                        contractId = unpaid?.id,
+                        renterId = renter.id,
+                        scooterId = renter.scooterId,
+                        timestamp = now,
+                        type = com.example.data.Transaction.TYPE_PAYMENT,
+                        amount = effectivePrice,
+                        notes = notes,
+                        renterName = renter.name,
+                        renterPhone = renter.phoneNumber,
+                        scooterName = renter.scooterName ?: "",
+                        contractLabel = contractLabel
+                    )
+                )
+            } catch (e: Exception) {
+                Log.w("RenterViewModel", "Failed to insert transaction: ${e.message}")
+            }
+
             // Обновляем арендатора: баланс растёт, даты аренды НЕ меняются
             val updated = renter.copy(
                 debtAmount = maxOf(0.0, -newBalance),
@@ -703,7 +735,7 @@ class RenterViewModel(application: Application) : AndroidViewModel(application) 
                 additionalInfo = scooterExtra,
                 isPaid = true
             )
-            historyRepository.insert(newContract)
+            val newContractId = historyRepository.insert(newContract)
 
             // Запись PAYMENT — для истории транзакций
             val paymentEntry = ContractHistoryEntry(
@@ -724,6 +756,34 @@ class RenterViewModel(application: Application) : AndroidViewModel(application) 
             )
             historyRepository.insert(paymentEntry)
 
+            // ── Запись в таблицу transactions (для страницы «Tranzaksiya») ──
+            // Чтобы оплата отображалась не только в истории контрактов, но и в
+            // общем списке транзакций. Привязка к контракту (contractId) — к
+            // только что созданному новому контракту.
+            val dateFmtTx = java.text.SimpleDateFormat("dd.MM.yyyy", java.util.Locale.getDefault())
+            val wsStr = dateFmtTx.format(java.util.Date(weekStart))
+            val weStr = dateFmtTx.format(java.util.Date(weekEnd))
+            val newContractLabel = "#$newContractId  $wsStr → $weStr"
+            try {
+                transactionRepository.insert(
+                    com.example.data.Transaction(
+                        contractId = newContractId.toInt(),
+                        renterId = renter.id,
+                        scooterId = renter.scooterId,
+                        timestamp = now,
+                        type = com.example.data.Transaction.TYPE_PAYMENT,
+                        amount = effectivePrice,
+                        notes = notes,
+                        renterName = renter.name,
+                        renterPhone = renter.phoneNumber,
+                        scooterName = renter.scooterName ?: "",
+                        contractLabel = newContractLabel
+                    )
+                )
+            } catch (e: Exception) {
+                Log.w("RenterViewModel", "Failed to insert transaction: ${e.message}")
+            }
+
             // Обновляем арендатора:
             //   • баланс растёт (предоплата)
             //   • rentStartDateTimestamp = weekStart (новая неделя)
@@ -743,19 +803,104 @@ class RenterViewModel(application: Application) : AndroidViewModel(application) 
         }
     }
 
+    /**
+     * Умное расторжение контракта (кнопка «Uzish»).
+     *
+     * НОВАЯ ЛОГИКА (по просьбе пользователя):
+     *   1. Проверяем, есть ли у арендатора неоплаченный контракт (isPaid=false).
+     *   2. Если есть → оплачиваем ТОЛЬКО ЕГО (одну неделю): помечаем isPaid=true,
+     *      создаём PAYMENT-запись в истории + Transaction в таблице транзакций.
+     *      Баланс при этом НЕ растёт (мы не добавляем новую неделю — мы просто
+     *      закрываем существующий долг).
+     *   3. Если неоплаченных контрактов нет → ничего не делаем с контрактами
+     *      и балансом.
+     *   4. В ОБОИХ случаях переводим арендатора в пассивное состояние
+     *      (isReturned = true), создаём запись TERMINATED в истории контрактов
+     *      и Transaction типа TERMINATED в таблице транзакций.
+     *
+     * Удалено: автоматическое добавление weeklyPrice к балансу при расторжении
+     * (это приводило к завышению баланса и ложным «зелёным» контрактам).
+     */
     private suspend fun applyTermination(renter: Renter, weeklyPrice: Double) {
         val effectivePrice = if (weeklyPrice > 0) weeklyPrice else SettingsRepository.DEFAULT_WEEKLY_PRICE
-        val newBalance = renter.balance + effectivePrice
-        val updated = renter.copy(debtAmount = maxOf(0.0, -newBalance), balance = newBalance,
-            isReturned = true, lastPaymentTimestamp = System.currentTimeMillis(), isOverdueSmsSent = false)
-        repository.update(updated)
+        val now = System.currentTimeMillis()
         val scooter: Scooter? = renter.scooterId?.let { fetchScooterById(it) }
+
+        // ── Шаг 1: проверяем неоплаченный контракт ────────────────────────
+        val unpaid = historyRepository.getEarliestUnpaidContract(renter.id)
+        var paidContractId: Int? = null
+        if (unpaid != null) {
+            // Оплачиваем этот контракт (помечаем isPaid=true)
+            historyRepository.update(unpaid.copy(isPaid = true))
+            paidContractId = unpaid.id
+
+            // Создаём PAYMENT-запись в истории контрактов (как при обычной оплате)
+            val paymentEntry = ContractHistoryEntry(
+                renterId = renter.id, timestamp = now,
+                type = ContractHistoryEntry.TYPE_PAYMENT, amount = effectivePrice,
+                notes = "Tugatish vaqtida to'lov (qarz yopildi)",
+                renterName = renter.name, renterPhone = renter.phoneNumber,
+                scooterName = renter.scooterName,
+                weekStart = unpaid.weekStart, weekEnd = unpaid.weekEnd,
+                weeklyPrice = effectivePrice,
+                passportData = renter.passportData,
+                address = renter.address,
+                pinfl = renter.pinfl,
+                vinNumber = scooter?.vinNumber ?: "",
+                engineNumber = scooter?.engineNumber ?: "",
+                scooterSerialNumber = scooter?.scooterSerialNumber ?: "",
+                batteryId1 = scooter?.batteryId1 ?: "",
+                batteryId2 = scooter?.batteryId2 ?: "",
+                additionalInfo = scooter?.additionalInfo ?: ""
+            )
+            historyRepository.insert(paymentEntry)
+
+            // Transaction в таблице транзакций (чтобы оплата появилась в «Tranzaksiya»)
+            val dateFmt = java.text.SimpleDateFormat("dd.MM.yyyy", java.util.Locale.getDefault())
+            val wsStr = unpaid.weekStart?.let { dateFmt.format(java.util.Date(it)) } ?: ""
+            val weStr = unpaid.weekEnd?.let { dateFmt.format(java.util.Date(it)) } ?: ""
+            val contractLabel = "#${unpaid.id}  $wsStr → $weStr"
+            try {
+                transactionRepository.insert(
+                    com.example.data.Transaction(
+                        contractId = unpaid.id,
+                        renterId = renter.id,
+                        scooterId = renter.scooterId,
+                        timestamp = now,
+                        type = com.example.data.Transaction.TYPE_PAYMENT,
+                        amount = effectivePrice,
+                        notes = "Tugatish vaqtida to'lov",
+                        renterName = renter.name,
+                        renterPhone = renter.phoneNumber,
+                        scooterName = renter.scooterName ?: "",
+                        contractLabel = contractLabel
+                    )
+                )
+            } catch (e: Exception) {
+                Log.w("RenterViewModel", "Failed to insert payment transaction: ${e.message}")
+            }
+        }
+        // Если unpaid == null — ничего с контрактами и балансом не делаем.
+
+        // ── Шаг 2: переводим арендатора в пассивное состояние ─────────────
+        // БАЛАНС НЕ МЕНЯЕТСЯ (раньше здесь было + effectivePrice — это была ошибка).
+        val updated = renter.copy(
+            isReturned = true,
+            lastPaymentTimestamp = now,
+            isOverdueSmsSent = false
+        )
+        repository.update(updated)
+
+        // ── Шаг 3: создаём запись TERMINATED в истории контрактов ──────────
         val entry = ContractHistoryEntry(
-            renterId = renter.id, timestamp = System.currentTimeMillis(),
-            type = ContractHistoryEntry.TYPE_TERMINATED, amount = effectivePrice, notes = "Kontrakt tugatildi",
-            renterName = renter.name, renterPhone = renter.phoneNumber, scooterName = renter.scooterName,
+            renterId = renter.id, timestamp = now,
+            type = ContractHistoryEntry.TYPE_TERMINATED, amount = effectivePrice,
+            notes = if (unpaid != null) "Kontrakt tugatildi (qarz yopildi)"
+                    else "Kontrakt tugatildi",
+            renterName = renter.name, renterPhone = renter.phoneNumber,
+            scooterName = renter.scooterName,
             weekStart = renter.rentStartDateTimestamp,
-            weekEnd = System.currentTimeMillis(),
+            weekEnd = now,
             weeklyPrice = effectivePrice,
             passportData = renter.passportData,
             address = renter.address,
@@ -768,6 +913,27 @@ class RenterViewModel(application: Application) : AndroidViewModel(application) 
             additionalInfo = scooter?.additionalInfo ?: ""
         )
         historyRepository.insert(entry)
+
+        // ── Шаг 4: Transaction TERMINATED в таблице транзакций ─────────────
+        try {
+            transactionRepository.insert(
+                com.example.data.Transaction(
+                    contractId = paidContractId,
+                    renterId = renter.id,
+                    scooterId = renter.scooterId,
+                    timestamp = now,
+                    type = com.example.data.Transaction.TYPE_TERMINATED,
+                    amount = effectivePrice,
+                    notes = "Kontrakt tugatildi",
+                    renterName = renter.name,
+                    renterPhone = renter.phoneNumber,
+                    scooterName = renter.scooterName ?: "",
+                    contractLabel = ""
+                )
+            )
+        } catch (e: Exception) {
+            Log.w("RenterViewModel", "Failed to insert terminated transaction: ${e.message}")
+        }
     }
 
     companion object {

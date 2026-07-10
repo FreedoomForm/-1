@@ -265,6 +265,10 @@ fun MainScreen(
     var searchQuery by remember { mutableStateOf("") }
     var showDateRangePicker by remember { mutableStateOf(false) }
     val dateRangePickerState = rememberDateRangePickerState()
+    // Триггеры для открытия диалога создания на вкладках Kontraktlar / Tranzaksiya.
+    // Увеличиваем значение → экран внутри открывает свой showCreateDialog.
+    var contractCreateTrigger by remember { mutableStateOf(0) }
+    var transactionCreateTrigger by remember { mutableStateOf(0) }
 
     // ── Навигация ────────────────────────────────────────────────────
     var navState by remember { mutableStateOf<NavigationState>(NavigationState.MainView) }
@@ -451,10 +455,36 @@ fun MainScreen(
                     actionIconContentColor = ClaudeText
                 ),
                 actions = {
+                    // ── Кнопка «+» — добавление сущности для текущей вкладки ──
+                    // Перенесена сюда из FAB (по просьбе пользователя — все
+                    // кнопки добавления теперь рядом с настройками вверху).
+                    // На вкладке 0 = добавление арендатора, 1 = добавление
+                    // скутера, 2 = создание контракта, 3 = создание транзакции.
+                    IconButton(
+                        onClick = {
+                            when (currentTab) {
+                                0 -> showAddDialog = true
+                                1 -> showAddScooterDialog = true
+                                2 -> contractCreateTrigger++
+                                3 -> transactionCreateTrigger++
+                            }
+                        },
+                        modifier = Modifier
+                            .padding(end = 8.dp, start = 4.dp)
+                            .size(40.dp)
+                            .background(ClaudeAccent, CircleShape)
+                    ) {
+                        Icon(
+                            Icons.Default.Add,
+                            contentDescription = "Qo'shish",
+                            tint = Color.White,
+                            modifier = Modifier.size(22.dp)
+                        )
+                    }
                     IconButton(
                         onClick = { showSettings = true },
                         modifier = Modifier
-                            .padding(end = 16.dp, start = 4.dp)
+                            .padding(end = 16.dp)
                             .size(40.dp)
                             .background(Color.White, CircleShape)
                             .border(1.dp, ClaudeDivider, CircleShape)
@@ -467,33 +497,6 @@ fun MainScreen(
                     }
                 }
             )
-        },
-        floatingActionButton = {
-            // FAB только на вкладках Арендаторы (0) и Скутеры (1).
-            // Вкладки Kontraktlar (2) и Tranzaksiya (3) имеют свои собственные
-            // FAB внутри соответствующих экранов.
-            if (currentTab == 0 || currentTab == 1) {
-                ExtendedFloatingActionButton(
-                    onClick = {
-                        if (currentTab == 0) showAddDialog = true
-                        else showAddScooterDialog = true
-                    },
-                    containerColor = ClaudeAccent,
-                    contentColor = Color.White,
-                    shape = RoundedCornerShape(18.dp)
-                ) {
-                    Icon(
-                        Icons.Default.Add,
-                        contentDescription = if (currentTab == 0) "Ijarachi qo'shish" else "Skuter qo'shish",
-                        modifier = Modifier.size(24.dp)
-                    )
-                    Spacer(modifier = Modifier.width(8.dp))
-                    Text(
-                        if (currentTab == 0) "Qo'shish" else "Qo'shish",
-                        fontWeight = FontWeight.SemiBold
-                    )
-                }
-            }
         },
         bottomBar = {
             NavigationBar(containerColor = ClaudeCard, contentColor = ClaudeText) {
@@ -1006,7 +1009,8 @@ fun MainScreen(
                 ContractListScreen(
                     contractHistoryViewModel = contractHistoryViewModel,
                     renterViewModel = viewModel,
-                    scooterViewModel = scooterViewModel
+                    scooterViewModel = scooterViewModel,
+                    createTrigger = contractCreateTrigger
                 )
             } else if (currentTab == 3) {
                 // ── Вкладка «Tranzaksiya» — все транзакции ──────────────
@@ -1014,7 +1018,8 @@ fun MainScreen(
                     transactionViewModel = transactionViewModel,
                     renterViewModel = viewModel,
                     scooterViewModel = scooterViewModel,
-                    contractHistoryViewModel = contractHistoryViewModel
+                    contractHistoryViewModel = contractHistoryViewModel,
+                    createTrigger = transactionCreateTrigger
                 )
             }
         }

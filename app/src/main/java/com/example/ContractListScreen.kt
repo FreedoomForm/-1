@@ -77,7 +77,11 @@ import java.util.Locale
 fun ContractListScreen(
     contractHistoryViewModel: ContractHistoryViewModel = viewModel(),
     renterViewModel: RenterViewModel = viewModel(),
-    scooterViewModel: ScooterViewModel = viewModel()
+    scooterViewModel: ScooterViewModel = viewModel(),
+    // Триггер извне: когда MainActivity увеличивает это значение (нажатие «+»
+    // в верхней панели), экран открывает диалог создания контракта. Заменяет
+    // внутренний FAB, который раньше был здесь.
+    createTrigger: Int = 0
 ) {
     val allHistory by contractHistoryViewModel.history.collectAsStateWithLifecycle()
     val allRenters by renterViewModel.rentersList.collectAsStateWithLifecycle()
@@ -85,19 +89,27 @@ fun ContractListScreen(
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
 
-    // Только контракты (CREATED + AUTO_RENEW), отсортированы по weekStart DESC
-    val allContracts = remember(allHistory) {
-        allHistory
-            .filter { it.type == ContractHistoryEntry.TYPE_CREATED || it.type == ContractHistoryEntry.TYPE_AUTO_RENEW }
-            .sortedByDescending { it.weekStart ?: it.timestamp }
-    }
-
     var selectedContracts by remember { mutableStateOf(setOf<Int>()) }
     var searchQuery by remember { mutableStateOf("") }
     var editingContract by remember { mutableStateOf<ContractHistoryEntry?>(null) }
     var showDeleteConfirm by remember { mutableStateOf(false) }
     var showCreateDialog by remember { mutableStateOf(false) }
     var generatingPdfFor by remember { mutableStateOf<Int?>(null) }
+
+    // ── Реакция на внешний триггер создания контракта ─────────────────
+    // Каждый раз, когда createTrigger увеличивается, открываем диалог.
+    // Пропускаем начальное значение 0 — иначе диалог открылся бы при первом
+    // входе на вкладку.
+    LaunchedEffect(createTrigger) {
+        if (createTrigger > 0) showCreateDialog = true
+    }
+
+    // Только контракты (CREATED + AUTO_RENEW), отсортированы по weekStart DESC
+    val allContracts = remember(allHistory) {
+        allHistory
+            .filter { it.type == ContractHistoryEntry.TYPE_CREATED || it.type == ContractHistoryEntry.TYPE_AUTO_RENEW }
+            .sortedByDescending { it.weekStart ?: it.timestamp }
+    }
 
     // ── Filter panel + column visibility ─────────────────────────────────
     var showFilterPanel by remember { mutableStateOf(false) }
@@ -218,35 +230,21 @@ fun ContractListScreen(
     val wPassport = 105.dp
     val wAddress  = 130.dp
     val wPinfl    = 90.dp
-    val wAction   = 50.dp
 
     Scaffold(
         containerColor = ClaudeBackground,
         topBar = {
             TopAppBar(
                 title = {
-                    Text(
-                        "Kontraktlar",
-                        style = MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.Bold)
-                    )
+                    // Большой заголовок «Kontraktlar» удалён по просьбе
+                    // пользователя — он занимал слишком много места. Название
+                    // вкладки и так видно в нижней навигации.
                 },
                 colors = TopAppBarDefaults.topAppBarColors(
                     containerColor = ClaudeCard,
                     titleContentColor = ClaudeText
                 )
             )
-        },
-        floatingActionButton = {
-            ExtendedFloatingActionButton(
-                onClick = { showCreateDialog = true },
-                containerColor = ClaudeAccent,
-                contentColor = Color.White,
-                shape = RoundedCornerShape(18.dp)
-            ) {
-                Icon(Icons.Default.Add, contentDescription = "Yangi kontrakt", modifier = Modifier.size(24.dp))
-                Spacer(Modifier.width(8.dp))
-                Text("Kontrakt", fontWeight = FontWeight.SemiBold)
-            }
         }
     ) { innerPadding ->
         Column(
@@ -343,7 +341,9 @@ fun ContractListScreen(
                     if (showPassport) NonSortableHeaderCellFixed(Icons.Default.CreditCard,         wPassport, "Pasport")
                     if (showAddress)  NonSortableHeaderCellFixed(Icons.Default.Home,               wAddress,  "Manzil")
                     if (showPinfl)    NonSortableHeaderCellFixed(Icons.Default.Fingerprint,        wPinfl,    "JSHSHIR")
-                    NonSortableHeaderCellFixed(Icons.Default.PictureAsPdf, wAction, "PDF")
+                    // Колонка «PDF» удалена — PDF-договор теперь формируется
+                    // только кнопкой в TopAppBar на странице истории контрактов
+                    // арендатора (cheksiz muddatli — на неограниченный срок).
                 }
             }
             HorizontalDivider(color = ClaudeDivider)
@@ -512,51 +512,9 @@ fun ContractListScreen(
                                         maxLines = 1
                                     )
                                 }
-                                // PDF button
-                                Box(
-                                    modifier = Modifier.width(wAction),
-                                    contentAlignment = Alignment.Center
-                                ) {
-                                    if (generatingPdfFor == entry.id) {
-                                        CircularProgressIndicator(
-                                            modifier = Modifier.size(18.dp),
-                                            strokeWidth = 2.dp,
-                                            color = ClaudeAccent
-                                        )
-                                    } else {
-                                        IconButton(
-                                            onClick = {
-                                                generatingPdfFor = entry.id
-                                                scope.launch {
-                                                    val uri = contractHistoryViewModel.generateContractPdf(entry.id)
-                                                    generatingPdfFor = null
-                                                    if (uri != null) {
-                                                        val shareIntent = Intent(Intent.ACTION_VIEW).apply {
-                                                            setDataAndType(uri, "application/pdf")
-                                                            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-                                                        }
-                                                        context.startActivity(Intent.createChooser(shareIntent, "PDF-ni ko'rish"))
-                                                        Toast.makeText(context,
-                                                            "PDF saqlandi: Documents/ScooterContracts/",
-                                                            Toast.LENGTH_LONG).show()
-                                                    } else {
-                                                        Toast.makeText(context,
-                                                            "PDF yaratib bo'lmadi",
-                                                            Toast.LENGTH_SHORT).show()
-                                                    }
-                                                }
-                                            },
-                                            modifier = Modifier.size(28.dp)
-                                        ) {
-                                            Icon(
-                                                Icons.Default.PictureAsPdf,
-                                                contentDescription = "PDF yuklab olish",
-                                                tint = StatusOverdue,
-                                                modifier = Modifier.size(18.dp)
-                                            )
-                                        }
-                                    }
-                                }
+                                // PDF-кнопка строки удалена — PDF-договор теперь
+                                // формируется только кнопкой в TopAppBar на странице
+                                // истории контрактов арендатора (cheksiz muddatli).
                             }
                         }
                     }

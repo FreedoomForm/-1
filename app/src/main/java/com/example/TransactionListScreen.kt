@@ -76,7 +76,11 @@ fun TransactionListScreen(
     transactionViewModel: TransactionViewModel = viewModel(),
     renterViewModel: RenterViewModel = viewModel(),
     scooterViewModel: ScooterViewModel = viewModel(),
-    contractHistoryViewModel: ContractHistoryViewModel = viewModel()
+    contractHistoryViewModel: ContractHistoryViewModel = viewModel(),
+    // Триггер извне: когда MainActivity увеличивает это значение (нажатие «+»
+    // в верхней панели), экран открывает диалог создания транзакции. Заменяет
+    // внутренний FAB, который раньше был здесь.
+    createTrigger: Int = 0
 ) {
     val transactions by transactionViewModel.transactions.collectAsStateWithLifecycle()
     val allRenters by renterViewModel.rentersList.collectAsStateWithLifecycle()
@@ -84,18 +88,25 @@ fun TransactionListScreen(
     val allHistory by contractHistoryViewModel.history.collectAsStateWithLifecycle()
     val context = LocalContext.current
 
+    var selectedTxs by remember { mutableStateOf(setOf<Int>()) }
+    var searchQuery by remember { mutableStateOf("") }
+    var editingTx by remember { mutableStateOf<Transaction?>(null) }
+    var showDeleteConfirm by remember { mutableStateOf(false) }
+    var showCreateDialog by remember { mutableStateOf(false) }
+
+    // ── Реакция на внешний триггер создания транзакции ─────────────────
+    // Каждый раз, когда createTrigger увеличивается, открываем диалог.
+    // Пропускаем начальное значение 0.
+    LaunchedEffect(createTrigger) {
+        if (createTrigger > 0) showCreateDialog = true
+    }
+
     // Все контракты (CREATED + AUTO_RENEW) — для выпадающего списка в диалоге
     val allContracts = remember(allHistory) {
         allHistory
             .filter { it.type == ContractHistoryEntry.TYPE_CREATED || it.type == ContractHistoryEntry.TYPE_AUTO_RENEW }
             .sortedByDescending { it.weekStart ?: it.timestamp }
     }
-
-    var selectedTxs by remember { mutableStateOf(setOf<Int>()) }
-    var searchQuery by remember { mutableStateOf("") }
-    var editingTx by remember { mutableStateOf<Transaction?>(null) }
-    var showDeleteConfirm by remember { mutableStateOf(false) }
-    var showCreateDialog by remember { mutableStateOf(false) }
 
     // ── Filter panel + column visibility ─────────────────────────────────
     var showFilterPanel by remember { mutableStateOf(false) }
@@ -186,28 +197,15 @@ fun TransactionListScreen(
         topBar = {
             TopAppBar(
                 title = {
-                    Text(
-                        "Tranzaksiyalar",
-                        style = MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.Bold)
-                    )
+                    // Большой заголовок «Tranzaksiyalar» удалён по просьбе
+                    // пользователя — он занимал слишком много места. Название
+                    // вкладки и так видно в нижней навигации.
                 },
                 colors = TopAppBarDefaults.topAppBarColors(
                     containerColor = ClaudeCard,
                     titleContentColor = ClaudeText
                 )
             )
-        },
-        floatingActionButton = {
-            ExtendedFloatingActionButton(
-                onClick = { showCreateDialog = true },
-                containerColor = ClaudeAccent,
-                contentColor = Color.White,
-                shape = RoundedCornerShape(18.dp)
-            ) {
-                Icon(Icons.Default.Add, contentDescription = "Yangi tranzaksiya", modifier = Modifier.size(24.dp))
-                Spacer(Modifier.width(8.dp))
-                Text("Tranzaksiya", fontWeight = FontWeight.SemiBold)
-            }
         }
     ) { innerPadding ->
         Column(
@@ -505,12 +503,13 @@ fun TransactionListScreen(
             allRenters = allRenters,
             allScooters = allScooters,
             onDismiss = { showCreateDialog = false },
-            onCreate = { contractId, renterId, rName, rPhone, sName, cLabel, type, amount, timestamp, noteText ->
+            onCreate = { contractId, renterId, rName, rPhone, sId, sName, cLabel, type, amount, timestamp, noteText ->
                 transactionViewModel.createTransaction(
                     contractId = contractId,
                     renterId = renterId,
                     renterName = rName,
                     renterPhone = rPhone,
+                    scooterId = sId,
                     scooterName = sName,
                     contractLabel = cLabel,
                     type = type,
@@ -570,7 +569,7 @@ private fun CreateTransactionDialog(
     onCreate: (
         contractId: Int?, renterId: Int,
         renterName: String, renterPhone: String,
-        scooterName: String, contractLabel: String,
+        scooterId: Int?, scooterName: String, contractLabel: String,
         type: String, amount: Double, timestamp: Long, notes: String?
     ) -> Unit
 ) {
@@ -582,6 +581,7 @@ private fun CreateTransactionDialog(
     var renterId by remember { mutableStateOf(0) }
     var renterName by remember { mutableStateOf("") }
     var renterPhone by remember { mutableStateOf("") }
+    var scooterId by remember { mutableStateOf<Int?>(null) }
     var scooterName by remember { mutableStateOf("") }
     var contractLabel by remember { mutableStateOf("") }
     var type by remember { mutableStateOf(Transaction.TYPE_PAYMENT) }
@@ -591,6 +591,7 @@ private fun CreateTransactionDialog(
 
     var expandedContract by remember { mutableStateOf(false) }
     var expandedRenter by remember { mutableStateOf(false) }
+    var expandedScooter by remember { mutableStateOf(false) }
     var expandedType by remember { mutableStateOf(false) }
     var showDatePicker by remember { mutableStateOf(false) }
     val datePickerState = rememberDatePickerState(initialSelectedDateMillis = timestamp)
@@ -697,6 +698,8 @@ private fun CreateTransactionDialog(
                                     renterName = c.renterName
                                     renterPhone = c.renterPhone
                                     scooterName = c.scooterName ?: ""
+                                    // Пробуем найти скутер в БД по имени — для установки scooterId
+                                    scooterId = allScooters.firstOrNull { it.name == c.scooterName }?.id
                                     expandedContract = false
                                 }
                             )
@@ -737,6 +740,7 @@ private fun CreateTransactionDialog(
                                     renterPhone = r.phoneNumber
                                     if (scooterName.isBlank() && r.scooterName != null) {
                                         scooterName = r.scooterName
+                                        scooterId = r.scooterId
                                     }
                                     expandedRenter = false
                                 }
@@ -753,13 +757,42 @@ private fun CreateTransactionDialog(
                     shape = RoundedCornerShape(8.dp)
                 )
 
-                OutlinedTextField(
-                    value = scooterName,
-                    onValueChange = { scooterName = it },
-                    label = { Text("Skuter nomi (ixtiyoriy)") },
-                    modifier = Modifier.fillMaxWidth(),
-                    shape = RoundedCornerShape(8.dp)
-                )
+                // ── Skuter (с выпадающим списком) ─────────────────────────
+                ExposedDropdownMenuBox(
+                    expanded = expandedScooter,
+                    onExpandedChange = { expandedScooter = !expandedScooter }
+                ) {
+                    OutlinedTextField(
+                        value = scooterName,
+                        onValueChange = {
+                            scooterName = it
+                            // При ручном вводе сбрасываем scooterId, т.к. он
+                            // может не соответствовать введённому имени.
+                            scooterId = null
+                        },
+                        label = { Text("Skuter nomi (ixtiyoriy)") },
+                        trailingIcon = {
+                            ExposedDropdownMenuDefaults.TrailingIcon(expanded = expandedScooter)
+                        },
+                        modifier = Modifier.menuAnchor().fillMaxWidth(),
+                        shape = RoundedCornerShape(8.dp)
+                    )
+                    ExposedDropdownMenu(
+                        expanded = expandedScooter,
+                        onDismissRequest = { expandedScooter = false }
+                    ) {
+                        allScooters.take(50).forEach { s ->
+                            DropdownMenuItem(
+                                text = { Text(s.name) },
+                                onClick = {
+                                    scooterId = s.id
+                                    scooterName = s.name
+                                    expandedScooter = false
+                                }
+                            )
+                        }
+                    }
+                }
 
                 HorizontalDivider(color = ClaudeDivider)
 
@@ -843,7 +876,7 @@ private fun CreateTransactionDialog(
                     val parsedAmount = amount.toDoubleOrNull() ?: 0.0
                     onCreate(
                         contractId, renterId, renterName, renterPhone,
-                        scooterName, contractLabel,
+                        scooterId, scooterName, contractLabel,
                         type, parsedAmount, timestamp,
                         notes.ifBlank { null }
                     )
@@ -882,6 +915,7 @@ private fun EditTransactionDialog(
     var renterId by remember { mutableStateOf(tx.renterId) }
     var renterName by remember { mutableStateOf(tx.renterName) }
     var renterPhone by remember { mutableStateOf(tx.renterPhone) }
+    var scooterId by remember { mutableStateOf(tx.scooterId) }
     var scooterName by remember { mutableStateOf(tx.scooterName) }
     var contractLabel by remember { mutableStateOf(tx.contractLabel) }
     var type by remember { mutableStateOf(tx.type) }
@@ -891,6 +925,7 @@ private fun EditTransactionDialog(
 
     var expandedContract by remember { mutableStateOf(false) }
     var expandedRenter by remember { mutableStateOf(false) }
+    var expandedScooter by remember { mutableStateOf(false) }
     var expandedType by remember { mutableStateOf(false) }
     var showDatePicker by remember { mutableStateOf(false) }
     val datePickerState = rememberDatePickerState(initialSelectedDateMillis = timestamp)
@@ -990,6 +1025,7 @@ private fun EditTransactionDialog(
                                     renterName = c.renterName
                                     renterPhone = c.renterPhone
                                     scooterName = c.scooterName ?: ""
+                                    scooterId = allScooters.firstOrNull { it.name == c.scooterName }?.id
                                     expandedContract = false
                                 }
                             )
@@ -1042,13 +1078,41 @@ private fun EditTransactionDialog(
                     shape = RoundedCornerShape(8.dp)
                 )
 
-                OutlinedTextField(
-                    value = scooterName,
-                    onValueChange = { scooterName = it },
-                    label = { Text("Skuter nomi") },
-                    modifier = Modifier.fillMaxWidth(),
-                    shape = RoundedCornerShape(8.dp)
-                )
+                // ── Skuter (с выпадающим списком) ─────────────────────────
+                ExposedDropdownMenuBox(
+                    expanded = expandedScooter,
+                    onExpandedChange = { expandedScooter = !expandedScooter }
+                ) {
+                    OutlinedTextField(
+                        value = scooterName,
+                        onValueChange = {
+                            scooterName = it
+                            // При ручном вводе сбрасываем scooterId
+                            scooterId = null
+                        },
+                        label = { Text("Skuter nomi") },
+                        trailingIcon = {
+                            ExposedDropdownMenuDefaults.TrailingIcon(expanded = expandedScooter)
+                        },
+                        modifier = Modifier.menuAnchor().fillMaxWidth(),
+                        shape = RoundedCornerShape(8.dp)
+                    )
+                    ExposedDropdownMenu(
+                        expanded = expandedScooter,
+                        onDismissRequest = { expandedScooter = false }
+                    ) {
+                        allScooters.take(50).forEach { s ->
+                            DropdownMenuItem(
+                                text = { Text(s.name) },
+                                onClick = {
+                                    scooterId = s.id
+                                    scooterName = s.name
+                                    expandedScooter = false
+                                }
+                            )
+                        }
+                    }
+                }
 
                 HorizontalDivider(color = ClaudeDivider)
 
@@ -1130,6 +1194,7 @@ private fun EditTransactionDialog(
                         renterId = renterId,
                         renterName = renterName,
                         renterPhone = renterPhone,
+                        scooterId = scooterId,
                         scooterName = scooterName,
                         contractLabel = contractLabel,
                         type = type,

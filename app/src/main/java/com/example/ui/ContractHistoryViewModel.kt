@@ -260,6 +260,32 @@ class ContractHistoryViewModel(application: Application) : AndroidViewModel(appl
         }
     }
 
+    /**
+     * Генерирует PDF-договор с НЕОГРАНИЧЕННЫМ сроком действия для данного
+     * арендатора. Используется кнопкой PDF на странице истории контрактов
+     * арендатора (рядом с карточкой информации об арендаторе).
+     *
+     * В отличие от [generateContractPdf], этот PDF не привязан к конкретной
+     * записи контракта — он формируется из актуальных данных арендатора и
+     * его скутера. В тексте договора прямо указано, что он действует на
+     * неограниченный срок до момента, когда арендатор решит его расторгнуть.
+     *
+     * @param renterId ID арендатора
+     * @return Uri на созданный PDF-файл, или null при ошибке
+     */
+    suspend fun generateUnlimitedContractPdf(renterId: Int): Uri? = withContext(Dispatchers.IO) {
+        try {
+            val renter = renterRepo.getById(renterId) ?: return@withContext null
+            val scooter: Scooter? = renter.scooterId?.let {
+                AppDatabase.getDatabase(getApplication()).scooterDao().getScooterById(it)
+            }
+            PdfContractGenerator.generateUnlimited(getApplication(), renter, scooter)
+        } catch (e: Exception) {
+            Log.e(TAG, "Unlimited PDF generation failed", e)
+            null
+        }
+    }
+
     companion object {
         private const val TAG = "ContractHistoryVM"
     }

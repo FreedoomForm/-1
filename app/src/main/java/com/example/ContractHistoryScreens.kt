@@ -40,6 +40,7 @@ import com.example.data.Scooter
 import com.example.data.SettingsRepository
 import com.example.ui.ContractHistoryViewModel
 import com.example.ui.ScooterViewModel
+import com.example.ui.TransactionViewModel
 import com.example.ui.components.UnifiedSearchBar
 import com.example.ui.components.FilterSidePanel
 import com.example.ui.components.FilterColumn
@@ -75,7 +76,8 @@ fun RenterContractHistoryScreen(
     onEditRenter: () -> Unit,
     contractHistoryViewModel: ContractHistoryViewModel = viewModel(),
     renterViewModel: com.example.ui.RenterViewModel = viewModel(),
-    scooterViewModel: ScooterViewModel = viewModel()
+    scooterViewModel: ScooterViewModel = viewModel(),
+    transactionViewModel: TransactionViewModel = viewModel()
 ) {
     // Только контракты (CREATED + AUTO_RENEW) — отсортированы ASC по weekStart.
     // PAYMENT/TERMINATED/RETURNED — транзакции, не показываются на этом экране.
@@ -88,12 +90,16 @@ fun RenterContractHistoryScreen(
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
 
+    // ── Toggle: 0 = Контракты, 1 = Транзакции ──────────────────────────
+    var selectedTab by remember { mutableStateOf(0) }
+
     var selectedContracts by remember { mutableStateOf(setOf<Int>()) }
     var searchQuery by remember { mutableStateOf("") }
     var editingContract by remember { mutableStateOf<ContractHistoryEntry?>(null) }
     var showDeleteConfirm by remember { mutableStateOf(false) }
     var showCreateDialog by remember { mutableStateOf(false) }
     var generatingPdfFor by remember { mutableStateOf<Int?>(null) }
+    var generatingUnlimitedPdf by remember { mutableStateOf(false) }
 
     val dateFmt = remember { SimpleDateFormat("dd.MM.yyyy", Locale.getDefault()) }
 
@@ -133,6 +139,50 @@ fun RenterContractHistoryScreen(
                     }
                 },
                 actions = {
+                    // ── PDF: договор с НЕОГРАНИЧЕННЫМ сроком действия ──────
+                    // Эта кнопка — единственная, которая остаётся для PDF-договора
+                    // арендатора. Она формирует PDF, в котором прямо указано, что
+                    // договор действует на неограниченный срок, пока арендатор не
+                    // решит его расторгнуть. Все остальные PDF-кнопки (на странице
+                    // «Kontraktlar» и в истории контрактов скутера) удалены.
+                    IconButton(
+                        onClick = {
+                            generatingUnlimitedPdf = true
+                            scope.launch {
+                                val uri = contractHistoryViewModel.generateUnlimitedContractPdf(renter.id)
+                                generatingUnlimitedPdf = false
+                                if (uri != null) {
+                                    val shareIntent = Intent(Intent.ACTION_VIEW).apply {
+                                        setDataAndType(uri, "application/pdf")
+                                        addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                                    }
+                                    context.startActivity(Intent.createChooser(shareIntent, "PDF-ni ko'rish"))
+                                    Toast.makeText(
+                                        context,
+                                        "PDF saqlandi: Documents/ScooterContracts/",
+                                        Toast.LENGTH_LONG
+                                    ).show()
+                                } else {
+                                    Toast.makeText(context, "PDF yaratib bo'lmadi", Toast.LENGTH_SHORT).show()
+                                }
+                            }
+                        },
+                        enabled = !generatingUnlimitedPdf
+                    ) {
+                        if (generatingUnlimitedPdf) {
+                            CircularProgressIndicator(
+                                modifier = Modifier.size(20.dp),
+                                strokeWidth = 2.dp,
+                                color = ClaudeAccent
+                            )
+                        } else {
+                            Icon(
+                                Icons.Default.PictureAsPdf,
+                                contentDescription = "Cheksiz muddatli kontrakt PDF",
+                                tint = StatusOverdue
+                            )
+                        }
+                    }
                     IconButton(onClick = onEditRenter) {
                         Icon(Icons.Default.Edit, contentDescription = "Mijozni tahrirlash")
                     }
@@ -184,20 +234,45 @@ fun RenterContractHistoryScreen(
                 }
             }
 
+            // ── Переключатель «Контракты» / «Транзакции» ────────────────
+            // Две кнопки над таблицей. Активная — залита акцентным цветом.
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp, vertical = 4.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                ToggleTabButton(
+                    label = "Kontraktlar",
+                    icon = Icons.Default.Description,
+                    isSelected = selectedTab == 0,
+                    onClick = { selectedTab = 0 }
+                )
+                ToggleTabButton(
+                    label = "Tranzaksiyalar",
+                    icon = Icons.Default.Payments,
+                    isSelected = selectedTab == 1,
+                    onClick = { selectedTab = 1 }
+                )
+            }
+
             // ── Unified search ───────────────────────────────────────
             UnifiedSearchBar(
                 query = searchQuery,
                 onQueryChange = { searchQuery = it },
-                placeholder = "Kontrakt qidirish...",
+                placeholder = if (selectedTab == 0) "Kontrakt qidirish..."
+                               else "Tranzaksiya qidirish...",
                 onCalendarClick = null,
                 onFilterClick = null
             )
 
-            // ── Панель действий — ВСЕГДА ВИДНА (Task 3) ────────────────────
-            // Кнопки Yaratish / Tahrirlash / O'chir всегда присутствуют.
-            // Yaratish всегда активна. Tahrirlash активна только когда выбран
-            // ровно 1 контракт. O'chir активна когда выбрано ≥1. Текст
-            // "X ta tanlandi" убран по просьбе пользователя.
+            if (selectedTab == 0) {
+                // ── ВКЛАДКА «КОНТРАКТЫ» ─────────────────────────────────────
+                // ── Панель действий — ВСЕГДА ВИДНА (Task 3) ────────────────────
+                // Кнопки Yaratish / Tahrirlash / O'chir всегда присутствуют.
+                // Yaratish всегда активна. Tahrirlash активна только когда выбран
+                // ровно 1 контракт. O'chir активна когда выбрано ≥1. Текст
+                // "X ta tanlandi" убран по просьбе пользователя.
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -230,6 +305,8 @@ fun RenterContractHistoryScreen(
             }
 
             // ── Заголовок таблицы — только иконки ──────────────────────
+            // Колонка «Amal» (PDF-кнопка) удалена — PDF-договор теперь
+            // формируется одной кнопкой в TopAppBar экрана (cheksiz muddatli).
             Surface(
                 color = ClaudeCard,
                 modifier = Modifier.fillMaxWidth(),
@@ -242,9 +319,8 @@ fun RenterContractHistoryScreen(
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     NonSortableHeaderCell(Icons.Default.Numbers,   0.4f, "#")
-                    NonSortableHeaderCell(Icons.Default.DateRange, 1.6f, "Muddat (hafta)")
-                    NonSortableHeaderCell(Icons.Default.Payments,  0.9f, "Summa")
-                    NonSortableHeaderCell(Icons.Default.Build,     0.7f, "Amal")
+                    NonSortableHeaderCell(Icons.Default.DateRange, 1.8f, "Muddat (hafta)")
+                    NonSortableHeaderCell(Icons.Default.Payments,  1.0f, "Summa")
                 }
             }
             HorizontalDivider(color = ClaudeDivider)
@@ -310,7 +386,7 @@ fun RenterContractHistoryScreen(
                                 maxLines = 1
                             )
                             // Muddat (weekStart → weekEnd) + статус-метка
-                            Column(modifier = Modifier.weight(1.6f)) {
+                            Column(modifier = Modifier.weight(1.8f)) {
                                 Text(
                                     text = buildString {
                                         entry.weekStart?.let { append(dateFmt.format(Date(it))) }
@@ -351,61 +427,28 @@ fun RenterContractHistoryScreen(
                             // Summa
                             Text(
                                 "${entry.amount.toLong()}",
-                                modifier = Modifier.weight(0.9f),
+                                modifier = Modifier.weight(1.0f),
                                 style = MaterialTheme.typography.labelMedium,
                                 color = if (entry.isPaid) StatusOk else StatusOverdue,
                                 fontWeight = FontWeight.Bold,
                                 textAlign = TextAlign.End,
                                 maxLines = 1
                             )
-                            // Amal: PDF download
-                            Row(
-                                modifier = Modifier.weight(0.7f),
-                                horizontalArrangement = Arrangement.End
-                            ) {
-                                if (generatingPdfFor == entry.id) {
-                                    CircularProgressIndicator(
-                                        modifier = Modifier.size(18.dp),
-                                        strokeWidth = 2.dp,
-                                        color = ClaudeAccent
-                                    )
-                                } else {
-                                    IconButton(
-                                        onClick = {
-                                            generatingPdfFor = entry.id
-                                            scope.launch {
-                                                val uri = contractHistoryViewModel.generateContractPdf(entry.id)
-                                                generatingPdfFor = null
-                                                if (uri != null) {
-                                                    val shareIntent = Intent(Intent.ACTION_VIEW).apply {
-                                                        setDataAndType(uri, "application/pdf")
-                                                        addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-                                                    }
-                                                    context.startActivity(Intent.createChooser(shareIntent, "PDF-ni ko'rish"))
-                                                    Toast.makeText(context,
-                                                        "PDF saqlandi: Documents/ScooterContracts/",
-                                                        Toast.LENGTH_LONG).show()
-                                                } else {
-                                                    Toast.makeText(context,
-                                                        "PDF yaratib bo'lmadi",
-                                                        Toast.LENGTH_SHORT).show()
-                                                }
-                                            }
-                                        },
-                                        modifier = Modifier.size(28.dp)
-                                    ) {
-                                        Icon(
-                                            Icons.Default.PictureAsPdf,
-                                            contentDescription = "PDF yuklab olish",
-                                            tint = StatusOverdue,
-                                            modifier = Modifier.size(18.dp)
-                                        )
-                                    }
-                                }
-                            }
+                            // PDF-кнопка строки удалена — теперь PDF-договор
+                            // формируется одной кнопкой в TopAppBar (cheksiz
+                            // muddatli — на неограниченный срок).
                         }
                     }
                 }
+            }
+            } else {
+                // ── ВКЛАДКА «ТРАНЗАКЦИИ» ─────────────────────────────────────
+                RenterTransactionListSection(
+                    renter = renter,
+                    allScooters = allScooters,
+                    transactionViewModel = transactionViewModel,
+                    contractHistoryViewModel = contractHistoryViewModel
+                )
             }
         }
     }
@@ -1410,11 +1453,15 @@ fun ScooterContractHistoryScreen(
     renters: List<Renter>,
     onBack: () -> Unit,
     onEditScooter: () -> Unit,
-    contractHistoryViewModel: ContractHistoryViewModel = viewModel()
+    contractHistoryViewModel: ContractHistoryViewModel = viewModel(),
+    transactionViewModel: TransactionViewModel = viewModel()
 ) {
     val contracts by contractHistoryViewModel.forScooter(scooter.name).collectAsStateWithLifecycle()
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
+
+    // ── Toggle: 0 = Контракты, 1 = Транзакции ──────────────────────────
+    var selectedTab by remember { mutableStateOf(0) }
 
     var generatingPdfFor by remember { mutableStateOf<Int?>(null) }
     var searchQuery by remember { mutableStateOf("") }
@@ -1525,15 +1572,38 @@ fun ScooterContractHistoryScreen(
 
             Spacer(Modifier.height(8.dp))
 
+            // ── Переключатель «Контракты» / «Транзакции» ────────────────
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp, vertical = 4.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                ToggleTabButton(
+                    label = "Kontraktlar",
+                    icon = Icons.Default.Description,
+                    isSelected = selectedTab == 0,
+                    onClick = { selectedTab = 0 }
+                )
+                ToggleTabButton(
+                    label = "Tranzaksiyalar",
+                    icon = Icons.Default.Payments,
+                    isSelected = selectedTab == 1,
+                    onClick = { selectedTab = 1 }
+                )
+            }
+
             // ── Unified search bar ────────────────────────────────────
             UnifiedSearchBar(
                 query = searchQuery,
                 onQueryChange = { searchQuery = it },
-                placeholder = "Kontrakt qidirish...",
+                placeholder = if (selectedTab == 0) "Kontrakt qidirish..."
+                               else "Tranzaksiya qidirish...",
                 onCalendarClick = null,
                 onFilterClick = null
             )
 
+            if (selectedTab == 0) {
             Text(
                 "Kontraktlar tarixi",
                 modifier = Modifier.padding(horizontal = 16.dp),
@@ -1629,52 +1699,80 @@ fun ScooterContractHistoryScreen(
                                         color = if (entry.type == ContractHistoryEntry.TYPE_PAYMENT) StatusOk else ClaudeText,
                                         fontWeight = FontWeight.Bold
                                     )
-                                    if (generatingPdfFor == entry.id) {
-                                        CircularProgressIndicator(
-                                            modifier = Modifier.size(18.dp).padding(top = 4.dp),
-                                            strokeWidth = 2.dp,
-                                            color = ClaudeAccent
-                                        )
-                                    } else {
-                                        UnifiedButton(
-                                            label = "PDF",
-                                            icon = Icons.Default.PictureAsPdf,
-                                            variant = UnifiedButtonVariant.DANGER_OUTLINED,
-                                            height = 32,
-                                            onClick = {
-                                                generatingPdfFor = entry.id
-                                                scope.launch {
-                                                    val uri = contractHistoryViewModel.generateContractPdf(entry.id)
-                                                    generatingPdfFor = null
-                                                    if (uri != null) {
-                                                        val shareIntent = Intent(Intent.ACTION_VIEW).apply {
-                                                            setDataAndType(uri, "application/pdf")
-                                                            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-                                                        }
-                                                        context.startActivity(Intent.createChooser(shareIntent, "PDF-ni ko'rish"))
-                                                        Toast.makeText(context,
-                                                            "PDF saqlandi: Documents/ScooterContracts/",
-                                                            Toast.LENGTH_LONG).show()
-                                                    } else {
-                                                        Toast.makeText(context,
-                                                            "PDF yaratib bo'lmadi",
-                                                            Toast.LENGTH_SHORT).show()
-                                                    }
-                                                }
-                                            }
-                                        )
-                                    }
+                                    // PDF-кнопка удалена — PDF-договор теперь
+                                    // формируется только кнопкой в TopAppBar на
+                                    // странице истории контрактов арендатора
+                                    // (cheksiz muddatli — на неограниченный срок).
                                 }
                             }
                         }
                     }
                 }
             }
+            } else {
+                // ── ВКЛАДКА «ТРАНЗАКЦИИ» ─────────────────────────────────────
+                ScooterTransactionListSection(
+                    scooter = scooter,
+                    renters = renters,
+                    transactionViewModel = transactionViewModel,
+                    contractHistoryViewModel = contractHistoryViewModel
+                )
+            }
         }
     }
 }
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
+
+/**
+ * Кнопка-переключатель вкладок «Контракты» / «Транзакции».
+ *
+ * Активная кнопка [isSelected] залита акцентным цветом (ClaudeAccent) и
+ * содержит белый текст/иконку. Неактивная — прозрачный фон, серый текст.
+ * Ширина — weight(1f), чтобы две кнопки поровну делили Row.
+ *
+ * Расширение RowScope — это даёт доступ к `Modifier.weight(1f)`.
+ */
+@Composable
+internal fun RowScope.ToggleTabButton(
+    label: String,
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    isSelected: Boolean,
+    onClick: () -> Unit
+) {
+    Surface(
+        modifier = Modifier
+            .weight(1f)
+            .height(44.dp)
+            .clickable(onClick = onClick),
+        shape = RoundedCornerShape(10.dp),
+        color = if (isSelected) ClaudeAccent else ClaudeCard,
+        border = BorderStroke(
+            1.dp,
+            if (isSelected) ClaudeAccent else ClaudeDivider
+        )
+    ) {
+        Row(
+            modifier = Modifier.fillMaxSize(),
+            horizontalArrangement = Arrangement.Center,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Icon(
+                imageVector = icon,
+                contentDescription = null,
+                tint = if (isSelected) Color.White else ClaudeTextSecondary,
+                modifier = Modifier.size(18.dp)
+            )
+            Spacer(Modifier.width(6.dp))
+            Text(
+                label,
+                style = MaterialTheme.typography.labelLarge,
+                color = if (isSelected) Color.White else ClaudeTextSecondary,
+                fontWeight = FontWeight.SemiBold
+            )
+        }
+    }
+}
 
 internal fun contractTypeLabel(t: String): String = when (t) {
     ContractHistoryEntry.TYPE_CREATED    -> "Yaratildi"

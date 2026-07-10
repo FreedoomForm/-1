@@ -31,6 +31,9 @@ data class Transaction(
     val contractId: Int? = null,
     /** Связанный арендатор (для быстрого JOIN'а и фильтрации). */
     val renterId: Int,
+    /** Связанный скутер (для быстрого JOIN'а и фильтрации). Может быть null,
+     *  если транзакция не привязана к конкретному скутеру. */
+    val scooterId: Int? = null,
     val timestamp: Long = System.currentTimeMillis(),
     /** TYPE_PAYMENT / TYPE_TERMINATED / TYPE_RETURNED / TYPE_PENALTY /
      *  TYPE_REPAIR / TYPE_CUSTOM. */
