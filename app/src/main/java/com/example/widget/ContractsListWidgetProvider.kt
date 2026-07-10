@@ -113,20 +113,25 @@ class ContractsListFactory(private val context: Context) : RemoteViewsService.Re
     override fun onDestroy() { contracts = emptyList() }
     override fun getCount(): Int = contracts.size
     override fun getViewAt(position: Int): RemoteViews {
-        val c = contracts[position]
-        val views = RemoteViews(context.packageName, R.layout.widget_contract_item)
-        views.setTextViewText(R.id.contract_renter, c.renterName)
-        views.setTextViewText(R.id.contract_scooter, c.scooterName ?: "—")
-        val dates = "${c.weekStart?.let { dateFmt.format(Date(it)) } ?: "—"} → ${c.weekEnd?.let { dateFmt.format(Date(it)) } ?: "—"}"
-        views.setTextViewText(R.id.contract_dates, dates)
-        views.setTextViewText(R.id.contract_amount, "${c.amount.toLong()} UZS")
-        views.setTextColor(R.id.contract_amount, if (c.isPaid) 0xFF16A34A.toInt() else 0xFFDC2626.toInt())
-        val delIntent = Intent().apply {
-            action = ContractsListWidgetProvider.ACTION_WIDGET_DELETE
-            putExtra(ContractsListWidgetProvider.EXTRA_CONTRACT_ID, c.id)
+        return try {
+            val c = contracts[position]
+            val views = RemoteViews(context.packageName, R.layout.widget_contract_item)
+            views.setTextViewText(R.id.contract_renter, c.renterName)
+            views.setTextViewText(R.id.contract_scooter, c.scooterName ?: "—")
+            val dates = "${c.weekStart?.let { dateFmt.format(Date(it)) } ?: "—"} → ${c.weekEnd?.let { dateFmt.format(Date(it)) } ?: "—"}"
+            views.setTextViewText(R.id.contract_dates, dates)
+            views.setTextViewText(R.id.contract_amount, "${c.amount.toLong()} UZS")
+            views.setTextColor(R.id.contract_amount, if (c.isPaid) 0xFF16A34A.toInt() else 0xFFDC2626.toInt())
+            val delIntent = Intent().apply {
+                action = ContractsListWidgetProvider.ACTION_WIDGET_DELETE
+                putExtra(ContractsListWidgetProvider.EXTRA_CONTRACT_ID, c.id)
+            }
+            views.setOnClickFillInIntent(R.id.btn_delete, delIntent)
+            views
+        } catch (e: Exception) {
+            android.util.Log.e("ContractsWidget", "getViewAt($position) failed", e)
+            RemoteViews(context.packageName, R.layout.widget_contract_item)
         }
-        views.setOnClickFillInIntent(R.id.btn_delete, delIntent)
-        return views
     }
     override fun getLoadingView(): RemoteViews? = null
     override fun getViewTypeCount(): Int = 1

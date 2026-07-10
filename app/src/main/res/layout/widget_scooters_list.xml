@@ -32,7 +32,7 @@
             <FrameLayout
                 android:layout_width="28dp"
                 android:layout_height="28dp"
-                android:background="@drawable/widget_accent_scooters"
+                android:background="@drawable/widget_icon_scooters"
                 android:layout_marginEnd="10dp">
                 <TextView
                     android:layout_width="wrap_content"

@@ -7,4 +7,17 @@
     <color name="teal_700">#FF018786</color>
     <color name="black">#FF000000</color>
     <color name="white">#FFFFFFFF</color>
+
+    <!-- ── Цвета нативных виджетов ─────────────────────────────────── -->
+    <!-- Вынесены в colors.xml чтобы backgroundTint работал надёжно во   -->
+    <!-- всех лаунчерах (сырые hex-значения в layout XML поддерживаются  -->
+    <!-- не везде).                                                       -->
+    <color name="widget_green">#FF16A34A</color>
+    <color name="widget_red">#FFDC2626</color>
+    <color name="widget_terracotta">#FFC14E24</color>
+    <color name="widget_gold">#FFB8862B</color>
+    <color name="widget_brown">#FF71624B</color>
+    <color name="widget_teal">#FF255E52</color>
+    <color name="widget_dark">#FF251E12</color>
+    <color name="widget_paper">#FFFFFCF3</color>
 </resources>

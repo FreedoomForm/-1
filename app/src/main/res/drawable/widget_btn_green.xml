@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Фон для кнопок виджета — зелёный (#16A34A).
+  Используется для кнопки «To'lov» в строке арендатора.
+  Простой rectangle с small radius — безопасен для RemoteViews.
+-->
+<shape xmlns:android="http://schemas.android.com/apk/res/android"
+    android:shape="rectangle">
+    <solid android:color="#16A34A" />
+    <corners android:radius="4dp" />
+</shape>

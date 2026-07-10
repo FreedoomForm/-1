@@ -112,27 +112,32 @@ class TransactionsListFactory(private val context: Context) : RemoteViewsService
     override fun onDestroy() { txs = emptyList() }
     override fun getCount(): Int = txs.size
     override fun getViewAt(position: Int): RemoteViews {
-        val tx = txs[position]
-        val views = RemoteViews(context.packageName, R.layout.widget_transaction_item)
-        views.setTextViewText(R.id.tx_renter, tx.renterName)
-        views.setTextViewText(R.id.tx_type, TransactionViewModel.typeLabel(tx.type))
-        views.setTextViewText(R.id.tx_date, dateFmt.format(Date(tx.timestamp)))
-        val isPositive = TransactionViewModel.typeIsPositive(tx.type)
-        val sign = if (isPositive) "+" else "−"
-        views.setTextViewText(R.id.tx_amount, "$sign${tx.amount.toLong()}")
-        views.setTextColor(
-            R.id.tx_amount,
-            when (tx.type) {
-                Transaction.TYPE_CUSTOM -> 0xFF71624B.toInt()
-                else -> if (isPositive) 0xFF16A34A.toInt() else 0xFFDC2626.toInt()
+        return try {
+            val tx = txs[position]
+            val views = RemoteViews(context.packageName, R.layout.widget_transaction_item)
+            views.setTextViewText(R.id.tx_renter, tx.renterName)
+            views.setTextViewText(R.id.tx_type, TransactionViewModel.typeLabel(tx.type))
+            views.setTextViewText(R.id.tx_date, dateFmt.format(Date(tx.timestamp)))
+            val isPositive = TransactionViewModel.typeIsPositive(tx.type)
+            val sign = if (isPositive) "+" else "−"
+            views.setTextViewText(R.id.tx_amount, "$sign${tx.amount.toLong()}")
+            views.setTextColor(
+                R.id.tx_amount,
+                when (tx.type) {
+                    Transaction.TYPE_CUSTOM -> 0xFF71624B.toInt()
+                    else -> if (isPositive) 0xFF16A34A.toInt() else 0xFFDC2626.toInt()
+                }
+            )
+            val delIntent = Intent().apply {
+                action = TransactionsListWidgetProvider.ACTION_WIDGET_DELETE
+                putExtra(TransactionsListWidgetProvider.EXTRA_TX_ID, tx.id)
             }
-        )
-        val delIntent = Intent().apply {
-            action = TransactionsListWidgetProvider.ACTION_WIDGET_DELETE
-            putExtra(TransactionsListWidgetProvider.EXTRA_TX_ID, tx.id)
+            views.setOnClickFillInIntent(R.id.btn_delete, delIntent)
+            views
+        } catch (e: Exception) {
+            android.util.Log.e("TransactionsWidget", "getViewAt($position) failed", e)
+            RemoteViews(context.packageName, R.layout.widget_transaction_item)
         }
-        views.setOnClickFillInIntent(R.id.btn_delete, delIntent)
-        return views
     }
     override fun getLoadingView(): RemoteViews? = null
     override fun getViewTypeCount(): Int = 1

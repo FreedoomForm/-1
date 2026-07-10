@@ -41,6 +41,11 @@ class ReportsSummaryWidgetProvider : AppWidgetProvider() {
 
     companion object {
         fun updateWidget(context: Context, appWidgetManager: AppWidgetManager, appWidgetId: Int) {
+            // Немедленно показываем плейсхолдер, чтобы лаунчер не считал виджет
+            // «не загруженным» — иначе при медленном старте корутины виджет может
+            // показать «Failed to load widget».
+            showPlaceholder(context, appWidgetManager, appWidgetId)
+
             CoroutineScope(Dispatchers.IO).launch {
                 try {
                     val db = AppDatabase.getDatabase(context)
@@ -49,7 +54,12 @@ class ReportsSummaryWidgetProvider : AppWidgetProvider() {
                     val history = db.contractHistoryDao().getAllOnce()
 
                     val now = System.currentTimeMillis()
-                    val monthAgo = now - 30L * 24 * 60 * 60 * 1000
+                    val dayMs = 24L * 60 * 60 * 1000
+                    val monthMs = 30L * dayMs
+                    val monthAgo = now - monthMs
+                    val twoMonthsAgo = now - 2 * monthMs
+
+                    // Платежи за текущий месяц (monthAgo..now)
                     val paymentsThisMonth = history
                         .filter { it.type == ContractHistoryEntry.TYPE_PAYMENT && it.timestamp >= monthAgo }
                         .sumOf { it.amount }
@@ -72,16 +82,17 @@ class ReportsSummaryWidgetProvider : AppWidgetProvider() {
                     val totalInvestment = scooters.size * scooterPriceUsd * usdRate
                     val roiMultiple = if (totalInvestment > 0) paymentsThisMonth / totalInvestment else 0.0
 
-                    // Сравнение с предыдущим месяцем — для индикатора роста/падения
-                    val twoMonthsAgo = now - 60L * 24 * 60 * 60 * 1000
-                    val paymentsPrevMonth = history
+                    // Сравнение текущего месяца с предыдущим — для индикатора роста/падения.
+                    // paymentsPrevMonth = платежи за ПРЕДЫДУЩИЙ месяц (twoMonthsAgo..monthAgo)
+                    // paymentsThisMonthSum = платежи за ТЕКУЩИЙ месяц (monthAgo..now)
+                    val paymentsThisMonthSum = history
                         .filter { it.type == ContractHistoryEntry.TYPE_PAYMENT && it.timestamp in monthAgo..now }
                         .sumOf { it.amount }
-                    val paymentsPrevPrev = history
+                    val paymentsPrevMonth = history
                         .filter { it.type == ContractHistoryEntry.TYPE_PAYMENT && it.timestamp in twoMonthsAgo..monthAgo }
                         .sumOf { it.amount }
-                    val trendArrow = if (paymentsPrevMonth >= paymentsPrevPrev) "▲" else "▼"
-                    val trendColor = if (paymentsPrevMonth >= paymentsPrevPrev) "#FF16A34A" else "#FFDC2626"
+                    val trendArrow = if (paymentsThisMonthSum >= paymentsPrevMonth) "▲" else "▼"
+                    val trendColor = if (paymentsThisMonthSum >= paymentsPrevMonth) "#FF16A34A" else "#FFDC2626"
 
                     val timeFmt = SimpleDateFormat("HH:mm", Locale.getDefault())
                     val updatedText = timeFmt.format(Date(now))
@@ -113,6 +124,43 @@ class ReportsSummaryWidgetProvider : AppWidgetProvider() {
                 } catch (e: Exception) {
                     android.util.Log.e("ReportsWidget", "Update failed", e)
                 }
+            }
+        }
+
+        /**
+         * Немедленно показывает плейсхолдер с «—» во всех полях.
+         * Гарантирует, что лаунчер получит RemoteViews сразу при onUpdate —
+         * иначе при медленном старте корутины виджет может показать
+         * «Failed to load widget».
+         */
+        private fun showPlaceholder(
+            context: Context,
+            appWidgetManager: AppWidgetManager,
+            appWidgetId: Int
+        ) {
+            try {
+                val views = RemoteViews(context.packageName, R.layout.widget_reports_summary).apply {
+                    setTextViewText(R.id.widget_net_profit, "—")
+                    setTextViewText(R.id.widget_active_renters, "—")
+                    setTextViewText(R.id.widget_overdue, "—")
+                    setTextViewText(R.id.widget_occupancy, "—")
+                    setTextViewText(R.id.widget_roi, "—")
+                    setTextViewText(R.id.widget_trend, "·")
+                    setTextViewText(R.id.widget_updated, "…")
+                }
+                val openIntent = Intent(context, MainActivity::class.java).apply {
+                    action = Intent.ACTION_MAIN
+                    putExtra("open_tab", 4)
+                    flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
+                }
+                val pendingIntent = PendingIntent.getActivity(
+                    context, appWidgetId, openIntent,
+                    PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+                )
+                views.setOnClickPendingIntent(R.id.widget_root, pendingIntent)
+                appWidgetManager.updateAppWidget(appWidgetId, views)
+            } catch (e: Exception) {
+                android.util.Log.e("ReportsWidget", "Placeholder failed", e)
             }
         }
 

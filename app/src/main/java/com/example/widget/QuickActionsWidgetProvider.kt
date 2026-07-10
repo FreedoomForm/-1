@@ -34,26 +34,29 @@ class QuickActionsWidgetProvider : AppWidgetProvider() {
 
     companion object {
         fun updateWidget(context: Context, appWidgetManager: AppWidgetManager, appWidgetId: Int) {
+            // Используем appWidgetId * 10 + offset для уникальных requestCode,
+            // чтобы PendingIntents разных виджетов не коллизировали.
+            val base = appWidgetId * 10
             val views = RemoteViews(context.packageName, R.layout.widget_quick_actions).apply {
                 // Кнопка "Создать арендатора"
                 setOnClickPendingIntent(
                     R.id.btn_create_renter,
-                    buildPendingIntent(context, appWidgetId, "create_renter")
+                    buildPendingIntent(context, base, "create_renter")
                 )
                 // Кнопка "Создать скутер"
                 setOnClickPendingIntent(
                     R.id.btn_create_scooter,
-                    buildPendingIntent(context, appWidgetId + 1, "create_scooter")
+                    buildPendingIntent(context, base + 1, "create_scooter")
                 )
                 // Кнопка "Создать контракт"
                 setOnClickPendingIntent(
                     R.id.btn_create_contract,
-                    buildPendingIntent(context, appWidgetId + 2, "create_contract")
+                    buildPendingIntent(context, base + 2, "create_contract")
                 )
                 // Кнопка "Создать транзакцию"
                 setOnClickPendingIntent(
                     R.id.btn_create_transaction,
-                    buildPendingIntent(context, appWidgetId + 3, "create_transaction")
+                    buildPendingIntent(context, base + 3, "create_transaction")
                 )
             }
             appWidgetManager.updateAppWidget(appWidgetId, views)

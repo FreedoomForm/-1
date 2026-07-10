@@ -48,6 +48,16 @@ class RentersListFactory(private val context: android.content.Context) : RemoteV
     override fun getCount(): Int = renters.size + 1  // +1 для заголовка-кнопки фильтра
 
     override fun getViewAt(position: Int): RemoteViews {
+        return try {
+            buildViewAt(position)
+        } catch (e: Exception) {
+            android.util.Log.e("RentersWidget", "getViewAt($position) failed", e)
+            // Возвращаем пустую заглушку, чтобы один битый элемент не ронял весь виджет
+            RemoteViews(context.packageName, R.layout.widget_renter_item)
+        }
+    }
+
+    private fun buildViewAt(position: Int): RemoteViews {
         if (position == 0) {
             // Заголовок-сводка
             val views = RemoteViews(context.packageName, R.layout.widget_renters_header)
@@ -87,11 +97,11 @@ class RentersListFactory(private val context: android.content.Context) : RemoteV
             if (renter.balance < 0) R.drawable.widget_dot_overdue else R.drawable.widget_dot_ok
         )
 
-        // fillInIntent для кнопки To'lov
+        // fillInIntent для кнопки To'lov.
+        // setClassName не нужен — template PendingIntent уже нацелен на провайдер.
         val payIntent = Intent().apply {
             action = RentersListWidgetProvider.ACTION_WIDGET_PAY
             putExtra(RentersListWidgetProvider.EXTRA_RENTER_ID, renter.id)
-            setClassName(context, RentersListWidgetProvider::class.java.name)
         }
         views.setOnClickFillInIntent(R.id.btn_pay, payIntent)
 
@@ -99,7 +109,6 @@ class RentersListFactory(private val context: android.content.Context) : RemoteV
         val termIntent = Intent().apply {
             action = RentersListWidgetProvider.ACTION_WIDGET_TERMINATE
             putExtra(RentersListWidgetProvider.EXTRA_RENTER_ID, renter.id)
-            setClassName(context, RentersListWidgetProvider::class.java.name)
         }
         views.setOnClickFillInIntent(R.id.btn_terminate, termIntent)
 
@@ -107,7 +116,6 @@ class RentersListFactory(private val context: android.content.Context) : RemoteV
         val smsIntent = Intent().apply {
             action = RentersListWidgetProvider.ACTION_WIDGET_SMS
             putExtra(RentersListWidgetProvider.EXTRA_RENTER_ID, renter.id)
-            setClassName(context, RentersListWidgetProvider::class.java.name)
         }
         views.setOnClickFillInIntent(R.id.btn_sms, smsIntent)
 
@@ -115,7 +123,6 @@ class RentersListFactory(private val context: android.content.Context) : RemoteV
         val delIntent = Intent().apply {
             action = RentersListWidgetProvider.ACTION_WIDGET_DELETE
             putExtra(RentersListWidgetProvider.EXTRA_RENTER_ID, renter.id)
-            setClassName(context, RentersListWidgetProvider::class.java.name)
         }
         views.setOnClickFillInIntent(R.id.btn_delete, delIntent)
 

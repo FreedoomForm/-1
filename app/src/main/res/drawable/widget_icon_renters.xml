@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Квадратный значок-«плашка» для шапки виджета «Ijarachilar».
+  Полностью закруглённые углы (4dp) — безопасен для RemoteViews.
+  Используется только как фон 28dp FrameLayout в шапке, НЕ для полосы-маркера.
+-->
+<shape xmlns:android="http://schemas.android.com/apk/res/android"
+    android:shape="rectangle">
+    <solid android:color="#16A34A" />
+    <corners android:radius="6dp" />
+</shape>

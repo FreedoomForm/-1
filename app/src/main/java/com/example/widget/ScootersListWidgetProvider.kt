@@ -125,24 +125,29 @@ class ScootersListFactory(private val context: Context) : RemoteViewsService.Rem
     override fun onDestroy() { scooters = emptyList() }
     override fun getCount(): Int = scooters.size
     override fun getViewAt(position: Int): RemoteViews {
-        val scooter = scooters[position]
-        val views = RemoteViews(context.packageName, R.layout.widget_scooter_item)
-        views.setTextViewText(R.id.scooter_name, scooter.name)
-        val isRented = renters.any { it.scooterId == scooter.id && !it.isReturned }
-        views.setTextViewText(
-            R.id.scooter_status,
-            if (isRented) "Ijarada" else "Bazada"
-        )
-        views.setTextColor(
-            R.id.scooter_status,
-            if (isRented) 0xFFDC2626.toInt() else 0xFF16A34A.toInt()
-        )
-        val delIntent = Intent().apply {
-            action = ScootersListWidgetProvider.ACTION_WIDGET_DELETE
-            putExtra(ScootersListWidgetProvider.EXTRA_SCOOTER_ID, scooter.id)
+        return try {
+            val scooter = scooters[position]
+            val views = RemoteViews(context.packageName, R.layout.widget_scooter_item)
+            views.setTextViewText(R.id.scooter_name, scooter.name)
+            val isRented = renters.any { it.scooterId == scooter.id && !it.isReturned }
+            views.setTextViewText(
+                R.id.scooter_status,
+                if (isRented) "Ijarada" else "Bazada"
+            )
+            views.setTextColor(
+                R.id.scooter_status,
+                if (isRented) 0xFFDC2626.toInt() else 0xFF16A34A.toInt()
+            )
+            val delIntent = Intent().apply {
+                action = ScootersListWidgetProvider.ACTION_WIDGET_DELETE
+                putExtra(ScootersListWidgetProvider.EXTRA_SCOOTER_ID, scooter.id)
+            }
+            views.setOnClickFillInIntent(R.id.btn_delete, delIntent)
+            views
+        } catch (e: Exception) {
+            android.util.Log.e("ScootersWidget", "getViewAt($position) failed", e)
+            RemoteViews(context.packageName, R.layout.widget_scooter_item)
         }
-        views.setOnClickFillInIntent(R.id.btn_delete, delIntent)
-        return views
     }
     override fun getLoadingView(): RemoteViews? = null
     override fun getViewTypeCount(): Int = 1

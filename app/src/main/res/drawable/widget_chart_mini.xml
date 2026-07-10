@@ -1,11 +1,13 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
-  Миниатюрная иконка-гистограмма для шапки виджета «Отчёты».
-  Простой rectangle с закруглёнными углами — безопасен для RemoteViews.
+  Миниатюрная иконка-гистограмма для шапки виджета «Otchetlar».
+  Простой белый прямоугольник с закруглёнными углами — безопасен для RemoteViews.
+  Внутри цветного кружка-плашки выглядит как «полоска графика».
 -->
 <shape xmlns:android="http://schemas.android.com/apk/res/android"
     android:shape="rectangle">
     <solid android:color="#FFFFFF" />
-    <corners android:radius="2dp" />
-    <size android:width="16dp" android:height="16dp" />
+    <corners
+        android:topLeftRadius="2dp"
+        android:topRightRadius="2dp" />
 </shape>

@@ -10,13 +10,10 @@ import android.widget.RemoteViews
 import com.example.MainActivity
 import com.example.R
 import com.example.data.AppDatabase
-import com.example.data.Renter
-import com.example.data.SettingsRepository
 import com.example.worker.NotificationActionReceiver
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
 
 /**
  * Виджет-список существующих арендаторов. Для каждого арендатора показывает:
@@ -56,12 +53,11 @@ class RentersListWidgetProvider : AppWidgetProvider() {
                         putExtra(NotificationActionReceiver.EXTRA_RENTER_ID, renterId)
                     }
                     context.sendBroadcast(payIntent)
-                    // Обновляем виджет
-                    CoroutineScope(Dispatchers.Main).launch {
-                        android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
-                            updateAll(context)
-                        }, 1500)
-                    }
+                    // Обновляем виджет с задержкой 1.5с, чтобы broadcast успел
+                    // обработаться и данные в БД обновились.
+                    android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
+                        updateAll(context)
+                    }, 1500)
                 }
             }
             ACTION_WIDGET_TERMINATE -> {
@@ -72,11 +68,9 @@ class RentersListWidgetProvider : AppWidgetProvider() {
                         putExtra(NotificationActionReceiver.EXTRA_RENTER_ID, renterId)
                     }
                     context.sendBroadcast(termIntent)
-                    CoroutineScope(Dispatchers.Main).launch {
-                        android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
-                            updateAll(context)
-                        }, 1500)
-                    }
+                    android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
+                        updateAll(context)
+                    }, 1500)
                 }
             }
             ACTION_WIDGET_SMS -> {
