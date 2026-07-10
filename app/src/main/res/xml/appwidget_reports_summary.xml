@@ -10,5 +10,4 @@
     android:previewLayout="@layout/widget_reports_summary"
     android:targetCellWidth="3"
     android:targetCellHeight="2"
-    android:description="@string/widget_reports_desc"
-    android:configure="" />
+    android:description="@string/widget_reports_desc" />

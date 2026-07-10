@@ -16,6 +16,7 @@ import com.example.worker.NotificationActionReceiver
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 /**
  * Виджет-список существующих арендаторов. Для каждого арендатора показывает:
@@ -117,18 +118,13 @@ class RentersListWidgetProvider : AppWidgetProvider() {
                 putExtra(AppWidgetManager.EXTRA_APPWIDGET_ID, appWidgetId)
                 data = android.net.Uri.parse(toUri(Intent.URI_INTENT_SCHEME))
             }
-            // Быстро подтягиваем счётчик арендаторов для шапки виджета
-            val (totalCount, activeCount) = try {
-                val all = kotlinx.coroutines.runBlocking {
-                    AppDatabase.getDatabase(context).renterDao().getAllRentersOnce()
-                }
-                all.size to all.count { !it.isReturned }
-            } catch (_: Exception) { 0 to 0 }
 
+            // Сразу строим виджет с плейсхолдером — счётчик обновим асинхронно,
+            // чтобы не блокировать главный поток (иначе ANR → Failed to load widget).
             val views = RemoteViews(context.packageName, R.layout.widget_renters_list).apply {
                 setRemoteAdapter(R.id.widget_list, intent)
                 setEmptyView(R.id.widget_list, R.id.widget_empty)
-                setTextViewText(R.id.widget_count, "$activeCount / $totalCount")
+                setTextViewText(R.id.widget_count, "— / —")
                 // Клик по шапке — открывает приложение на вкладке Ijarachilar
                 val openIntent = Intent(context, MainActivity::class.java).apply {
                     action = Intent.ACTION_MAIN
@@ -142,30 +138,33 @@ class RentersListWidgetProvider : AppWidgetProvider() {
                 setOnClickPendingIntent(R.id.widget_root, pendingIntent)
             }
 
-            // Шаблон PendingIntent для обработки нажатий на кнопки элементов
-            val payTemplateIntent = Intent(context, RentersListWidgetProvider::class.java).apply {
+            // Шаблон PendingIntent для обработки нажатий на кнопки элементов.
+            // fillInIntent в adapter-е переопределяет action, поэтому один шаблон
+            // работает для всех 4 кнопок (PAY / TERMINATE / SMS / DELETE).
+            val templateIntent = Intent(context, RentersListWidgetProvider::class.java).apply {
                 action = ACTION_WIDGET_PAY
             }
-            val payPendingIntent = PendingIntent.getBroadcast(
-                context, 0, payTemplateIntent,
+            val templatePendingIntent = PendingIntent.getBroadcast(
+                context, 0, templateIntent,
                 PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_MUTABLE
             )
-            views.setPendingIntentTemplate(R.id.widget_list, payPendingIntent)
-
-            val termTemplateIntent = Intent(context, RentersListWidgetProvider::class.java).apply {
-                action = ACTION_WIDGET_TERMINATE
-            }
-            val termPendingIntent = PendingIntent.getBroadcast(
-                context, 1, termTemplateIntent,
-                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_MUTABLE
-            )
-            // Для разных действий нужен разный requestCode, но setPendingIntentTemplate
-            // принимает только один template на listView. Поэтому мы используем fillInIntent
-            // с разными action внутри adapter-а, а template один. Обработчик в onReceive
-            // смотрит на intent.action.
+            views.setPendingIntentTemplate(R.id.widget_list, templatePendingIntent)
 
             appWidgetManager.updateAppWidget(appWidgetId, views)
             appWidgetManager.notifyAppWidgetViewDataChanged(appWidgetId, R.id.widget_list)
+
+            // Асинхронно подтягиваем счётчик арендаторов для шапки виджета
+            CoroutineScope(Dispatchers.IO).launch {
+                try {
+                    val all = AppDatabase.getDatabase(context).renterDao().getAllRentersOnce()
+                    val activeCount = all.count { !it.isReturned }
+                    val totalCount = all.size
+                    val updated = RemoteViews(context.packageName, R.layout.widget_renters_list).apply {
+                        setTextViewText(R.id.widget_count, "$activeCount / $totalCount")
+                    }
+                    appWidgetManager.partiallyUpdateAppWidget(appWidgetId, updated)
+                } catch (_: Exception) { }
+            }
         }
 
         fun updateAll(context: Context) {

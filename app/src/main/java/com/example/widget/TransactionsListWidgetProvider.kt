@@ -47,14 +47,12 @@ class TransactionsListWidgetProvider : AppWidgetProvider() {
                 putExtra(AppWidgetManager.EXTRA_APPWIDGET_ID, appWidgetId)
                 data = android.net.Uri.parse(toUri(Intent.URI_INTENT_SCHEME))
             }
-            val totalCount = try {
-                runBlocking { AppDatabase.getDatabase(context).transactionDao().getAllOnce().size }
-            } catch (_: Exception) { 0 }
 
+            // Сразу строим виджет с плейсхолдером, счётчик подтянем асинхронно.
             val views = RemoteViews(context.packageName, R.layout.widget_transactions_list).apply {
                 setRemoteAdapter(R.id.widget_list, intent)
                 setEmptyView(R.id.widget_list, R.id.widget_empty)
-                setTextViewText(R.id.widget_count, totalCount.toString())
+                setTextViewText(R.id.widget_count, "—")
                 val openIntent = Intent(context, MainActivity::class.java).apply {
                     action = Intent.ACTION_MAIN
                     putExtra("open_tab", 3)
@@ -72,6 +70,17 @@ class TransactionsListWidgetProvider : AppWidgetProvider() {
             views.setPendingIntentTemplate(R.id.widget_list, delPending)
             appWidgetManager.updateAppWidget(appWidgetId, views)
             appWidgetManager.notifyAppWidgetViewDataChanged(appWidgetId, R.id.widget_list)
+
+            // Асинхронно подтягиваем счётчик транзакций для шапки виджета
+            CoroutineScope(Dispatchers.IO).launch {
+                try {
+                    val count = AppDatabase.getDatabase(context).transactionDao().getAllOnce().size
+                    val updated = RemoteViews(context.packageName, R.layout.widget_transactions_list).apply {
+                        setTextViewText(R.id.widget_count, count.toString())
+                    }
+                    appWidgetManager.partiallyUpdateAppWidget(appWidgetId, updated)
+                } catch (_: Exception) { }
+            }
         }
         fun updateAll(context: Context) {
             val mgr = AppWidgetManager.getInstance(context)
