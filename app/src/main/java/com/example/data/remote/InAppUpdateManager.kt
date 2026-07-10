@@ -67,11 +67,73 @@ class InAppUpdateManager(private val context: Context) {
     }
 
     /**
+     * Возвращает versionCode УСТАНОВЛЕННОГО приложения.
+     */
+    private fun getInstalledVersionCode(): Int {
+        return try {
+            val packageInfo = context.packageManager.getPackageInfo(context.packageName, 0)
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+                packageInfo.longVersionCode.toInt()
+            } else {
+                @Suppress("DEPRECATION")
+                packageInfo.versionCode
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed to get installed version code", e)
+            0
+        }
+    }
+
+    /**
+     * Извлекает versionCode из APK файла (не устанавливая его).
+     * Возвращает null если не удалось прочитать.
+     */
+    private fun getApkVersionCode(apkFile: File): Int? {
+        return try {
+            // Файл должен быть читаемым для getPackageArchiveInfo
+            apkFile.setReadable(true, false)
+            val info = context.packageManager.getPackageArchiveInfo(apkFile.absolutePath, 0)
+            if (info != null) {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+                    info.longVersionCode.toInt()
+                } else {
+                    @Suppress("DEPRECATION")
+                    info.versionCode
+                }
+            } else {
+                Log.w(TAG, "getPackageArchiveInfo returned null for ${apkFile.absolutePath}")
+                null
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to read APK versionCode", e)
+            null
+        }
+    }
+
+    /**
      * Устанавливает APK через PackageInstaller API.
      * Требуется REQUEST_INSTALL_PACKAGES permission на Android 8+.
      */
     fun installApk(apkFile: File) {
         try {
+            // ── Pre-check: сравниваем versionCode скачанного APK с установленным ──
+            // Если APK не новее — PackageInstaller вернёт STATUS_FAILURE_INVALID
+            // с невнятным сообщением. Ловим это заранее и показываем понятный текст.
+            val installedVc = getInstalledVersionCode()
+            val apkVc = getApkVersionCode(apkFile)
+            Log.d(TAG, "Version pre-check: installed=$installedVc, apk=$apkVc")
+            if (apkVc != null && apkVc <= installedVc) {
+                _state.value = InAppUpdateState.Error(
+                    "Yangi versiya eskiroq yoki teng joriyga (installed=$installedVc, apk=$apkVc). " +
+                    "Iltimos, kutubxonasidan yangiroq relizni kuting."
+                )
+                Log.e(TAG, "Aborting install: APK versionCode ($apkVc) <= installed ($installedVc)")
+                return
+            }
+            if (apkVc == null) {
+                Log.w(TAG, "Could not read APK versionCode — proceeding with install attempt anyway")
+            }
+
             // Регистрируем receiver для результата установки
             registerInstallReceiver()
 
@@ -185,14 +247,25 @@ class InAppUpdateManager(private val context: Context) {
                             PackageInstaller.STATUS_FAILURE_INVALID,
                             PackageInstaller.STATUS_FAILURE_STORAGE -> {
                                 Log.e(TAG, "Installation failed: status=$status, message=$message")
+                                val hint = when (status) {
+                                    PackageInstaller.STATUS_FAILURE_INVALID ->
+                                        " (APK versiyasi eski yoki imzo mos emas)"
+                                    PackageInstaller.STATUS_FAILURE_CONFLICT ->
+                                        " (mavjud paket bilan konflikt — avval eski versiyani o'chiring)"
+                                    PackageInstaller.STATUS_FAILURE_STORAGE ->
+                                        " (yetarli joy yo'q)"
+                                    PackageInstaller.STATUS_FAILURE_BLOCKED ->
+                                        " (tizim blokladi — sozlamalardan ruxsat bering)"
+                                    else -> ""
+                                }
                                 _state.value = InAppUpdateState.Error(
-                                    "O'rnatish muvaffaqiyatsiz: $message"
+                                    "O'rnatish muvaffaqiyatsiz [status=$status]$hint: $message"
                                 )
                                 cleanup()
                             }
                             else -> {
                                 Log.w(TAG, "Unknown install status: $status")
-                                _state.value = InAppUpdateState.Error("Noma'lum xato: $message")
+                                _state.value = InAppUpdateState.Error("Noma'lum xato [status=$status]: $message")
                                 cleanup()
                             }
                         }

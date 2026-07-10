@@ -29,6 +29,8 @@ import androidx.compose.material.icons.filled.List
 import androidx.compose.material.icons.filled.DirectionsBike
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.AccountBalanceWallet
+import androidx.compose.material.icons.filled.ReceiptLong
 import androidx.compose.foundation.border
 import androidx.compose.material.icons.filled.DateRange
 import androidx.compose.material.icons.filled.Notifications
@@ -60,6 +62,7 @@ import androidx.work.WorkManager
 import com.example.data.NotificationHistoryEntity
 import com.example.data.Renter
 import com.example.data.Scooter
+import com.example.data.VirtualCard
 import com.example.data.remote.SyncManager
 import com.example.data.remote.SyncResult
 import com.example.data.remote.InAppUpdateManager
@@ -68,6 +71,7 @@ import com.example.data.remote.UpdateCheckResult
 import com.example.data.remote.UpdateChecker
 import com.example.data.remote.UpdateInfo
 import com.example.ui.ContractHistoryViewModel
+import com.example.ui.FinansiViewModel
 import com.example.ui.LoginState
 import com.example.ui.LoginViewModel
 import com.example.ui.NotificationHistoryViewModel
@@ -198,7 +202,8 @@ fun MainScreen(
     settingsViewModel: SettingsViewModel = viewModel(),
     scooterViewModel: ScooterViewModel = viewModel(),
     historyViewModel: NotificationHistoryViewModel = viewModel(),
-    contractHistoryViewModel: ContractHistoryViewModel = viewModel()
+    contractHistoryViewModel: ContractHistoryViewModel = viewModel(),
+    finansiViewModel: FinansiViewModel = viewModel()
 ) {
     var currentTab by remember { mutableStateOf(0) }
     var showSettings by remember { mutableStateOf(false) }
@@ -208,6 +213,9 @@ fun MainScreen(
     var scooterToEdit by remember { mutableStateOf<Scooter?>(null) }
     var selectedRenters by remember { mutableStateOf(setOf<Int>()) }
     var selectedScooters by remember { mutableStateOf(setOf<Int>()) }
+    // ── Finansi bo'limi holati ──
+    var showAddCardDialog by remember { mutableStateOf(false) }
+    var cardToEdit by remember { mutableStateOf<VirtualCard?>(null) }
     var searchQuery by remember { mutableStateOf("") }
     var showDateRangePicker by remember { mutableStateOf(false) }
     val dateRangePickerState = rememberDateRangePickerState()
@@ -388,8 +396,12 @@ fun MainScreen(
             if (userRole == UserRole.ADMIN) {
                 FloatingActionButton(
                     onClick = {
-                        if (currentTab == 0) showAddDialog = true
-                        else showAddScooterDialog = true
+                        when (currentTab) {
+                            0 -> showAddDialog = true
+                            1 -> showAddScooterDialog = true
+                            2 -> showAddCardDialog = true
+                            // Tab 3 = Transactions: no FAB
+                        }
                     },
                     containerColor = ClaudeAccent,
                     contentColor = Color.White,
@@ -398,7 +410,12 @@ fun MainScreen(
                 ) {
                     Icon(
                         Icons.Default.Add,
-                        contentDescription = if (currentTab == 0) "Ijarachi qo'shish" else "Skuter qo'shish",
+                        contentDescription = when (currentTab) {
+                            0 -> "Ijarachi qo'shish"
+                            1 -> "Skuter qo'shish"
+                            2 -> "Karta qo'shish"
+                            else -> "Qo'shish"
+                        },
                         modifier = Modifier.size(32.dp)
                     )
                 }
@@ -424,6 +441,32 @@ fun MainScreen(
                     onClick = { currentTab = 1 },
                     icon = { Icon(Icons.Default.DirectionsBike, contentDescription = "Skuterlar") },
                     label = { Text("Skuterlar") },
+                    colors = NavigationBarItemDefaults.colors(
+                        selectedIconColor = ClaudeAccent,
+                        unselectedIconColor = ClaudeTextSecondary,
+                        selectedTextColor = ClaudeAccent,
+                        unselectedTextColor = ClaudeTextSecondary,
+                        indicatorColor = ClaudeCard
+                    )
+                )
+                NavigationBarItem(
+                    selected = currentTab == 2,
+                    onClick = { currentTab = 2 },
+                    icon = { Icon(Icons.Default.AccountBalanceWallet, contentDescription = "Finansi") },
+                    label = { Text("Finansi") },
+                    colors = NavigationBarItemDefaults.colors(
+                        selectedIconColor = ClaudeAccent,
+                        unselectedIconColor = ClaudeTextSecondary,
+                        selectedTextColor = ClaudeAccent,
+                        unselectedTextColor = ClaudeTextSecondary,
+                        indicatorColor = ClaudeCard
+                    )
+                )
+                NavigationBarItem(
+                    selected = currentTab == 3,
+                    onClick = { currentTab = 3 },
+                    icon = { Icon(Icons.Default.ReceiptLong, contentDescription = "Tranzaksiyalar") },
+                    label = { Text("Tranzaksiya") },
                     colors = NavigationBarItemDefaults.colors(
                         selectedIconColor = ClaudeAccent,
                         unselectedIconColor = ClaudeTextSecondary,
@@ -571,7 +614,8 @@ fun MainScreen(
                 }
             }
 
-            if (currentTab == 0) {
+            when (currentTab) {
+                0 -> {
                 // Поиск
                 OutlinedTextField(
                     value = searchQuery,
@@ -776,7 +820,8 @@ fun MainScreen(
                     },
                     onClick = { renterToEdit = it }
                 )
-            } else {
+                }
+                1 -> {
                 // Вкладка «Скутеры»
                 OutlinedTextField(
                     value = searchQuery,
@@ -841,6 +886,22 @@ fun MainScreen(
                     },
                     onClick = { scooterToEdit = it }
                 )
+                }
+                2 -> {
+                    // Вкладка «Finansi» — виртуальные карты + зона транзакции
+                    FinansiPanel(
+                        viewModel = finansiViewModel,
+                        onEditCard = { card -> cardToEdit = card }
+                    )
+                }
+                3 -> {
+                    // Вкладка «Tranzaksiyalar» — лента переводов между картами
+                    val cardsForTx by finansiViewModel.cards.collectAsStateWithLifecycle()
+                    TransactionsPanel(
+                        viewModel = finansiViewModel,
+                        cards = cardsForTx
+                    )
+                }
             }
         }
 
@@ -924,6 +985,37 @@ fun MainScreen(
                     }
                     showAddScooterDialog = false
                     scooterToEdit = null
+                }
+            )
+        }
+
+        // ===== Диалог создания/редактирования виртуальной карты =====
+        if (showAddCardDialog || cardToEdit != null) {
+            VirtualCardFormDialog(
+                initial = cardToEdit,
+                onDismiss = {
+                    showAddCardDialog = false
+                    cardToEdit = null
+                },
+                onSave = { name, balance, colorHex, info ->
+                    val editing = cardToEdit
+                    if (editing != null) {
+                        // Редактирование: сохраняем баланс, если карта системная
+                        // (форма блокирует редактирование баланса для isDefault карт)
+                        val newBalance = if (editing.isDefault) editing.balance else balance
+                        finansiViewModel.updateCard(
+                            editing.copy(
+                                name = name,
+                                balance = newBalance,
+                                colorHex = colorHex,
+                                info = info
+                            )
+                        )
+                    } else {
+                        finansiViewModel.addCard(name, balance, colorHex, info)
+                    }
+                    showAddCardDialog = false
+                    cardToEdit = null
                 }
             )
         }
