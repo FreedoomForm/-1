@@ -193,20 +193,7 @@ fun TransactionListScreen(
     val wAmount   = 85.dp
 
     Scaffold(
-        containerColor = ClaudeBackground,
-        topBar = {
-            TopAppBar(
-                title = {
-                    // Большой заголовок «Tranzaksiyalar» удалён по просьбе
-                    // пользователя — он занимал слишком много места. Название
-                    // вкладки и так видно в нижней навигации.
-                },
-                colors = TopAppBarDefaults.topAppBarColors(
-                    containerColor = ClaudeCard,
-                    titleContentColor = ClaudeText
-                )
-            )
-        }
+        containerColor = ClaudeBackground
     ) { innerPadding ->
         Column(
             modifier = Modifier

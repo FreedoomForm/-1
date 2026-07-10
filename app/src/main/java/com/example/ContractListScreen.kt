@@ -232,20 +232,7 @@ fun ContractListScreen(
     val wPinfl    = 90.dp
 
     Scaffold(
-        containerColor = ClaudeBackground,
-        topBar = {
-            TopAppBar(
-                title = {
-                    // Большой заголовок «Kontraktlar» удалён по просьбе
-                    // пользователя — он занимал слишком много места. Название
-                    // вкладки и так видно в нижней навигации.
-                },
-                colors = TopAppBarDefaults.topAppBarColors(
-                    containerColor = ClaudeCard,
-                    titleContentColor = ClaudeText
-                )
-            )
-        }
+        containerColor = ClaudeBackground
     ) { innerPadding ->
         Column(
             modifier = Modifier
