@@ -32,6 +32,9 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import com.example.ui.theme.ClaudeAccent
+import com.example.ui.theme.ClaudeAccentBg
+import com.example.ui.theme.ClaudeAccentDark
 import com.example.ui.theme.ClaudeCard
 import com.example.ui.theme.ClaudeDivider
 import com.example.ui.theme.ClaudeText
@@ -104,15 +107,20 @@ fun UnifiedButton(
         label = "iconScale"
     )
 
-    // Resolve colors by variant — black-and-white palette per user spec
-    // (status colors are reserved for the table; all UI controls are grayscale)
+    // Resolve colors by variant — Driftwood warm palette:
+    // PRIMARY  = terracotta filled, cream text
+    // SECONDARY = cream card + brown border
+    // SUCCESS  = teal filled
+    // DANGER   = deep terracotta filled
+    // DANGER_OUT = cream + terracotta border
+    // TEXT     = transparent, terracotta text
     val (containerColor, contentColor, border) = when (variant) {
-        UnifiedButtonVariant.PRIMARY -> Triple(ClaudeText, Color.White, null)            // black bg, white text
-        UnifiedButtonVariant.SECONDARY -> Triple(ClaudeCard, ClaudeText, BorderStroke(1.dp, ClaudeDivider)) // white + gray border
-        UnifiedButtonVariant.SUCCESS -> Triple(ClaudeText, Color.White, null)            // black (same as primary)
-        UnifiedButtonVariant.DANGER -> Triple(ClaudeText, Color.White, null)             // black (same as primary)
-        UnifiedButtonVariant.DANGER_OUTLINED -> Triple(ClaudeCard, ClaudeText, BorderStroke(1.dp, ClaudeText)) // white + black border
-        UnifiedButtonVariant.TEXT -> Triple(Color.Transparent, ClaudeText, null)
+        UnifiedButtonVariant.PRIMARY -> Triple(ClaudeAccent, Color(0xFFFFF7E8), null)
+        UnifiedButtonVariant.SECONDARY -> Triple(ClaudeCard, ClaudeText, BorderStroke(1.dp, ClaudeDivider))
+        UnifiedButtonVariant.SUCCESS -> Triple(ClaudeAccentDark, Color(0xFFFFF7E8), null)
+        UnifiedButtonVariant.DANGER -> Triple(ClaudeAccentDark, Color(0xFFFFF7E8), null)
+        UnifiedButtonVariant.DANGER_OUTLINED -> Triple(ClaudeCard, ClaudeAccentDark, BorderStroke(1.dp, ClaudeAccentDark))
+        UnifiedButtonVariant.TEXT -> Triple(Color.Transparent, ClaudeAccent, null)
     }
 
     val disabledAlpha = if (enabled) 1f else 0.45f
@@ -125,7 +133,7 @@ fun UnifiedButton(
                 scaleY = buttonScale
                 alpha = disabledAlpha
             },
-        shape = RoundedCornerShape(10.dp),
+        shape = RoundedCornerShape(50),  // Pill — Driftwood CTA shape
         color = containerColor,
         contentColor = contentColor,
         border = border,
