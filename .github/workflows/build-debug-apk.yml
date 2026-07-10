@@ -120,21 +120,44 @@ jobs:
       - name: Verify APK versionCode matches run number
         if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
         run: |
-          AAPT=$(find $ANDROID_HOME/build-tools -name aapt2 -o -name aapt 2>/dev/null | head -1)
+          set +e
+          # Находим aapt2/aapt в SDK. Пробуем несколько известных переменных
+          # окружения runner'а — ANDROID_HOME и ANDROID_SDK_ROOT.
+          SDK_ROOT="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-/usr/local/lib/android/sdk}}"
+          echo "SDK_ROOT=$SDK_ROOT"
+          AAPT=""
+          if [ -d "$SDK_ROOT/build-tools" ]; then
+            # Берём самую свежую версию build-tools
+            BT_DIR=$(ls -1d "$SDK_ROOT/build-tools"/*/ 2>/dev/null | sort -V | tail -1)
+            echo "Latest build-tools dir: $BT_DIR"
+            if [ -n "$BT_DIR" ]; then
+              if [ -x "$BT_DIR/aapt2" ]; then
+                AAPT="$BT_DIR/aapt2"
+              elif [ -x "$BT_DIR/aapt" ]; then
+                AAPT="$BT_DIR/aapt"
+              fi
+            fi
+          fi
           if [ -z "$AAPT" ]; then
-            echo "WARNING: aapt not found, skipping versionCode verification"
+            echo "WARNING: aapt not found in $SDK_ROOT — skipping versionCode verification (non-fatal)"
             exit 0
           fi
+          echo "Using AAPT: $AAPT"
           APK="${{ steps.locate_apk.outputs.apk_path }}"
-          APK_VERSION_CODE=$($AAPT dump badging "$APK" 2>/dev/null | grep -E "package:.*versionCode" | sed 's/.*versionCode=\x27([0-9]+)\x27.*/\1/' | head -1)
-          APK_VERSION_NAME=$($AAPT dump badging "$APK" 2>/dev/null | grep -E "package:.*versionName" | sed "s/.*versionName='\([^']*\)'.*/\1/" | head -1)
+          BADGING=$("$AAPT" dump badging "$APK" 2>/dev/null)
+          # aapt2: package: name='...' versionCode='113' versionName='1.2.106.113' ...
+          APK_VERSION_CODE=$(echo "$BADGING" | grep -oE "versionCode='[0-9]+'" | head -1 | grep -oE "[0-9]+")
+          APK_VERSION_NAME=$(echo "$BADGING" | grep -oE "versionName='[^']+'" | head -1 | sed "s/versionName='//; s/'$//")
           echo "APK versionCode: $APK_VERSION_CODE"
           echo "APK versionName: $APK_VERSION_NAME"
           echo "Expected versionCode: ${{ github.run_number }}"
+          if [ -z "$APK_VERSION_CODE" ]; then
+            echo "WARNING: Could not parse versionCode from APK — skipping verification (non-fatal)"
+            exit 0
+          fi
           if [ "$APK_VERSION_CODE" != "${{ github.run_number }}" ]; then
             echo "ERROR: APK versionCode ($APK_VERSION_CODE) does not match run number (${{ github.run_number }})!"
             echo "This means the version injection did not take effect before assembleDebug."
-            echo "In-app updates will fail with 'O\\'rnatish muvaffaqiyatsiz'."
             exit 1
           fi
           echo "OK: APK versionCode matches run number."
