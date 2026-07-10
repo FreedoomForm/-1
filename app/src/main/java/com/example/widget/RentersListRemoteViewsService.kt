@@ -53,6 +53,10 @@ class RentersListFactory(private val context: android.content.Context) : RemoteV
             val views = RemoteViews(context.packageName, R.layout.widget_renters_header)
             val activeCount = renters.count { !it.isReturned }
             val overdueCount = renters.count { !it.isReturned && it.balance < 0 }
+            views.setTextViewText(R.id.header_total, renters.size.toString())
+            views.setTextViewText(R.id.header_active, activeCount.toString())
+            views.setTextViewText(R.id.header_overdue, overdueCount.toString())
+            // Совместимость со старой версией (на случай, если кто-то ещё читает header_summary)
             views.setTextViewText(
                 R.id.header_summary,
                 "Jami: ${renters.size}  |  Faol: $activeCount  |  Qarzdor: $overdueCount"
@@ -77,6 +81,11 @@ class RentersListFactory(private val context: android.content.Context) : RemoteV
             else -> 0xFF251E12.toInt()
         }
         views.setTextColor(R.id.renter_balance, balanceColor)
+        // Цветной кружок-индикатор статуса: красный при долге, зелёный иначе
+        views.setImageViewResource(
+            R.id.renter_status_dot,
+            if (renter.balance < 0) R.drawable.widget_dot_overdue else R.drawable.widget_dot_ok
+        )
 
         // fillInIntent для кнопки To'lov
         val payIntent = Intent().apply {

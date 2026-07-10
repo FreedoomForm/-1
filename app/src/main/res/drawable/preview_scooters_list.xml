@@ -1,0 +1,102 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Превью виджета «Список скутеров» — бирюзовая полоса слева, имя + статус
+  каждой строки + красная кнопка «O'chir» справа.
+-->
+<layer-list xmlns:android="http://schemas.android.com/apk/res/android">
+    <item android:width="240dp" android:height="160dp">
+        <shape android:shape="rectangle">
+            <solid android:color="#FFFCF3" />
+            <corners android:radius="16dp" />
+            <stroke android:width="1dp" android:color="#24251E12" />
+        </shape>
+    </item>
+    <!-- Бирюзовая полоса слева -->
+    <item android:left="0dp" android:top="0dp" android:width="6dp" android:height="160dp">
+        <shape android:shape="rectangle">
+            <solid android:color="#255E52" />
+        </shape>
+    </item>
+    <!-- Заголовок -->
+    <item android:left="14dp" android:top="10dp" android:right="120dp" android:height="14dp">
+        <shape android:shape="rectangle">
+            <solid android:color="#251E12" />
+            <corners android:radius="2dp" />
+        </shape>
+    </item>
+
+    <!-- Строка 1: иконка скутера + имя + статус + кнопка -->
+    <item android:left="14dp" android:top="34dp" android:width="14dp" android:height="14dp">
+        <shape android:shape="oval">
+            <solid android:color="#255E52" />
+        </shape>
+    </item>
+    <item android:left="34dp" android:top="32dp" android:right="100dp" android:height="12dp">
+        <shape android:shape="rectangle">
+            <solid android:color="#251E12" />
+            <corners android:radius="2dp" />
+        </shape>
+    </item>
+    <item android:left="34dp" android:top="48dp" android:right="80dp" android:height="10dp">
+        <shape android:shape="rectangle">
+            <solid android:color="#16A34A" />
+            <corners android:radius="2dp" />
+        </shape>
+    </item>
+    <item android:left="180dp" android:top="32dp" android:right="14dp" android:height="22dp">
+        <shape android:shape="rectangle">
+            <solid android:color="#DC2626" />
+            <corners android:radius="4dp" />
+        </shape>
+    </item>
+
+    <!-- Строка 2 -->
+    <item android:left="14dp" android:top="74dp" android:width="14dp" android:height="14dp">
+        <shape android:shape="oval">
+            <solid android:color="#255E52" />
+        </shape>
+    </item>
+    <item android:left="34dp" android:top="72dp" android:right="100dp" android:height="12dp">
+        <shape android:shape="rectangle">
+            <solid android:color="#251E12" />
+            <corners android:radius="2dp" />
+        </shape>
+    </item>
+    <item android:left="34dp" android:top="88dp" android:right="80dp" android:height="10dp">
+        <shape android:shape="rectangle">
+            <solid android:color="#C14E24" />
+            <corners android:radius="2dp" />
+        </shape>
+    </item>
+    <item android:left="180dp" android:top="72dp" android:right="14dp" android:height="22dp">
+        <shape android:shape="rectangle">
+            <solid android:color="#DC2626" />
+            <corners android:radius="4dp" />
+        </shape>
+    </item>
+
+    <!-- Строка 3 -->
+    <item android:left="14dp" android:top="114dp" android:width="14dp" android:height="14dp">
+        <shape android:shape="oval">
+            <solid android:color="#255E52" />
+        </shape>
+    </item>
+    <item android:left="34dp" android:top="112dp" android:right="100dp" android:height="12dp">
+        <shape android:shape="rectangle">
+            <solid android:color="#251E12" />
+            <corners android:radius="2dp" />
+        </shape>
+    </item>
+    <item android:left="34dp" android:top="128dp" android:right="80dp" android:height="10dp">
+        <shape android:shape="rectangle">
+            <solid android:color="#16A34A" />
+            <corners android:radius="2dp" />
+        </shape>
+    </item>
+    <item android:left="180dp" android:top="112dp" android:right="14dp" android:height="22dp">
+        <shape android:shape="rectangle">
+            <solid android:color="#DC2626" />
+            <corners android:radius="4dp" />
+        </shape>
+    </item>
+</layer-list>

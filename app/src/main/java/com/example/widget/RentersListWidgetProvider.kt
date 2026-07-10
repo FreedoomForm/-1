@@ -117,10 +117,19 @@ class RentersListWidgetProvider : AppWidgetProvider() {
                 putExtra(AppWidgetManager.EXTRA_APPWIDGET_ID, appWidgetId)
                 data = android.net.Uri.parse(toUri(Intent.URI_INTENT_SCHEME))
             }
+            // Быстро подтягиваем счётчик арендаторов для шапки виджета
+            val (totalCount, activeCount) = try {
+                val all = kotlinx.coroutines.runBlocking {
+                    AppDatabase.getDatabase(context).renterDao().getAllRentersOnce()
+                }
+                all.size to all.count { !it.isReturned }
+            } catch (_: Exception) { 0 to 0 }
+
             val views = RemoteViews(context.packageName, R.layout.widget_renters_list).apply {
                 setRemoteAdapter(R.id.widget_list, intent)
                 setEmptyView(R.id.widget_list, R.id.widget_empty)
-                // Заголовок — открывает приложение на вкладке Ijarachilar
+                setTextViewText(R.id.widget_count, "$activeCount / $totalCount")
+                // Клик по шапке — открывает приложение на вкладке Ijarachilar
                 val openIntent = Intent(context, MainActivity::class.java).apply {
                     action = Intent.ACTION_MAIN
                     putExtra("open_tab", 0)
@@ -130,7 +139,7 @@ class RentersListWidgetProvider : AppWidgetProvider() {
                     context, appWidgetId, openIntent,
                     PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
                 )
-                setOnClickPendingIntent(R.id.widget_header, pendingIntent)
+                setOnClickPendingIntent(R.id.widget_root, pendingIntent)
             }
 
             // Шаблон PendingIntent для обработки нажатий на кнопки элементов

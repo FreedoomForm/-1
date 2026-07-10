@@ -47,9 +47,14 @@ class TransactionsListWidgetProvider : AppWidgetProvider() {
                 putExtra(AppWidgetManager.EXTRA_APPWIDGET_ID, appWidgetId)
                 data = android.net.Uri.parse(toUri(Intent.URI_INTENT_SCHEME))
             }
+            val totalCount = try {
+                runBlocking { AppDatabase.getDatabase(context).transactionDao().getAllOnce().size }
+            } catch (_: Exception) { 0 }
+
             val views = RemoteViews(context.packageName, R.layout.widget_transactions_list).apply {
                 setRemoteAdapter(R.id.widget_list, intent)
                 setEmptyView(R.id.widget_list, R.id.widget_empty)
+                setTextViewText(R.id.widget_count, totalCount.toString())
                 val openIntent = Intent(context, MainActivity::class.java).apply {
                     action = Intent.ACTION_MAIN
                     putExtra("open_tab", 3)
@@ -59,7 +64,7 @@ class TransactionsListWidgetProvider : AppWidgetProvider() {
                     context, appWidgetId, openIntent,
                     PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
                 )
-                setOnClickPendingIntent(R.id.widget_header, pendingIntent)
+                setOnClickPendingIntent(R.id.widget_root, pendingIntent)
             }
             val delTemplate = Intent(context, TransactionsListWidgetProvider::class.java).apply { action = ACTION_WIDGET_DELETE }
             val delPending = PendingIntent.getBroadcast(context, 0, delTemplate,

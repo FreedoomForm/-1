@@ -6,5 +6,8 @@
     android:initialLayout="@layout/widget_contracts_list"
     android:resizeMode="horizontal|vertical"
     android:widgetCategory="home_screen"
+    android:previewImage="@drawable/preview_contracts_list"
+    android:previewLayout="@layout/widget_contracts_list"
     android:targetCellWidth="3"
-    android:targetCellHeight="4" />
+    android:targetCellHeight="4"
+    android:description="@string/widget_contracts_desc" />

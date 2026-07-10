@@ -6,5 +6,8 @@
     android:initialLayout="@layout/widget_quick_actions"
     android:resizeMode="horizontal"
     android:widgetCategory="home_screen"
+    android:previewImage="@drawable/preview_quick_actions"
+    android:previewLayout="@layout/widget_quick_actions"
     android:targetCellWidth="3"
-    android:targetCellHeight="2" />
+    android:targetCellHeight="2"
+    android:description="@string/widget_quick_actions_desc" />

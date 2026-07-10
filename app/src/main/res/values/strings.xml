@@ -13,4 +13,12 @@
     <string name="returned">Returned</string>
     <string name="mark_returned">Mark Returned</string>
     <string name="delete">Delete</string>
+
+    <!-- Описания нативных виджетов (видны в окне выбора виджетов Android) -->
+    <string name="widget_reports_desc">Otchetlar — sof foyda, ROI, bandlik va boshqa kalit metrikalar</string>
+    <string name="widget_quick_actions_desc">Tezkor amallar — ijarachi, skuter, kontrakt, tranzaksiya qo\'shish</string>
+    <string name="widget_renters_desc">Ijarachilar ro\'yxati — To\'lov, Uzish, SMS, O\'chir tugmalari bilan</string>
+    <string name="widget_scooters_desc">Skuterlar ro\'yxati — holati va O\'chirish tugmasi bilan</string>
+    <string name="widget_contracts_desc">Kontraktlar ro\'yxati — oxirgi shartnomalar va O\'chirish</string>
+    <string name="widget_transactions_desc">Tranzaksiyalar tarixi — to\'lovlar va O\'chirish</string>
 </resources>

@@ -1,82 +1,133 @@
 <?xml version="1.0" encoding="utf-8"?>
+<!--
+  Нативный виджет «Быстрые действия».
+  Слева — терракотовая полоса-маркер.
+  Шапка: цветной кружок с символом «+» + заголовок «TEZKOR AMALLAR».
+  4 кнопки сеткой 2×2, каждая с цветным фоном и крупным шрифтом.
+-->
 <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/widget_root"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
-    android:orientation="vertical"
-    android:background="@drawable/widget_bg"
-    android:padding="12dp">
+    android:orientation="horizontal"
+    android:background="@drawable/widget_bg">
 
-    <TextView
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:text="Tezkor amallar"
-        android:textColor="#251E12"
-        android:textSize="13sp"
-        android:textStyle="bold"
-        android:layout_marginBottom="8dp" />
+    <View
+        android:layout_width="6dp"
+        android:layout_height="match_parent"
+        android:background="@drawable/widget_accent_quick" />
 
     <LinearLayout
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:orientation="horizontal"
-        android:layout_marginBottom="6dp">
+        android:layout_width="0dp"
+        android:layout_height="match_parent"
+        android:layout_weight="1"
+        android:orientation="vertical"
+        android:padding="12dp">
 
-        <Button
-            android:id="@+id/btn_create_renter"
-            android:layout_width="0dp"
+        <!-- Шапка -->
+        <LinearLayout
+            android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_weight="1"
-            android:text="+ Ijarachi"
-            android:textColor="#FFFFFF"
-            android:backgroundTint="#C14E24"
-            android:textSize="11sp"
-            android:padding="6dp"
-            android:minHeight="36dp" />
+            android:orientation="horizontal"
+            android:gravity="center_vertical"
+            android:layout_marginBottom="10dp">
 
-        <View android:layout_width="6dp" android:layout_height="match_parent" />
+            <FrameLayout
+                android:layout_width="28dp"
+                android:layout_height="28dp"
+                android:background="@drawable/widget_accent_quick"
+                android:layout_marginEnd="10dp">
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_gravity="center"
+                    android:text="+"
+                    android:textColor="#FFFFFF"
+                    android:textSize="18sp"
+                    android:textStyle="bold" />
+            </FrameLayout>
 
-        <Button
-            android:id="@+id/btn_create_scooter"
-            android:layout_width="0dp"
+            <TextView
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:text="TEZKOR AMALLAR"
+                android:textColor="#251E12"
+                android:textSize="12sp"
+                android:textStyle="bold"
+                android:letterSpacing="0.08" />
+        </LinearLayout>
+
+        <!-- Кнопки 2×2 -->
+        <LinearLayout
+            android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_weight="1"
-            android:text="+ Skuter"
-            android:textColor="#FFFFFF"
-            android:backgroundTint="#C14E24"
-            android:textSize="11sp"
-            android:padding="6dp"
-            android:minHeight="36dp" />
-    </LinearLayout>
+            android:orientation="horizontal"
+            android:layout_marginBottom="6dp">
 
-    <LinearLayout
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:orientation="horizontal">
+            <Button
+                android:id="@+id/btn_create_renter"
+                android:layout_width="0dp"
+                android:layout_height="40dp"
+                android:layout_weight="1"
+                android:text="+ Ijarachi"
+                android:textColor="#FFFFFF"
+                android:backgroundTint="#C14E24"
+                android:textSize="11sp"
+                android:textStyle="bold"
+                android:padding="0dp"
+                android:minWidth="0dp"
+                android:minHeight="0dp"
+                android:layout_marginEnd="6dp" />
 
-        <Button
-            android:id="@+id/btn_create_contract"
-            android:layout_width="0dp"
+            <Button
+                android:id="@+id/btn_create_scooter"
+                android:layout_width="0dp"
+                android:layout_height="40dp"
+                android:layout_weight="1"
+                android:text="+ Skuter"
+                android:textColor="#FFFFFF"
+                android:backgroundTint="#C14E24"
+                android:textSize="11sp"
+                android:textStyle="bold"
+                android:padding="0dp"
+                android:minWidth="0dp"
+                android:minHeight="0dp" />
+        </LinearLayout>
+
+        <LinearLayout
+            android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_weight="1"
-            android:text="+ Kontrakt"
-            android:textColor="#FFFFFF"
-            android:backgroundTint="#B8862B"
-            android:textSize="11sp"
-            android:padding="6dp"
-            android:minHeight="36dp" />
+            android:orientation="horizontal">
 
-        <View android:layout_width="6dp" android:layout_height="match_parent" />
+            <Button
+                android:id="@+id/btn_create_contract"
+                android:layout_width="0dp"
+                android:layout_height="40dp"
+                android:layout_weight="1"
+                android:text="+ Kontrakt"
+                android:textColor="#FFFFFF"
+                android:backgroundTint="#B8862B"
+                android:textSize="11sp"
+                android:textStyle="bold"
+                android:padding="0dp"
+                android:minWidth="0dp"
+                android:minHeight="0dp"
+                android:layout_marginEnd="6dp" />
 
-        <Button
-            android:id="@+id/btn_create_transaction"
-            android:layout_width="0dp"
-            android:layout_height="wrap_content"
-            android:layout_weight="1"
-            android:text="+ Tranzaksiya"
-            android:textColor="#FFFFFF"
-            android:backgroundTint="#B8862B"
-            android:textSize="11sp"
-            android:padding="6dp"
-            android:minHeight="36dp" />
+            <Button
+                android:id="@+id/btn_create_transaction"
+                android:layout_width="0dp"
+                android:layout_height="40dp"
+                android:layout_weight="1"
+                android:text="+ Tranzaksiya"
+                android:textColor="#FFFFFF"
+                android:backgroundTint="#B8862B"
+                android:textSize="11sp"
+                android:textStyle="bold"
+                android:padding="0dp"
+                android:minWidth="0dp"
+                android:minHeight="0dp" />
+        </LinearLayout>
     </LinearLayout>
 </LinearLayout>

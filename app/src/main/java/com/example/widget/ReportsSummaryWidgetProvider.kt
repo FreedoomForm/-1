@@ -72,11 +72,29 @@ class ReportsSummaryWidgetProvider : AppWidgetProvider() {
                     val totalInvestment = scooters.size * scooterPriceUsd * usdRate
                     val roiMultiple = if (totalInvestment > 0) paymentsThisMonth / totalInvestment else 0.0
 
+                    // Сравнение с предыдущим месяцем — для индикатора роста/падения
+                    val twoMonthsAgo = now - 60L * 24 * 60 * 60 * 1000
+                    val paymentsPrevMonth = history
+                        .filter { it.type == ContractHistoryEntry.TYPE_PAYMENT && it.timestamp in monthAgo..now }
+                        .sumOf { it.amount }
+                    val paymentsPrevPrev = history
+                        .filter { it.type == ContractHistoryEntry.TYPE_PAYMENT && it.timestamp in twoMonthsAgo..monthAgo }
+                        .sumOf { it.amount }
+                    val trendArrow = if (paymentsPrevMonth >= paymentsPrevPrev) "▲" else "▼"
+                    val trendColor = if (paymentsPrevMonth >= paymentsPrevPrev) "#FF16A34A" else "#FFDC2626"
+
+                    val timeFmt = SimpleDateFormat("HH:mm", Locale.getDefault())
+                    val updatedText = timeFmt.format(Date(now))
+
                     val views = RemoteViews(context.packageName, R.layout.widget_reports_summary).apply {
                         setTextViewText(R.id.widget_net_profit, formatUzs(paymentsThisMonth * 0.70))
-                        setTextViewText(R.id.widget_active_renters, "$activeRenters (${overdueRenters} qarz)")
-                        setTextViewText(R.id.widget_occupancy, "$occupancyPct% — $scootersRented/${scooters.size}")
+                        setTextViewText(R.id.widget_active_renters, activeRenters.toString())
+                        setTextViewText(R.id.widget_overdue, overdueRenters.toString())
+                        setTextViewText(R.id.widget_occupancy, "$occupancyPct%")
                         setTextViewText(R.id.widget_roi, "%.2f×".format(roiMultiple))
+                        setTextViewText(R.id.widget_trend, trendArrow)
+                        setTextColor(R.id.widget_trend, android.graphics.Color.parseColor(trendColor))
+                        setTextViewText(R.id.widget_updated, updatedText)
                     }
 
                     // Клик по виджету открывает приложение на вкладке Отчёты

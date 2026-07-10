@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Кружок-«чип» статуса арендатора: зелёный (оплачено) / красный (долг).
+  Используется в строке списка виджета «Ijarachilar».
+-->
+<shape xmlns:android="http://schemas.android.com/apk/res/android"
+    android:shape="oval">
+    <solid android:color="#16A34A" />
+    <size android:width="8dp" android:height="8dp" />
+</shape>
