@@ -43,16 +43,29 @@ class TransactionsListWidgetProvider : AppWidgetProvider() {
         const val ACTION_WIDGET_DELETE = "com.example.widget.ACTION_DELETE_TX"
         const val EXTRA_TX_ID = "tx_id"
         fun updateWidget(context: Context, appWidgetManager: AppWidgetManager, appWidgetId: Int) {
+            buildAndShow(context, appWidgetManager, appWidgetId, "—")
+            CoroutineScope(Dispatchers.IO).launch {
+                try {
+                    val count = AppDatabase.getDatabase(context).transactionDao().getAllOnce().size
+                    buildAndShow(context, appWidgetManager, appWidgetId, count.toString())
+                } catch (_: Exception) { }
+            }
+        }
+
+        private fun buildAndShow(
+            context: Context,
+            appWidgetManager: AppWidgetManager,
+            appWidgetId: Int,
+            countText: String
+        ) {
             val intent = Intent(context, TransactionsListRemoteViewsService::class.java).apply {
                 putExtra(AppWidgetManager.EXTRA_APPWIDGET_ID, appWidgetId)
                 data = android.net.Uri.parse(toUri(Intent.URI_INTENT_SCHEME))
             }
-
-            // Сразу строим виджет с плейсхолдером, счётчик подтянем асинхронно.
             val views = RemoteViews(context.packageName, R.layout.widget_transactions_list).apply {
                 setRemoteAdapter(R.id.widget_list, intent)
                 setEmptyView(R.id.widget_list, R.id.widget_empty)
-                setTextViewText(R.id.widget_count, "—")
+                setTextViewText(R.id.widget_count, countText)
                 val openIntent = Intent(context, MainActivity::class.java).apply {
                     action = Intent.ACTION_MAIN
                     putExtra("open_tab", 3)
@@ -70,17 +83,6 @@ class TransactionsListWidgetProvider : AppWidgetProvider() {
             views.setPendingIntentTemplate(R.id.widget_list, delPending)
             appWidgetManager.updateAppWidget(appWidgetId, views)
             appWidgetManager.notifyAppWidgetViewDataChanged(appWidgetId, R.id.widget_list)
-
-            // Асинхронно подтягиваем счётчик транзакций для шапки виджета
-            CoroutineScope(Dispatchers.IO).launch {
-                try {
-                    val count = AppDatabase.getDatabase(context).transactionDao().getAllOnce().size
-                    val updated = RemoteViews(context.packageName, R.layout.widget_transactions_list).apply {
-                        setTextViewText(R.id.widget_count, count.toString())
-                    }
-                    appWidgetManager.partiallyUpdateAppWidget(appWidgetId, updated)
-                } catch (_: Exception) { }
-            }
         }
         fun updateAll(context: Context) {
             val mgr = AppWidgetManager.getInstance(context)

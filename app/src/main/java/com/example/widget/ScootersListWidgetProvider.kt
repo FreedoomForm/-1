@@ -50,17 +50,29 @@ class ScootersListWidgetProvider : AppWidgetProvider() {
         const val EXTRA_SCOOTER_ID = "scooter_id"
 
         fun updateWidget(context: Context, appWidgetManager: AppWidgetManager, appWidgetId: Int) {
+            buildAndShow(context, appWidgetManager, appWidgetId, "—")
+            CoroutineScope(Dispatchers.IO).launch {
+                try {
+                    val count = AppDatabase.getDatabase(context).scooterDao().getAllScootersOnce().size
+                    buildAndShow(context, appWidgetManager, appWidgetId, count.toString())
+                } catch (_: Exception) { }
+            }
+        }
+
+        private fun buildAndShow(
+            context: Context,
+            appWidgetManager: AppWidgetManager,
+            appWidgetId: Int,
+            countText: String
+        ) {
             val intent = Intent(context, ScootersListRemoteViewsService::class.java).apply {
                 putExtra(AppWidgetManager.EXTRA_APPWIDGET_ID, appWidgetId)
                 data = android.net.Uri.parse(toUri(Intent.URI_INTENT_SCHEME))
             }
-
-            // Сразу строим виджет с плейсхолдером, счётчик подтянем асинхронно,
-            // чтобы не блокировать главный поток (runBlocking → ANR → Failed to load widget).
             val views = RemoteViews(context.packageName, R.layout.widget_scooters_list).apply {
                 setRemoteAdapter(R.id.widget_list, intent)
                 setEmptyView(R.id.widget_list, R.id.widget_empty)
-                setTextViewText(R.id.widget_count, "—")
+                setTextViewText(R.id.widget_count, countText)
                 val openIntent = Intent(context, MainActivity::class.java).apply {
                     action = Intent.ACTION_MAIN
                     putExtra("open_tab", 1)
@@ -82,17 +94,6 @@ class ScootersListWidgetProvider : AppWidgetProvider() {
             views.setPendingIntentTemplate(R.id.widget_list, delPending)
             appWidgetManager.updateAppWidget(appWidgetId, views)
             appWidgetManager.notifyAppWidgetViewDataChanged(appWidgetId, R.id.widget_list)
-
-            // Асинхронно подтягиваем счётчик скутеров для шапки виджета
-            CoroutineScope(Dispatchers.IO).launch {
-                try {
-                    val count = AppDatabase.getDatabase(context).scooterDao().getAllScootersOnce().size
-                    val updated = RemoteViews(context.packageName, R.layout.widget_scooters_list).apply {
-                        setTextViewText(R.id.widget_count, count.toString())
-                    }
-                    appWidgetManager.partiallyUpdateAppWidget(appWidgetId, updated)
-                } catch (_: Exception) { }
-            }
         }
 
         fun updateAll(context: Context) {

@@ -1,22 +1,11 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
-  Миниатюрная иконка-гистограмма: 3 столбика разной высоты.
-  Используется в шапке виджета «Отчёты» (в цветном кружке).
+  Миниатюрная иконка-гистограмма для шапки виджета «Отчёты».
+  Простой rectangle с закруглёнными углами — безопасен для RemoteViews.
 -->
-<layer-list xmlns:android="http://schemas.android.com/apk/res/android">
-    <item android:left="0dp" android:top="6dp" android:width="3dp" android:height="6dp">
-        <shape android:shape="rectangle">
-            <solid android:color="#FFFFFF" />
-        </shape>
-    </item>
-    <item android:left="4dp" android:top="3dp" android:width="3dp" android:height="9dp">
-        <shape android:shape="rectangle">
-            <solid android:color="#FFFFFF" />
-        </shape>
-    </item>
-    <item android:left="8dp" android:top="0dp" android:width="3dp" android:height="12dp">
-        <shape android:shape="rectangle">
-            <solid android:color="#FFFFFF" />
-        </shape>
-    </item>
-</layer-list>
+<shape xmlns:android="http://schemas.android.com/apk/res/android"
+    android:shape="rectangle">
+    <solid android:color="#FFFFFF" />
+    <corners android:radius="2dp" />
+    <size android:width="16dp" android:height="16dp" />
+</shape>

@@ -113,19 +113,35 @@ class RentersListWidgetProvider : AppWidgetProvider() {
         const val EXTRA_RENTER_ID = "renter_id"
 
         fun updateWidget(context: Context, appWidgetManager: AppWidgetManager, appWidgetId: Int) {
-            // Используем RemoteViewsService для отображения списка
+            // Сразу строим виджет с плейсхолдером, чтобы не блокировать главный поток.
+            // Счётчик и список подтянутся асинхронно — лаунчер не ждёт.
+            buildAndShow(context, appWidgetManager, appWidgetId, "— / —")
+
+            // Асинхронно подтягиваем счётчик арендаторов и обновляем виджет целиком.
+            CoroutineScope(Dispatchers.IO).launch {
+                try {
+                    val all = AppDatabase.getDatabase(context).renterDao().getAllRentersOnce()
+                    val activeCount = all.count { !it.isReturned }
+                    val totalCount = all.size
+                    buildAndShow(context, appWidgetManager, appWidgetId, "$activeCount / $totalCount")
+                } catch (_: Exception) { }
+            }
+        }
+
+        private fun buildAndShow(
+            context: Context,
+            appWidgetManager: AppWidgetManager,
+            appWidgetId: Int,
+            countText: String
+        ) {
             val intent = Intent(context, RentersListRemoteViewsService::class.java).apply {
                 putExtra(AppWidgetManager.EXTRA_APPWIDGET_ID, appWidgetId)
                 data = android.net.Uri.parse(toUri(Intent.URI_INTENT_SCHEME))
             }
-
-            // Сразу строим виджет с плейсхолдером — счётчик обновим асинхронно,
-            // чтобы не блокировать главный поток (иначе ANR → Failed to load widget).
             val views = RemoteViews(context.packageName, R.layout.widget_renters_list).apply {
                 setRemoteAdapter(R.id.widget_list, intent)
                 setEmptyView(R.id.widget_list, R.id.widget_empty)
-                setTextViewText(R.id.widget_count, "— / —")
-                // Клик по шапке — открывает приложение на вкладке Ijarachilar
+                setTextViewText(R.id.widget_count, countText)
                 val openIntent = Intent(context, MainActivity::class.java).apply {
                     action = Intent.ACTION_MAIN
                     putExtra("open_tab", 0)
@@ -137,10 +153,6 @@ class RentersListWidgetProvider : AppWidgetProvider() {
                 )
                 setOnClickPendingIntent(R.id.widget_root, pendingIntent)
             }
-
-            // Шаблон PendingIntent для обработки нажатий на кнопки элементов.
-            // fillInIntent в adapter-е переопределяет action, поэтому один шаблон
-            // работает для всех 4 кнопок (PAY / TERMINATE / SMS / DELETE).
             val templateIntent = Intent(context, RentersListWidgetProvider::class.java).apply {
                 action = ACTION_WIDGET_PAY
             }
@@ -149,22 +161,8 @@ class RentersListWidgetProvider : AppWidgetProvider() {
                 PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_MUTABLE
             )
             views.setPendingIntentTemplate(R.id.widget_list, templatePendingIntent)
-
             appWidgetManager.updateAppWidget(appWidgetId, views)
             appWidgetManager.notifyAppWidgetViewDataChanged(appWidgetId, R.id.widget_list)
-
-            // Асинхронно подтягиваем счётчик арендаторов для шапки виджета
-            CoroutineScope(Dispatchers.IO).launch {
-                try {
-                    val all = AppDatabase.getDatabase(context).renterDao().getAllRentersOnce()
-                    val activeCount = all.count { !it.isReturned }
-                    val totalCount = all.size
-                    val updated = RemoteViews(context.packageName, R.layout.widget_renters_list).apply {
-                        setTextViewText(R.id.widget_count, "$activeCount / $totalCount")
-                    }
-                    appWidgetManager.partiallyUpdateAppWidget(appWidgetId, updated)
-                } catch (_: Exception) { }
-            }
         }
 
         fun updateAll(context: Context) {
