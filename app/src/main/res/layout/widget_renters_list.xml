@@ -10,7 +10,10 @@
     android:orientation="horizontal"
     android:background="@drawable/widget_bg">
 
-    <View
+    <!-- FrameLayout вместо <View> — <View> НЕ в официальном списке
+         supported RemoteViews views (см. Android docs). FrameLayout
+         поддерживается везде и рендерит background-drawable так же. -->
+    <FrameLayout
         android:layout_width="6dp"
         android:layout_height="match_parent"
         android:background="@drawable/widget_accent_renters" />

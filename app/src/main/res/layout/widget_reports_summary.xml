@@ -11,7 +11,9 @@
     android:orientation="horizontal"
     android:background="@drawable/widget_bg">
 
-    <View
+    <!-- FrameLayout вместо <View>: <View> НЕ в официальном списке
+         supported RemoteViews views (Android docs). -->
+    <FrameLayout
         android:layout_width="6dp"
         android:layout_height="match_parent"
         android:background="@drawable/widget_accent_reports" />
@@ -36,11 +38,14 @@
                 android:layout_height="28dp"
                 android:background="@drawable/widget_icon_reports"
                 android:layout_marginEnd="10dp">
-                <View
+                <!-- ImageView вместо <View> для иконки-графика.
+                     ImageView официально поддерживается в RemoteViews. -->
+                <ImageView
                     android:layout_width="16dp"
                     android:layout_height="16dp"
                     android:layout_gravity="center"
-                    android:background="@drawable/widget_chart_mini" />
+                    android:src="@drawable/widget_chart_mini"
+                    android:contentDescription="@null" />
             </FrameLayout>
 
             <TextView
