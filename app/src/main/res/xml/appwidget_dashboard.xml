@@ -13,6 +13,12 @@
       Иконка приложения есть всегда, рендерится мгновенно, работает
       на всех версиях Android.
 
+    • previewLayout = @layout/widget_dashboard (Android 12+ / API 31+)
+      НОВЫЙ способ рендеринга превью — лаунчер напрямую инфлейтит
+      сам layout виджета как превью. Надёжнее чем previewImage, потому
+      что показывает реальный вид виджета. Атрибут игнорируется на
+      API < 31, там используется previewImage.
+
     • updatePeriodMillis = 1800000 (30 минут) — системный минимум.
       В дополнение WidgetUpdater.updateAll() вызывается из приложения
       после любого изменения данных.
@@ -20,6 +26,7 @@
     • widgetCategory = home_screen — только домашний экран, не keyguard.
     • resizeMode = horizontal|vertical — пользователь может менять размер.
     • minHeight = 140dp — достаточно для 3 строк + шапки.
+    • targetCellWidth/Height (API 31+) — точный размер в клетках лаунчера.
 -->
 <appwidget-provider xmlns:android="http://schemas.android.com/apk/res/android"
     android:minWidth="250dp"
@@ -29,4 +36,7 @@
     android:resizeMode="horizontal|vertical"
     android:widgetCategory="home_screen"
     android:previewImage="@mipmap/ic_launcher"
+    android:previewLayout="@layout/widget_dashboard"
+    android:targetCellWidth="4"
+    android:targetCellHeight="3"
     android:description="@string/widget_dashboard_desc" />

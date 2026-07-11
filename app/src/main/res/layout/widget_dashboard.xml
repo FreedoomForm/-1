@@ -8,6 +8,15 @@
   — это потенциальная причина "Failed to load widget", поэтому здесь
   их нет совсем.
 
+  ВАЖНО для совместимости с minSdk=24:
+    • НЕ используем android:layout_marginVertical (добавлен в API 26,
+      ломает инфляцию RemoteViews на Android 7.x). Вместо этого пишем
+      явно android:layout_marginTop + android:layout_marginBottom.
+    • НЕ используем View-разделители — некоторые лаунчеры плохо
+      рендерят голые View в RemoteViews. Вместо этого даём каждой
+      строке свой фон-плашку через android:background на LinearLayout.
+    • Все цвета — хардкод hex (#RRGGBB), никаких color resource refs.
+
   Фон — простая форма (widget_bg_simple.xml) с solid color + corners.
   Превью виджета в пикере — @mipmap/ic_launcher (см. appwidget_dashboard.xml).
 -->
@@ -24,7 +33,7 @@
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:orientation="horizontal"
-        android:layout_marginBottom="10dp">
+        android:layout_marginBottom="8dp">
 
         <TextView
             android:id="@+id/widget_title"
@@ -51,7 +60,9 @@
         android:layout_height="wrap_content"
         android:orientation="horizontal"
         android:gravity="center_vertical"
-        android:layout_marginBottom="6dp">
+        android:layout_marginBottom="6dp"
+        android:background="#0D16A34A"
+        android:padding="6dp">
 
         <TextView
             android:id="@+id/widget_active_count"
@@ -73,20 +84,15 @@
             android:textSize="11sp" />
     </LinearLayout>
 
-    <!-- ── Разделитель ───────────────────────────────────────────── -->
-    <View
-        android:layout_width="match_parent"
-        android:layout_height="1dp"
-        android:background="#1F251E12"
-        android:layout_marginVertical="4dp" />
-
     <!-- ── Строка 2: Свободные скутеры ───────────────────────────── -->
     <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:orientation="horizontal"
         android:gravity="center_vertical"
-        android:layout_marginBottom="6dp">
+        android:layout_marginBottom="6dp"
+        android:background="#0DC14E24"
+        android:padding="6dp">
 
         <TextView
             android:id="@+id/widget_free_count"
@@ -108,19 +114,14 @@
             android:textSize="11sp" />
     </LinearLayout>
 
-    <!-- ── Разделитель ───────────────────────────────────────────── -->
-    <View
-        android:layout_width="match_parent"
-        android:layout_height="1dp"
-        android:background="#1F251E12"
-        android:layout_marginVertical="4dp" />
-
     <!-- ── Строка 3: Баланс кассы ────────────────────────────────── -->
     <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:orientation="horizontal"
-        android:gravity="center_vertical">
+        android:gravity="center_vertical"
+        android:background="#0DB8862B"
+        android:padding="6dp">
 
         <TextView
             android:id="@+id/widget_balance_count"

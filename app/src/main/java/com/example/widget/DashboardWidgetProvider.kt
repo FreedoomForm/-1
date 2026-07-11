@@ -57,10 +57,18 @@ class DashboardWidgetProvider : AppWidgetProvider() {
         appWidgetManager: AppWidgetManager,
         appWidgetIds: IntArray
     ) {
-        // goAsync() даёт BroadcastReceiver до 10 секунд на выполнение работы
-        // перед тем, как Android убьёт процесс. Это критично — старый подход
-        // запускал CoroutineScope и сразу возвращался, из-за чего процесс
-        // убивался до того, как корутина успевала вызвать updateAppWidget().
+        // ── Шаг 1: НЕМЕДЛЕННО показываем плейсхолдер для каждого виджета ──
+        // Это критично: лаунчер ожидает RemoteViews сразу после onUpdate.
+        // Если их нет — показывает "Failed to load widget". Старый код
+        // запускал корутину и возвращался, из-за чего лаунчер не получал
+        // RemoteViews вовремя. Теперь сначала ставим плейсхолдер (синхронно,
+        // в main thread), потом грузим данные.
+        appWidgetIds.forEach { id ->
+            showPlaceholder(context, appWidgetManager, id)
+        }
+
+        // ── Шаг 2: goAsync() даёт BroadcastReceiver до 10 секунд на работу ──
+        // Потом загружаем реальные данные и обновляем виджет.
         val pendingResult = goAsync()
 
         CoroutineScope(Dispatchers.IO).launch {
@@ -70,12 +78,28 @@ class DashboardWidgetProvider : AppWidgetProvider() {
                 }
             } catch (e: Exception) {
                 android.util.Log.e(TAG, "Update failed", e)
-                // Показываем хотя бы плейсхолдер — лучше, чем "Failed to load"
-                try {
-                    appWidgetIds.forEach { id ->
-                        showPlaceholder(context, appWidgetManager, id)
-                    }
-                } catch (_: Throwable) {}
+                // Плейсхолдер уже показан на шаге 1 — ничего не делаем,
+                // виджет не будет "Failed to load", просто покажет "—".
+            } finally {
+                try { pendingResult.finish() } catch (_: Throwable) {}
+            }
+        }
+    }
+
+    override fun onAppWidgetOptionsChanged(
+        context: Context,
+        appWidgetManager: AppWidgetManager,
+        appWidgetId: Int,
+        newOptions: android.os.Bundle
+    ) {
+        // При изменении размера виджета — обновляем его (плейсхолдер + данные)
+        showPlaceholder(context, appWidgetManager, appWidgetId)
+        val pendingResult = goAsync()
+        CoroutineScope(Dispatchers.IO).launch {
+            try {
+                buildAndUpdate(context, appWidgetManager, appWidgetId)
+            } catch (e: Exception) {
+                android.util.Log.e(TAG, "Options changed update failed", e)
             } finally {
                 try { pendingResult.finish() } catch (_: Throwable) {}
             }
