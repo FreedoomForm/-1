@@ -104,31 +104,33 @@ fun TransactionListScreen(
     var showDeleteConfirm by remember { mutableStateOf(false) }
     var showCreateDialog by remember { mutableStateOf(false) }
 
+    // Запоминаем последнее обработанное значение каждого триггера, чтобы
+    // НЕ реагировать на начальное значение при входе на вкладку.
+    var lastCreateTrigger by remember { mutableStateOf(createTrigger) }
+    var lastEditTrigger by remember { mutableStateOf(editTrigger) }
+    var lastDeleteTrigger by remember { mutableStateOf(deleteTrigger) }
+
     // ── Реакция на внешний триггер создания транзакции ─────────────────
-    // Каждый раз, когда createTrigger увеличивается, открываем диалог.
-    // Пропускаем начальное значение 0.
+    // Срабатывает ТОЛЬКО при реальном увеличении значения, а не при входе.
     LaunchedEffect(createTrigger) {
-        if (createTrigger > 0) showCreateDialog = true
+        if (createTrigger > lastCreateTrigger) showCreateDialog = true
+        lastCreateTrigger = createTrigger
     }
 
     // ── Реакция на универсальный ✎ из верхней панели ───────────────
-    // Когда MainActivity увеличивает editTrigger (нажата универсальная
-    // кнопка "Tahrirlash" в TopAppBar), открываем диалог редактирования
-    // выбранной транзакции. Заменяет внутреннюю кнопку "Tahrirlash" над
-    // таблицей, которая дублировала универсальную.
     LaunchedEffect(editTrigger) {
-        if (editTrigger > 0 && selectedTxs.size == 1) {
+        if (editTrigger > lastEditTrigger && selectedTxs.size == 1) {
             editingTx = transactions.firstOrNull { it.id == selectedTxs.first() }
         }
+        lastEditTrigger = editTrigger
     }
 
     // ── Реакция на универсальный 🗑 из верхней панели ───────────────
-    // Когда MainActivity увеличивает deleteTrigger (нажата универсальная
-    // кнопка "O'chir" в TopAppBar), открываем подтверждение удаления.
     LaunchedEffect(deleteTrigger) {
-        if (deleteTrigger > 0 && selectedTxs.isNotEmpty()) {
+        if (deleteTrigger > lastDeleteTrigger && selectedTxs.isNotEmpty()) {
             showDeleteConfirm = true
         }
+        lastDeleteTrigger = deleteTrigger
     }
 
     // Все контракты (CREATED + AUTO_RENEW) — для выпадающего списка в диалоге

@@ -719,6 +719,15 @@ fun FinansiPanel(
     var showCreateDialog by remember { mutableStateOf(false) }
     var editingCard by remember { mutableStateOf<VirtualCard?>(null) }
 
+    // Запоминаем последнее обработанное значение каждого триггера, чтобы
+    // НЕ реагировать на начальное значение при входе на вкладку (compose
+    // создаёт composable заново каждый раз при переключении вкладок —
+    // LaunchedEffect при этом срабатывает с текущим значением триггера,
+    // что раньше приводило к автологу диалога создания).
+    var lastCreateTrigger by remember { mutableStateOf(externalCreateTrigger) }
+    var lastEditTrigger by remember { mutableStateOf(externalEditTrigger) }
+    var lastDeleteTrigger by remember { mutableStateOf(externalDeleteTrigger) }
+
     // Синхронизируем локальный selectedIds с внешним (из MainActivity)
     LaunchedEffect(selectedCardIds) {
         selectedIds = selectedCardIds
@@ -741,21 +750,26 @@ fun FinansiPanel(
         toCard = toCard?.let { selected -> cards.find { it.id == selected.id } }
     }
 
-    // Реакция на внешний триггер создания (кнопка «+» в TopAppBar)
+    // Реакция на внешний триггер создания (кнопка «+» в TopAppBar).
+    // Срабатывает ТОЛЬКО при реальном увеличении значения, а не при входе на вкладку.
     LaunchedEffect(externalCreateTrigger) {
-        if (externalCreateTrigger > 0) showCreateDialog = true
+        if (externalCreateTrigger > lastCreateTrigger) {
+            showCreateDialog = true
+        }
+        lastCreateTrigger = externalCreateTrigger
     }
 
-    // Реакция на внешний ✎ — открываем диалог редактирования выбранной карты
+    // Реакция на внешний ✎ — открываем диалог редактирования выбранной карты.
     LaunchedEffect(externalEditTrigger) {
-        if (externalEditTrigger > 0 && selectedIds.size == 1) {
+        if (externalEditTrigger > lastEditTrigger && selectedIds.size == 1) {
             editingCard = cards.firstOrNull { it.id == selectedIds.first() }
         }
+        lastEditTrigger = externalEditTrigger
     }
 
-    // Реакция на внешний 🗑 — удаляем выбранные карты
+    // Реакция на внешний 🗑 — удаляем выбранные карты.
     LaunchedEffect(externalDeleteTrigger) {
-        if (externalDeleteTrigger > 0 && selectedIds.isNotEmpty()) {
+        if (externalDeleteTrigger > lastDeleteTrigger && selectedIds.isNotEmpty()) {
             selectedIds.forEach { id ->
                 cards.find { it.id == id }?.let { card ->
                     if (!card.isDefault) {
@@ -766,6 +780,7 @@ fun FinansiPanel(
             selectedIds = emptySet()
             onSelectedCardIdsChange(emptySet())
         }
+        lastDeleteTrigger = externalDeleteTrigger
     }
 
     Column(modifier = Modifier.fillMaxSize()) {

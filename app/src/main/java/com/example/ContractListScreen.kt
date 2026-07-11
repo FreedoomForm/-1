@@ -105,12 +105,17 @@ fun ContractListScreen(
     var showCreateDialog by remember { mutableStateOf(false) }
     var generatingPdfFor by remember { mutableStateOf<Int?>(null) }
 
+    // Запоминаем последнее обработанное значение каждого триггера, чтобы
+    // НЕ реагировать на начальное значение при входе на вкладку.
+    var lastCreateTrigger by remember { mutableStateOf(createTrigger) }
+    var lastEditTrigger by remember { mutableStateOf(editTrigger) }
+    var lastDeleteTrigger by remember { mutableStateOf(deleteTrigger) }
+
     // ── Реакция на внешний триггер создания контракта ─────────────────
-    // Каждый раз, когда createTrigger увеличивается, открываем диалог.
-    // Пропускаем начальное значение 0 — иначе диалог открылся бы при первом
-    // входе на вкладку.
+    // Срабатывает ТОЛЬКО при реальном увеличении значения, а не при входе.
     LaunchedEffect(createTrigger) {
-        if (createTrigger > 0) showCreateDialog = true
+        if (createTrigger > lastCreateTrigger) showCreateDialog = true
+        lastCreateTrigger = createTrigger
     }
 
     // Только контракты (CREATED + AUTO_RENEW), отсортированы по weekStart DESC
@@ -126,18 +131,20 @@ fun ContractListScreen(
     // выбранного контракта. Заменяет внутреннюю кнопку "Tahrirlash" над
     // таблицей, которая дублировала универсальную.
     LaunchedEffect(editTrigger) {
-        if (editTrigger > 0 && selectedContracts.size == 1) {
+        if (editTrigger > lastEditTrigger && selectedContracts.size == 1) {
             editingContract = allContracts.firstOrNull { it.id == selectedContracts.first() }
         }
+        lastEditTrigger = editTrigger
     }
 
     // ── Реакция на универсальный 🗑 из верхней панели ───────────────
     // Когда MainActivity увеличивает deleteTrigger (нажата универсальная
     // кнопка "O'chir" в TopAppBar), открываем подтверждение удаления.
     LaunchedEffect(deleteTrigger) {
-        if (deleteTrigger > 0 && selectedContracts.isNotEmpty()) {
+        if (deleteTrigger > lastDeleteTrigger && selectedContracts.isNotEmpty()) {
             showDeleteConfirm = true
         }
+        lastDeleteTrigger = deleteTrigger
     }
 
     // ── Filter panel + column visibility ─────────────────────────────────
