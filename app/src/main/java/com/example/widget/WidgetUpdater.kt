@@ -3,18 +3,20 @@ package com.example.widget
 import android.content.Context
 
 /**
- * Обновляет все нативные виджеты приложения. Вызывается после любого
- * изменения данных (добавление/удаление арендатора, оплата, и т.д.),
- * чтобы виджеты на главном экране Android сразу отображали актуальные
- * данные.
+ * Обновляет единственный нативный виджет приложения.
+ *
+ * Вызывается после любого изменения данных (добавление/удаление арендатора,
+ * оплата, и т.д.), чтобы виджет на главном экране Android сразу отображал
+ * актуальные данные.
+ *
+ * Раньше здесь было 6 вызовов для 6 разных виджетов — теперь один.
  */
 object WidgetUpdater {
     fun updateAll(context: Context) {
-        try { ReportsSummaryWidgetProvider.updateAll(context) } catch (e: Exception) {}
-        try { QuickActionsWidgetProvider.updateAll(context) } catch (e: Exception) {}
-        try { RentersListWidgetProvider.updateAll(context) } catch (e: Exception) {}
-        try { ScootersListWidgetProvider.updateAll(context) } catch (e: Exception) {}
-        try { ContractsListWidgetProvider.updateAll(context) } catch (e: Exception) {}
-        try { TransactionsListWidgetProvider.updateAll(context) } catch (e: Exception) {}
+        try {
+            DashboardWidgetProvider.updateAll(context)
+        } catch (e: Exception) {
+            android.util.Log.e("WidgetUpdater", "updateAll failed", e)
+        }
     }
 }

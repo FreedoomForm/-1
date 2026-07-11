@@ -68,103 +68,23 @@
         </provider>
 
         <!-- ════════════════════════════════════════════════════════════════ -->
-        <!-- НАТИВНЫЕ ВИДЖЕТЫ ГЛАВНОГО ЭКРАНА ANDROID                         -->
+        <!-- НАТИВНЫЙ ВИДЖЕТ ГЛАВНОГО ЭКРАНА ANDROID                            -->
         <!-- ════════════════════════════════════════════════════════════════ -->
+        <!-- КАРДИНАЛЬНО другой подход: вместо 6 сложных виджетов с layer-list
+             preview (которые ломались на Android 12+) — ОДИН простой виджет
+             с previewImage=@mipmap/ic_launcher и минимальным layout.
+             См. DashboardWidgetProvider.kt для подробностей. -->
 
-        <!-- Виджет «Отчёты» — сводка ключевых метрик -->
         <receiver
-            android:name=".widget.ReportsSummaryWidgetProvider"
+            android:name=".widget.DashboardWidgetProvider"
             android:exported="true">
             <intent-filter>
                 <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
             </intent-filter>
             <meta-data
                 android:name="android.appwidget.provider"
-                android:resource="@xml/appwidget_reports_summary" />
+                android:resource="@xml/appwidget_dashboard" />
         </receiver>
-
-        <!-- Виджет «Быстрые действия» — 4 кнопки создания -->
-        <receiver
-            android:name=".widget.QuickActionsWidgetProvider"
-            android:exported="true">
-            <intent-filter>
-                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
-            </intent-filter>
-            <meta-data
-                android:name="android.appwidget.provider"
-                android:resource="@xml/appwidget_quick_actions" />
-        </receiver>
-
-        <!-- Виджет «Список арендаторов» с кнопками To'lov/Uzish/SMS/O'chir -->
-        <receiver
-            android:name=".widget.RentersListWidgetProvider"
-            android:exported="true">
-            <intent-filter>
-                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
-                <action android:name="com.example.widget.ACTION_PAY" />
-                <action android:name="com.example.widget.ACTION_TERMINATE" />
-                <action android:name="com.example.widget.ACTION_SMS" />
-                <action android:name="com.example.widget.ACTION_DELETE" />
-            </intent-filter>
-            <meta-data
-                android:name="android.appwidget.provider"
-                android:resource="@xml/appwidget_renters_list" />
-        </receiver>
-        <service
-            android:name=".widget.RentersListRemoteViewsService"
-            android:permission="android.permission.BIND_REMOTEVIEWS"
-            android:exported="false" />
-
-        <!-- Виджет «Список скутеров» с кнопкой удаления -->
-        <receiver
-            android:name=".widget.ScootersListWidgetProvider"
-            android:exported="true">
-            <intent-filter>
-                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
-                <action android:name="com.example.widget.ACTION_DELETE_SCOOTER" />
-            </intent-filter>
-            <meta-data
-                android:name="android.appwidget.provider"
-                android:resource="@xml/appwidget_scooters_list" />
-        </receiver>
-        <service
-            android:name=".widget.ScootersListRemoteViewsService"
-            android:permission="android.permission.BIND_REMOTEVIEWS"
-            android:exported="false" />
-
-        <!-- Виджет «Список контрактов» с кнопкой удаления -->
-        <receiver
-            android:name=".widget.ContractsListWidgetProvider"
-            android:exported="true">
-            <intent-filter>
-                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
-                <action android:name="com.example.widget.ACTION_DELETE_CONTRACT" />
-            </intent-filter>
-            <meta-data
-                android:name="android.appwidget.provider"
-                android:resource="@xml/appwidget_contracts_list" />
-        </receiver>
-        <service
-            android:name=".widget.ContractsListRemoteViewsService"
-            android:permission="android.permission.BIND_REMOTEVIEWS"
-            android:exported="false" />
-
-        <!-- Виджет «Список транзакций» с кнопкой удаления -->
-        <receiver
-            android:name=".widget.TransactionsListWidgetProvider"
-            android:exported="true">
-            <intent-filter>
-                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
-                <action android:name="com.example.widget.ACTION_DELETE_TX" />
-            </intent-filter>
-            <meta-data
-                android:name="android.appwidget.provider"
-                android:resource="@xml/appwidget_transactions_list" />
-        </receiver>
-        <service
-            android:name=".widget.TransactionsListRemoteViewsService"
-            android:permission="android.permission.BIND_REMOTEVIEWS"
-            android:exported="false" />
 
     </application>
 

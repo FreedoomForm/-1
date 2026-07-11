@@ -1,0 +1,145 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  ОДИН простой виджет «ScooterRent Dashboard».
+
+  Намеренно МИНИМАЛЬНЫЙ — только TextView в LinearLayout.
+  Никаких RemoteViewsService, ListView, ImageView с custom drawable,
+  сложных layer-list или gradient. Каждая кастомная штука в RemoteViews
+  — это потенциальная причина "Failed to load widget", поэтому здесь
+  их нет совсем.
+
+  Фон — простая форма (widget_bg_simple.xml) с solid color + corners.
+  Превью виджета в пикере — @mipmap/ic_launcher (см. appwidget_dashboard.xml).
+-->
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/widget_root"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:orientation="vertical"
+    android:background="@drawable/widget_bg_simple"
+    android:padding="12dp">
+
+    <!-- ── Шапка: заголовок + время обновления ────────────────────── -->
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal"
+        android:layout_marginBottom="10dp">
+
+        <TextView
+            android:id="@+id/widget_title"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:text="ScooterRent"
+            android:textColor="#251E12"
+            android:textSize="13sp"
+            android:textStyle="bold" />
+
+        <TextView
+            android:id="@+id/widget_updated"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="—"
+            android:textColor="#71624B"
+            android:textSize="10sp" />
+    </LinearLayout>
+
+    <!-- ── Строка 1: Активные арендаторы ─────────────────────────── -->
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal"
+        android:gravity="center_vertical"
+        android:layout_marginBottom="6dp">
+
+        <TextView
+            android:id="@+id/widget_active_count"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="—"
+            android:textColor="#16A34A"
+            android:textSize="22sp"
+            android:textStyle="bold"
+            android:layout_marginEnd="10dp" />
+
+        <TextView
+            android:id="@+id/widget_active_label"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:text="Faol ijarachi"
+            android:textColor="#71624B"
+            android:textSize="11sp" />
+    </LinearLayout>
+
+    <!-- ── Разделитель ───────────────────────────────────────────── -->
+    <View
+        android:layout_width="match_parent"
+        android:layout_height="1dp"
+        android:background="#1F251E12"
+        android:layout_marginVertical="4dp" />
+
+    <!-- ── Строка 2: Свободные скутеры ───────────────────────────── -->
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal"
+        android:gravity="center_vertical"
+        android:layout_marginBottom="6dp">
+
+        <TextView
+            android:id="@+id/widget_free_count"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="—"
+            android:textColor="#C14E24"
+            android:textSize="22sp"
+            android:textStyle="bold"
+            android:layout_marginEnd="10dp" />
+
+        <TextView
+            android:id="@+id/widget_free_label"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:text="Bo'sh skuterlar"
+            android:textColor="#71624B"
+            android:textSize="11sp" />
+    </LinearLayout>
+
+    <!-- ── Разделитель ───────────────────────────────────────────── -->
+    <View
+        android:layout_width="match_parent"
+        android:layout_height="1dp"
+        android:background="#1F251E12"
+        android:layout_marginVertical="4dp" />
+
+    <!-- ── Строка 3: Баланс кассы ────────────────────────────────── -->
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal"
+        android:gravity="center_vertical">
+
+        <TextView
+            android:id="@+id/widget_balance_count"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="—"
+            android:textColor="#B8862B"
+            android:textSize="22sp"
+            android:textStyle="bold"
+            android:layout_marginEnd="10dp" />
+
+        <TextView
+            android:id="@+id/widget_balance_label"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:text="Kassa (so'm)"
+            android:textColor="#71624B"
+            android:textSize="11sp" />
+    </LinearLayout>
+
+</LinearLayout>

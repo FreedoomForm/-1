@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Метаданные ОДНОГО виджета «ScooterRent Dashboard».
+
+  КЛЮЧЕВЫЕ ОТЛИЧИЯ от старых 6 виджетов:
+    • previewImage = @mipmap/ic_launcher — ИКОНКА ПРИЛОЖЕНИЯ
+      В старых виджетах здесь был @drawable/preview_* — layer-list с
+      <item android:width android:height>. Этот атрибут НЕ поддерживается
+      в RemoteViews на Android 12+ (API 31+) — лаунчер не может отрендерить
+      превью → виджет вообще не появляется в пикере, либо показывает
+      "Failed to load widget" после размещения.
+
+      Иконка приложения есть всегда, рендерится мгновенно, работает
+      на всех версиях Android.
+
+    • updatePeriodMillis = 1800000 (30 минут) — системный минимум.
+      В дополнение WidgetUpdater.updateAll() вызывается из приложения
+      после любого изменения данных.
+
+    • widgetCategory = home_screen — только домашний экран, не keyguard.
+    • resizeMode = horizontal|vertical — пользователь может менять размер.
+    • minHeight = 140dp — достаточно для 3 строк + шапки.
+-->
+<appwidget-provider xmlns:android="http://schemas.android.com/apk/res/android"
+    android:minWidth="250dp"
+    android:minHeight="140dp"
+    android:updatePeriodMillis="1800000"
+    android:initialLayout="@layout/widget_dashboard"
+    android:resizeMode="horizontal|vertical"
+    android:widgetCategory="home_screen"
+    android:previewImage="@mipmap/ic_launcher"
+    android:description="@string/widget_dashboard_desc" />
