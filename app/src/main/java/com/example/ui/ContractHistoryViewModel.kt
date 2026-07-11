@@ -12,6 +12,8 @@ import com.example.data.ContractHistoryRepository
 import com.example.data.Renter
 import com.example.data.RenterRepository
 import com.example.data.Scooter
+import com.example.data.TransactionRepository
+import com.example.data.VirtualCardRepository
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
@@ -27,6 +29,8 @@ import java.util.Locale
 class ContractHistoryViewModel(application: Application) : AndroidViewModel(application) {
     private val repo: ContractHistoryRepository
     private val renterRepo: RenterRepository
+    private val transactionRepo: TransactionRepository
+    private val virtualCardRepo: VirtualCardRepository
     val history: StateFlow<List<ContractHistoryEntry>>
 
     // Кэш StateFlow по renterId — чтобы не создавать новый flow на каждую рекомпозицию
@@ -40,6 +44,8 @@ class ContractHistoryViewModel(application: Application) : AndroidViewModel(appl
         val db = AppDatabase.getDatabase(application)
         repo = ContractHistoryRepository(db.contractHistoryDao())
         renterRepo = RenterRepository(db.renterDao())
+        transactionRepo = TransactionRepository(db.transactionDao())
+        virtualCardRepo = VirtualCardRepository(db.virtualCardDao(), db.cardTransactionDao())
         history = repo.allHistory.stateIn(
             viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList()
         )
@@ -213,10 +219,16 @@ class ContractHistoryViewModel(application: Application) : AndroidViewModel(appl
      *
      * 2) При изменении `isPaid` для CREATED/AUTO_RENEW (контракты-долги):
      *    • false → true  (контракт оплачен)   → баланс += amount  (долг списан)
+     *      + создаётся Transaction.TYPE_PAYMENT для вкладки «Tranzaksiya»
+     *      + сумма зачисляется на «Glavnaya» виртуальную карту через
+     *        VirtualCardRepository.depositContractIncome()
      *    • true  → false (контракт НЕ оплачен) → баланс -= amount  (долг восстановлен)
+     *      + создаётся Transaction.TYPE_PAYMENT с отрицательной суммой (возврат/отмена)
+     *      + сумма списывается с «Glavnaya» карты (reverse-deposit)
      *    Это главное исправление: раньше при смене статуса контракта баланс
      *    арендатора не менялся, и арендатор оставался в минусе даже после
-     *    пометки контракта как "To'langan".
+     *    пометки контракта как "To'langan". Дополнительно деньги не падали
+     *    на главную карту и не появлялись в списке транзакций.
      *
      * 3) Если одновременно изменились и `amount`, и `isPaid` — обе корректировки
      *    применяются последовательно (сумма + статус).
@@ -252,7 +264,8 @@ class ContractHistoryViewModel(application: Application) : AndroidViewModel(appl
             // имеет смысла).
             val isContractType = old.type == ContractHistoryEntry.TYPE_CREATED ||
                                  old.type == ContractHistoryEntry.TYPE_AUTO_RENEW
-            if (isContractType && old.isPaid != entry.isPaid) {
+            val statusChanged = isContractType && old.isPaid != entry.isPaid
+            if (statusChanged) {
                 // Сумма, по которой корректируем: если amount тоже изменился,
                 // используем новое значение (оно уже учтено в delta выше как
                 // "долг вырос/уменьшился", а здесь мы добавляем/вычитаем
@@ -264,6 +277,61 @@ class ContractHistoryViewModel(application: Application) : AndroidViewModel(appl
                 } else {
                     // Стал НЕ оплачен → долг восстановлен, баланс падает
                     -amountForStatus
+                }
+
+                // ── Создаём Transaction для вкладки «Tranzaksiya» ───────
+                // Чтобы оплата/отмена отображалась в общем списке транзакций,
+                // а не только в истории контрактов.
+                val now = System.currentTimeMillis()
+                val dateFmt = SimpleDateFormat("dd.MM.yyyy", Locale.getDefault())
+                val wsStr = entry.weekStart?.let { dateFmt.format(Date(it)) } ?: ""
+                val weStr = entry.weekEnd?.let { dateFmt.format(Date(it)) } ?: ""
+                val contractLabel = "#${entry.id}  $wsStr → $weStr"
+                val txType = com.example.data.Transaction.TYPE_PAYMENT
+                val txNotes = if (entry.isPaid) {
+                    "Kontrakt statusi o'zgartirildi: To'langan"
+                } else {
+                    "Kontrakt statusi o'zgartirildi: To'lanmagan (qaytarildi)"
+                }
+                try {
+                    transactionRepo.insert(
+                        com.example.data.Transaction(
+                            contractId = entry.id,
+                            renterId = renter.id,
+                            scooterId = renter.scooterId,
+                            timestamp = now,
+                            type = txType,
+                            amount = if (entry.isPaid) amountForStatus else -amountForStatus,
+                            notes = txNotes,
+                            renterName = renter.name,
+                            renterPhone = renter.phoneNumber,
+                            scooterName = renter.scooterName ?: "",
+                            contractLabel = contractLabel
+                        )
+                    )
+                } catch (e: Exception) {
+                    Log.w("ContractHistoryVM", "Failed to insert status-change transaction: ${e.message}")
+                }
+
+                // ── Зачисление / списание на «Glavnaya» карту ───────────
+                // При оплате контракта (false → true) сумма падает на главную
+                // карту как входящий поток (depositContractIncome).
+                // При отмене оплаты (true → false) — наоборот, списываем,
+                // используя depositContractIncome с отрицательной суммой
+                // (adjustBalance в DAO корректно обрабатывает минус).
+                try {
+                    val signedAmount = if (entry.isPaid) amountForStatus else -amountForStatus
+                    val noteText = if (entry.isPaid) {
+                        "To'lov: ${renter.name} (status o'zgartirildi) — #${entry.id}"
+                    } else {
+                        "Bekor qilindi: ${renter.name} (status o'zgartirildi) — #${entry.id}"
+                    }
+                    virtualCardRepo.depositContractIncome(
+                        amount = signedAmount,
+                        note = noteText
+                    )
+                } catch (e: Exception) {
+                    Log.w("ContractHistoryVM", "depositContractIncome failed: ${e.message}")
                 }
             }
 

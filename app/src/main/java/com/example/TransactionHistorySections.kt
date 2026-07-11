@@ -192,9 +192,10 @@ fun RenterTransactionListSection(
                 items(filteredTxs, key = { it.id }) { tx ->
                     val isSelected = tx.id in selectedTxs
                     val isPositive = TransactionViewModel.typeIsPositive(tx.type)
+                    val effectivePositive = isPositive && tx.amount >= 0
                     val statusColor = when (tx.type) {
                         Transaction.TYPE_CUSTOM -> ClaudeTextSecondary
-                        else -> if (isPositive) StatusOk else StatusOverdue
+                        else -> if (effectivePositive) StatusOk else StatusOverdue
                     }
                     val typeLabel = TransactionViewModel.typeLabel(tx.type)
 
@@ -275,9 +276,10 @@ fun RenterTransactionListSection(
                                     maxLines = 1
                                 )
                             }
-                            val sign = if (isPositive) "+" else "−"
+                            val sign = if (effectivePositive) "+" else "−"
+                            val displayAmount = kotlin.math.abs(tx.amount.toLong())
                             Text(
-                                "$sign ${tx.amount.toLong()}",
+                                "$sign $displayAmount",
                                 modifier = Modifier.width(wAmount).padding(horizontal = 4.dp),
                                 style = MaterialTheme.typography.bodyMedium,
                                 color = statusColor,
@@ -504,9 +506,10 @@ fun ScooterTransactionListSection(
                 items(filteredTxs, key = { it.id }) { tx ->
                     val isSelected = tx.id in selectedTxs
                     val isPositive = TransactionViewModel.typeIsPositive(tx.type)
+                    val effectivePositive = isPositive && tx.amount >= 0
                     val statusColor = when (tx.type) {
                         Transaction.TYPE_CUSTOM -> ClaudeTextSecondary
-                        else -> if (isPositive) StatusOk else StatusOverdue
+                        else -> if (effectivePositive) StatusOk else StatusOverdue
                     }
                     val typeLabel = TransactionViewModel.typeLabel(tx.type)
 
@@ -595,9 +598,10 @@ fun ScooterTransactionListSection(
                                     maxLines = 1
                                 )
                             }
-                            val sign = if (isPositive) "+" else "−"
+                            val sign = if (effectivePositive) "+" else "−"
+                            val displayAmount = kotlin.math.abs(tx.amount.toLong())
                             Text(
-                                "$sign ${tx.amount.toLong()}",
+                                "$sign $displayAmount",
                                 modifier = Modifier.width(wAmount).padding(horizontal = 4.dp),
                                 style = MaterialTheme.typography.bodyMedium,
                                 color = statusColor,
