@@ -3005,10 +3005,13 @@ fun ScooterFormDialog(
         if (initialScooter != null) {
             initialScooter.name
         } else {
+            // По умолчанию название скутера начинается с "Skillmax-".
+            // Автонумерация: ищем максимальный существующий номер после
+            // префикса "Skillmax-" и берём следующий.
             val nextN = (existingScooters
-                .mapNotNull { it.name.removePrefix("BC-").trimStart('0').toIntOrNull() }
+                .mapNotNull { it.name.removePrefix("Skillmax-").trimStart('0').toIntOrNull() }
                 .maxOrNull() ?: 0) + 1
-            "BC-" + nextN.toString().padStart(3, '0')
+            "Skillmax-" + nextN.toString().padStart(3, '0')
         }
     }
     var name by remember { mutableStateOf(initialName) }
@@ -3051,7 +3054,7 @@ fun ScooterFormDialog(
                 OutlinedTextField(
                     value = name,
                     onValueChange = { name = it },
-                    label = { Text("Skuter nomi (BC- formatida)") },
+                    label = { Text("Skuter nomi (Skillmax- formatida)") },
                     modifier = Modifier.fillMaxWidth(),
                     shape = RoundedCornerShape(8.dp),
                     supportingText = {

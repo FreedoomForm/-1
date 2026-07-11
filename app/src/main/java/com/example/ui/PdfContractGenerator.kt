@@ -50,6 +50,37 @@ object PdfContractGenerator {
     private val dateFmt = SimpleDateFormat("dd.MM.yyyy", Locale.getDefault())
     private val dateFmtUz = SimpleDateFormat("dd MMMM yyyy", Locale("ru"))
 
+    /**
+     * Форматирует список ID аккумуляторов для PDF-договора.
+     *
+     * Правила (чтобы не показывать дубликаты, когда оба аккумулятора
+     * имеют одинаковый ID или когда второй аккумулятор отсутствует):
+     *   • Если battId2 пустой → показываем только "ID: battId1"
+     *   • Если battId1 пустой → показываем только "ID: battId2"
+     *   • Если battId1 == battId2 → показываем только один "ID: battId1"
+     *     (это частый случай: у скутера 2 аккума с одним и тем же номером
+     *      или пользователь ввёл один и тот же номер дважды)
+     *   • Иначе → "ID: battId1, ID: battId2"
+     *   • Если оба пустые → "ID: ______" (заглушка для подписи)
+     *
+     * @param separator разделитель между двумя ID (", " для раздела 1.1,
+     *                  "  " для далолатномаси)
+     */
+    private fun formatBatteryIds(
+        battId1: String,
+        battId2: String,
+        separator: String = ", "
+    ): String {
+        val shortFill: (String) -> String = { it.ifBlank { "________" } }
+        return when {
+            battId1.isBlank() && battId2.isBlank() -> "ID: ${shortFill("")}"
+            battId1.isBlank() -> "ID: ${shortFill(battId2)}"
+            battId2.isBlank() -> "ID: ${shortFill(battId1)}"
+            battId1 == battId2 -> "ID: ${shortFill(battId1)}"
+            else -> "ID: ${shortFill(battId1)}${separator}ID: ${shortFill(battId2)}"
+        }
+    }
+
     // ── Реквизиты арендодателя (статичны, как в docx) ──────────────────────
     private const val LANDLORD_NAME = "ЯТТ «АСИЛБЕКОВ ШЕРЗОД УЛУГБЕКОВИЧ»"
     private const val LANDLORD_ADDRESS = "Тошкент Шахри, Юнусобод тумани, Сайилгох кучаси, 17-уй"
@@ -102,7 +133,8 @@ object PdfContractGenerator {
 
             // Заполнитель для пустых полей (чтобы линия для подписи оставалась)
             fun fill(value: String): String = value.ifBlank { "______________________________" }
-            fun shortFill(value: String): String = value.ifBlank { "________" }
+            // shortFill для battery IDs больше не используется здесь —
+            // форматирование аккумуляторов вынесено в formatBatteryIds() (см. выше).
 
             // ── Paints ───────────────────────────────────────────────────────
             val titlePaint = TextPaint().apply {
@@ -171,7 +203,7 @@ object PdfContractGenerator {
                     bodyPaint, indent = 12f, spaceAfter = 4f
                 ))
                 add(Paragraph(
-                    "2) Аккумуляторлар (ID: ${shortFill(battId1)}, ID: ${shortFill(battId2)}) билан биргаликда «Ижарага олувчи»га топшириш, «Ижарага олувчи» эса вақтинча фойдаланиш учун уни ижарага олиш ва ижара ҳақини тўлаш мажбуриятини олади.",
+                    "2) Аккумуляторлар (${formatBatteryIds(battId1, battId2)}) билан биргаликда «Ижарага олувчи»га топшириш, «Ижарага олувчи» эса вақтинча фойдаланиш учун уни ижарага олиш ва ижара ҳақини тўлаш мажбуриятини олади.",
                     bodyPaint, indent = 12f, spaceAfter = 4f
                 ))
                 add(Paragraph(
@@ -300,7 +332,7 @@ object PdfContractGenerator {
                 add(Paragraph("VIN №: ${fill(scooterVin)}", bodyPaint, spaceAfter = 2f))
                 add(Paragraph("Двигатель рақами: ${fill(scooterEngine)}", bodyPaint, spaceAfter = 2f))
                 add(Paragraph("ID рақами: ${fill(scooterSerial)}", bodyPaint, spaceAfter = 2f))
-                add(Paragraph("Аккумулятор ID рақамлари: ID: ${shortFill(battId1)}  ID: ${shortFill(battId2)}", bodyPaint, spaceAfter = 2f))
+                add(Paragraph("Аккумулятор ID рақамлари: ${formatBatteryIds(battId1, battId2, separator = "  ")}", bodyPaint, spaceAfter = 2f))
                 add(Paragraph("Қўшимча маълумот: ${fill(extraInfo)}", bodyPaint, spaceAfter = 8f))
                 add(Paragraph(
                     "Ижарага берувчи юқорида кўрсатилган мототранспорт воситасини кўздан кечирганда қуйидаги ҳолатлар аниқланди:",
@@ -498,7 +530,7 @@ object PdfContractGenerator {
                     bodyPaint, indent = 12f, spaceAfter = 4f
                 ))
                 add(Paragraph(
-                    "2) Аккумуляторлар (ID: ${shortFill(battId1)}, ID: ${shortFill(battId2)}) билан биргаликда «Ижарага олувчи»га топшириш, «Ижарага олувчи» эса вақтинча фойдаланиш учун уни ижарага олиш ва ижара ҳақини тўлаш мажбуриятини олади.",
+                    "2) Аккумуляторлар (${formatBatteryIds(battId1, battId2)}) билан биргаликда «Ижарага олувчи»га топшириш, «Ижарага олувчи» эса вақтинча фойдаланиш учун уни ижарага олиш ва ижара ҳақини тўлаш мажбуриятини олади.",
                     bodyPaint, indent = 12f, spaceAfter = 4f
                 ))
                 add(Paragraph(
@@ -629,7 +661,7 @@ object PdfContractGenerator {
                 add(Paragraph("VIN №: ${fill(scooterVin)}", bodyPaint, spaceAfter = 2f))
                 add(Paragraph("Двигатель рақами: ${fill(scooterEngine)}", bodyPaint, spaceAfter = 2f))
                 add(Paragraph("ID рақами: ${fill(scooterSerial)}", bodyPaint, spaceAfter = 2f))
-                add(Paragraph("Аккумулятор ID рақамлари: ID: ${shortFill(battId1)}  ID: ${shortFill(battId2)}", bodyPaint, spaceAfter = 2f))
+                add(Paragraph("Аккумулятор ID рақамлари: ${formatBatteryIds(battId1, battId2, separator = "  ")}", bodyPaint, spaceAfter = 2f))
                 add(Paragraph("Қўшимча маълумот: ${fill(extraInfo)}", bodyPaint, spaceAfter = 8f))
                 add(Paragraph(
                     "Ижарага берувчи юқорида кўрсатилган мототранспорт воситасини кўздан кечирганда қуйидаги ҳолатлар аниқланди:",

@@ -204,9 +204,22 @@ class ContractHistoryViewModel(application: Application) : AndroidViewModel(appl
 
     /**
      * Обновляет запись контракта.
-     * При изменении `amount` для PAYMENT/AUTO_RENEW также корректируется баланс арендатора:
-     *   • PAYMENT     — старая сумма вычитается, новая добавляется
-     *   • AUTO_RENEW  — старая сумма добавляется, новая вычитается
+     *
+     * Корректировки баланса арендатора:
+     *
+     * 1) При изменении `amount` для PAYMENT/AUTO_RENEW:
+     *    • PAYMENT     — старая сумма вычитается, новая добавляется
+     *    • AUTO_RENEW  — старая сумма добавляется, новая вычитается
+     *
+     * 2) При изменении `isPaid` для CREATED/AUTO_RENEW (контракты-долги):
+     *    • false → true  (контракт оплачен)   → баланс += amount  (долг списан)
+     *    • true  → false (контракт НЕ оплачен) → баланс -= amount  (долг восстановлен)
+     *    Это главное исправление: раньше при смене статуса контракта баланс
+     *    арендатора не менялся, и арендатор оставался в минусе даже после
+     *    пометки контракта как "To'langan".
+     *
+     * 3) Если одновременно изменились и `amount`, и `isPaid` — обе корректировки
+     *    применяются последовательно (сумма + статус).
      */
     fun updateContract(entry: ContractHistoryEntry) {
         viewModelScope.launch(Dispatchers.IO) {
@@ -215,22 +228,52 @@ class ContractHistoryViewModel(application: Application) : AndroidViewModel(appl
                 repo.update(entry)
                 return@launch
             }
-            // Корректировка баланса при изменении суммы
+
+            val renter = renterRepo.getById(entry.renterId)
+            if (renter == null) {
+                repo.update(entry)
+                return@launch
+            }
+
+            var delta = 0.0
+
+            // ── Корректировка 1: изменение суммы ──────────────────────────
             if (old.amount != entry.amount) {
-                val renter = renterRepo.getById(entry.renterId) ?: return@launch
-                val delta = when (old.type) {
+                delta += when (old.type) {
                     ContractHistoryEntry.TYPE_PAYMENT    -> entry.amount - old.amount        // +delta
                     ContractHistoryEntry.TYPE_AUTO_RENEW -> -(entry.amount - old.amount)    // -delta (долг вырос)
                     else                                 -> 0.0
                 }
-                if (delta != 0.0) {
-                    val newBalance = renter.balance + delta
-                    val updated = renter.copy(
-                        balance = newBalance,
-                        debtAmount = maxOf(0.0, -newBalance)
-                    )
-                    renterRepo.update(updated)
+            }
+
+            // ── Корректировка 2: изменение статуса оплаты (isPaid) ────────
+            // Применяется только к контрактам (CREATED / AUTO_RENEW), не к
+            // транзакциям (PAYMENT/TERMINATED/RETURNED — для них isPaid не
+            // имеет смысла).
+            val isContractType = old.type == ContractHistoryEntry.TYPE_CREATED ||
+                                 old.type == ContractHistoryEntry.TYPE_AUTO_RENEW
+            if (isContractType && old.isPaid != entry.isPaid) {
+                // Сумма, по которой корректируем: если amount тоже изменился,
+                // используем новое значение (оно уже учтено в delta выше как
+                // "долг вырос/уменьшился", а здесь мы добавляем/вычитаем
+                // финальную сумму как оплату).
+                val amountForStatus = entry.amount
+                delta += if (entry.isPaid) {
+                    // Стал оплачен → долг списан, баланс растёт
+                    +amountForStatus
+                } else {
+                    // Стал НЕ оплачен → долг восстановлен, баланс падает
+                    -amountForStatus
                 }
+            }
+
+            if (delta != 0.0) {
+                val newBalance = renter.balance + delta
+                val updated = renter.copy(
+                    balance = newBalance,
+                    debtAmount = maxOf(0.0, -newBalance)
+                )
+                renterRepo.update(updated)
             }
             repo.update(entry)
         }
