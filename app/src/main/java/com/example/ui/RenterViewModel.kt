@@ -105,8 +105,14 @@ class RenterViewModel(application: Application) : AndroidViewModel(application) 
             // ── Начальный баланс арендатора ──────────────────────────────────
             // Логика:
             //   • Если дата окончания уже в прошлом (isOverdueAtCreation) →
-            //     баланс = -(weeklyPrice × overdueWeeks). Арендатор сразу
+            //     баланс = -(weeklyPrice × (overdueWeeks + 1)). Арендатор сразу
             //     видит красный статус и долг за просроченные недели.
+            //     ВНИМАНИЕ: +1 нужен потому, что помимо overdueWeeks штук
+            //     AUTO_RENEW-контрактов создаётся ещё 1 базовый CREATED-контракт
+            //     (первая неделя), который тоже не оплачен. Раньше здесь было
+            //     -(weeklyPrice × overdueWeeks) — это приводило к багу: при
+            //     оплате одной недели баланс сразу становился 0, хотя вторая
+            //     неделя всё ещё была не оплачена (см. скриншот пользователя).
             //   • Если в форме указан явный долг (debt > 0) → баланс = -debt.
             //     Пользователь сам ввёл сумму долга при создании.
             //   • Иначе (создаётся сегодня, без явного долга) → контракт
@@ -117,7 +123,7 @@ class RenterViewModel(application: Application) : AndroidViewModel(application) 
             val initialBalance = when {
                 isOverdueAtCreation -> {
                     val overdueWeeks = ((now - expiryTime) / (7L * 24 * 60 * 60 * 1000)).toInt().coerceAtLeast(1)
-                    -(effectiveWeeklyPrice * overdueWeeks)
+                    -(effectiveWeeklyPrice * (overdueWeeks + 1))
                 }
                 debt > 0 -> -debt
                 else -> 0.0
