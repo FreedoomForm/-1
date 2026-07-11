@@ -71,6 +71,7 @@ import androidx.compose.material.icons.filled.Bolt
 import androidx.compose.material.icons.filled.Description
 import androidx.compose.material.icons.filled.Receipt
 import androidx.compose.material.icons.filled.RequestQuote
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.outlined.Notifications
 import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.foundation.ExperimentalFoundationApi
@@ -272,12 +273,14 @@ enum class SortDirection { ASC, DESC }
  *   • RenterHistory    — история контрактов конкретного арендатора
  *   • ScooterHistory   — история контрактов конкретного скутера
  *   • CardHistory      — история транзакций конкретной виртуальной карты
+ *   • Settings         — отдельная страница настроек (не диалог)
  */
 sealed class NavigationState {
     data object MainView : NavigationState()
     data class RenterHistory(val renter: Renter) : NavigationState()
     data class ScooterHistory(val scooter: Scooter) : NavigationState()
     data class CardHistory(val card: com.example.data.VirtualCard) : NavigationState()
+    data object Settings : NavigationState()
 }
 
 /**
@@ -318,7 +321,6 @@ fun MainScreen(
     finansiViewModel: com.example.ui.FinansiViewModel = viewModel()
 ) {
     var currentTab by remember { mutableStateOf(0) }
-    var showSettings by remember { mutableStateOf(false) }
     var showAddDialog by remember { mutableStateOf(false) }
     var showAddScooterDialog by remember { mutableStateOf(false) }
     var renterToEdit by remember { mutableStateOf<Renter?>(null) }
@@ -563,6 +565,80 @@ fun MainScreen(
             )
             return
         }
+        NavigationState.Settings -> {
+            // ── Отдельная страница настроек (не диалог) ────────────────
+            // Раньше был AlertDialog с verticalScroll — был риск, что нижние
+            // секции (SIM, Update, Logout) обрезаются. Теперь это полная
+            // страница с TopAppBar, кнопкой «Saqla» в аппбаре и кнопкой
+            // «← Orqaga» для возврата.
+            val template by settingsViewModel.smsTemplate.collectAsStateWithLifecycle()
+            val weekly by settingsViewModel.weeklyPrice.collectAsStateWithLifecycle()
+            val monthly by settingsViewModel.monthlyPrice.collectAsStateWithLifecycle()
+            val smsAutoSend by settingsViewModel.smsAutoSendEnabled.collectAsStateWithLifecycle()
+            SettingsScreen(
+                currentTemplate = template,
+                currentWeeklyPrice = weekly,
+                currentMonthlyPrice = monthly,
+                currentSmsAutoSend = smsAutoSend,
+                updateInfo = updateInfo,
+                isCheckingUpdate = isCheckingUpdate,
+                isUpToDate = isUpToDate,
+                updateState = updateState,
+                onStartUpdate = { info ->
+                    coroutineScope.launch {
+                        if (!updateManager.canInstallFromUnknownSources()) {
+                            updateManager.openInstallPermissionSettings()
+                            Toast.makeText(localContext, "Ilova sozlamalaridan \"Noma'lum manbalardan o'rnatish\" ruxsatini bering", Toast.LENGTH_LONG).show()
+                        } else {
+                            updateManager.downloadAndInstall(info)
+                        }
+                    }
+                },
+                onBack = { navState = NavigationState.MainView },
+                onSave = { newTemplate, newWeekly, newMonthly, _, _ ->
+                    settingsViewModel.updateTemplate(newTemplate)
+                    settingsViewModel.updatePrices(newWeekly, newMonthly)
+                    navState = NavigationState.MainView
+                },
+                onSmsAutoSendChange = { enabled ->
+                    settingsViewModel.updateSmsAutoSend(enabled)
+                    Toast.makeText(
+                        localContext,
+                        if (enabled) "SMS avto-yuborish yoqildi"
+                        else "SMS qo'llanma rejimiga o'tdi",
+                        Toast.LENGTH_SHORT
+                    ).show()
+                },
+                onLogout = {
+                    navState = NavigationState.MainView
+                },
+                onCheckUpdate = {
+                    if (!isCheckingUpdate) {
+                        isCheckingUpdate = true
+                        coroutineScope.launch {
+                            val checker = UpdateChecker(localContext)
+                            val (result, info) = checker.checkForUpdate()
+                            when (result) {
+                                UpdateCheckResult.UPDATE_AVAILABLE -> {
+                                    updateInfo = info
+                                    isUpToDate = false
+                                }
+                                UpdateCheckResult.UP_TO_DATE -> {
+                                    updateInfo = null
+                                    isUpToDate = true
+                                }
+                                UpdateCheckResult.ERROR -> {
+                                    updateInfo = null
+                                    isUpToDate = false
+                                }
+                            }
+                            isCheckingUpdate = false
+                        }
+                    }
+                }
+            )
+            return
+        }
         NavigationState.MainView -> { /* продолжаем — основной Scaffold ниже */ }
     }
 
@@ -711,7 +787,7 @@ fun MainScreen(
                     }
 
                     IconButton(
-                        onClick = { showSettings = true },
+                        onClick = { navState = NavigationState.Settings },
                         modifier = Modifier
                             .padding(end = 16.dp)
                             .size(40.dp)
@@ -1411,75 +1487,6 @@ fun MainScreen(
                     }
                     showAddScooterDialog = false
                     scooterToEdit = null
-                }
-            )
-        }
-
-        if (showSettings) {
-            val template by settingsViewModel.smsTemplate.collectAsStateWithLifecycle()
-            val weekly by settingsViewModel.weeklyPrice.collectAsStateWithLifecycle()
-            val monthly by settingsViewModel.monthlyPrice.collectAsStateWithLifecycle()
-            val smsAutoSend by settingsViewModel.smsAutoSendEnabled.collectAsStateWithLifecycle()
-            SettingsDialog(
-                currentTemplate = template,
-                currentWeeklyPrice = weekly,
-                currentMonthlyPrice = monthly,
-                currentSmsAutoSend = smsAutoSend,
-                updateInfo = updateInfo,
-                isCheckingUpdate = isCheckingUpdate,
-                isUpToDate = isUpToDate,
-                updateState = updateState,
-                onStartUpdate = { info ->
-                    coroutineScope.launch {
-                        if (!updateManager.canInstallFromUnknownSources()) {
-                            updateManager.openInstallPermissionSettings()
-                            Toast.makeText(localContext, "Ilova sozlamalaridan \"Noma'lum manbalardan o'rnatish\" ruxsatini bering", Toast.LENGTH_LONG).show()
-                        } else {
-                            updateManager.downloadAndInstall(info)
-                        }
-                    }
-                },
-                onDismiss = { showSettings = false },
-                onSave = { newTemplate, newWeekly, newMonthly, _, _ ->
-                    settingsViewModel.updateTemplate(newTemplate)
-                    settingsViewModel.updatePrices(newWeekly, newMonthly)
-                    showSettings = false
-                },
-                onSmsAutoSendChange = { enabled ->
-                    settingsViewModel.updateSmsAutoSend(enabled)
-                    Toast.makeText(
-                        localContext,
-                        if (enabled) "SMS avto-yuborish yoqildi"
-                        else "SMS qo'llanma rejimiga o'tdi",
-                        Toast.LENGTH_SHORT
-                    ).show()
-                },
-                onLogout = {
-                    showSettings = false
-                },
-                onCheckUpdate = {
-                    if (!isCheckingUpdate) {
-                        isCheckingUpdate = true
-                        coroutineScope.launch {
-                            val checker = UpdateChecker(localContext)
-                            val (result, info) = checker.checkForUpdate()
-                            when (result) {
-                                UpdateCheckResult.UPDATE_AVAILABLE -> {
-                                    updateInfo = info
-                                    isUpToDate = false
-                                }
-                                UpdateCheckResult.UP_TO_DATE -> {
-                                    updateInfo = null
-                                    isUpToDate = true
-                                }
-                                UpdateCheckResult.ERROR -> {
-                                    updateInfo = null
-                                    isUpToDate = false
-                                }
-                            }
-                            isCheckingUpdate = false
-                        }
-                    }
                 }
             )
         }
@@ -2290,8 +2297,9 @@ data class RenterFormResult(
     val pinfl: String
 )
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun SettingsDialog(
+fun SettingsScreen(
     currentTemplate: String,
     currentWeeklyPrice: Double,
     currentMonthlyPrice: Double,
@@ -2301,7 +2309,7 @@ fun SettingsDialog(
     isUpToDate: Boolean = false,
     updateState: InAppUpdateState = InAppUpdateState.Idle,
     onStartUpdate: (UpdateInfo) -> Unit = {},
-    onDismiss: () -> Unit,
+    onBack: () -> Unit,
     onSave: (String, Double, Double, String, String) -> Unit,
     onSmsAutoSendChange: (Boolean) -> Unit = {},
     onLogout: () -> Unit = {},
@@ -2332,18 +2340,68 @@ fun SettingsDialog(
         })
     }
 
+    // ── Логика сохранения — вынесена в локальную лямбду, чтобы её можно было
+    // вызывать и из TopAppBar action, и из нижней кнопки «Saqla» без дубля.
+    val saveSettings: () -> Unit = {
+        val wPrice = weekly.toDoubleOrNull() ?: 0.0
+        val mPrice = monthly.toDoubleOrNull() ?: 0.0
+        settingsRepo.paymeLink = paymeLink.trim().ifBlank {
+            com.example.data.SettingsRepository.DEFAULT_PAYME_LINK
+        }
+        settingsRepo.callCenter = callCenter.trim().ifBlank {
+            com.example.data.SettingsRepository.DEFAULT_CALL_CENTER
+        }
+        // Сохраняем цену скутера и курс USD для страницы Отчётов
+        settingsRepo.scooterPriceUsd = scooterPriceUsd.toDoubleOrNull()
+            ?: com.example.data.SettingsRepository.DEFAULT_SCOOTER_PRICE_USD
+        settingsRepo.usdToUzsRate = usdToUzsRate.toDoubleOrNull()
+            ?: com.example.data.SettingsRepository.DEFAULT_USD_TO_UZS_RATE
+        onSave(template, wPrice, mPrice, paymeLink, callCenter)
+    }
+
     val settingsScrollState = rememberScrollState()
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text("Sozlamalar", style = MaterialTheme.typography.titleLarge) },
-        containerColor = ClaudeCard,
-        text = {
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .verticalScroll(settingsScrollState),
-                verticalArrangement = Arrangement.spacedBy(16.dp)
-            ) {
+    Scaffold(
+        modifier = Modifier.fillMaxSize(),
+        containerColor = ClaudeBackground,
+        topBar = {
+            TopAppBar(
+                title = {
+                    Text(
+                        "Sozlamalar",
+                        style = MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.Bold)
+                    )
+                },
+                navigationIcon = {
+                    IconButton(onClick = onBack) {
+                        Icon(
+                            Icons.AutoMirrored.Filled.ArrowBack,
+                            contentDescription = "Orqaga"
+                        )
+                    }
+                },
+                actions = {
+                    PrimaryButton(
+                        label = "Saqla",
+                        icon = Icons.Default.Save,
+                        onClick = saveSettings
+                    )
+                },
+                colors = TopAppBarDefaults.topAppBarColors(
+                    containerColor = ClaudeBackground,
+                    titleContentColor = ClaudeText,
+                    navigationIconContentColor = ClaudeText
+                )
+            )
+        }
+    ) { padding ->
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(padding)
+                .verticalScroll(settingsScrollState)
+                .padding(horizontal = 16.dp, vertical = 16.dp),
+            verticalArrangement = Arrangement.spacedBy(16.dp)
+        ) {
                 Column {
                     Text("Tariflar", style = MaterialTheme.typography.labelMedium, color = ClaudeText)
                     Spacer(modifier = Modifier.height(8.dp))
@@ -2748,38 +2806,20 @@ fun SettingsDialog(
                     onClick = { onLogout() },
                     modifier = Modifier.fillMaxWidth()
                 )
-            }
-        },
-        confirmButton = {
-            PrimaryButton(
-                label = "Saqla",
-                icon = Icons.Default.Save,
-                onClick = {
-                    val wPrice = weekly.toDoubleOrNull() ?: 0.0
-                    val mPrice = monthly.toDoubleOrNull() ?: 0.0
-                    settingsRepo.paymeLink = paymeLink.trim().ifBlank {
-                        com.example.data.SettingsRepository.DEFAULT_PAYME_LINK
-                    }
-                    settingsRepo.callCenter = callCenter.trim().ifBlank {
-                        com.example.data.SettingsRepository.DEFAULT_CALL_CENTER
-                    }
-                    // Сохраняем цену скутера и курс USD для страницы Отчётов
-                    settingsRepo.scooterPriceUsd = scooterPriceUsd.toDoubleOrNull()
-                        ?: com.example.data.SettingsRepository.DEFAULT_SCOOTER_PRICE_USD
-                    settingsRepo.usdToUzsRate = usdToUzsRate.toDoubleOrNull()
-                        ?: com.example.data.SettingsRepository.DEFAULT_USD_TO_UZS_RATE
-                    onSave(template, wPrice, mPrice, paymeLink, callCenter)
-                }
-            )
-        },
-        dismissButton = {
-            TextActionButton(
-                label = "Bekor",
-                icon = Icons.Default.Close,
-                onClick = onDismiss
-            )
+
+                HorizontalDivider()
+
+                // ── Дублирующая кнопка «Saqla» внизу страницы ─────────────
+                // На длинной форме неудобно тянуться к аппбару — даём вторую
+                // кнопку сохранения в самом низу, рядом с «Chiqish».
+                PrimaryButton(
+                    label = "Saqla",
+                    icon = Icons.Default.Save,
+                    onClick = saveSettings,
+                    modifier = Modifier.fillMaxWidth()
+                )
         }
-    )
+    }
 }
 
 
