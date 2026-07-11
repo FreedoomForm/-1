@@ -91,7 +91,11 @@ fun ContractListScreen(
     // Выделение поднято в MainActivity, чтобы универсальные ✎/🗑 в верхней
     // панели могли его видеть. Раньше было внутренним state этого экрана.
     selectedContracts: Set<Int> = emptySet(),
-    onSelectedContractsChange: (Set<Int>) -> Unit = {}
+    onSelectedContractsChange: (Set<Int>) -> Unit = {},
+    // Клик по строке контракта (одиночный, не long-click) — открывает экран
+    // истории транзакций этого контракта. Long-click по-прежнему выделяет
+    // строку для универсальных ✎/🗑 в TopAppBar.
+    onContractClick: (ContractHistoryEntry) -> Unit = {}
 ) {
     val allHistory by contractHistoryViewModel.history.collectAsStateWithLifecycle()
     val allRenters by renterViewModel.rentersList.collectAsStateWithLifecycle()
@@ -387,16 +391,14 @@ fun ContractListScreen(
                                     .background(if (isSelected) ClaudeAccentBg else ClaudeCard)
                                     .combinedClickable(
                                         onClick = {
-                                            // Один клик = выбрать/снять выделение.
-                                            // Диалог редактирования открывается универсальной
-                                            // кнопкой ✎ в верхней панели (TopAppBar).
-                                            onSelectedContractsChange(
-                                                if (isSelected) selectedContracts - entry.id
-                                                else selectedContracts + entry.id
-                                            )
+                                            // Один клик = открыть экран истории транзакций
+                                            // этого контракта (как в CardTransactionHistoryScreen,
+                                            // где клик по строке открывает детали).
+                                            onContractClick(entry)
                                         },
                                         onLongClick = {
-                                            // Долгое нажатие — резервный способ выбора.
+                                            // Долгое нажатие — выбор строки для универсальных
+                                            // ✎/🗑 в верхней панели (TopAppBar).
                                             onSelectedContractsChange(
                                                 if (isSelected) selectedContracts - entry.id
                                                 else selectedContracts + entry.id

@@ -43,10 +43,11 @@ class TransactionViewModel(application: Application) : AndroidViewModel(applicat
     private val renterRepo: RenterRepository
     val transactions: StateFlow<List<Transaction>>
 
-    // Кэши StateFlow по renterId / scooterId — чтобы не создавать новый flow
-    // на каждую рекомпозицию (аналогично ContractHistoryViewModel).
+    // Кэши StateFlow по renterId / scooterId / contractId — чтобы не создавать
+    // новый flow на каждую рекомпозицию (аналогично ContractHistoryViewModel).
     private val renterTxFlows = mutableMapOf<Int, StateFlow<List<Transaction>>>()
     private val scooterTxFlows = mutableMapOf<Int, StateFlow<List<Transaction>>>()
+    private val contractTxFlows = mutableMapOf<Int, StateFlow<List<Transaction>>>()
     private val txFlowsLock = Any()
 
     init {
@@ -73,6 +74,16 @@ class TransactionViewModel(application: Application) : AndroidViewModel(applicat
         synchronized(txFlowsLock) {
             scooterTxFlows.getOrPut(scooterId) {
                 repo.forScooter(scooterId).stateIn(
+                    viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList()
+                )
+            }
+        }
+
+    /** Все транзакции конкретного контракта (по contractId). */
+    fun transactionsForContract(contractId: Int): StateFlow<List<Transaction>> =
+        synchronized(txFlowsLock) {
+            contractTxFlows.getOrPut(contractId) {
+                repo.forContract(contractId).stateIn(
                     viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList()
                 )
             }

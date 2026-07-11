@@ -280,6 +280,7 @@ sealed class NavigationState {
     data class RenterHistory(val renter: Renter) : NavigationState()
     data class ScooterHistory(val scooter: Scooter) : NavigationState()
     data class CardHistory(val card: com.example.data.VirtualCard) : NavigationState()
+    data class ContractTransactionHistory(val contract: com.example.data.ContractHistoryEntry) : NavigationState()
     data object Settings : NavigationState()
 }
 
@@ -325,6 +326,7 @@ fun MainScreen(
     var showAddScooterDialog by remember { mutableStateOf(false) }
     var renterToEdit by remember { mutableStateOf<Renter?>(null) }
     var scooterToEdit by remember { mutableStateOf<Scooter?>(null) }
+    var contractToEdit by remember { mutableStateOf<com.example.data.ContractHistoryEntry?>(null) }
     var selectedRenters by remember { mutableStateOf(setOf<Int>()) }
     var selectedScooters by remember { mutableStateOf(setOf<Int>()) }
     var searchQuery by remember { mutableStateOf("") }
@@ -563,6 +565,45 @@ fun MainScreen(
                 },
                 finansiViewModel = finansiViewModel
             )
+            return
+        }
+        is NavigationState.ContractTransactionHistory -> {
+            // ── Экран истории транзакций контракта ─────────────────────
+            // Шаблон — CardTransactionHistoryScreen. Показывает входящие
+            // (PAYMENT, RETURNED) и исходящие (TERMINATED, PENALTY, REPAIR)
+            // транзакции, связанные с конкретным контрактом, в отдельных вкладках.
+            ContractTransactionHistoryScreen(
+                contract = st.contract,
+                onBack = { navState = NavigationState.MainView },
+                onEditContract = { contractToEdit = st.contract },
+                transactionViewModel = transactionViewModel,
+                contractHistoryViewModel = contractHistoryViewModel,
+                renterViewModel = viewModel,
+                scooterViewModel = scooterViewModel
+            )
+            // ── Диалог редактирования контракта (поверх экрана истории) ──
+            // Используется тот же EditContractDialog, что и в ContractListScreen.
+            contractToEdit?.let { entry ->
+                val allRentersList by viewModel.rentersList.collectAsStateWithLifecycle()
+                val allScootersList by scooterViewModel.scootersList.collectAsStateWithLifecycle()
+                EditContractDialog(
+                    entry = entry,
+                    allRenters = allRentersList,
+                    allScooters = allScootersList,
+                    onDismiss = { contractToEdit = null },
+                    onSave = { updated ->
+                        contractHistoryViewModel.updateContract(updated)
+                        contractToEdit = null
+                        Toast.makeText(localContext, "Kontrakt yangilandi", Toast.LENGTH_SHORT).show()
+                    },
+                    onDelete = {
+                        contractHistoryViewModel.deleteContract(entry.id)
+                        contractToEdit = null
+                        navState = NavigationState.MainView
+                        Toast.makeText(localContext, "Kontrakt o'chirildi", Toast.LENGTH_SHORT).show()
+                    }
+                )
+            }
             return
         }
         NavigationState.Settings -> {
@@ -1348,7 +1389,10 @@ fun MainScreen(
                     editTrigger = contractEditTrigger,
                     deleteTrigger = contractDeleteTrigger,
                     selectedContracts = selectedContracts,
-                    onSelectedContractsChange = { selectedContracts = it }
+                    onSelectedContractsChange = { selectedContracts = it },
+                    onContractClick = { entry ->
+                        navState = NavigationState.ContractTransactionHistory(entry)
+                    }
                 )
             } else if (currentTab == 3) {
                 // ── Вкладка «Tranzaksiya» — все транзакции ──────────────
