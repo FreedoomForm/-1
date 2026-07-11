@@ -10,13 +10,16 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.ArrowForward
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
@@ -46,6 +49,17 @@ import java.util.Locale
      • Список транзакций с цветными индикаторами:
          зелёный — приход на эту карту
          красный — расход с этой карты
+
+   Диалог создания/редактирования транзакции — ВЕРТИКАЛЬНЫЙ:
+     ┌──────────────────────────────┐
+     │  [Manba karta — сверху]       │
+     ├──────────────────────────────┤
+     │   ↓             [Summa ___]   │
+     │  ↓↓ (flip)      [Izoh  ___]   │
+     │   ↓                            │
+     ├──────────────────────────────┤
+     │  [Maqsad karta — снизу]       │
+     └──────────────────────────────┘
    ============================================================================ */
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -69,6 +83,8 @@ fun CardTransactionHistoryScreen(
     var selectedTxIds by remember { mutableStateOf(setOf<Int>()) }
     var searchQuery by remember { mutableStateOf("") }
     var showDeleteConfirm by remember { mutableStateOf(false) }
+    var showCreateDialog by remember { mutableStateOf(false) }
+    var editingTx by remember { mutableStateOf<CardTransaction?>(null) }
 
     val dateFmt = remember { SimpleDateFormat("dd.MM.yyyy HH:mm", Locale.getDefault()) }
 
@@ -210,7 +226,9 @@ fun CardTransactionHistoryScreen(
                 onFilterClick = null
             )
 
-            // ── Панель действий ────────────────────────────────────────
+            // ── Панель действий — как в RenterContractHistoryScreen ──────
+            // Yaratish — всегда активна. Tahrirlash — ровно 1 выбран.
+            // O'chir — хоть 1 выбран.
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -218,11 +236,19 @@ fun CardTransactionHistoryScreen(
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
+                PrimaryButton(
+                    label = "Yaratish",
+                    icon = Icons.Default.Add,
+                    onClick = { showCreateDialog = true }
+                )
                 SecondaryButton(
                     label = "Tahrirlash",
                     icon = Icons.Default.Edit,
-                    enabled = false,
-                    onClick = {}
+                    enabled = selectedTxIds.size == 1,
+                    onClick = {
+                        val id = selectedTxIds.first()
+                        editingTx = currentList.firstOrNull { it.id == id }
+                    }
                 )
                 DangerButton(
                     label = "O'chir",
@@ -312,6 +338,377 @@ fun CardTransactionHistoryScreen(
             }
         )
     }
+
+    // ── Диалог создания транзакции ─────────────────────────────────────
+    // В режиме create: текущая карта автоматически становится «приёмником»
+    // (toCard) если активна вкладка Kiruvchi, либо «источником» (fromCard)
+    // если активна Chiquvchi — это естественное поведение для пользователя.
+    if (showCreateDialog) {
+        val defaultFrom = if (selectedTab == 1) currentCard else allCards.firstOrNull { it.id != currentCard.id }
+        val defaultTo   = if (selectedTab == 0) currentCard else allCards.firstOrNull { it.id != currentCard.id }
+
+        VerticalCardTransferDialog(
+            cards = allCards,
+            initialFrom = defaultFrom,
+            initialTo = defaultTo,
+            initialAmount = "",
+            initialNote = "",
+            title = "Tranzaksiya yaratish",
+            onDismiss = { showCreateDialog = false },
+            onSave = { fromCard, toCard, amount, note ->
+                if (fromCard.id == toCard.id) {
+                    Toast.makeText(context, "Manba va maqsad boshqa bo'lishi kerak", Toast.LENGTH_SHORT).show()
+                    return@VerticalCardTransferDialog
+                }
+                finansiViewModel.transfer(fromCard.id, toCard.id, amount, note, reversed = false)
+                Toast.makeText(context, "Tranzaksiya yaratildi", Toast.LENGTH_SHORT).show()
+                showCreateDialog = false
+            }
+        )
+    }
+
+    // ── Диалог редактирования транзакции ───────────────────────────────
+    // ВНИМАНИЕ: правка НЕ пересчитывает балансы карт — только правит запись.
+    // Это соответствует поведению удаления (O'chir), где балансы также не
+    // откатываются. Если нужно реально переместить деньги — создайте новую.
+    editingTx?.let { tx ->
+        VerticalCardTransferDialog(
+            cards = allCards,
+            initialFrom = allCards.firstOrNull { it.id == tx.fromCardId },
+            initialTo = allCards.firstOrNull { it.id == tx.toCardId },
+            initialAmount = tx.amount.toLong().toString(),
+            initialNote = tx.note ?: "",
+            title = "Tranzaksiyani tahrirlash",
+            onDismiss = { editingTx = null },
+            onSave = { fromCard, toCard, amount, note ->
+                if (fromCard.id == toCard.id) {
+                    Toast.makeText(context, "Manba va maqsad boshqa bo'lishi kerak", Toast.LENGTH_SHORT).show()
+                    return@VerticalCardTransferDialog
+                }
+                finansiViewModel.updateTransaction(
+                    tx.copy(
+                        fromCardId = fromCard.id,
+                        toCardId = toCard.id,
+                        amount = amount,
+                        note = note
+                    )
+                )
+                Toast.makeText(context, "Tranzaksiya yangilandi", Toast.LENGTH_SHORT).show()
+                editingTx = null
+            }
+        )
+    }
+}
+
+/* ============================================================================
+   ВЕРТИКАЛЬНЫЙ ДИАЛОГ ПЕРЕВОДА МЕЖДУ КАРТАМИ
+   ----------------------------------------------------------------------------
+   Карта-источник сверху, карта-назначение снизу, между ними — столбец с
+   круглой кнопкой-стрелкой (вертикальной, переворачивается по тапу) и
+   справа от неё — поля «Summa» и «Izoh». Это вертикальный аналог
+   горизонтальной TransactionZone из FinansiPanel.kt.
+   ============================================================================ */
+
+@Composable
+private fun VerticalCardTransferDialog(
+    cards: List<VirtualCard>,
+    initialFrom: VirtualCard?,
+    initialTo: VirtualCard?,
+    initialAmount: String,
+    initialNote: String,
+    title: String,
+    onDismiss: () -> Unit,
+    onSave: (from: VirtualCard, to: VirtualCard, amount: Double, note: String?) -> Unit
+) {
+    var fromCard by remember { mutableStateOf(initialFrom) }
+    var toCard by remember { mutableStateOf(initialTo) }
+    var amountText by remember { mutableStateOf(initialAmount) }
+    var noteText by remember { mutableStateOf(initialNote) }
+    var reversed by remember { mutableStateOf(false) }
+    var pickingSlot by remember { mutableStateOf<Int?>(null) } // 1 = from, 2 = to
+
+    // Эффективные from/to с учётом флага разворота
+    val effectiveFrom = if (reversed) toCard else fromCard
+    val effectiveTo   = if (reversed) fromCard else toCard
+
+    val amountParsed = amountText.replace(',', '.').toDoubleOrNull()
+    val canSave = fromCard != null && toCard != null &&
+                  amountParsed != null && amountParsed > 0.0 &&
+                  fromCard!!.id != toCard!!.id
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        shape = RoundedCornerShape(20.dp),
+        containerColor = ClaudeCard,
+        title = {
+            Text(title, fontWeight = FontWeight.Bold, color = ClaudeText)
+        },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                // ── Верхняя карта (источник в прямом направлении) ───────
+                VerticalCardSlot(
+                    label = "Manba karta (yuqori)",
+                    card = effectiveFrom,
+                    onClick = { pickingSlot = 1 }
+                )
+
+                // ── Стрелка-переворот + поля ввода рядом ──────────────
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(10.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    // Кнопка-стрелка (вертикальная)
+                    Column(
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.spacedBy(2.dp)
+                    ) {
+                        IconButton(
+                            onClick = { reversed = !reversed },
+                            modifier = Modifier
+                                .size(44.dp)
+                                .background(ClaudeAccent, CircleShape)
+                        ) {
+                            Icon(
+                                imageVector = if (reversed) Icons.AutoMirrored.Filled.ArrowBack
+                                              else Icons.AutoMirrored.Filled.ArrowForward,
+                                contentDescription = "Yo'nalishni o'zgartirish",
+                                tint = Color.White,
+                                modifier = Modifier.size(22.dp)
+                            )
+                        }
+                        Text(
+                            text = if (reversed) "Pastdan yuqoriga" else "Yuqoridan pastga",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = ClaudeTextSecondary,
+                            textAlign = TextAlign.Center,
+                            modifier = Modifier.width(80.dp)
+                        )
+                    }
+
+                    // Поля ввода рядом со стрелкой
+                    Column(
+                        modifier = Modifier.weight(1f),
+                        verticalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        OutlinedTextField(
+                            value = amountText,
+                            onValueChange = { s -> amountText = s.filter { it.isDigit() || it == '.' || it == ',' } },
+                            label = { Text("Summa (so'm) *") },
+                            placeholder = { Text("0") },
+                            keyboardOptions = KeyboardOptions(keyboardType = androidx.compose.ui.text.input.KeyboardType.Number),
+                            modifier = Modifier.fillMaxWidth(),
+                            shape = RoundedCornerShape(10.dp),
+                            singleLine = true,
+                            colors = OutlinedTextFieldDefaults.colors(
+                                unfocusedBorderColor = ClaudeDivider,
+                                focusedBorderColor = ClaudeAccent,
+                                unfocusedContainerColor = ClaudeBackground,
+                                focusedContainerColor = ClaudeBackground
+                            )
+                        )
+                        OutlinedTextField(
+                            value = noteText,
+                            onValueChange = { noteText = it },
+                            label = { Text("Izoh (ixtiyoriy)") },
+                            modifier = Modifier.fillMaxWidth(),
+                            shape = RoundedCornerShape(10.dp),
+                            singleLine = true,
+                            colors = OutlinedTextFieldDefaults.colors(
+                                unfocusedBorderColor = ClaudeDivider,
+                                focusedBorderColor = ClaudeAccent,
+                                unfocusedContainerColor = ClaudeBackground,
+                                focusedContainerColor = ClaudeBackground
+                            )
+                        )
+                    }
+                }
+
+                // ── Нижняя карта (назначение в прямом направлении) ──────
+                VerticalCardSlot(
+                    label = "Maqsad karta (pastki)",
+                    card = effectiveTo,
+                    onClick = { pickingSlot = 2 }
+                )
+            }
+        },
+        confirmButton = {
+            Button(
+                onClick = {
+                    val amt = amountText.replace(',', '.').toDoubleOrNull() ?: 0.0
+                    val f = effectiveFrom
+                    val t = effectiveTo
+                    if (f != null && t != null && amt > 0 && f.id != t.id) {
+                        onSave(f, t, amt, noteText.ifBlank { null })
+                    }
+                },
+                enabled = canSave,
+                shape = RoundedCornerShape(10.dp),
+                colors = ButtonDefaults.buttonColors(containerColor = ClaudeAccent)
+            ) {
+                Icon(Icons.Default.Check, contentDescription = null, tint = Color.White, modifier = Modifier.size(18.dp))
+                Spacer(Modifier.width(6.dp))
+                Text("Saqlash", color = Color.White, fontWeight = FontWeight.Bold)
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) {
+                Text("Bekor", color = ClaudeTextSecondary)
+            }
+        }
+    )
+
+    // ── Вложенный диалог выбора карты в слот ──────────────────────────
+    pickingSlot?.let { slot ->
+        CardPickerDialogInline(
+            cards = cards,
+            excludeId = if (slot == 1) effectiveTo?.id else effectiveFrom?.id,
+            title = if (slot == 1) "Manba kartani tanlang" else "Maqsad kartani tanlang",
+            onDismiss = { pickingSlot = null },
+            onPick = { c ->
+                if (slot == 1) fromCard = c else toCard = c
+                pickingSlot = null
+            }
+        )
+    }
+}
+
+/** Компактный слот карты для вертикального диалога. */
+@Composable
+private fun VerticalCardSlot(
+    label: String,
+    card: VirtualCard?,
+    onClick: () -> Unit
+) {
+    Surface(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onClick),
+        shape = RoundedCornerShape(12.dp),
+        color = if (card != null) ClaudeBackground else ClaudeAccentBg,
+        border = BorderStroke(
+            width = if (card != null) 1.dp else 1.5.dp,
+            color = if (card != null) ClaudeDivider else ClaudeAccentMuted
+        )
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(10.dp)
+        ) {
+            Box(
+                modifier = Modifier
+                    .size(40.dp)
+                    .clip(CircleShape)
+                    .background(
+                        if (card != null) parseColorHex(card.colorHex)
+                        else ClaudeAccent.copy(alpha = 0.5f)
+                    ),
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(
+                    imageVector = if (card != null) Icons.Default.CreditCard else Icons.Default.Add,
+                    contentDescription = null,
+                    tint = Color.White,
+                    modifier = Modifier.size(20.dp)
+                )
+            }
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = label,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = ClaudeTextSecondary
+                )
+                Text(
+                    text = card?.name ?: "Tanlanmagan",
+                    style = MaterialTheme.typography.bodyMedium,
+                    fontWeight = FontWeight.SemiBold,
+                    color = if (card != null) ClaudeText else ClaudeAccent
+                )
+                if (card != null) {
+                    Text(
+                        text = "${formatMoney(card.balance)} so'm",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = ClaudeTextSecondary
+                    )
+                }
+            }
+            Icon(
+                imageVector = Icons.Default.ArrowDropDown,
+                contentDescription = null,
+                tint = ClaudeTextSecondary
+            )
+        }
+    }
+}
+
+/** Inline-диалог выбора карты (упрощённый, без зависимостей от FinansiPanel). */
+@Composable
+private fun CardPickerDialogInline(
+    cards: List<VirtualCard>,
+    excludeId: Int?,
+    title: String,
+    onDismiss: () -> Unit,
+    onPick: (VirtualCard) -> Unit
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        shape = RoundedCornerShape(20.dp),
+        containerColor = ClaudeCard,
+        title = {
+            Text(title, fontWeight = FontWeight.Bold, color = ClaudeText)
+        },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                cards
+                    .filter { it.id != excludeId }
+                    .forEach { card ->
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clip(RoundedCornerShape(12.dp))
+                                .background(ClaudeBackground)
+                                .clickable { onPick(card) }
+                                .padding(12.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(12.dp)
+                        ) {
+                            Box(
+                                modifier = Modifier
+                                    .size(36.dp)
+                                    .clip(CircleShape)
+                                    .background(parseColorHex(card.colorHex))
+                            )
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    text = card.name,
+                                    fontWeight = FontWeight.Medium,
+                                    color = ClaudeText
+                                )
+                                Text(
+                                    text = "${formatMoney(card.balance)} so'm",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = ClaudeTextSecondary
+                                )
+                            }
+                        }
+                    }
+                if (cards.isEmpty() || cards.all { it.id == excludeId }) {
+                    Text(
+                        text = "Boshqa kartalar yo'q. Avval yangi karta yarating.",
+                        color = ClaudeTextSecondary
+                    )
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = onDismiss) {
+                Text("Yopish", color = ClaudeTextSecondary)
+            }
+        }
+    )
 }
 
 /* ── Вспомогательные компоненты ───────────────────────────────────────── */
@@ -490,6 +887,19 @@ private fun EmptyStateBox(text: String) {
                 fontSize = 14.sp
             )
         }
+    }
+}
+
+/** Парсит HEX-цвет (#RRGGBB) в Compose Color. */
+private fun parseColorHex(hex: String): Color {
+    return try {
+        val cleaned = hex.removePrefix("#")
+        val r = cleaned.substring(0, 2).toInt(16)
+        val g = cleaned.substring(2, 4).toInt(16)
+        val b = cleaned.substring(4, 6).toInt(16)
+        Color(r, g, b)
+    } catch (e: Exception) {
+        Color(0x607080FF)
     }
 }
 

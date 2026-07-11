@@ -79,5 +79,6 @@ class VirtualCardRepository(
     }
 
     suspend fun deleteTransaction(id: Int) = txDao.deleteTransaction(id)
+    suspend fun updateTransaction(tx: CardTransaction) = txDao.updateTransaction(tx)
     suspend fun countCards(): Int = cardDao.count()
 }

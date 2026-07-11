@@ -158,6 +158,23 @@ class FinansiViewModel(application: Application) : AndroidViewModel(application)
         }
     }
 
+    /**
+     * Обновляет запись транзакции в истории (поля from/to/amount/note).
+     * ВНИМАНИЕ: как и [deleteTransaction], НЕ трогает балансы карт —
+     * правка носит характер «исправления описания/суммы записи».
+     * Если нужно реально переместить деньги — используйте [transfer].
+     */
+    fun updateTransaction(tx: CardTransaction) {
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                repository.updateTransaction(tx)
+                WidgetUpdater.updateAll(getApplication())
+            } catch (e: Exception) {
+                Log.e(TAG, "Failed to update transaction", e)
+            }
+        }
+    }
+
     companion object {
         private const val TAG = "FinansiViewModel"
     }

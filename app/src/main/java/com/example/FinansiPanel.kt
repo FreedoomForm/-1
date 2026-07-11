@@ -494,15 +494,17 @@ fun CardsGrid(
     onCardClick: (VirtualCard) -> Unit,
     onCardLongClick: (Int, Boolean) -> Unit,
     onMoveUp: (VirtualCard) -> Unit = {},
-    onMoveDown: (VirtualCard) -> Unit = {}
+    onMoveDown: (VirtualCard) -> Unit = {},
+    modifier: Modifier = Modifier
 ) {
     LazyVerticalGrid(
         columns = GridCells.Fixed(2),
         // ВАЖНО: weight(1f) вместо fillMaxSize — иначе TransactionZone
         // сверху выталкивается за пределы экрана при прокрутке.
         // Со weight(1f) CardsGrid занимает оставшееся место под
-        // зафиксированной TransactionZone.
-        modifier = Modifier.weight(1f).fillMaxWidth(),
+        // зафиксированной TransactionZone. Weight передаётся вызывающим
+        // кодом, который находится внутри ColumnScope.
+        modifier = modifier.fillMaxWidth(),
         contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
         horizontalArrangement = Arrangement.spacedBy(10.dp),
         verticalArrangement = Arrangement.spacedBy(10.dp)
@@ -783,7 +785,7 @@ fun FinansiPanel(
     // Хранится как строка id1,id2,id3,... — карты, которых нет в строке,
     // добавляются в конец по возрастанию id.
     val orderPrefs = remember { context.getSharedPreferences("finansi_card_order", android.content.Context.MODE_PRIVATE) }
-    var cardOrder by remember {
+    var cardOrder: List<Int> by remember {
         mutableStateOf(
             orderPrefs.getString("order", null)
                 ?.split(",")
@@ -943,7 +945,8 @@ fun FinansiPanel(
                 }
             },
             onMoveUp = { card -> moveCardUp(card) },
-            onMoveDown = { card -> moveCardDown(card) }
+            onMoveDown = { card -> moveCardDown(card) },
+            modifier = Modifier.weight(1f)
         )
     }
 
