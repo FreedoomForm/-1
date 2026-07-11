@@ -102,29 +102,38 @@ class RenterViewModel(application: Application) : AndroidViewModel(application) 
             val isOverdueAtCreation = expiryTime < now
             val effectiveWeeklyPrice = if (weeklyPrice > 0) weeklyPrice else SettingsRepository.DEFAULT_WEEKLY_PRICE
 
+            // ── Сколько неоплаченных недель будет создано в истории ──────────
+            // При isOverdueAtCreation (дата окончания в прошлом) создаётся:
+            //   • 1 базовый CREATED (isPaid=false) — первая неделя
+            //   • N записей AUTO_RENEW (isPaid=false) — по одной на каждую
+            //     ПОЛНУЮ просроченную неделю после первой
+            //   Итого неоплаченных контрактов = N + 1.
+            //
+            // Баланс ДОЛЖЕН точно совпадать с количеством неоплаченных
+            // контрактов × weeklyPrice, иначе при оплате одной недели
+            // баланс уйдёт в 0 раньше времени (см. предыдущий баг, где
+            // формула использовала только overdueWeeks без учёта CREATED).
+            //
+            // Здесь мы считаем ВСЁ через одно число unpaidContractsCount,
+            // чтобы баланс и цикл создания контрактов всегда были
+            // синхронизированы — независимо от того, 1, 2, 3 или 10
+            // неоплаченных недель.
+            val overdueWeeks = if (isOverdueAtCreation) {
+                ((now - expiryTime) / (7L * 24 * 60 * 60 * 1000)).toInt().coerceAtLeast(1)
+            } else 0
+            // 1 CREATED (первая неделя) + overdueWeeks AUTO_RENEW — все неоплачены
+            val unpaidContractsCount = if (isOverdueAtCreation) overdueWeeks + 1 else 0
+
             // ── Начальный баланс арендатора ──────────────────────────────────
-            // Логика:
-            //   • Если дата окончания уже в прошлом (isOverdueAtCreation) →
-            //     баланс = -(weeklyPrice × (overdueWeeks + 1)). Арендатор сразу
-            //     видит красный статус и долг за просроченные недели.
-            //     ВНИМАНИЕ: +1 нужен потому, что помимо overdueWeeks штук
-            //     AUTO_RENEW-контрактов создаётся ещё 1 базовый CREATED-контракт
-            //     (первая неделя), который тоже не оплачен. Раньше здесь было
-            //     -(weeklyPrice × overdueWeeks) — это приводило к багу: при
-            //     оплате одной недели баланс сразу становился 0, хотя вторая
-            //     неделя всё ещё была не оплачена (см. скриншот пользователя).
-            //   • Если в форме указан явный долг (debt > 0) → баланс = -debt.
+            //   • isOverdueAtCreation → баланс = -(weeklyPrice × unpaidContractsCount).
+            //     Это РОВНО столько, сколько неоплаченных контрактов будет
+            //     создано ниже — никакого рассинхрона.
+            //   • debt > 0 (явный долг из формы, не просрочка) → баланс = -debt.
             //     Пользователь сам ввёл сумму долга при создании.
             //   • Иначе (создаётся сегодня, без явного долга) → контракт
             //     создаётся ЗАРАНЕЕ ОПЛАЧЕННЫМ: баланс = 0, isPaid = true.
-            //     На странице «Ijarachilar» виден ЗЕЛЁНЫЙ статус (оплачено),
-            //     контракт в истории — зелёный. При наступлении следующей
-            //     недели авто-продление создаст новый неоплаченный контракт.
             val initialBalance = when {
-                isOverdueAtCreation -> {
-                    val overdueWeeks = ((now - expiryTime) / (7L * 24 * 60 * 60 * 1000)).toInt().coerceAtLeast(1)
-                    -(effectiveWeeklyPrice * (overdueWeeks + 1))
-                }
+                isOverdueAtCreation -> -(effectiveWeeklyPrice * unpaidContractsCount)
                 debt > 0 -> -debt
                 else -> 0.0
             }
@@ -172,8 +181,9 @@ class RenterViewModel(application: Application) : AndroidViewModel(application) 
                     ))
 
                     // Если просрочка — создаем N записей AUTO_RENEW
+                    // overdueWeeks уже посчитан выше — НЕ пересчитываем тут,
+                    // чтобы баланс и цикл всегда были синхронизированы.
                     if (isOverdueAtCreation) {
-                        val overdueWeeks = ((now - expiryTime) / (7L * 24 * 60 * 60 * 1000)).toInt().coerceAtLeast(1)
                         for (i in 1..overdueWeeks) {
                             val weekStart = expiryTime + (i - 1) * 7L * 24 * 60 * 60 * 1000
                             val weekEnd = weekStart + 7L * 24 * 60 * 60 * 1000
