@@ -23,6 +23,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -89,6 +90,21 @@ fun CardTransactionHistoryScreen(
     var showCreateDialog by remember { mutableStateOf(false) }
     var editingTx by remember { mutableStateOf<CardTransaction?>(null) }
 
+    // ── Фильтр по диапазону дат (как на странице «Arendatorlar») ────────
+    var showDateRangePicker by remember { mutableStateOf(false) }
+    val dateRangePickerState = rememberDateRangePickerState()
+    // ── Боковая панель фильтров по столбцам ─────────────────────────────
+    var showFilterPanel by remember { mutableStateOf(false) }
+    var filterValues by remember { mutableStateOf(mapOf<String, String>()) }
+    val cardFilterColumns = remember {
+        listOf(
+            FilterColumn("col_counterparty", "Kontragent", "Masalan: Glavnaya"),
+            FilterColumn("col_amount", "Summa", "0", KeyboardType.Number),
+            FilterColumn("col_note", "Izoh", "Masalan: To'lov"),
+            FilterColumn("col_date", "Sana", "dd.MM.yyyy")
+        )
+    }
+
     val dateFmt = remember { SimpleDateFormat("dd.MM.yyyy HH:mm", Locale.getDefault()) }
 
     // Карта id → имя (для отображения контрагента)
@@ -117,14 +133,32 @@ fun CardTransactionHistoryScreen(
 
     val currentList = if (selectedTab == 0) incoming else outgoing
 
-    val filteredTxs = remember(currentList, searchQuery) {
+    val filteredTxs = remember(currentList, searchQuery, dateRangePickerState.selectedStartDateMillis, dateRangePickerState.selectedEndDateMillis, filterValues) {
+        val startMillis = dateRangePickerState.selectedStartDateMillis
+        val endMillis = dateRangePickerState.selectedEndDateMillis
         currentList.filter { t ->
-            searchQuery.isBlank() ||
+            val counterparty = if (t.toCardId == currentCard.id) cardName(t.fromCardId) else cardName(t.toCardId)
+            val textMatch = searchQuery.isBlank() ||
                 cardName(t.fromCardId).contains(searchQuery, ignoreCase = true) ||
                 cardName(t.toCardId).contains(searchQuery, ignoreCase = true) ||
                 (t.note?.contains(searchQuery, ignoreCase = true) == true) ||
                 t.amount.toLong().toString().contains(searchQuery) ||
                 t.id.toString().contains(searchQuery)
+            val dateMatch = if (startMillis != null) {
+                if (endMillis != null) t.timestamp in startMillis..endMillis
+                else t.timestamp >= startMillis
+            } else true
+            val filterMatch = filterValues.all { (colId, filterText) ->
+                if (filterText.isBlank()) true
+                else when (colId) {
+                    "col_counterparty" -> counterparty.contains(filterText, ignoreCase = true)
+                    "col_amount" -> t.amount.toLong().toString().contains(filterText, ignoreCase = true)
+                    "col_note" -> (t.note ?: "").contains(filterText, ignoreCase = true)
+                    "col_date" -> dateFmt.format(Date(t.timestamp)).contains(filterText, ignoreCase = true)
+                    else -> true
+                }
+            }
+            textMatch && dateMatch && filterMatch
         }
     }
 
@@ -227,8 +261,23 @@ fun CardTransactionHistoryScreen(
                 query = searchQuery,
                 onQueryChange = { searchQuery = it },
                 placeholder = "Tranzaksiya qidirish...",
-                onCalendarClick = null,
-                onFilterClick = null
+                onCalendarClick = { showDateRangePicker = true },
+                calendarActive = dateRangePickerState.selectedStartDateMillis != null,
+                onFilterClick = { showFilterPanel = true },
+                filterActive = filterValues.any { it.value.isNotBlank() }
+            )
+
+            // ── Боковая панель фильтров ──────────────────────────────────
+            FilterSidePanel(
+                columns = cardFilterColumns,
+                filterValues = filterValues,
+                onFilterChange = { colId, value ->
+                    filterValues = filterValues.toMutableMap().apply { put(colId, value) }
+                },
+                onSearch = { /* фильтры применяются реактивно */ },
+                onReset = { filterValues = emptyMap() },
+                onDismiss = { showFilterPanel = false },
+                visible = showFilterPanel
             )
 
             // ── Панель действий — как в RenterContractHistoryScreen ──────
@@ -402,6 +451,37 @@ fun CardTransactionHistoryScreen(
                 editingTx = null
             }
         )
+    }
+
+    // ── Диалог выбора диапазона дат (фильтр по дате транзакции) ──────────
+    if (showDateRangePicker) {
+        DatePickerDialog(
+            onDismissRequest = { showDateRangePicker = false },
+            confirmButton = {
+                TextActionButton(
+                    label = "Tanlash",
+                    icon = Icons.Default.Check,
+                    onClick = { showDateRangePicker = false }
+                )
+            },
+            dismissButton = {
+                TextActionButton(
+                    label = "Tozalash",
+                    icon = Icons.Default.Clear,
+                    onClick = {
+                        dateRangePickerState.setSelection(null, null)
+                        showDateRangePicker = false
+                    }
+                )
+            }
+        ) {
+            DateRangePicker(
+                state = dateRangePickerState,
+                modifier = Modifier.weight(1f),
+                title = { Text("Sana bo'yicha filter", modifier = Modifier.padding(16.dp)) },
+                headline = { Text("Davrni tanlang", modifier = Modifier.padding(16.dp)) }
+            )
+        }
     }
 }
 

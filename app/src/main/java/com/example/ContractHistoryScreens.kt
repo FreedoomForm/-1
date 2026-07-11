@@ -101,6 +101,21 @@ fun RenterContractHistoryScreen(
     var generatingPdfFor by remember { mutableStateOf<Int?>(null) }
     var generatingUnlimitedPdf by remember { mutableStateOf(false) }
 
+    // ── Фильтр по диапазону дат (как на странице «Arendatorlar») ────────
+    var showDateRangePicker by remember { mutableStateOf(false) }
+    val dateRangePickerState = rememberDateRangePickerState()
+    // ── Боковая панель фильтров по столбцам ─────────────────────────────
+    var showFilterPanel by remember { mutableStateOf(false) }
+    var filterValues by remember { mutableStateOf(mapOf<String, String>()) }
+    val renterHistoryFilterColumns = remember {
+        listOf(
+            FilterColumn("col_period", "Davr", "dd.MM.yyyy"),
+            FilterColumn("col_scooter", "Skuter", "Masalan: Honda"),
+            FilterColumn("col_notes", "Izoh", "Masalan: To'lov"),
+            FilterColumn("col_id", "ID", "0", KeyboardType.Number)
+        )
+    }
+
     val dateFmt = remember { SimpleDateFormat("dd.MM.yyyy", Locale.getDefault()) }
 
     val filteredContracts = contracts.filter { c ->
@@ -113,7 +128,26 @@ fun RenterContractHistoryScreen(
             c.notes?.contains(searchQuery, ignoreCase = true) == true ||
             c.id.toString().contains(searchQuery) ||
             (c.scooterName?.contains(searchQuery, ignoreCase = true) == true)
-        textMatch
+        // ── Фильтр по диапазону дат: сравниваем weekStart с выбранной датой ──
+        val startMillis = dateRangePickerState.selectedStartDateMillis
+        val endMillis = dateRangePickerState.selectedEndDateMillis
+        val ts = c.weekStart ?: c.timestamp
+        val dateMatch = if (startMillis != null) {
+            if (endMillis != null) ts in startMillis..endMillis
+            else ts >= startMillis
+        } else true
+        // ── Фильтры из боковой панели ──────────────────────────────────────
+        val filterMatch = filterValues.all { (colId, filterText) ->
+            if (filterText.isBlank()) true
+            else when (colId) {
+                "col_period" -> periodStr.contains(filterText, ignoreCase = true)
+                "col_scooter" -> (c.scooterName ?: "").contains(filterText, ignoreCase = true)
+                "col_notes" -> (c.notes ?: "").contains(filterText, ignoreCase = true)
+                "col_id" -> c.id.toString().contains(filterText, ignoreCase = true)
+                else -> true
+            }
+        }
+        textMatch && dateMatch && filterMatch
     }
 
     Scaffold(
@@ -262,8 +296,23 @@ fun RenterContractHistoryScreen(
                 onQueryChange = { searchQuery = it },
                 placeholder = if (selectedTab == 0) "Kontrakt qidirish..."
                                else "Tranzaksiya qidirish...",
-                onCalendarClick = null,
-                onFilterClick = null
+                onCalendarClick = { showDateRangePicker = true },
+                calendarActive = dateRangePickerState.selectedStartDateMillis != null,
+                onFilterClick = { showFilterPanel = true },
+                filterActive = filterValues.any { it.value.isNotBlank() }
+            )
+
+            // ── Боковая панель фильтров ──────────────────────────────────
+            FilterSidePanel(
+                columns = renterHistoryFilterColumns,
+                filterValues = filterValues,
+                onFilterChange = { colId, value ->
+                    filterValues = filterValues.toMutableMap().apply { put(colId, value) }
+                },
+                onSearch = { /* фильтры применяются реактивно */ },
+                onReset = { filterValues = emptyMap() },
+                onDismiss = { showFilterPanel = false },
+                visible = showFilterPanel
             )
 
             if (selectedTab == 0) {
@@ -552,6 +601,37 @@ fun RenterContractHistoryScreen(
                 showCreateDialog = false
             }
         )
+    }
+
+    // ── Диалог выбора диапазона дат (фильтр по weekStart контракта) ──────
+    if (showDateRangePicker) {
+        DatePickerDialog(
+            onDismissRequest = { showDateRangePicker = false },
+            confirmButton = {
+                TextActionButton(
+                    label = "Tanlash",
+                    icon = Icons.Default.Check,
+                    onClick = { showDateRangePicker = false }
+                )
+            },
+            dismissButton = {
+                TextActionButton(
+                    label = "Tozalash",
+                    icon = Icons.Default.Clear,
+                    onClick = {
+                        dateRangePickerState.setSelection(null, null)
+                        showDateRangePicker = false
+                    }
+                )
+            }
+        ) {
+            DateRangePicker(
+                state = dateRangePickerState,
+                modifier = Modifier.weight(1f),
+                title = { Text("Sana bo'yicha filter", modifier = Modifier.padding(16.dp)) },
+                headline = { Text("Davrni tanlang", modifier = Modifier.padding(16.dp)) }
+            )
+        }
     }
 }
 
@@ -1468,15 +1548,50 @@ fun ScooterContractHistoryScreen(
     val dateFmt = remember { SimpleDateFormat("dd.MM.yyyy", Locale.getDefault()) }
     val dateTimeFmt = remember { SimpleDateFormat("dd.MM.yyyy HH:mm", Locale.getDefault()) }
 
+    // ── Фильтр по диапазону дат (как на странице «Arendatorlar») ────────
+    var showDateRangePicker by remember { mutableStateOf(false) }
+    val dateRangePickerState = rememberDateRangePickerState()
+    // ── Боковая панель фильтров по столбцам ─────────────────────────────
+    var showFilterPanel by remember { mutableStateOf(false) }
+    var filterValues by remember { mutableStateOf(mapOf<String, String>()) }
+    val scooterHistoryFilterColumns = remember {
+        listOf(
+            FilterColumn("col_renter", "Ijarachi", "Masalan: Akmal"),
+            FilterColumn("col_type", "Turi", "Masalan: CREATED"),
+            FilterColumn("col_notes", "Izoh", "Masalan: To'lov"),
+            FilterColumn("col_date", "Sana", "dd.MM.yyyy")
+        )
+    }
+
     // Кто сейчас арендует этот скутер
     val activeRenter = renters.firstOrNull { it.scooterId == scooter.id && !it.isReturned }
     val pastRenters = renters.filter { it.scooterId == scooter.id && it.isReturned }
 
     val filteredContracts = contracts.filter { c ->
-        c.notes?.contains(searchQuery, ignoreCase = true) == true ||
-        c.renterName.contains(searchQuery, ignoreCase = true) ||
-        c.type.contains(searchQuery, ignoreCase = true) ||
-        (c.scooterName?.contains(searchQuery, ignoreCase = true) == true)
+        val textMatch = c.notes?.contains(searchQuery, ignoreCase = true) == true ||
+            c.renterName.contains(searchQuery, ignoreCase = true) ||
+            c.type.contains(searchQuery, ignoreCase = true) ||
+            (c.scooterName?.contains(searchQuery, ignoreCase = true) == true)
+        // ── Фильтр по диапазону дат: сравниваем weekStart/timestamp ────────
+        val startMillis = dateRangePickerState.selectedStartDateMillis
+        val endMillis = dateRangePickerState.selectedEndDateMillis
+        val ts = c.weekStart ?: c.timestamp
+        val dateMatch = if (startMillis != null) {
+            if (endMillis != null) ts in startMillis..endMillis
+            else ts >= startMillis
+        } else true
+        // ── Фильтры из боковой панели ──────────────────────────────────────
+        val filterMatch = filterValues.all { (colId, filterText) ->
+            if (filterText.isBlank()) true
+            else when (colId) {
+                "col_renter" -> c.renterName.contains(filterText, ignoreCase = true)
+                "col_type" -> c.type.contains(filterText, ignoreCase = true)
+                "col_notes" -> (c.notes ?: "").contains(filterText, ignoreCase = true)
+                "col_date" -> dateFmt.format(Date(ts)).contains(filterText, ignoreCase = true)
+                else -> true
+            }
+        }
+        textMatch && dateMatch && filterMatch
     }
 
     Scaffold(
@@ -1603,8 +1718,23 @@ fun ScooterContractHistoryScreen(
                 onQueryChange = { searchQuery = it },
                 placeholder = if (selectedTab == 0) "Kontrakt qidirish..."
                                else "Tranzaksiya qidirish...",
-                onCalendarClick = null,
-                onFilterClick = null
+                onCalendarClick = { showDateRangePicker = true },
+                calendarActive = dateRangePickerState.selectedStartDateMillis != null,
+                onFilterClick = { showFilterPanel = true },
+                filterActive = filterValues.any { it.value.isNotBlank() }
+            )
+
+            // ── Боковая панель фильтров ──────────────────────────────────
+            FilterSidePanel(
+                columns = scooterHistoryFilterColumns,
+                filterValues = filterValues,
+                onFilterChange = { colId, value ->
+                    filterValues = filterValues.toMutableMap().apply { put(colId, value) }
+                },
+                onSearch = { /* фильтры применяются реактивно */ },
+                onReset = { filterValues = emptyMap() },
+                onDismiss = { showFilterPanel = false },
+                visible = showFilterPanel
             )
 
             if (selectedTab == 0) {
@@ -1725,6 +1855,37 @@ fun ScooterContractHistoryScreen(
                     contractHistoryViewModel = contractHistoryViewModel
                 )
             }
+        }
+    }
+
+    // ── Диалог выбора диапазона дат (фильтр по weekStart/timestamp) ──────
+    if (showDateRangePicker) {
+        DatePickerDialog(
+            onDismissRequest = { showDateRangePicker = false },
+            confirmButton = {
+                TextActionButton(
+                    label = "Tanlash",
+                    icon = Icons.Default.Check,
+                    onClick = { showDateRangePicker = false }
+                )
+            },
+            dismissButton = {
+                TextActionButton(
+                    label = "Tozalash",
+                    icon = Icons.Default.Clear,
+                    onClick = {
+                        dateRangePickerState.setSelection(null, null)
+                        showDateRangePicker = false
+                    }
+                )
+            }
+        ) {
+            DateRangePicker(
+                state = dateRangePickerState,
+                modifier = Modifier.weight(1f),
+                title = { Text("Sana bo'yicha filter", modifier = Modifier.padding(16.dp)) },
+                headline = { Text("Davrni tanlang", modifier = Modifier.padding(16.dp)) }
+            )
         }
     }
 }
