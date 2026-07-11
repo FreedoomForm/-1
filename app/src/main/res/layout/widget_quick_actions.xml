@@ -1,0 +1,141 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Нативный виджет «Tezkor amallar» (Quick Actions).
+
+  Применены 3 критических фикса против "Failed to load widget":
+    1. НЕТ android:layout_marginVertical (добавлен в API 26, ломает инфляцию
+       RemoteViews на Android 7.x / API 24-25). Вместо этого — явные
+       android:layout_marginTop + android:layout_marginBottom.
+    2. НЕТ <View>-разделителей (некоторые лаунчеры MIUI/One UI плохо рендерят
+       голые <View> с цветным фоном в RemoteViews). Левая цветная полоса
+       сделана через drawable, но это <View> БЕЗ разделительной функции —
+       это декоративный акцент, и он окрашен через @drawable/widget_accent_*.
+       Если будут проблемы — заменить на android:background на корневом layout.
+    3. previewImage = @mipmap/ic_launcher (см. appwidget_quick_actions.xml).
+-->
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/widget_root"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:orientation="horizontal"
+    android:background="@drawable/widget_bg">
+
+    <!-- Левая цветная полоса-маркер (терракотовая) -->
+    <View
+        android:layout_width="6dp"
+        android:layout_height="match_parent"
+        android:background="@drawable/widget_accent_quick" />
+
+    <LinearLayout
+        android:layout_width="0dp"
+        android:layout_height="match_parent"
+        android:layout_weight="1"
+        android:orientation="vertical"
+        android:padding="12dp">
+
+        <!-- ── Шапка ──────────────────────────────────────────────── -->
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal"
+            android:gravity="center_vertical"
+            android:layout_marginBottom="10dp">
+
+            <FrameLayout
+                android:layout_width="28dp"
+                android:layout_height="28dp"
+                android:background="@drawable/widget_icon_quick"
+                android:layout_marginEnd="10dp">
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_gravity="center"
+                    android:text="+"
+                    android:textColor="#FFFFFF"
+                    android:textSize="18sp"
+                    android:textStyle="bold" />
+            </FrameLayout>
+
+            <TextView
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:text="TEZKOR AMALLAR"
+                android:textColor="#251E12"
+                android:textSize="12sp"
+                android:textStyle="bold" />
+        </LinearLayout>
+
+        <!-- ── Кнопки 2×2 ─────────────────────────────────────────── -->
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal"
+            android:layout_marginBottom="6dp">
+
+            <Button
+                android:id="@+id/btn_create_renter"
+                android:layout_width="0dp"
+                android:layout_height="40dp"
+                android:layout_weight="1"
+                android:text="+ Ijarachi"
+                android:textColor="#FFFFFF"
+                android:background="@drawable/widget_btn_terracotta"
+                android:textSize="11sp"
+                android:textStyle="bold"
+                android:padding="0dp"
+                android:minWidth="0dp"
+                android:minHeight="0dp"
+                android:layout_marginEnd="6dp" />
+
+            <Button
+                android:id="@+id/btn_create_scooter"
+                android:layout_width="0dp"
+                android:layout_height="40dp"
+                android:layout_weight="1"
+                android:text="+ Skuter"
+                android:textColor="#FFFFFF"
+                android:background="@drawable/widget_btn_terracotta"
+                android:textSize="11sp"
+                android:textStyle="bold"
+                android:padding="0dp"
+                android:minWidth="0dp"
+                android:minHeight="0dp" />
+        </LinearLayout>
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal">
+
+            <Button
+                android:id="@+id/btn_create_contract"
+                android:layout_width="0dp"
+                android:layout_height="40dp"
+                android:layout_weight="1"
+                android:text="+ Kontrakt"
+                android:textColor="#FFFFFF"
+                android:background="@drawable/widget_btn_gold"
+                android:textSize="11sp"
+                android:textStyle="bold"
+                android:padding="0dp"
+                android:minWidth="0dp"
+                android:minHeight="0dp"
+                android:layout_marginEnd="6dp" />
+
+            <Button
+                android:id="@+id/btn_create_transaction"
+                android:layout_width="0dp"
+                android:layout_height="40dp"
+                android:layout_weight="1"
+                android:text="+ Tranzaksiya"
+                android:textColor="#FFFFFF"
+                android:background="@drawable/widget_btn_gold"
+                android:textSize="11sp"
+                android:textStyle="bold"
+                android:padding="0dp"
+                android:minWidth="0dp"
+                android:minHeight="0dp" />
+        </LinearLayout>
+    </LinearLayout>
+</LinearLayout>

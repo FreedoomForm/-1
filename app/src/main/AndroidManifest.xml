@@ -68,13 +68,25 @@
         </provider>
 
         <!-- ════════════════════════════════════════════════════════════════ -->
-        <!-- НАТИВНЫЙ ВИДЖЕТ ГЛАВНОГО ЭКРАНА ANDROID                            -->
+        <!-- НАТИВНЫЕ ВИДЖЕТЫ ГЛАВНОГО ЭКРАНА ANDROID — 7 ШТУК                  -->
         <!-- ════════════════════════════════════════════════════════════════ -->
-        <!-- КАРДИНАЛЬНО другой подход: вместо 6 сложных виджетов с layer-list
-             preview (которые ломались на Android 12+) — ОДИН простой виджет
-             с previewImage=@mipmap/ic_launcher и минимальным layout.
-             См. DashboardWidgetProvider.kt для подробностей. -->
+        <!-- Все виджеты применяют 3 критических фикса против "Failed to load
+             widget" (см. подробные комментарии в DashboardWidgetProvider.kt
+             и в каждом провайдере):
+               1. НЕТ android:layout_marginVertical в layout (только marginTop
+                  + marginBottom). Атрибут добавлен в API 26, ломает инфляцию
+                  RemoteViews на Android 7.x (minSdk=24).
+               2. RemoteViews возвращаются СИНХРОННО в onUpdate — сначала
+                  showPlaceholder(), потом goAsync() даёт BR до 10 секунд.
+               3. НЕТ <View>-разделителей в layout (некоторые лаунчеры MIUI /
+                  One UI плохо рендерят голые <View> с цветным фоном).
+               + previewImage = @mipmap/ic_launcher (иконка приложения,
+                 рендерится всегда, в отличие от layer-list preview).
+               + previewLayout = сам layout (Android 12+ / API 31+).
+               + onAppWidgetOptionsChanged signature: android.os.Bundle. -->
 
+        <!-- 1. Dashboard — сводный виджет: активные арендаторы, свободные
+              скутеры, баланс кассы. -->
         <receiver
             android:name=".widget.DashboardWidgetProvider"
             android:exported="true">
@@ -85,6 +97,106 @@
                 android:name="android.appwidget.provider"
                 android:resource="@xml/appwidget_dashboard" />
         </receiver>
+
+        <!-- 2. Otchetlar — метрики: sof foyda, ROI, bandlik, faol ijarachilar. -->
+        <receiver
+            android:name=".widget.ReportsSummaryWidgetProvider"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+            </intent-filter>
+            <meta-data
+                android:name="android.appwidget.provider"
+                android:resource="@xml/appwidget_reports_summary" />
+        </receiver>
+
+        <!-- 3. Tezkor amallar — 4 кнопки быстрого создания. -->
+        <receiver
+            android:name=".widget.QuickActionsWidgetProvider"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+            </intent-filter>
+            <meta-data
+                android:name="android.appwidget.provider"
+                android:resource="@xml/appwidget_quick_actions" />
+        </receiver>
+
+        <!-- 4. Ijarachilar — список арендаторов с кнопками To'lov/Uzish/SMS/O'chir. -->
+        <receiver
+            android:name=".widget.RentersListWidgetProvider"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+                <action android:name="com.example.widget.ACTION_PAY" />
+                <action android:name="com.example.widget.ACTION_TERMINATE" />
+                <action android:name="com.example.widget.ACTION_SMS" />
+                <action android:name="com.example.widget.ACTION_DELETE" />
+            </intent-filter>
+            <meta-data
+                android:name="android.appwidget.provider"
+                android:resource="@xml/appwidget_renters_list" />
+        </receiver>
+
+        <!-- 5. Skuterlar — список скутеров с кнопкой O'chir. -->
+        <receiver
+            android:name=".widget.ScootersListWidgetProvider"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+                <action android:name="com.example.widget.ACTION_DELETE_SCOOTER" />
+            </intent-filter>
+            <meta-data
+                android:name="android.appwidget.provider"
+                android:resource="@xml/appwidget_scooters_list" />
+        </receiver>
+
+        <!-- 6. Kontraktlar — список последних контрактов с кнопкой O'chir. -->
+        <receiver
+            android:name=".widget.ContractsListWidgetProvider"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+                <action android:name="com.example.widget.ACTION_DELETE_CONTRACT" />
+            </intent-filter>
+            <meta-data
+                android:name="android.appwidget.provider"
+                android:resource="@xml/appwidget_contracts_list" />
+        </receiver>
+
+        <!-- 7. Tranzaksiyalar — список последних транзакций с кнопкой O'chir. -->
+        <receiver
+            android:name=".widget.TransactionsListWidgetProvider"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+                <action android:name="com.example.widget.ACTION_DELETE_TX" />
+            </intent-filter>
+            <meta-data
+                android:name="android.appwidget.provider"
+                android:resource="@xml/appwidget_transactions_list" />
+        </receiver>
+
+        <!-- RemoteViewsService для списковых виджетов. Каждый сервис нужен
+             для setRemoteAdapter(R.id.widget_list, intent) в соответствующем
+             провайдере. Без объявления в манифесте — servicio не запустится,
+             ListView в виджете будет пустым. -->
+        <service
+            android:name=".widget.RentersListRemoteViewsService"
+            android:permission="android.permission.BIND_REMOTEVIEWS"
+            android:exported="false" />
+        <service
+            android:name=".widget.ScootersListRemoteViewsService"
+            android:permission="android.permission.BIND_REMOTEVIEWS"
+            android:exported="false" />
+        <service
+            android:name=".widget.ContractsListRemoteViewsService"
+            android:permission="android.permission.BIND_REMOTEVIEWS"
+            android:exported="false" />
+        <service
+            android:name=".widget.TransactionsListRemoteViewsService"
+            android:permission="android.permission.BIND_REMOTEVIEWS"
+            android:exported="false" />
 
     </application>
 
