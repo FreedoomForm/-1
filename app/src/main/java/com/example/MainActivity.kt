@@ -1419,10 +1419,12 @@ fun MainScreen(
             val template by settingsViewModel.smsTemplate.collectAsStateWithLifecycle()
             val weekly by settingsViewModel.weeklyPrice.collectAsStateWithLifecycle()
             val monthly by settingsViewModel.monthlyPrice.collectAsStateWithLifecycle()
+            val smsAutoSend by settingsViewModel.smsAutoSendEnabled.collectAsStateWithLifecycle()
             SettingsDialog(
                 currentTemplate = template,
                 currentWeeklyPrice = weekly,
                 currentMonthlyPrice = monthly,
+                currentSmsAutoSend = smsAutoSend,
                 updateInfo = updateInfo,
                 isCheckingUpdate = isCheckingUpdate,
                 isUpToDate = isUpToDate,
@@ -1442,6 +1444,15 @@ fun MainScreen(
                     settingsViewModel.updateTemplate(newTemplate)
                     settingsViewModel.updatePrices(newWeekly, newMonthly)
                     showSettings = false
+                },
+                onSmsAutoSendChange = { enabled ->
+                    settingsViewModel.updateSmsAutoSend(enabled)
+                    Toast.makeText(
+                        localContext,
+                        if (enabled) "SMS avto-yuborish yoqildi"
+                        else "SMS qo'llanma rejimiga o'tdi",
+                        Toast.LENGTH_SHORT
+                    ).show()
                 },
                 onLogout = {
                     showSettings = false
@@ -2284,6 +2295,7 @@ fun SettingsDialog(
     currentTemplate: String,
     currentWeeklyPrice: Double,
     currentMonthlyPrice: Double,
+    currentSmsAutoSend: Boolean = true,
     updateInfo: UpdateInfo? = null,
     isCheckingUpdate: Boolean = false,
     isUpToDate: Boolean = false,
@@ -2291,6 +2303,7 @@ fun SettingsDialog(
     onStartUpdate: (UpdateInfo) -> Unit = {},
     onDismiss: () -> Unit,
     onSave: (String, Double, Double, String, String) -> Unit,
+    onSmsAutoSendChange: (Boolean) -> Unit = {},
     onLogout: () -> Unit = {},
     onCheckUpdate: () -> Unit = {}
 ) {
@@ -2301,6 +2314,8 @@ fun SettingsDialog(
     var monthly by remember {
         mutableStateOf(if (currentMonthlyPrice > 0) currentMonthlyPrice.toString() else "")
     }
+    // SMS avto-yuborish rejimi — darhol saqlanadi (Save bosishni kutmaydi).
+    var smsAutoSend by remember { mutableStateOf(currentSmsAutoSend) }
     val settingsContext = LocalContext.current
     val settingsRepo = remember { com.example.data.SettingsRepository(settingsContext) }
     var paymeLink by remember { mutableStateOf(settingsRepo.paymeLink) }
@@ -2401,6 +2416,64 @@ fun SettingsDialog(
                         shape = RoundedCornerShape(8.dp),
                         singleLine = true
                     )
+                }
+
+                HorizontalDivider()
+
+                // ── SMS yuborish rejimi: Avto / Qo'llanma ───────────────────
+                Column {
+                    Text(
+                        "SMS yuborish rejimi",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = ClaudeText
+                    )
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Text(
+                        if (smsAutoSend)
+                            "AVTO — kechikkan mijozlarga SMS avtomatik yuboriladi (har 4 soatda va yangi kechikkan renter yaratilganda)."
+                        else
+                            "QO'LLANMA — SMS faqat \"SMS\" tugmasi orqali yuboriladi. Avto-yuborish o'chirilgan, lekin bildirishnomalar va yozuvlar saqlanadi.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = ClaudeTextSecondary
+                    )
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(8.dp))
+                            .background(Color(0xFFF7F7F7))
+                            .padding(horizontal = 12.dp, vertical = 10.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                if (smsAutoSend) "Avto yuborish" else "Qo'llanma",
+                                style = MaterialTheme.typography.bodyMedium,
+                                fontWeight = FontWeight.Bold,
+                                color = Color(0xFF000000)
+                            )
+                            Text(
+                                if (smsAutoSend) "Yoqilgan" else "O'chirilgan",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = ClaudeTextSecondary
+                            )
+                        }
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Switch(
+                            checked = smsAutoSend,
+                            onCheckedChange = { newValue ->
+                                smsAutoSend = newValue
+                                settingsRepo.smsAutoSendEnabled = newValue
+                                onSmsAutoSendChange(newValue)
+                            },
+                            colors = SwitchDefaults.colors(
+                                checkedThumbColor = Color(0xFF000000),
+                                checkedTrackColor = Color(0xFFBDBDBD),
+                                uncheckedThumbColor = Color(0xFFFFFFFF),
+                                uncheckedTrackColor = Color(0xFFCCCCCC)
+                            )
+                        )
+                    }
                 }
 
                 HorizontalDivider()

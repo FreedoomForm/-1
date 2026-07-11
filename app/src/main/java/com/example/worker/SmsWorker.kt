@@ -31,9 +31,19 @@ class SmsWorker(
 
     override suspend fun doWork(): Result = withContext(Dispatchers.IO) {
         try {
+            val settingsRepo = SettingsRepository(applicationContext)
+
+            // ── Qo'llanma rejimi: avto-yuborish o'chirilgan ───────────────
+            // Foydalanuvchi Settingsda "Qo'llanma" rejimini tanlagan bo'lsa,
+            // SmsWorker hech narsa yubormaydi — SMS faqat "SMS" tugmasi orqali
+            // yuboriladi. Bildirishnomalar va boshqa logika ishlayveradi.
+            if (!settingsRepo.smsAutoSendEnabled) {
+                Log.d(TAG, "SmsWorker skipped: manual mode is on (smsAutoSendEnabled=false)")
+                return@withContext Result.success()
+            }
+
             val db = AppDatabase.getDatabase(applicationContext)
             val repository = RenterRepository(db.renterDao())
-            val settingsRepo = SettingsRepository(applicationContext)
             val activeRenters = repository.getActiveRenters()
             val currentTime = System.currentTimeMillis()
 

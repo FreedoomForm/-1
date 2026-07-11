@@ -23,6 +23,10 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
     )
     val monthlyPrice: StateFlow<Double> = _monthlyPrice.asStateFlow()
 
+    /** SMS avto-yuborish rejimi: true = avto, false = faqat qo'llanma. */
+    private val _smsAutoSendEnabled = MutableStateFlow(repository.smsAutoSendEnabled)
+    val smsAutoSendEnabled: StateFlow<Boolean> = _smsAutoSendEnabled.asStateFlow()
+
     fun updateTemplate(newTemplate: String) {
         repository.smsTemplate = newTemplate
         _smsTemplate.value = newTemplate
@@ -35,5 +39,10 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
         repository.monthlyPrice = effectiveMonthly
         _weeklyPrice.value = effectiveWeekly
         _monthlyPrice.value = effectiveMonthly
+    }
+
+    fun updateSmsAutoSend(enabled: Boolean) {
+        repository.smsAutoSendEnabled = enabled
+        _smsAutoSendEnabled.value = enabled
     }
 }

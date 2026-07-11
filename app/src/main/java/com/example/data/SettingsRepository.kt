@@ -48,6 +48,19 @@ class SettingsRepository(context: Context) {
         get() = prefs.getInt("selected_sim_sub_id", -1)
         set(value) = prefs.edit().putInt("selected_sim_sub_id", value).apply()
 
+    /**
+     * SMS yuborish rejimi:
+     *  • true  — AVTO yuborish (standart). Kechikkan mijozga SmsWorker
+     *            (4 soatda bir) va kechikgan holda yaratilgan renter uchun
+     *            RenterViewModel tomonidan SMS darhol yuboriladi.
+     *  • false — FAQAT QO'LLANMA. SMS faqat foydalanuvchi "SMS" tugmasini
+     *            bosganda yuboriladi. SmsWorker va addRenter() avto-yuborish
+     *            o'chiriladi (notif/yozuvlar saqlanadi).
+     */
+    var smsAutoSendEnabled: Boolean
+        get() = prefs.getBoolean("sms_auto_send_enabled", true)
+        set(value) = prefs.edit().putBoolean("sms_auto_send_enabled", value).apply()
+
     companion object {
         const val DEFAULT_WEEKLY_PRICE = 420_000.0
         const val DEFAULT_MONTHLY_PRICE = 1_680_000.0

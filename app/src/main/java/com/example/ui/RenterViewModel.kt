@@ -205,7 +205,23 @@ class RenterViewModel(application: Application) : AndroidViewModel(application) 
                     NotificationHelper.postPaymentDueNotification(context, savedRenter.id, savedRenter.name, savedRenter.phoneNumber)
                 } catch (e: Exception) { Log.e(TAG, "Notification xato", e) }
 
-                sendSmsWithFullRetry(context, savedRenter, expiryTime, now, initialBalance)
+                // ── SMS avto-yuborish rejimini tekshirish ─────────────────
+                // Agar Settings'da "Qo'llanma" rejimi tanlangan bo'lsa (smsAutoSendEnabled=false),
+                // SMS avtomatik yuborilmaydi — faqat bildirishnoma va tarix yozuvi saqlanadi.
+                // Foydalanuvchi keyin "SMS" tugmasi orqali qo'lda yuborishi mumkin.
+                val settingsRepo = SettingsRepository(context)
+                if (settingsRepo.smsAutoSendEnabled) {
+                    sendSmsWithFullRetry(context, savedRenter, expiryTime, now, initialBalance)
+                } else {
+                    Log.d(TAG, "Auto-SMS skipped for renter #${savedRenter.id}: manual mode is on")
+                    _smsResults.tryEmit(SmsResult(
+                        success = false,
+                        message = "SMS avto-yuborish o'chirilgan (qo'llanma rejimi). Mijozga SMS qo'lda yuboring.",
+                        errorCode = "SMS_AUTO_DISABLED",
+                        exceptionClass = null,
+                        exceptionMessage = "smsAutoSendEnabled=false"
+                    ))
+                }
 
                 try {
                     val db = AppDatabase.getDatabase(context)
