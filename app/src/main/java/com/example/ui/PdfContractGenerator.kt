@@ -48,7 +48,9 @@ object PdfContractGenerator {
     private const val MARGIN_BOTTOM = 40f
 
     private val dateFmt = SimpleDateFormat("dd.MM.yyyy", Locale.getDefault())
-    private val dateFmtUz = SimpleDateFormat("dd MMMM yyyy", Locale("ru"))
+    // Только месяц и год — день уже выводится в кавычках «DD» в месте использования,
+    // поэтому здесь он не нужен (раньше был "dd MMMM yyyy" → дублировался день).
+    private val dateFmtUz = SimpleDateFormat("MMMM yyyy", Locale("ru"))
 
     /**
      * Форматирует список ID аккумуляторов для PDF-договора.
