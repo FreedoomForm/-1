@@ -189,6 +189,16 @@ class MainActivity : ComponentActivity() {
             paymentCheckRequest
         )
 
+        // ── Принудительное обновление нативных виджетов при старте приложения ──
+        // Виджеты на главном экране Android могут показывать "не удалось загрузить
+        // виджет" если они не получили RemoteViews после установки/перезагрузки.
+        // Системный onUpdate вызывается раз в 30 минут — слишком редко. Дёрнем
+        // обновление вручную при каждом открытии приложения, чтобы виджеты
+        // гарантированно получили свежие данные.
+        try {
+            com.example.widget.WidgetUpdater.updateAll(applicationContext)
+        } catch (_: Exception) {}
+
         setContent {
             MyApplicationTheme {
                 val permissionLauncher = rememberLauncherForActivityResult(

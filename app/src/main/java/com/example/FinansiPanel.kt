@@ -8,8 +8,10 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.GridItemSpan
+import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
+import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
@@ -19,6 +21,8 @@ import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material.icons.filled.ArrowForward
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material.icons.filled.KeyboardArrowDown
+import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material.icons.filled.SwapHoriz
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -79,6 +83,8 @@ private fun formatMoney(amount: Double): String {
  *
  * [selected] подсвечивает карту рамкой (для зоны выбора транзакции).
  * [onClick] / [onLongClick] поддерживают tap-to-edit и long-press multi-select.
+ * [onMoveUp] / [onMoveDown] — кнопки перестановки (как виджеты в Otcheti).
+ * [showReorderButtons] — показывать ли стрелки ↑/↓ (в зоне транзакции они не нужны).
  */
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
@@ -86,16 +92,27 @@ fun VirtualCardView(
     card: VirtualCard,
     selected: Boolean = false,
     isSlot: Boolean = false,
+    compact: Boolean = false,
+    showReorderButtons: Boolean = false,
+    canMoveUp: Boolean = true,
+    canMoveDown: Boolean = true,
     onClick: () -> Unit = {},
-    onLongClick: () -> Unit = {}
+    onLongClick: () -> Unit = {},
+    onMoveUp: () -> Unit = {},
+    onMoveDown: () -> Unit = {}
 ) {
     val baseColor = parseColorHex(card.colorHex)
     val cardShape = RoundedCornerShape(16.dp)
+    val cardHeight = if (compact) 110.dp else 150.dp
+    val balanceFont = if (compact) 16.sp else 22.sp
+    val nameFont = if (compact) 13.sp else 16.sp
+    val chipSize = if (compact) 28.dp else 36.dp
+    val chipPaddingTop = if (compact) 36.dp else 56.dp
 
     Box(
         modifier = Modifier
             .fillMaxWidth()
-            .height(150.dp)
+            .height(cardHeight)
             .clip(cardShape)
             .combinedClickable(
                 onClick = onClick,
@@ -144,8 +161,8 @@ fun VirtualCardView(
         // ── Чип-имитация (жёлтый прямоугольник как на реальных картах) ──
         Box(
             modifier = Modifier
-                .padding(start = 16.dp, top = 56.dp)
-                .size(width = 36.dp, height = 26.dp)
+                .padding(start = 12.dp, top = chipPaddingTop)
+                .size(width = chipSize, height = if (compact) 20.dp else 26.dp)
                 .background(
                     brush = Brush.linearGradient(
                         colors = listOf(
@@ -162,10 +179,10 @@ fun VirtualCardView(
         Column(
             modifier = Modifier
                 .fillMaxSize()
-                .padding(16.dp),
+                .padding(if (compact) 10.dp else 16.dp),
             verticalArrangement = Arrangement.SpaceBetween
         ) {
-            // Верх: имя карты + метка системной
+            // Верх: имя карты + метка системной + кнопки перестановки
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
@@ -175,7 +192,7 @@ fun VirtualCardView(
                     text = card.name,
                     color = Color.White,
                     fontWeight = FontWeight.Bold,
-                    fontSize = 16.sp,
+                    fontSize = nameFont,
                     modifier = Modifier.weight(1f),
                     maxLines = 1
                 )
@@ -184,14 +201,14 @@ fun VirtualCardView(
                         modifier = Modifier
                             .background(
                                 Color.White.copy(alpha = 0.2f),
-                                RoundedCornerShape(8.dp)
+                                RoundedCornerShape(6.dp)
                             )
-                            .padding(horizontal = 6.dp, vertical = 2.dp)
+                            .padding(horizontal = 4.dp, vertical = 1.dp)
                     ) {
                         Text(
                             text = "ASOSIY",
                             color = Color.White,
-                            fontSize = 9.sp,
+                            fontSize = 8.sp,
                             fontWeight = FontWeight.Bold
                         )
                     }
@@ -203,12 +220,12 @@ fun VirtualCardView(
                 Text(
                     text = "${formatMoney(card.balance)} so'm",
                     color = if (card.balance < 0) Color(0xFFFFD7D7) else Color.White,
-                    fontSize = 22.sp,
+                    fontSize = balanceFont,
                     fontWeight = FontWeight.Bold
                 )
             }
 
-            // Низ: инфо + иконка
+            // Низ: инфо + кнопки перестановки ↑/↓ (если включены)
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
@@ -217,16 +234,46 @@ fun VirtualCardView(
                 Text(
                     text = card.info ?: "",
                     color = Color.White.copy(alpha = 0.7f),
-                    fontSize = 11.sp,
+                    fontSize = if (compact) 9.sp else 11.sp,
                     modifier = Modifier.weight(1f),
                     maxLines = 1
                 )
-                Icon(
-                    imageVector = if (selected) Icons.Default.Edit else Icons.Default.SwapHoriz,
-                    contentDescription = null,
-                    tint = Color.White.copy(alpha = 0.5f),
-                    modifier = Modifier.size(18.dp)
-                )
+                if (showReorderButtons) {
+                    // Кнопки перестановки (как в Otcheti — поверх карты, белым)
+                    Row {
+                        IconButton(
+                            onClick = onMoveUp,
+                            enabled = canMoveUp,
+                            modifier = Modifier.size(if (compact) 22.dp else 28.dp)
+                        ) {
+                            Icon(
+                                Icons.Default.KeyboardArrowUp,
+                                contentDescription = "Yuqoriga",
+                                tint = if (canMoveUp) Color.White else Color.White.copy(alpha = 0.3f),
+                                modifier = Modifier.size(if (compact) 16.dp else 20.dp)
+                            )
+                        }
+                        IconButton(
+                            onClick = onMoveDown,
+                            enabled = canMoveDown,
+                            modifier = Modifier.size(if (compact) 22.dp else 28.dp)
+                        ) {
+                            Icon(
+                                Icons.Default.KeyboardArrowDown,
+                                contentDescription = "Pastga",
+                                tint = if (canMoveDown) Color.White else Color.White.copy(alpha = 0.3f),
+                                modifier = Modifier.size(if (compact) 16.dp else 20.dp)
+                            )
+                        }
+                    }
+                } else {
+                    Icon(
+                        imageVector = if (selected) Icons.Default.Edit else Icons.Default.SwapHoriz,
+                        contentDescription = null,
+                        tint = Color.White.copy(alpha = 0.5f),
+                        modifier = Modifier.size(if (compact) 14.dp else 18.dp)
+                    )
+                }
             }
         }
     }
@@ -321,6 +368,7 @@ fun TransactionZone(
                         VirtualCardView(
                             card = fromCard,
                             selected = true,
+                            compact = true,
                             onClick = onPickFrom
                         )
                     } else {
@@ -355,6 +403,7 @@ fun TransactionZone(
                         VirtualCardView(
                             card = toCard,
                             selected = true,
+                            compact = true,
                             onClick = onPickTo
                         )
                     } else {
@@ -443,17 +492,26 @@ fun CardsGrid(
     cards: List<VirtualCard>,
     selectedIds: Set<Int>,
     onCardClick: (VirtualCard) -> Unit,
-    onCardLongClick: (Int, Boolean) -> Unit
+    onCardLongClick: (Int, Boolean) -> Unit,
+    onMoveUp: (VirtualCard) -> Unit = {},
+    onMoveDown: (VirtualCard) -> Unit = {}
 ) {
-    LazyColumn(
+    LazyVerticalGrid(
+        columns = GridCells.Fixed(2),
         modifier = Modifier.fillMaxSize(),
-        contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
-        verticalArrangement = Arrangement.spacedBy(12.dp)
+        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
+        horizontalArrangement = Arrangement.spacedBy(10.dp),
+        verticalArrangement = Arrangement.spacedBy(10.dp)
     ) {
         items(cards, key = { it.id }) { card ->
+            val index = cards.indexOf(card)
             VirtualCardView(
                 card = card,
+                compact = true,
                 selected = card.id in selectedIds,
+                showReorderButtons = true,
+                canMoveUp = index > 0,
+                canMoveDown = index < cards.size - 1,
                 onClick = {
                     if (selectedIds.isNotEmpty()) {
                         onCardLongClick(card.id, card.id !in selectedIds)
@@ -461,10 +519,13 @@ fun CardsGrid(
                         onCardClick(card)
                     }
                 },
-                onLongClick = { onCardLongClick(card.id, card.id !in selectedIds) }
+                onLongClick = { onCardLongClick(card.id, card.id !in selectedIds) },
+                onMoveUp = { onMoveUp(card) },
+                onMoveDown = { onMoveDown(card) }
             )
         }
-        item {
+        // Bottom spacer — чтобы последний ряд не перекрывался FAB
+        item(span = { GridItemSpan(2) }) {
             Spacer(modifier = Modifier.height(80.dp))
         }
     }
@@ -711,6 +772,56 @@ fun FinansiPanel(
     onSelectedCardIdsChange: (Set<Int>) -> Unit = {}
 ) {
     val cards by viewModel.cards.collectAsStateWithLifecycle()
+    val context = LocalContext.current
+
+    // ── Порядок карт (как в Otcheti) — сохраняется в SharedPreferences ────
+    // Хранится как строка id1,id2,id3,... — карты, которых нет в строке,
+    // добавляются в конец по возрастанию id.
+    val orderPrefs = remember { context.getSharedPreferences("finansi_card_order", android.content.Context.MODE_PRIVATE) }
+    var cardOrder by remember {
+        mutableStateOf(
+            orderPrefs.getString("order", null)
+                ?.split(",")
+                ?.mapNotNull { it.toIntOrNull() }
+                ?: emptyList()
+        )
+    }
+
+    // Сортируем карты по сохранённому порядку: сначала те, что есть в cardOrder
+    // (в этом порядке), потом остальные (по возрастанию id).
+    val orderedCards = remember(cards, cardOrder) {
+        val inOrder = cardOrder.mapNotNull { id -> cards.find { it.id == id } }
+        val rest = cards.filter { it.id !in cardOrder }.sortedBy { it.id }
+        inOrder + rest
+    }
+
+    fun saveOrder(newOrder: List<Int>) {
+        cardOrder = newOrder
+        orderPrefs.edit().putString("order", newOrder.joinToString(",")).apply()
+    }
+
+    fun moveCardUp(card: VirtualCard) {
+        val currentIds = orderedCards.map { it.id }
+        val idx = currentIds.indexOf(card.id)
+        if (idx > 0) {
+            val newList = currentIds.toMutableList()
+            val tmp = newList[idx - 1]
+            newList[idx - 1] = card.id
+            newList[idx] = tmp
+            saveOrder(newList)
+        }
+    }
+    fun moveCardDown(card: VirtualCard) {
+        val currentIds = orderedCards.map { it.id }
+        val idx = currentIds.indexOf(card.id)
+        if (idx >= 0 && idx < currentIds.size - 1) {
+            val newList = currentIds.toMutableList()
+            val tmp = newList[idx + 1]
+            newList[idx + 1] = card.id
+            newList[idx] = tmp
+            saveOrder(newList)
+        }
+    }
 
     var fromCard by remember { mutableStateOf<VirtualCard?>(null) }
     var toCard by remember { mutableStateOf<VirtualCard?>(null) }
@@ -737,17 +848,17 @@ fun FinansiPanel(
     }
 
     // Когда карты загрузились — ставим две первые как дефолтный выбор
-    LaunchedEffect(cards.size) {
-        if (cards.isNotEmpty()) {
-            if (fromCard == null && cards.isNotEmpty()) fromCard = cards.first()
-            if (toCard == null && cards.size > 1) toCard = cards.getOrNull(1)
+    LaunchedEffect(orderedCards.size) {
+        if (orderedCards.isNotEmpty()) {
+            if (fromCard == null && orderedCards.isNotEmpty()) fromCard = orderedCards.first()
+            if (toCard == null && orderedCards.size > 1) toCard = orderedCards.getOrNull(1)
         }
     }
 
     // Обновляем ссылки на выбранные карты (баланс мог измениться после перевода)
-    LaunchedEffect(cards) {
-        fromCard = fromCard?.let { selected -> cards.find { it.id == selected.id } }
-        toCard = toCard?.let { selected -> cards.find { it.id == selected.id } }
+    LaunchedEffect(orderedCards) {
+        fromCard = fromCard?.let { selected -> orderedCards.find { it.id == selected.id } }
+        toCard = toCard?.let { selected -> orderedCards.find { it.id == selected.id } }
     }
 
     // Реакция на внешний триггер создания (кнопка «+» в TopAppBar).
@@ -786,7 +897,7 @@ fun FinansiPanel(
     Column(modifier = Modifier.fillMaxSize()) {
         // Зона транзакции
         TransactionZone(
-            cards = cards,
+            cards = orderedCards,
             fromCard = fromCard,
             toCard = toCard,
             onPickFrom = { pickingSlot = 1 },
@@ -800,7 +911,7 @@ fun FinansiPanel(
 
         // Список карт
         CardsGrid(
-            cards = cards,
+            cards = orderedCards,
             selectedIds = selectedIds,
             onCardClick = { card ->
                 editingCard = card
@@ -810,14 +921,16 @@ fun FinansiPanel(
                 if (select) newSet.add(id) else newSet.remove(id)
                 selectedIds = newSet
                 onSelectedCardIdsChange(newSet)
-            }
+            },
+            onMoveUp = { card -> moveCardUp(card) },
+            onMoveDown = { card -> moveCardDown(card) }
         )
     }
 
     // Диалог выбора карты в слот
     pickingSlot?.let { slot ->
         CardPickerDialog(
-            cards = cards,
+            cards = orderedCards,
             excludeId = if (slot == 1) toCard?.id else fromCard?.id,
             title = if (slot == 1) "Manba kartani tanlang" else "Maqsad kartani tanlang",
             onDismiss = { pickingSlot = null },

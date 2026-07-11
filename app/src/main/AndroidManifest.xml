@@ -13,6 +13,8 @@
     <!-- Для сохранения PDF-договоров в общую папку Documents (Android 9 и ниже) -->
     <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE"
         android:maxSdkVersion="28" />
+    <!-- Чтобы обновлять виджеты после перезагрузки устройства -->
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
 
     <application
         android:allowBackup="true"
@@ -41,6 +43,16 @@
             <intent-filter>
                 <action android:name="com.example.ACTION_PAYMENT_RECEIVED" />
                 <action android:name="com.example.ACTION_TERMINATE_CONTRACT" />
+            </intent-filter>
+        </receiver>
+
+        <!-- Receiver для обновления виджетов после перезагрузки устройства -->
+        <receiver
+            android:name=".widget.BootWidgetReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+                <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
             </intent-filter>
         </receiver>
 
