@@ -39,6 +39,9 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.data.VirtualCard
+import com.example.data.isExternal
+import com.example.data.isExternalIn
+import com.example.data.isExternalOut
 import com.example.ui.FinansiViewModel
 import com.example.ui.theme.ClaudeAccent
 import com.example.ui.theme.ClaudeBackground
@@ -196,7 +199,7 @@ fun VirtualCardView(
                     modifier = Modifier.weight(1f),
                     maxLines = 1
                 )
-                if (card.isDefault) {
+                if (card.isDefault && !card.isExternal) {
                     Box(
                         modifier = Modifier
                             .background(
@@ -212,14 +215,31 @@ fun VirtualCardView(
                             fontWeight = FontWeight.Bold
                         )
                     }
+                } else if (card.isExternal) {
+                    Box(
+                        modifier = Modifier
+                            .background(
+                                Color.White.copy(alpha = 0.25f),
+                                RoundedCornerShape(6.dp)
+                            )
+                            .padding(horizontal = 4.dp, vertical = 1.dp)
+                    ) {
+                        Text(
+                            text = if (card.isExternalIn) "TASHQIDAN" else "TASHQIGA",
+                            color = Color.White,
+                            fontSize = 8.sp,
+                            fontWeight = FontWeight.Bold
+                        )
+                    }
                 }
             }
 
-            // Центр: только сумма баланса (без подписи "Balans")
+            // Центр: только сумма баланса (∞ для внешних карт)
             Column {
+                val balanceText = if (card.isExternal) "∞" else "${formatMoney(card.balance)} so'm"
                 Text(
-                    text = "${formatMoney(card.balance)} so'm",
-                    color = if (card.balance < 0) Color(0xFFFFD7D7) else Color.White,
+                    text = balanceText,
+                    color = Color.White,
                     fontSize = balanceFont,
                     fontWeight = FontWeight.Bold
                 )
@@ -337,6 +357,16 @@ fun TransactionZone(
     var noteText by remember { mutableStateOf("") }
     var reversed by remember { mutableStateOf(false) }
 
+    // Внешний перевод — если хотя бы одна из выбранных карт внешняя
+    // (Tashqidan / Tashqiga), поле «Izoh» становится обязательным.
+    val involvesExternal = (fromCard?.isExternal == true) || (toCard?.isExternal == true)
+    val noteLabel = if (involvesExternal) "Izoh (majburiy) *" else "Izoh (ixtiyoriy)"
+    val amountParsed = amountText.replace(',', '.').toDoubleOrNull()
+    val canTransfer = fromCard != null && toCard != null &&
+                      amountParsed != null && amountParsed > 0.0 &&
+                      fromCard!!.id != toCard!!.id &&
+                      (!involvesExternal || noteText.isNotBlank())
+
     Card(
         modifier = Modifier
             .fillMaxWidth()
@@ -430,14 +460,15 @@ fun TransactionZone(
                 )
             )
 
-            // ── Поле примечания (необязательное) ──
+            // ── Поле примечания (обязательное для внешних переводов) ──
             OutlinedTextField(
                 value = noteText,
                 onValueChange = { noteText = it },
-                label = { Text("Izoh (ixtiyoriy)") },
+                label = { Text(noteLabel) },
                 modifier = Modifier.fillMaxWidth(),
                 shape = RoundedCornerShape(12.dp),
                 singleLine = true,
+                isError = involvesExternal && noteText.isBlank() && amountText.isNotBlank(),
                 colors = OutlinedTextFieldDefaults.colors(
                     unfocusedBorderColor = ClaudeDivider,
                     focusedBorderColor = ClaudeAccent,
@@ -445,6 +476,14 @@ fun TransactionZone(
                     focusedContainerColor = ClaudeBackground
                 )
             )
+            if (involvesExternal) {
+                Text(
+                    text = "Tashqi o'tkazma uchun izoh majburiy — summa nima uchun o'tkazilayotganini yozing.",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = ClaudeTextSecondary,
+                    modifier = Modifier.padding(start = 4.dp)
+                )
+            }
 
             // ── Кнопка перевода ──
             Button(
@@ -456,8 +495,7 @@ fun TransactionZone(
                         noteText = ""
                     }
                 },
-                enabled = fromCard != null && toCard != null &&
-                          amountText.replace(',', '.').toDoubleOrNull()?.let { it > 0 } == true,
+                enabled = canTransfer,
                 modifier = Modifier
                     .fillMaxWidth()
                     .height(48.dp),
@@ -580,7 +618,8 @@ fun VirtualCardFormDialog(
                         balance = balanceText.replace(" ", "").replace(",", ".").toDoubleOrNull() ?: 0.0,
                         colorHex = selectedColor,
                         info = info.ifBlank { null },
-                        isDefault = isDefaultCard
+                        isDefault = isDefaultCard,
+                        kind = initial?.kind ?: VirtualCard.KIND_REGULAR
                     )
                 )
 
@@ -732,7 +771,7 @@ fun CardPickerDialog(
                                     color = ClaudeText
                                 )
                                 Text(
-                                    text = "${formatMoney(card.balance)} so'm",
+                                    text = if (card.isExternal) "∞" else "${formatMoney(card.balance)} so'm",
                                     style = MaterialTheme.typography.bodySmall,
                                     color = ClaudeTextSecondary
                                 )

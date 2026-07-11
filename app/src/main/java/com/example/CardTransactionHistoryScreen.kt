@@ -30,6 +30,9 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.example.data.CardTransaction
 import com.example.data.VirtualCard
+import com.example.data.isExternal
+import com.example.data.isExternalIn
+import com.example.data.isExternalOut
 import com.example.ui.FinansiViewModel
 import com.example.ui.components.*
 import com.example.ui.theme.*
@@ -95,6 +98,8 @@ fun CardTransactionHistoryScreen(
 
     fun cardName(id: Int): String = when (id) {
         CardTransaction.EXTERNAL_SOURCE_ID -> "Kontrakt"
+        VirtualCard.EXTERNAL_IN_CARD_ID -> "Tashqidan"
+        VirtualCard.EXTERNAL_OUT_CARD_ID -> "Tashqiga"
         currentCard.id -> "Bu karta"
         else -> cardNameById[id] ?: "Karta #$id"
     }
@@ -134,7 +139,7 @@ fun CardTransactionHistoryScreen(
                             style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold)
                         )
                         Text(
-                            "Balans: ${formatMoney(currentCard.balance)} so'm",
+                            if (currentCard.isExternal) "Balans: \u221e" else "Balans: ${formatMoney(currentCard.balance)} so'm",
                             style = MaterialTheme.typography.labelSmall,
                             color = ClaudeTextSecondary
                         )
@@ -183,7 +188,7 @@ fun CardTransactionHistoryScreen(
                     SummaryColumn("Chiquvchi", "${formatMoney(totalOutgoing)}", StatusOverdue)
                     SummaryColumn(
                         "Balans",
-                        "${formatMoney(currentCard.balance)}",
+                        if (currentCard.isExternal) "\u221e" else "${formatMoney(currentCard.balance)}",
                         if (currentCard.balance < 0) StatusOverdue else StatusOk
                     )
                     SummaryColumn("Tranzaksiya", "${incoming.size + outgoing.size}")
@@ -432,9 +437,15 @@ private fun VerticalCardTransferDialog(
     val effectiveTo   = if (reversed) fromCard else toCard
 
     val amountParsed = amountText.replace(',', '.').toDoubleOrNull()
+    // Внешний перевод — если хотя бы одна из карт Tashqidan/Tashqiga.
+    // В этом случае поле «Izoh» становится обязательным.
+    val involvesExternal = (effectiveFrom?.isExternal == true) ||
+                           (effectiveTo?.isExternal == true)
+    val noteLabel = if (involvesExternal) "Izoh (majburiy) *" else "Izoh (ixtiyoriy)"
     val canSave = fromCard != null && toCard != null &&
                   amountParsed != null && amountParsed > 0.0 &&
-                  fromCard!!.id != toCard!!.id
+                  fromCard!!.id != toCard!!.id &&
+                  (!involvesExternal || noteText.isNotBlank())
 
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -510,10 +521,11 @@ private fun VerticalCardTransferDialog(
                         OutlinedTextField(
                             value = noteText,
                             onValueChange = { noteText = it },
-                            label = { Text("Izoh (ixtiyoriy)") },
+                            label = { Text(noteLabel) },
                             modifier = Modifier.fillMaxWidth(),
                             shape = RoundedCornerShape(10.dp),
                             singleLine = true,
+                            isError = involvesExternal && noteText.isBlank() && amountText.isNotBlank(),
                             colors = OutlinedTextFieldDefaults.colors(
                                 unfocusedBorderColor = ClaudeDivider,
                                 focusedBorderColor = ClaudeAccent,
@@ -521,6 +533,13 @@ private fun VerticalCardTransferDialog(
                                 focusedContainerColor = ClaudeBackground
                             )
                         )
+                        if (involvesExternal) {
+                            Text(
+                                text = "Tashqi o'tkazma uchun izoh majburiy.",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = ClaudeTextSecondary
+                            )
+                        }
                     }
                 }
 
@@ -629,7 +648,7 @@ private fun VerticalCardSlot(
                 )
                 if (card != null) {
                     Text(
-                        text = "${formatMoney(card.balance)} so'm",
+                        text = if (card.isExternal) "\u221e" else "${formatMoney(card.balance)} so'm",
                         style = MaterialTheme.typography.labelSmall,
                         color = ClaudeTextSecondary
                     )
@@ -688,7 +707,7 @@ private fun CardPickerDialogInline(
                                     color = ClaudeText
                                 )
                                 Text(
-                                    text = "${formatMoney(card.balance)} so'm",
+                                    text = if (card.isExternal) "∞" else "${formatMoney(card.balance)} so'm",
                                     style = MaterialTheme.typography.bodySmall,
                                     color = ClaudeTextSecondary
                                 )

@@ -39,6 +39,16 @@ class VirtualCardRepository(
     /**
      * Переводит [amount] с карты [fromCardId] на карту [toCardId].
      * Атомарно: обновляет оба баланса и создаёт запись в истории транзакций.
+     *
+     * ВНЕШНИЕ КАРТЫ (Tashqidan / Tashqiga):
+     *   Если одна из сторон — внешняя карта (kind = EXTERNAL_IN / EXTERNAL_OUT),
+     *   вызов adjustBalance для неё пропускается. Баланс внешней карты концептуально
+     *   бесконечен и не должен меняться. Это позволяет:
+     *     • вносить деньги «из вне» (с Tashqidan на любую обычную) — обычная карта
+     *       увеличивается, внешняя не трогается;
+     *     • выводить деньги «вне» (с любой обычной на Tashqiga) — обычная карта
+     *       уменьшается, внешняя не трогается.
+     *   Валидация обязательного [note] для таких переводов — в FinansiViewModel.transfer.
      */
     suspend fun transfer(
         fromCardId: Int,
@@ -46,8 +56,12 @@ class VirtualCardRepository(
         amount: Double,
         note: String?
     ): Long {
-        cardDao.adjustBalance(fromCardId, -amount)
-        cardDao.adjustBalance(toCardId, +amount)
+        if (!VirtualCard.isExternalId(fromCardId)) {
+            cardDao.adjustBalance(fromCardId, -amount)
+        }
+        if (!VirtualCard.isExternalId(toCardId)) {
+            cardDao.adjustBalance(toCardId, +amount)
+        }
         return txDao.insertTransaction(
             CardTransaction(
                 fromCardId = fromCardId,

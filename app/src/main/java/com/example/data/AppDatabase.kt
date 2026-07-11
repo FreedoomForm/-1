@@ -17,7 +17,7 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         VirtualCard::class,
         CardTransaction::class
     ],
-    version = 13,
+    version = 14,
     exportSchema = false
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -117,6 +117,38 @@ abstract class AppDatabase : RoomDatabase() {
             }
         }
 
+        /**
+         * Migration 13 → 14: добавляем колонку `kind` в virtual_cards и сидируем
+         * две внешние карты с бесконечным балансом:
+         *   • id=3 «Tashqidan» (EXTERNAL_IN) — приём денег «из вне» (банк, нал).
+         *   • id=4 «Tashqiga»  (EXTERNAL_OUT) — вывод денег «вне» (снятие, налоги).
+         *
+         * У обеих карт isDefault=1 (нельзя удалить), balance=0 и не меняется
+         * при переводах — логика в VirtualCardRepository.transfer пропускает
+         * adjustBalance для внешних карт.
+         *
+         * При переводе с участием внешней карты пользователь обязан указать
+         * описание (note) — валидация в FinansiViewModel.transfer.
+         */
+        private val MIGRATION_13_14 = object : Migration(13, 14) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                // 1) Добавляем колонку kind. У всех существующих карт значение 'REGULAR'.
+                db.execSQL(
+                    "ALTER TABLE `virtual_cards` ADD COLUMN `kind` TEXT NOT NULL DEFAULT 'REGULAR'"
+                )
+                // 2) Сидируем две внешние карты. INSERT OR IGNORE безопасен, если
+                //    вдруг id=3/4 уже заняты пользовательскими картами — тогда внешние
+                //    карты не встанут (редкий случай; на практике id=3,4 свободны).
+                db.execSQL("""
+                    INSERT OR IGNORE INTO `virtual_cards`
+                        (id, name, balance, colorHex, info, isDefault, createdAt, kind)
+                    VALUES
+                        (3, 'Tashqidan', 0.0, '#FF00838F', 'Tashqidan kirgan pul (bank, naqd va h.k.)', 1, strftime('%s','now') * 1000, 'EXTERNAL_IN'),
+                        (4, 'Tashqiga',  0.0, '#FFC62828', 'Tashqiga chiqarilgan pul (yechib olish, to''lovlar)', 1, strftime('%s','now') * 1000, 'EXTERNAL_OUT')
+                """.trimIndent())
+            }
+        }
+
         fun getDatabase(context: Context): AppDatabase {
             return INSTANCE ?: synchronized(this) {
                 val instance = Room.databaseBuilder(
@@ -124,21 +156,26 @@ abstract class AppDatabase : RoomDatabase() {
                     AppDatabase::class.java,
                     "scooter_rent_db"
                 )
-                    .addMigrations(MIGRATION_11_12, MIGRATION_12_13)
+                    .addMigrations(MIGRATION_11_12, MIGRATION_12_13, MIGRATION_13_14)
                     // На случай если кто-то перескакивает через несколько версий —
                     // лучше потерять локальные данные, чем крашнуться при старте.
                     .fallbackToDestructiveMigration(true)
                     .addCallback(object : RoomDatabase.Callback() {
                         override fun onCreate(db: SupportSQLiteDatabase) {
                             super.onCreate(db)
-                            // При первой установке (fresh install) тоже создаём две системные карты.
+                            // При первой установке (fresh install) создаём все 4 системные карты:
+                            //   1 = Glavnaya, 2 = Vtorostepennaya (обычные, isDefault)
+                            //   3 = Tashqidan (EXTERNAL_IN), 4 = Tashqiga (EXTERNAL_OUT)
                             // Одинарные кавычки внутри SQL-строк экранируем удвоением.
                             // INSERT OR IGNORE — на случай если коллбэк вызывается повторно.
                             db.execSQL("""
-                                INSERT OR IGNORE INTO `virtual_cards` (id, name, balance, colorHex, info, isDefault, createdAt)
+                                INSERT OR IGNORE INTO `virtual_cards`
+                                    (id, name, balance, colorHex, info, isDefault, createdAt, kind)
                                 VALUES
-                                    (1, 'Glavnaya', 0.0, '#FF1565C0', 'Asosiy kassa — contract to''lovlari shu yerga tushadi', 1, strftime('%s','now') * 1000),
-                                    (2, 'Vtorostepennaya', 0.0, '#FF2E7D32', 'Qo`shimcha karta', 1, strftime('%s','now') * 1000)
+                                    (1, 'Glavnaya', 0.0, '#FF1565C0', 'Asosiy kassa — contract to''lovlari shu yerga tushadi', 1, strftime('%s','now') * 1000, 'REGULAR'),
+                                    (2, 'Vtorostepennaya', 0.0, '#FF2E7D32', 'Qo`shimcha karta', 1, strftime('%s','now') * 1000, 'REGULAR'),
+                                    (3, 'Tashqidan', 0.0, '#FF00838F', 'Tashqidan kirgan pul (bank, naqd va h.k.)', 1, strftime('%s','now') * 1000, 'EXTERNAL_IN'),
+                                    (4, 'Tashqiga',  0.0, '#FFC62828', 'Tashqiga chiqarilgan pul (yechib olish, to''lovlar)', 1, strftime('%s','now') * 1000, 'EXTERNAL_OUT')
                             """.trimIndent())
                         }
                     })

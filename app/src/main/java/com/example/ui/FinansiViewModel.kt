@@ -104,6 +104,11 @@ class FinansiViewModel(application: Application) : AndroidViewModel(application)
     /**
      * Переводит [amount] с карты [fromCardId] на карту [toCardId].
      * Если [reversed] = true — меняет направление (для кнопки разворота стрелки).
+     *
+     * ВНЕШНИЕ ПЕРЕВОДЫ:
+     *   Если хотя бы одна из сторон — внешняя карта (Tashqidan / Tashqiga),
+     *   параметр [note] становится ОБЯЗАТЕЛЬНЫМ. Пользователь должен указать,
+     *   для чего вносится/выводится сумма. Без описания перевод отклоняется.
      */
     fun transfer(
         fromCardId: Int,
@@ -122,6 +127,13 @@ class FinansiViewModel(application: Application) : AndroidViewModel(application)
                 }
                 if (amount <= 0.0) {
                     Log.w(TAG, "Cannot transfer: amount must be positive")
+                    return@launch
+                }
+                // Внешний перевод (с участием Tashqidan / Tashqiga) требует описание.
+                val involvesExternal =
+                    VirtualCard.isExternalId(actualFrom) || VirtualCard.isExternalId(actualTo)
+                if (involvesExternal && note.isNullOrBlank()) {
+                    Log.w(TAG, "Cannot transfer: external transfer requires a non-empty note")
                     return@launch
                 }
                 repository.transfer(actualFrom, actualTo, amount, note)

@@ -1291,14 +1291,28 @@ private fun CardTransfersSection(
                     val time = SimpleDateFormat("dd.MM HH:mm", Locale.getDefault())
                         .format(Date(tx.timestamp))
                     val isIncome = tx.type == com.example.data.CardTransaction.TYPE_CONTRACT_INCOME
-                    val fromLabel = if (isIncome || tx.fromCardId == 0) "Kontrakt" else (from?.name ?: "—")
-                    val toLabel = to?.name ?: "—"
-                    val fromColor = if (isIncome || tx.fromCardId == 0) {
-                        Color(0xFF34C759)
-                    } else {
-                        from?.colorHex?.let { parseHexColor(it) } ?: ClaudeDivider
+                    val fromLabel = when {
+                        isIncome || tx.fromCardId == 0 -> "Kontrakt"
+                        tx.fromCardId == com.example.data.VirtualCard.EXTERNAL_IN_CARD_ID -> "Tashqidan"
+                        tx.fromCardId == com.example.data.VirtualCard.EXTERNAL_OUT_CARD_ID -> "Tashqiga"
+                        else -> from?.name ?: "—"
                     }
-                    val toColor = to?.colorHex?.let { parseHexColor(it) } ?: ClaudeDivider
+                    val toLabel = when (tx.toCardId) {
+                        com.example.data.VirtualCard.EXTERNAL_IN_CARD_ID -> "Tashqidan"
+                        com.example.data.VirtualCard.EXTERNAL_OUT_CARD_ID -> "Tashqiga"
+                        else -> to?.name ?: "—"
+                    }
+                    val fromColor = when {
+                        isIncome || tx.fromCardId == 0 -> Color(0xFF34C759)
+                        tx.fromCardId == com.example.data.VirtualCard.EXTERNAL_IN_CARD_ID -> Color(0xFF00838F)
+                        tx.fromCardId == com.example.data.VirtualCard.EXTERNAL_OUT_CARD_ID -> Color(0xFFC62828)
+                        else -> from?.colorHex?.let { parseHexColor(it) } ?: ClaudeDivider
+                    }
+                    val toColor = when (tx.toCardId) {
+                        com.example.data.VirtualCard.EXTERNAL_IN_CARD_ID -> Color(0xFF00838F)
+                        com.example.data.VirtualCard.EXTERNAL_OUT_CARD_ID -> Color(0xFFC62828)
+                        else -> to?.colorHex?.let { parseHexColor(it) } ?: ClaudeDivider
+                    }
 
                     Row(
                         modifier = Modifier

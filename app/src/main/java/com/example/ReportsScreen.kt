@@ -30,6 +30,7 @@ import com.example.data.Renter
 import com.example.data.Scooter
 import com.example.data.SettingsRepository
 import com.example.data.Transaction
+import com.example.data.isExternal
 import com.example.ui.ContractHistoryViewModel
 import com.example.ui.RenterViewModel
 import com.example.ui.ScooterViewModel
@@ -1323,11 +1324,14 @@ private fun fmtMoney(amount: Double): String {
  */
 @Composable
 private fun CardsBalancesWidget(d: ReportWidgetData) {
-    if (d.cards.isEmpty()) {
+    // Внешние карты (Tashqidan / Tashqiga) исключаем — у них ∞ баланс,
+    // учёт их в итогах бессмысленен.
+    val regularCards = d.cards.filter { !it.isExternal }
+    if (regularCards.isEmpty()) {
         EmptyWidget("Hozircha kartalar yo'q. Finansi bo'limidan yarating.")
         return
     }
-    val totalBalance = d.cards.sumOf { it.balance }
+    val totalBalance = regularCards.sumOf { it.balance }
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
         // Общий баланс всех карт
         Row(
@@ -1349,7 +1353,7 @@ private fun CardsBalancesWidget(d: ReportWidgetData) {
         }
         HorizontalDivider(color = ClaudeDivider)
         // Список карт
-        d.cards.forEach { card ->
+        regularCards.forEach { card ->
             val cardColor = parseHexColor(card.colorHex)
             Row(
                 modifier = Modifier
@@ -1405,8 +1409,15 @@ private fun CashFlowWidget(d: ReportWidgetData) {
     val income = d.cardTransactions
         .filter { it.type == com.example.data.CardTransaction.TYPE_CONTRACT_INCOME }
         .sumOf { it.amount }
+    // Внутренние переводы между обычными картами (исключаем внешние —
+    // Tashqidan/Tashqiga — поскольку они не являются внутренним расходом,
+    // а представляют вход/выход средств относительно системы).
     val transfers = d.cardTransactions
-        .filter { it.type == com.example.data.CardTransaction.TYPE_CARD_TRANSFER }
+        .filter {
+            it.type == com.example.data.CardTransaction.TYPE_CARD_TRANSFER &&
+            !com.example.data.VirtualCard.isExternalId(it.fromCardId) &&
+            !com.example.data.VirtualCard.isExternalId(it.toCardId)
+        }
         .sumOf { it.amount }
     val netFlow = income - transfers
 
@@ -1549,7 +1560,10 @@ private fun MainCardIncomeWidget(d: ReportWidgetData) {
  */
 @Composable
 private fun ExpenseCardsWidget(d: ReportWidgetData) {
-    val expenseCards = d.cards.filter { it.id != com.example.data.VirtualCard.MAIN_CARD_ID }
+    // Внешние карты исключаем — они не являются «расходными карманами».
+    val expenseCards = d.cards.filter {
+        it.id != com.example.data.VirtualCard.MAIN_CARD_ID && !it.isExternal
+    }
     if (expenseCards.isEmpty()) {
         EmptyWidget("Rashod kartalari yo'q. Finansi bo'limidan yarating.")
         return
