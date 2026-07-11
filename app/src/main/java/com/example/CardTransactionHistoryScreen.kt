@@ -120,12 +120,33 @@ fun CardTransactionHistoryScreen(
         else -> cardNameById[id] ?: "Karta #$id"
     }
 
-    // Разделяем на входящие (toCardId == currentCard.id) и исходящие (fromCardId == currentCard.id)
-    val incoming = remember(transactions) {
-        transactions.filter { it.toCardId == currentCard.id }
+    // Разделяем на «Kiruvchi» (поступления, +) и «Chiquvchi» (расходы, −).
+    //
+    // Для ОБЫЧНЫХ карт направление совпадает со знаком:
+    //   • toCardId == currentCard.id  → приход на эту карту (+) → Kiruvchi
+    //   • fromCardId == currentCard.id → расход с этой карты (−) → Chiquvchi
+    //
+    // Для ВНЕШНИХ карт (Tashqidan / Tashqiga) логика ИНВЕРТИРОВАНА, потому что
+    // внешняя карта представляет «остальной мир» с точки зрения пользователя:
+    //   • Tashqidan (EXTERNAL_IN): перевод С этой карты = деньги вошли в систему
+    //     пользователя (поступление, +) → Kiruvchi;
+    //     перевод НА эту карту = возврат во вне (расход, −) → Chiquvchi.
+    //   • Tashqiga (EXTERNAL_OUT): перевод НА эту карту = деньги вышли из системы
+    //     пользователя (расход, −) → Chiquvchi;
+    //     перевод С этой карты = возврат из вне (поступление, +) → Kiruvchi.
+    val incoming = remember(transactions, currentCard.id, currentCard.isExternal) {
+        if (currentCard.isExternal) {
+            transactions.filter { it.fromCardId == currentCard.id }
+        } else {
+            transactions.filter { it.toCardId == currentCard.id }
+        }
     }
-    val outgoing = remember(transactions) {
-        transactions.filter { it.fromCardId == currentCard.id }
+    val outgoing = remember(transactions, currentCard.id, currentCard.isExternal) {
+        if (currentCard.isExternal) {
+            transactions.filter { it.toCardId == currentCard.id }
+        } else {
+            transactions.filter { it.fromCardId == currentCard.id }
+        }
     }
 
     val totalIncoming = incoming.sumOf { it.amount }
@@ -137,7 +158,10 @@ fun CardTransactionHistoryScreen(
         val startMillis = dateRangePickerState.selectedStartDateMillis
         val endMillis = dateRangePickerState.selectedEndDateMillis
         currentList.filter { t ->
-            val counterparty = if (t.toCardId == currentCard.id) cardName(t.fromCardId) else cardName(t.toCardId)
+            // Контрагент — всегда «другая сторона» транзакции относительно currentCard.
+            // Это работает и для обычных, и для внешних карт.
+            val counterparty = if (t.fromCardId == currentCard.id)
+                cardName(t.toCardId) else cardName(t.fromCardId)
             val textMatch = searchQuery.isBlank() ||
                 cardName(t.fromCardId).contains(searchQuery, ignoreCase = true) ||
                 cardName(t.toCardId).contains(searchQuery, ignoreCase = true) ||
@@ -328,14 +352,15 @@ fun CardTransactionHistoryScreen(
                     verticalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
                     items(filteredTxs, key = { it.id }) { tx ->
+                        // Контрагент — всегда «другая сторона» транзакции.
+                        // Работает и для обычных, и для внешних карт.
+                        val counterpartyId = if (tx.fromCardId == currentCard.id)
+                            tx.toCardId else tx.fromCardId
                         CardTxRow(
                             tx = tx,
                             isIncoming = selectedTab == 0,
                             currentCardId = currentCard.id,
-                            counterpartyName = if (selectedTab == 0)
-                                cardName(tx.fromCardId)
-                            else
-                                cardName(tx.toCardId),
+                            counterpartyName = cardName(counterpartyId),
                             isSelected = tx.id in selectedTxIds,
                             dateFmt = dateFmt,
                             onClick = {

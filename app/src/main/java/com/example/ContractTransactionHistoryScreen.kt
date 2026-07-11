@@ -375,9 +375,14 @@ fun ContractTransactionHistoryScreen(
     }
 
     // ── Диалог создания транзакции ─────────────────────────────────────
+    // Тип транзакции определяется автоматически по выбранной вкладке:
+    //   • Kiruvchi (0)  → TYPE_PAYMENT  (положительная, поступление)
+    //   • Chiquvchi (1) → TYPE_CUSTOM   (отрицательная, расход)
+    // Пользователь не выбирает тип вручную — это убирает путаницу.
     if (showCreateDialog) {
         CreateContractTransactionDialog(
             contract = contract,
+            selectedTab = selectedTab,
             onDismiss = { showCreateDialog = false },
             onCreate = { type, amount, timestamp, notes ->
                 transactionViewModel.createTransaction(
@@ -447,41 +452,34 @@ fun ContractTransactionHistoryScreen(
 /* ============================================================================
    ДИАЛОГ СОЗДАНИЯ ТРАНЗАКЦИИ ДЛЯ КОНТРАКТА
    ----------------------------------------------------------------------------
-   Простой диалог: тип, сумма, дата, заметка. Все остальные поля (renter,
-   scooter, contractId) уже предзаполнены из контракта.
+   Простой диалог: сумма, дата, заметка. Тип определяется автоматически по
+   выбранной вкладке (Kiruvchi → TYPE_PAYMENT, Chiquvchi → TYPE_CUSTOM).
+   Остальные поля (renter, scooter, contractId) уже предзаполнены из контракта.
    ============================================================================ */
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun CreateContractTransactionDialog(
     contract: ContractHistoryEntry,
+    selectedTab: Int,
     onDismiss: () -> Unit,
     onCreate: (type: String, amount: Double, timestamp: Long, notes: String?) -> Unit
 ) {
     val dayMs = 24L * 60 * 60 * 1000
     val initialTimestamp = (System.currentTimeMillis() / (15 * 60 * 1000)) * (15 * 60 * 1000)
 
-    var type by remember { mutableStateOf(Transaction.TYPE_PAYMENT) }
+    // Тип авто-определяется по вкладке: Kiruvchi → положительный (PAYMENT),
+    // Chiquvchi → отрицательный (CUSTOM). Пользователь не выбирает тип.
+    val type = if (selectedTab == 0) Transaction.TYPE_PAYMENT else Transaction.TYPE_CUSTOM
+    val typeLabel = if (selectedTab == 0) "To'lov (kiruvchi)" else "Boshqa (chiquvchi)"
+
     var amountText by remember { mutableStateOf("") }
     var timestamp by remember { mutableStateOf(initialTimestamp) }
     var notes by remember { mutableStateOf("") }
 
-    var expandedType by remember { mutableStateOf(false) }
     var showDatePicker by remember { mutableStateOf(false) }
     val datePickerState = rememberDatePickerState(initialSelectedDateMillis = timestamp)
     val scrollState = rememberScrollState()
-
-    val typeOptions = remember {
-        listOf(
-            Transaction.TYPE_PAYMENT    to "To'lov",
-            Transaction.TYPE_TERMINATED to "Tugatildi",
-            Transaction.TYPE_RETURNED   to "Qaytarildi",
-            Transaction.TYPE_PENALTY    to "Jarima",
-            Transaction.TYPE_REPAIR     to "Ta'mir",
-            Transaction.TYPE_CUSTOM     to "Boshqa"
-        )
-    }
-    val selectedTypeLabel = typeOptions.find { it.first == type }?.second ?: "To'lov"
 
     val amountParsed = amountText.replace(',', '.').toDoubleOrNull()
     val canSave = amountParsed != null && amountParsed > 0.0
@@ -556,41 +554,31 @@ private fun CreateContractTransactionDialog(
                     }
                 }
 
-                // ── Тип ────────────────────────────────────────────────────
-                Text("Turi", style = MaterialTheme.typography.labelMedium, color = ClaudeTextSecondary)
-                ExposedDropdownMenuBox(
-                    expanded = expandedType,
-                    onExpandedChange = { expandedType = !expandedType }
+                // ── Бейдж типа (только для информации, не редактируется) ───
+                Surface(
+                    shape = RoundedCornerShape(10.dp),
+                    color = ClaudeBackground,
+                    border = BorderStroke(1.dp, ClaudeDivider)
                 ) {
-                    OutlinedTextField(
-                        value = selectedTypeLabel,
-                        onValueChange = {},
-                        readOnly = true,
-                        trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = expandedType) },
+                    Row(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .menuAnchor(),
-                        shape = RoundedCornerShape(10.dp),
-                        colors = OutlinedTextFieldDefaults.colors(
-                            unfocusedBorderColor = ClaudeDivider,
-                            focusedBorderColor = ClaudeAccent,
-                            unfocusedContainerColor = ClaudeBackground,
-                            focusedContainerColor = ClaudeBackground
-                        )
-                    )
-                    ExposedDropdownMenu(
-                        expanded = expandedType,
-                        onDismissRequest = { expandedType = false }
+                            .padding(horizontal = 12.dp, vertical = 10.dp),
+                        verticalAlignment = Alignment.CenterVertically
                     ) {
-                        typeOptions.forEach { (value, label) ->
-                            DropdownMenuItem(
-                                text = { Text(label) },
-                                onClick = {
-                                    type = value
-                                    expandedType = false
-                                }
-                            )
-                        }
+                        Icon(
+                            imageVector = if (selectedTab == 0) Icons.Default.ArrowDownward
+                                          else Icons.Default.ArrowUpward,
+                            contentDescription = null,
+                            tint = if (selectedTab == 0) StatusOk else StatusOverdue,
+                            modifier = Modifier.size(18.dp)
+                        )
+                        Spacer(Modifier.width(8.dp))
+                        Text(
+                            "Turi: $typeLabel",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = ClaudeTextSecondary
+                        )
                     }
                 }
 
