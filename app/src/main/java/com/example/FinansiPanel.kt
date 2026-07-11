@@ -520,8 +520,13 @@ fun TransactionZone(
 }
 
 /**
- * Список карт снизу зоны транзакции.
- * Долгий тап → выбор для удаления (как в RenterTable/ScooterTable).
+ * Список карт с зоной транзакции сверху.
+ *
+ * [header] — необязательный заголовок, который рендерится первым элементом
+ * сетки с полным span (2 колонки). Это позволяет заголовку (например,
+ * TransactionZone) скроллиться вместе с картами, а не залипать сверху.
+ *
+ * Долгий тап по карте → выбор для удаления (как в RenterTable/ScooterTable).
  * Обычный тап → редактирование.
  */
 @OptIn(ExperimentalFoundationApi::class)
@@ -533,20 +538,26 @@ fun CardsGrid(
     onCardLongClick: (Int, Boolean) -> Unit,
     onMoveUp: (VirtualCard) -> Unit = {},
     onMoveDown: (VirtualCard) -> Unit = {},
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    header: @Composable (() -> Unit)? = null
 ) {
     LazyVerticalGrid(
         columns = GridCells.Fixed(2),
-        // ВАЖНО: weight(1f) вместо fillMaxSize — иначе TransactionZone
-        // сверху выталкивается за пределы экрана при прокрутке.
-        // Со weight(1f) CardsGrid занимает оставшееся место под
-        // зафиксированной TransactionZone. Weight передаётся вызывающим
-        // кодом, который находится внутри ColumnScope.
-        modifier = modifier.fillMaxWidth(),
+        // Раньше тут был weight(1f) — CardsGrid занимал место под
+        // зафиксированной TransactionZone. Теперь TransactionZone уехала
+        // внутрь как header, поэтому сетка занимает весь экран.
+        modifier = modifier.fillMaxSize(),
         contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
         horizontalArrangement = Arrangement.spacedBy(10.dp),
         verticalArrangement = Arrangement.spacedBy(10.dp)
     ) {
+        // ── Заголовок (зона транзакции) — скроллится вместе с картами ──
+        if (header != null) {
+            item(span = { GridItemSpan(2) }) {
+                header()
+            }
+        }
+
         items(cards, key = { it.id }) { card ->
             val index = cards.indexOf(card)
             VirtualCardView(
@@ -940,54 +951,56 @@ fun FinansiPanel(
         lastDeleteTrigger = externalDeleteTrigger
     }
 
-    Column(modifier = Modifier.fillMaxSize()) {
-        // Зона транзакции
-        TransactionZone(
-            cards = orderedCards,
-            fromCard = fromCard,
-            toCard = toCard,
-            onPickFrom = { pickingSlot = 1 },
-            onPickTo = { pickingSlot = 2 },
-            onTransfer = { amount, note, reversed ->
-                val fromId = fromCard?.id ?: return@TransactionZone
-                val toId = toCard?.id ?: return@TransactionZone
-                viewModel.transfer(fromId, toId, amount, note, reversed)
-            }
-        )
+    // Раньше тут был Column { TransactionZone(); CardsGrid(weight(1f)) },
+    // из-за чего TransactionZone была прибита сверху и «следовала» за
+    // пользователем при прокрутке карт. Теперь TransactionZone передаётся
+    // в CardsGrid как header — первый full-span item в LazyVerticalGrid —
+    // и скроллится вместе с картами естественным образом.
+    CardsGrid(
+        cards = orderedCards,
+        selectedIds = selectedIds,
+        onCardClick = { card ->
+            // Тап по карте → открывает экран истории транзакций этой карты
+            // (как тап по арендатору открывает RenterContractHistoryScreen).
+            onCardClick(card)
+        },
+        onCardLongClick = { id, select ->
+            val newSet = selectedIds.toMutableSet()
+            if (select) newSet.add(id) else newSet.remove(id)
+            selectedIds = newSet
+            onSelectedCardIdsChange(newSet)
 
-        // Список карт
-        CardsGrid(
-            cards = orderedCards,
-            selectedIds = selectedIds,
-            onCardClick = { card ->
-                // Тап по карте → открывает экран истории транзакций этой карты
-                // (как тап по арендатору открывает RenterContractHistoryScreen).
-                onCardClick(card)
-            },
-            onCardLongClick = { id, select ->
-                val newSet = selectedIds.toMutableSet()
-                if (select) newSet.add(id) else newSet.remove(id)
-                selectedIds = newSet
-                onSelectedCardIdsChange(newSet)
-
-                // ── Авто-заполнение зоны транзакции при выборе ровно 2 карт ──
-                // Пользователь долго жмёт на 2 карты → они автоматически
-                // подставляются в слоты from/to зоны транзакции.
-                if (newSet.size == 2) {
-                    val list = newSet.toList()
-                    val firstCard = orderedCards.firstOrNull { it.id == list[0] }
-                    val secondCard = orderedCards.firstOrNull { it.id == list[1] }
-                    if (firstCard != null && secondCard != null) {
-                        fromCard = firstCard
-                        toCard = secondCard
-                    }
+            // ── Авто-заполнение зоны транзакции при выборе ровно 2 карт ──
+            // Пользователь долго жмёт на 2 карты → они автоматически
+            // подставляются в слоты from/to зоны транзакции.
+            if (newSet.size == 2) {
+                val list = newSet.toList()
+                val firstCard = orderedCards.firstOrNull { it.id == list[0] }
+                val secondCard = orderedCards.firstOrNull { it.id == list[1] }
+                if (firstCard != null && secondCard != null) {
+                    fromCard = firstCard
+                    toCard = secondCard
                 }
-            },
-            onMoveUp = { card -> moveCardUp(card) },
-            onMoveDown = { card -> moveCardDown(card) },
-            modifier = Modifier.weight(1f)
-        )
-    }
+            }
+        },
+        onMoveUp = { card -> moveCardUp(card) },
+        onMoveDown = { card -> moveCardDown(card) },
+        modifier = Modifier.fillMaxSize(),
+        header = {
+            TransactionZone(
+                cards = orderedCards,
+                fromCard = fromCard,
+                toCard = toCard,
+                onPickFrom = { pickingSlot = 1 },
+                onPickTo = { pickingSlot = 2 },
+                onTransfer = { amount, note, reversed ->
+                    val fromId = fromCard?.id ?: return@TransactionZone
+                    val toId = toCard?.id ?: return@TransactionZone
+                    viewModel.transfer(fromId, toId, amount, note, reversed)
+                }
+            )
+        }
+    )
 
     // Диалог выбора карты в слот
     pickingSlot?.let { slot ->
