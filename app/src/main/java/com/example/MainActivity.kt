@@ -2332,12 +2332,18 @@ fun SettingsDialog(
         })
     }
 
+    val settingsScrollState = rememberScrollState()
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text("Sozlamalar", style = MaterialTheme.typography.titleLarge) },
         containerColor = ClaudeCard,
         text = {
-            Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .verticalScroll(settingsScrollState),
+                verticalArrangement = Arrangement.spacedBy(16.dp)
+            ) {
                 Column {
                     Text("Tariflar", style = MaterialTheme.typography.labelMedium, color = ClaudeText)
                     Spacer(modifier = Modifier.height(8.dp))
