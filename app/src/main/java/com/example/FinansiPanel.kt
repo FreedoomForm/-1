@@ -198,13 +198,8 @@ fun VirtualCardView(
                 }
             }
 
-            // Центр: баланс
+            // Центр: только сумма баланса (без подписи "Balans")
             Column {
-                Text(
-                    text = "Balans",
-                    color = Color.White.copy(alpha = 0.7f),
-                    fontSize = 11.sp
-                )
                 Text(
                     text = "${formatMoney(card.balance)} so'm",
                     color = if (card.balance < 0) Color(0xFFFFD7D7) else Color.White,
