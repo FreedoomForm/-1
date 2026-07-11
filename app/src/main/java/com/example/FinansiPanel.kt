@@ -498,7 +498,11 @@ fun CardsGrid(
 ) {
     LazyVerticalGrid(
         columns = GridCells.Fixed(2),
-        modifier = Modifier.fillMaxSize(),
+        // ВАЖНО: weight(1f) вместо fillMaxSize — иначе TransactionZone
+        // сверху выталкивается за пределы экрана при прокрутке.
+        // Со weight(1f) CardsGrid занимает оставшееся место под
+        // зафиксированной TransactionZone.
+        modifier = Modifier.weight(1f).fillMaxWidth(),
         contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
         horizontalArrangement = Arrangement.spacedBy(10.dp),
         verticalArrangement = Arrangement.spacedBy(10.dp)
@@ -769,7 +773,8 @@ fun FinansiPanel(
     externalEditTrigger: Int = 0,
     externalDeleteTrigger: Int = 0,
     selectedCardIds: Set<Int> = emptySet(),
-    onSelectedCardIdsChange: (Set<Int>) -> Unit = {}
+    onSelectedCardIdsChange: (Set<Int>) -> Unit = {},
+    onCardClick: (VirtualCard) -> Unit = {}
 ) {
     val cards by viewModel.cards.collectAsStateWithLifecycle()
     val context = LocalContext.current
@@ -914,13 +919,28 @@ fun FinansiPanel(
             cards = orderedCards,
             selectedIds = selectedIds,
             onCardClick = { card ->
-                editingCard = card
+                // Тап по карте → открывает экран истории транзакций этой карты
+                // (как тап по арендатору открывает RenterContractHistoryScreen).
+                onCardClick(card)
             },
             onCardLongClick = { id, select ->
                 val newSet = selectedIds.toMutableSet()
                 if (select) newSet.add(id) else newSet.remove(id)
                 selectedIds = newSet
                 onSelectedCardIdsChange(newSet)
+
+                // ── Авто-заполнение зоны транзакции при выборе ровно 2 карт ──
+                // Пользователь долго жмёт на 2 карты → они автоматически
+                // подставляются в слоты from/to зоны транзакции.
+                if (newSet.size == 2) {
+                    val list = newSet.toList()
+                    val firstCard = orderedCards.firstOrNull { it.id == list[0] }
+                    val secondCard = orderedCards.firstOrNull { it.id == list[1] }
+                    if (firstCard != null && secondCard != null) {
+                        fromCard = firstCard
+                        toCard = secondCard
+                    }
+                }
             },
             onMoveUp = { card -> moveCardUp(card) },
             onMoveDown = { card -> moveCardDown(card) }

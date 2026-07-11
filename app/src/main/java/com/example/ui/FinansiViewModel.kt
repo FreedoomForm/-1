@@ -10,6 +10,7 @@ import com.example.data.VirtualCard
 import com.example.data.VirtualCardRepository
 import com.example.widget.WidgetUpdater
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.stateIn
@@ -30,6 +31,10 @@ class FinansiViewModel(application: Application) : AndroidViewModel(application)
 
     val cards: StateFlow<List<VirtualCard>>
     val transactions: StateFlow<List<CardTransaction>>
+
+    /** Поток транзакций для конкретной карты (используется экраном истории карты). */
+    fun transactionsForCard(cardId: Int): Flow<List<CardTransaction>> =
+        repository.transactionsForCard(cardId)
 
     init {
         val database = AppDatabase.getDatabase(application)

@@ -271,11 +271,13 @@ enum class SortDirection { ASC, DESC }
  *   • MainView         — список арендаторов / скутеров с табами
  *   • RenterHistory    — история контрактов конкретного арендатора
  *   • ScooterHistory   — история контрактов конкретного скутера
+ *   • CardHistory      — история транзакций конкретной виртуальной карты
  */
 sealed class NavigationState {
     data object MainView : NavigationState()
     data class RenterHistory(val renter: Renter) : NavigationState()
     data class ScooterHistory(val scooter: Scooter) : NavigationState()
+    data class CardHistory(val card: com.example.data.VirtualCard) : NavigationState()
 }
 
 /**
@@ -542,6 +544,23 @@ fun MainScreen(
                     }
                 )
             }
+            return
+        }
+        is NavigationState.CardHistory -> {
+            // ── Экран истории транзакций виртуальной карты ─────────────
+            // Шаблон — RenterContractHistoryScreen. Показывает входящие
+            // и исходящие транзакции карты в отдельных вкладках.
+            CardTransactionHistoryScreen(
+                card = st.card,
+                onBack = { navState = NavigationState.MainView },
+                onEditCard = {
+                    // Возврат на вкладку Finansi — пользователь может
+                    // долго нажать на карту + ✎ для редактирования.
+                    currentTab = 5
+                    navState = NavigationState.MainView
+                },
+                finansiViewModel = finansiViewModel
+            )
             return
         }
         NavigationState.MainView -> { /* продолжаем — основной Scaffold ниже */ }
@@ -1288,7 +1307,10 @@ fun MainScreen(
                     externalEditTrigger = cardEditTrigger,
                     externalDeleteTrigger = cardDeleteTrigger,
                     selectedCardIds = selectedCardIds,
-                    onSelectedCardIdsChange = { selectedCardIds = it }
+                    onSelectedCardIdsChange = { selectedCardIds = it },
+                    onCardClick = { card ->
+                        navState = NavigationState.CardHistory(card)
+                    }
                 )
             }
         }

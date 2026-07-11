@@ -19,6 +19,10 @@ class VirtualCardRepository(
     val allCards: Flow<List<VirtualCard>> = cardDao.getAllCards()
     val allTransactions: Flow<List<CardTransaction>> = txDao.getAllTransactions()
 
+    /** Все транзакции, в которых участвует карта [cardId] (входящие + исходящие). */
+    fun transactionsForCard(cardId: Int): Flow<List<CardTransaction>> =
+        txDao.getTransactionsForCard(cardId)
+
     suspend fun getCard(id: Int): VirtualCard? = cardDao.getCardById(id)
     suspend fun getAllCardsOnce(): List<VirtualCard> = cardDao.getAllCardsOnce()
 
