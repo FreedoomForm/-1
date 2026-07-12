@@ -313,6 +313,36 @@ class ContractHistoryViewModel(application: Application) : AndroidViewModel(appl
                     Log.w("ContractHistoryVM", "Failed to insert status-change transaction: ${e.message}")
                 }
 
+                // ── Создаём PAYMENT-запись в истории контрактов (аудит) ──
+                // Чтобы при смене isPaid оставался след в истории контрактов
+                // (как при applyWeeklyPayment). Без этой записи аудит-трейл
+                // неполный: можно сменить статус, и не будет записи «когда и
+                // каким образом».
+                try {
+                    val paymentAuditEntry = ContractHistoryEntry(
+                        renterId = renter.id,
+                        timestamp = now,
+                        type = ContractHistoryEntry.TYPE_PAYMENT,
+                        amount = if (entry.isPaid) amountForStatus else -amountForStatus,
+                        notes = if (entry.isPaid)
+                            "Status o'zgartirildi: To'langan — #${entry.id}"
+                        else
+                            "Status o'zgartirildi: Bekor qilindi — #${entry.id}",
+                        renterName = renter.name,
+                        renterPhone = renter.phoneNumber,
+                        scooterName = renter.scooterName ?: "",
+                        weekStart = entry.weekStart,
+                        weekEnd = entry.weekEnd,
+                        weeklyPrice = amountForStatus,
+                        passportData = renter.passportData,
+                        address = renter.address,
+                        pinfl = renter.pinfl
+                    )
+                    repo.insert(paymentAuditEntry)
+                } catch (e: Exception) {
+                    Log.w("ContractHistoryVM", "Failed to insert audit PAYMENT entry: ${e.message}")
+                }
+
                 // ── Зачисление / списание на «Glavnaya» карту ───────────
                 // При оплате контракта (false → true) сумма падает на главную
                 // карту как входящий поток (depositContractIncome).

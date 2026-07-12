@@ -77,8 +77,12 @@ class PaymentCheckWorker(
 
     /**
      * Продлевает контракт арендатора на 1 неделю:
-     *   • rentStartDateTimestamp += 7 дней
-     *   • rentDurationDays += 7
+     *   • rentStartDateTimestamp НЕ МЕНЯЕТСЯ — это первоначальная дата начала
+     *     аренды, она должна оставаться неизменной для корректного отображения
+     *     в PDF-договоре и UI. Раньше здесь было += 7 дней, что приводило к
+     *     «поползанию» даты начала вперёд после каждого продления и потере
+     *     первоначальной информации об аренде.
+     *   • rentDurationDays += 7 (срок аренды растёт — это правильно)
      *   • balance -= weeklyPrice (уходит в минус = долг)
      *   • debtAmount = max(0, -balance) (синхронизация)
      *   • isOverdueSmsSent = false (новая неделя — можно снова слать SMS)
@@ -99,7 +103,7 @@ class PaymentCheckWorker(
 
         val newBalance = renter.balance - weeklyPrice
         val renewed = renter.copy(
-            rentStartDateTimestamp = renter.rentStartDateTimestamp + sevenDays,
+            // ВАЖНО: rentStartDateTimestamp НЕ трогаем — это первоначальная дата.
             rentDurationDays = renter.rentDurationDays + 7,
             balance = newBalance,
             debtAmount = maxOf(0.0, -newBalance),
@@ -110,8 +114,15 @@ class PaymentCheckWorker(
         // ── Подтягиваем реквизиты скутера для PDF-денормализации ──────────
         val scooter = renter.scooterId?.let { db.scooterDao().getScooterById(it) }
 
-        val weekStart = renewed.rentStartDateTimestamp
-        val weekEnd = weekStart + sevenDays
+        // Новая неделя начинается СРАЗУ после конца предыдущей:
+        //   prevExpiry = rentStartDateTimestamp + (rentDurationDays_before_add) * dayMs
+        //   newWeekStart = prevExpiry
+        //   newWeekEnd = newWeekStart + 7d
+        // Так как rentStartDateTimestamp остаётся прежним, а rentDurationDays
+        // увеличивается на 7, новый expiryTime = oldExpiry + 7d, что и нужно.
+        val newWeekStart = renter.rentStartDateTimestamp +
+            renter.rentDurationDays * 24L * 60 * 60 * 1000
+        val newWeekEnd = newWeekStart + sevenDays
         db.contractHistoryDao().insert(
             ContractHistoryEntry(
                 renterId = renter.id,
@@ -122,8 +133,8 @@ class PaymentCheckWorker(
                 renterName = renter.name,
                 renterPhone = renter.phoneNumber,
                 scooterName = renter.scooterName,
-                weekStart = weekStart,
-                weekEnd = weekEnd,
+                weekStart = newWeekStart,
+                weekEnd = newWeekEnd,
                 weeklyPrice = weeklyPrice,
                 passportData = renter.passportData,
                 address = renter.address,

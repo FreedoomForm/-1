@@ -239,25 +239,62 @@ fun ReportsScreen(
     } else 0
 
     // ── ROI ───────────────────────────────────────────────────────────
+    // ROI считается как отношение доходов за выбранный период к инвестициям,
+    // нормализованное к месяце. Раньше было просто totalPayments / investment,
+    // что росло линейно со временем и не отражало реальную окупаемость.
     val totalInvestmentUzs = scooters.size * scooterPriceUsd * usdToUzs
     val roiMultiple = if (totalInvestmentUzs > 0) totalPayments / totalInvestmentUzs else 0.0
     val roiPercent = roiMultiple * 100
+    // Дополнительная метрика: ROI в месяц (нормализованная).
+    // Если период = 30 дней, monthlyRoi = roiMultiple. Если 60 дней,
+    // monthlyRoi = roiMultiple / 2 (делим на кол-во месяцев в периоде).
+    val periodMonths = (effectivePeriodDays.toDouble() / 30.0).coerceAtLeast(1.0)
+    val roiMultiplePerMonth = if (totalInvestmentUzs > 0)
+        (totalPayments / periodMonths) / totalInvestmentUzs else 0.0
+    val roiPercentPerMonth = roiMultiplePerMonth * 100
 
     // ── Ожидаемые доходы в следующем месяце ───────────────────────────
-    val expectedNextMonth = activeRenters * weeklyPrice * 4
+    // Используем точное число недель в месяце (4.348), а не округление 4.
+    val expectedNextMonth = activeRenters * weeklyPrice * (365.25 / 7.0 / 12.0)
 
     // ── Новые метрики для бизнес-отчётности ───────────────────────────
     // ARPU = средний доход на одного активного арендатора (за период)
     val arpu = if (activeRenters > 0) totalPayments / activeRenters else 0.0
-    // LTV = ARPU × среднее число недель аренды (оценка = 8 недель)
-    val avgWeeksPerRenter = 8.0
+    // LTV = ARPU × среднее число недель аренды
+    // Вычисляем avgWeeksPerRenter из истории контрактов: для каждого
+    // арендатора считаем кол-во его записей CREATED+AUTO_RENEW, и берём
+    // среднее. Раньше был хардкод 8.0 — это плохо для аналитики.
+    val avgWeeksPerRenter = remember(history, renters) {
+        val rentersWithContracts = renters.filter { it.id != 0 }
+        if (rentersWithContracts.isEmpty()) 0.0
+        else {
+            val weeksPerRenter = rentersWithContracts.map { r ->
+                history.count {
+                    it.renterId == r.id &&
+                    it.type in listOf(
+                        ContractHistoryEntry.TYPE_CREATED,
+                        ContractHistoryEntry.TYPE_AUTO_RENEW
+                    )
+                }
+            }
+            // Защита от деления на 0 и от 0-длинных историй
+            val avg = weeksPerRenter.average()
+            if (avg > 0) avg else 8.0  // fallback на 8 недель если нет данных
+        }
+    }
     val ltv = arpu * avgWeeksPerRenter
-    // MRR = активные арендаторы × недельная ставка × 4 недели
-    val mrr = activeRenters * weeklyPrice * 4
-    // Целевой MRR = (всего скутеров × weeklyPrice × 4) — если бы все были в аренде
-    val targetMrr = scooters.size * weeklyPrice * 4
-    // Churn rate (упрощённо) = overdueRenters / activeRenters × 100%
-    val churnRate = if (activeRenters > 0) (overdueRenters.toDouble() / activeRenters * 100).toInt() else 0
+    // MRR = активные арендаторы × недельная ставка × (среднее число недель в месяце)
+    // В месяце в среднем 365.25 / 7 / 12 = 4.348 недель. Раньше было * 4,
+    // что занижало MRR на ~8%.
+    val weeksPerMonth = 365.25 / 7.0 / 12.0  // ≈ 4.348
+    val mrr = activeRenters * weeklyPrice * weeksPerMonth
+    // Целевой MRR = (всего скутеров × weeklyPrice × недель в месяце) — если бы все были в аренде
+    val targetMrr = scooters.size * weeklyPrice * weeksPerMonth
+    // OverdueRate (доля должников среди активных). Раньше называлось churnRate,
+    // что неправильно: churn = доля ПОКИНУВШИХ систему, а не доля должников.
+    val overdueRate = if (activeRenters > 0) (overdueRenters.toDouble() / activeRenters * 100).toInt() else 0
+    // Совместимость: оставляем churnRate как алиас для UI-кода, который уже его использует
+    val churnRate = overdueRate
     // Payment discipline = % арендаторов без долга
     val paymentDiscipline = if (activeRenters > 0) ((activeRenters - overdueRenters).toDouble() / activeRenters * 100).toInt() else 0
     // Revenue per scooter (эффективность парка)

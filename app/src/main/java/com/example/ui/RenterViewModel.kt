@@ -113,23 +113,28 @@ class RenterViewModel(application: Application) : AndroidViewModel(application) 
             val expiryTime = startTimestamp + duration * dayMs
             val firstWeekEnd = startTimestamp + weekMs
 
-            // ── Просрочка определяется по концу ПЕРВОЙ недели, а не по концу ─
-            // ── всего периода аренды.                                                    ─
-            // Если первая неделя уже закончилась (now > firstWeekEnd), то
-            // арендатор должен за каждую прошедшую неделю — включая ТЕКУЩУЮ
-            // (незавершённую) неделю.
+            // ── Просрочка определяется по концу ПЕРВОЙ недели. ─────────────
+            // Если первая неделя УЖЕ закончилась (now > firstWeekEnd), то
+            // арендатор должен за каждую ПОЛНОСТЬЮ прошедшую неделю.
+            //
+            // ВАЖНО: используем FLOOR, а не CEIL — текущая (незавершённая)
+            // неделя НЕ считается просроченной. Долг начисляется только за
+            // недели, которые УЖЕ закончились.
+            //   Пример: прошло 1 день после firstWeekEnd →
+            //     floor(1/7) = 0 недель (текущая неделя ещё идёт).
+            //   Пример: прошло 8 дней после firstWeekEnd →
+            //     floor(8/7) = 1 неделя (1 завершённая, 1 текущая идёт).
             val isOverdueAtCreation = firstWeekEnd < now
 
             val effectiveWeeklyPrice = if (weeklyPrice > 0) weeklyPrice else SettingsRepository.DEFAULT_WEEKLY_PRICE
 
-            // ── Сколько неоплаченных недель прошло после первой недели ──────
-            // Используем CEIL (округление вверх), чтобы считать ТЕКУЩУЮ
-            // незавершённую неделю как просроченную.
-            //   Пример: прошло 8 дней после firstWeekEnd →
-            //     ceil(8/7) = 2 недели (1 завершённая + 1 текущая).
+            // ── Сколько ПОЛНОСТЬЮ неоплаченных недель прошло после первой ──
+            // FLOOR — потому что текущая (незавершённая) неделя не должна
+            // сразу создавать долг. Долг появляется только когда неделя
+            // ЗАКОНЧИЛАСЬ, а оплаты не было.
             val overdueWeeks = if (isOverdueAtCreation) {
                 val overdueMs = now - firstWeekEnd
-                kotlin.math.ceil(overdueMs.toDouble() / weekMs).toInt().coerceAtLeast(1)
+                kotlin.math.floor(overdueMs.toDouble() / weekMs).toInt().coerceAtLeast(0)
             } else 0
 
             // 1 CREATED (первая неделя) + overdueWeeks AUTO_RENEW — все неоплачены
@@ -523,9 +528,14 @@ class RenterViewModel(application: Application) : AndroidViewModel(application) 
             val scooter: Scooter? = newScooterId?.let { fetchScooterById(it) }
 
             // ── Сдвиг даты назад → дополнительные недели ───────────────────
+            // Используем FLOOR, а не CEIL — чтобы не создавать перекрытий с
+            // уже существующим CREATED. Если deltaMillis точно кратно 7 дням,
+            // FLOOR и CEIL дают одинаковый результат. Если есть «хвост»
+            // (< 7 дней), FLOOR его отбрасывает, и пользователь должен сам
+            // решать, нужна ли дополнительная неделя (через ручное создание).
             if (newStart < oldStart) {
                 val deltaMillis = oldStart - newStart
-                val extraWeeks = ((deltaMillis + 7L * 24 * 60 * 60 * 1000 - 1) / (7L * 24 * 60 * 60 * 1000)).toInt()
+                val extraWeeks = (deltaMillis / (7L * 24 * 60 * 60 * 1000)).toInt()
                 if (extraWeeks > 0) {
                     for (i in 1..extraWeeks) {
                         val weekStart = newStart + (i - 1) * 7L * 24 * 60 * 60 * 1000
@@ -558,13 +568,19 @@ class RenterViewModel(application: Application) : AndroidViewModel(application) 
             }
 
             // ── Сдвиг даты вперёд → возврат баланса за «лишние» недели ──────
+            // Удаляем AUTO_RENEW по weekStart DESC (не по timestamp!).
+            // Это гарантирует, что удаляются именно самые поздние по неделе
+            // контракты, а не те, что были созданы последними по времени
+            // (что может быть результатом ручных операций).
+            // CREATED никогда не удаляется — это первичная запись.
             if (newStart > oldStart) {
                 val deltaMillis = newStart - oldStart
                 val removedWeeks = (deltaMillis / (7L * 24 * 60 * 60 * 1000)).toInt()
                 if (removedWeeks > 0) {
                     val history = historyRepository.getForRenterOnce(existing.id)
                     val autoRenew = history.filter { it.type == ContractHistoryEntry.TYPE_AUTO_RENEW }
-                        .sortedByDescending { it.timestamp }.take(removedWeeks)
+                        .sortedByDescending { it.weekStart ?: 0L }
+                        .take(removedWeeks)
                     autoRenew.forEach { entry ->
                         historyRepository.deleteById(entry.id)
                         balanceAdjust += realWeeklyPrice
@@ -606,10 +622,16 @@ class RenterViewModel(application: Application) : AndroidViewModel(application) 
             }
 
             val newBalance = existing.balance + balanceAdjust
+            // debtAmount должен быть СТРОГО max(0, -newBalance) — это
+            // автоматически синхронизирует поле с реальным балансом.
+            // Раньше здесь было max(newDebt, -newBalance.coerceAtMost(0.0)),
+            // что приводило к парадоксу: пользователь мог ввести долг 300,
+            // а реальный по контрактам — 200, и сохранялось 300 (лишний долг).
+            val newDebtAmount = maxOf(0.0, -newBalance)
             val updated = existing.copy(
                 name = newName,
                 phoneNumber = newPhone,
-                debtAmount = maxOf(newDebt, -newBalance.coerceAtMost(0.0)),
+                debtAmount = newDebtAmount,
                 rentDurationDays = newDuration,
                 rentStartDateTimestamp = newStart,
                 scooterId = newScooterId,
@@ -900,15 +922,17 @@ class RenterViewModel(application: Application) : AndroidViewModel(application) 
 
             // Обновляем арендатора:
             //   • баланс растёт (предоплата)
-            //   • rentStartDateTimestamp = weekStart (новая неделя)
-            //   • rentDurationDays = 7 (одна неделя)
+            //   • ВАЖНО: rentStartDateTimestamp и rentDurationDays НЕ МЕНЯЮТСЯ —
+            //     это первоначальные условия аренды, они должны оставаться
+            //     неизменными до явного редактирования через updateRenterWithContracts.
+            //     Раньше здесь было rentStartDateTimestamp = weekStart и
+            //     rentDurationDays = 7, что приводило к потере первоначальной
+            //     даты начала аренды и скачкообразному уменьшению срока.
             //   • isReturned = false — реактивация, если был в пассивном состоянии
             //   • isOverdueSmsSent = false — сбрасываем флаг просрочки
             val updated = renter.copy(
                 debtAmount = maxOf(0.0, -newBalance),
                 balance = newBalance,
-                rentStartDateTimestamp = weekStart,
-                rentDurationDays = 7,
                 lastPaymentTimestamp = now,
                 isOverdueSmsSent = false,
                 isReturned = false  // ← реактивация пассивного арендатора
@@ -925,10 +949,10 @@ class RenterViewModel(application: Application) : AndroidViewModel(application) 
      * ЛОГИКА (по требованию пользователя):
      *   • Если balance < 0 (арендатор должен) → оплачиваем ОДНУ неоплаченную
      *     неделю: помечаем самый ранний isPaid=false контракт как оплаченный,
-     *     создаём PAYMENT-запись, но баланс НЕ растёт и НЕ списывается — мы
-     *     просто закрываем один долг. Если неоплаченных контрактов нет, но
+     *     создаём PAYMENT-запись, баланс увеличивается на weeklyPrice
+     *     (как при обычной оплате). Если неоплаченных контрактов нет, но
      *     баланс всё равно отрицательный (рассинхрон) — баланс обнуляется
-     *     до 0.
+     *     до 0 (долг «прощается» при закрытии договора).
      *   • Если balance >= 0 (арендатор ничего не должен) → НИЧЕГО не платим,
      *     НЕ списываем с баланса. Баланс остаётся как есть.
      *   • В ОБОИХ случаях: isReturned=true, создаём TERMINATED в истории
@@ -945,6 +969,19 @@ class RenterViewModel(application: Application) : AndroidViewModel(application) 
         val unpaid = if (renter.balance < 0) {
             historyRepository.getEarliestUnpaidContract(renter.id)
         } else null
+
+        // Финальный баланс арендатора после расторжения.
+        // Если был долг И есть unpaid контракт → баланс растёт на weeklyPrice
+        //   (как при обычной оплате applyWeeklyPayment).
+        // Если был долг, но unpaid==null (рассинхрон) → баланс обнуляется до 0
+        //   (долг «прощается» при закрытии договора, иначе он зависнет навсегда).
+        // Если долга не было → баланс не меняется.
+        val finalBalance = when {
+            unpaid != null -> renter.balance + effectivePrice
+            renter.balance < 0 -> 0.0  // рассинхрон — обнуляем
+            else -> renter.balance     // не было долга
+        }
+
         var paidContractId: Int? = null
         if (unpaid != null) {
             // Оплачиваем этот контракт (помечаем isPaid=true)
@@ -1008,12 +1045,16 @@ class RenterViewModel(application: Application) : AndroidViewModel(application) 
                 Log.w("RenterViewModel", "depositContractIncome failed: ${e.message}")
             }
         }
-        // Если unpaid == null — ничего с контрактами и балансом не делаем.
+        // Если unpaid == null — ничего с контрактами и картой не делаем.
 
         // ── Шаг 2: переводим арендатора в пассивное состояние ─────────────
-        // БАЛАНС НЕ МЕНЯЕТСЯ (раньше здесь было + effectivePrice — это была ошибка).
+        // БАЛАНС КОРРЕКТИРУЕТСЯ в зависимости от сценария (см. finalBalance выше).
+        // Раньше баланс вообще не менялся — это была ошибка, которая оставляла
+        // арендатора вечно в минусе даже после пометки контракта как оплаченного.
         val updated = renter.copy(
             isReturned = true,
+            balance = finalBalance,
+            debtAmount = maxOf(0.0, -finalBalance),
             lastPaymentTimestamp = now,
             isOverdueSmsSent = false
         )
