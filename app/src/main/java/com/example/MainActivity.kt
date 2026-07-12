@@ -1188,6 +1188,39 @@ fun MainScreen(
                 // ===== ТАБЛИЦА АРЕНДАТОРОВ =====
                 val dateFmtLocal = remember { SimpleDateFormat("dd.MM.yyyy", Locale.getDefault()) }
 
+                // ── Latest contract per renter ─────────────────────────────────
+                // Для каждой строки таблицы нужны даты ПОСЛЕДНЕГО (самого нового)
+                // контракта арендатора, а не первого. Раньше в колонках
+                // «Boshlanish» / «Tugash» показывались дата создания арендатора
+                // (rentStartDateTimestamp) и конец первоначального периода
+                // (start + duration × dayMs) — это даты ПЕРВОГО контракта.
+                // Теперь берём из истории контрактов самую свежую запись
+                // (CREATED или AUTO_RENEW) с наибольшим weekEnd и используем её
+                // weekStart / weekEnd. Если истории нет — fallback на поля Renter.
+                val contractHistory by contractHistoryViewModel.history
+                    .collectAsStateWithLifecycle()
+                val latestContractByRenter: Map<Int, com.example.data.ContractHistoryEntry> =
+                    remember(contractHistory) {
+                        contractHistory
+                            .asSequence()
+                            .filter {
+                                it.type == com.example.data.ContractHistoryEntry.TYPE_CREATED ||
+                                it.type == com.example.data.ContractHistoryEntry.TYPE_AUTO_RENEW
+                            }
+                            .filter { it.renterId > 0 }
+                            .groupBy { it.renterId }
+                            .mapValues { (_, entries) ->
+                                entries.maxByOrNull { it.weekEnd ?: it.timestamp }!!
+                            }
+                    }
+
+                // Helper: даты последнего контракта (с fallback на поля Renter).
+                fun latestStartTs(r: Renter): Long =
+                    latestContractByRenter[r.id]?.weekStart ?: r.rentStartDateTimestamp
+                fun latestEndTs(r: Renter): Long =
+                    latestContractByRenter[r.id]?.weekEnd
+                        ?: (r.rentStartDateTimestamp + (r.rentDurationDays * 24L * 60 * 60 * 1000))
+
                 val filteredRenters = renters.filter { renter ->
                     val textMatch = renter.name.contains(searchQuery, ignoreCase = true) ||
                         renter.phoneNumber.contains(searchQuery) ||
@@ -1195,21 +1228,21 @@ fun MainScreen(
                     val startMillis = dateRangePickerState.selectedStartDateMillis
                     val endMillis = dateRangePickerState.selectedEndDateMillis
                     val dateMatch = if (startMillis != null) {
-                        val expiryTime =
-                            renter.rentStartDateTimestamp + (renter.rentDurationDays * 24L * 60 * 60 * 1000)
+                        // Фильтр по дате окончания ПОСЛЕДНЕГО контракта
+                        // (раньше — по концу первоначального периода аренды).
+                        val expiryTime = latestEndTs(renter)
                         if (endMillis != null) expiryTime in startMillis..endMillis
                         else expiryTime >= startMillis
                     } else true
                     // Column filters from side panel
-                    val expiryTs = renter.rentStartDateTimestamp + (renter.rentDurationDays * 24L * 60 * 60 * 1000)
                     val filterMatch = renterFilterValues.all { (colId, filterText) ->
                         if (filterText.isBlank()) true
                         else when (colId) {
                             "col_name" -> renter.name.contains(filterText, ignoreCase = true)
                             "col_phone" -> renter.phoneNumber.contains(filterText, ignoreCase = true)
                             "col_scooter" -> (renter.scooterName ?: "").contains(filterText, ignoreCase = true)
-                            "col_start" -> dateFmtLocal.format(Date(renter.rentStartDateTimestamp)).contains(filterText, ignoreCase = true)
-                            "col_end" -> dateFmtLocal.format(Date(expiryTs)).contains(filterText, ignoreCase = true)
+                            "col_start" -> dateFmtLocal.format(Date(latestStartTs(renter))).contains(filterText, ignoreCase = true)
+                            "col_end" -> dateFmtLocal.format(Date(latestEndTs(renter))).contains(filterText, ignoreCase = true)
                             "col_balance" -> renter.balance.toLong().toString().contains(filterText, ignoreCase = true)
                             "col_passport" -> renter.passportData.contains(filterText, ignoreCase = true)
                             "col_address" -> renter.address.contains(filterText, ignoreCase = true)
@@ -1223,22 +1256,20 @@ fun MainScreen(
                     val col = renterSortState.activeColumn
                     val state = renterSortState.stateFor(col ?: "")
                     if (state == SortState.NONE) {
-                        // Default: sort by status (expiry time) ASC
-                        list.sortedWith(compareBy {
-                            it.rentStartDateTimestamp + (it.rentDurationDays * 24L * 60 * 60 * 1000)
-                        })
+                        // Default: sort by status (latest contract end) ASC
+                        list.sortedWith(compareBy { latestEndTs(it) })
                     } else {
                         val comparator = when (col) {
                             "col_name" -> compareBy<Renter> { it.name.lowercase() }
                             "col_phone" -> compareBy<Renter> { it.phoneNumber }
                             "col_scooter" -> compareBy<Renter> { it.scooterName ?: "" }
-                            "col_start" -> compareBy<Renter> { it.rentStartDateTimestamp }
-                            "col_end" -> compareBy<Renter> { it.rentStartDateTimestamp + (it.rentDurationDays * 24L * 60 * 60 * 1000) }
+                            "col_start" -> compareBy<Renter> { latestStartTs(it) }
+                            "col_end" -> compareBy<Renter> { latestEndTs(it) }
                             "col_balance" -> compareBy<Renter> { it.balance }
                             "col_passport" -> compareBy<Renter> { it.passportData }
                             "col_address" -> compareBy<Renter> { it.address }
                             "col_pinfl" -> compareBy<Renter> { it.pinfl }
-                            else -> compareBy<Renter> { it.rentStartDateTimestamp }
+                            else -> compareBy<Renter> { latestEndTs(it) }
                         }
                         if (state == SortState.ASCENDING) list.sortedWith(comparator)
                         else list.sortedWith(comparator.reversed())
@@ -1250,6 +1281,7 @@ fun MainScreen(
                     selected = selectedRenters,
                     sortState = renterSortState,
                     columnVisibility = renterColumnVisibility,
+                    latestContractByRenter = latestContractByRenter,
                     onSortClick = { colId ->
                         renterSortState = renterSortState.click(colId)
                     },
@@ -1622,6 +1654,7 @@ fun RenterTable(
     selected: Set<Int>,
     sortState: TableSortState,
     columnVisibility: Map<String, Boolean>,
+    latestContractByRenter: Map<Int, com.example.data.ContractHistoryEntry>,
     onSortClick: (String) -> Unit,
     onSelect: (Int, Boolean) -> Unit,
     onClick: (Renter) -> Unit
@@ -1782,10 +1815,12 @@ fun RenterTable(
                                 maxLines = 1
                             )
                         }
-                        // Boshlanish
+                        // Boshlanish (дата начала ПОСЛЕДНЕГО контракта)
                         if (showStart) {
+                            val latest = latestContractByRenter[renter.id]
+                            val startTs = latest?.weekStart ?: renter.rentStartDateTimestamp
                             Text(
-                                dateFmt.format(Date(renter.rentStartDateTimestamp)),
+                                dateFmt.format(Date(startTs)),
                                 modifier = Modifier
                                     .then(if (hasAnyExtraVisible) Modifier.width(wStart) else Modifier.weight(fStart))
                                     .padding(horizontal = 4.dp),
@@ -1794,12 +1829,18 @@ fun RenterTable(
                                 maxLines = 1
                             )
                         }
-                        // Tugash (= data poslednego kontrakta)
+                        // Tugash (дата окончания ПОСЛЕДНЕГО контракта)
+                        // Берётся weekEnd самой свежей записи (CREATED/AUTO_RENEW).
+                        // Раньше показывался конец ПЕРВОГО контракта
+                        // (rentStartDateTimestamp + rentDurationDays × dayMs),
+                        // что не соответствовало реальной текущей дате контракта.
                         if (showEnd) {
-                            val expiry = renter.rentStartDateTimestamp +
-                                (renter.rentDurationDays * 24L * 60 * 60 * 1000)
+                            val latest = latestContractByRenter[renter.id]
+                            val endTs = latest?.weekEnd
+                                ?: (renter.rentStartDateTimestamp +
+                                    (renter.rentDurationDays * 24L * 60 * 60 * 1000))
                             Text(
-                                dateFmt.format(Date(expiry)),
+                                dateFmt.format(Date(endTs)),
                                 modifier = Modifier
                                     .then(if (hasAnyExtraVisible) Modifier.width(wEnd) else Modifier.weight(fEnd))
                                     .padding(horizontal = 4.dp),
