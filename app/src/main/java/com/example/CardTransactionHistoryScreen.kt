@@ -120,13 +120,19 @@ fun CardTransactionHistoryScreen(
         else -> cardNameById[id] ?: "Karta #$id"
     }
 
-    // Разделяем на «Kiruvchi» (поступления, +) и «Chiquvchi» (расходы, −).
+    // ── Эффективная сумма со знаком относительно текущей карты ──────────
+    // Для каждой транзакции считаем «знак для этой карты»:
+    //   • деньги пришли на эту карту (или ушли С внешней) → положительный знак = Kiruvchi
+    //   • деньги ушли с этой карты (или пришли НА внешнюю) → отрицательный знак = Chiquvchi
     //
-    // Для ОБЫЧНЫХ карт направление совпадает со знаком:
-    //   • toCardId == currentCard.id  → приход на эту карту (+) → Kiruvchi
-    //   • fromCardId == currentCard.id → расход с этой карты (−) → Chiquvchi
+    // Это та же логика, что и в ContractTransactionHistoryScreen:
+    //   «плюсовые → входящие, минусовые → уходящие».
     //
-    // Для ВНЕШНИХ карт (Tashqidan / Tashqiga) логика ИНВЕРТИРОВАНА, потому что
+    // Для ОБЫЧНЫХ карт:
+    //   • toCardId == currentCard.id  → приход (+)
+    //   • fromCardId == currentCard.id → расход (−)
+    //
+    // Для ВНЕШНИХ карт (Tashqidan / Tashqiga) логика инвертирована, потому что
     // внешняя карта представляет «остальной мир» с точки зрения пользователя:
     //   • Tashqidan (EXTERNAL_IN): перевод С этой карты = деньги вошли в систему
     //     пользователя (поступление, +) → Kiruvchi;
@@ -134,19 +140,20 @@ fun CardTransactionHistoryScreen(
     //   • Tashqiga (EXTERNAL_OUT): перевод НА эту карту = деньги вышли из системы
     //     пользователя (расход, −) → Chiquvchi;
     //     перевод С этой карты = возврат из вне (поступление, +) → Kiruvchi.
+    fun signedAmountFor(tx: CardTransaction): Double {
+        val isExternal = currentCard.isExternal
+        val arrivesOnThisCard = tx.toCardId == currentCard.id
+        val leavesFromThisCard = tx.fromCardId == currentCard.id
+        val isPositive = if (isExternal) leavesFromThisCard else arrivesOnThisCard
+        return if (isPositive) tx.amount else -tx.amount
+    }
+
+    // ── Разделение по ЗНАКУ суммы (как в ContractTransactionHistoryScreen) ─
     val incoming = remember(transactions, currentCard.id, currentCard.isExternal) {
-        if (currentCard.isExternal) {
-            transactions.filter { it.fromCardId == currentCard.id }
-        } else {
-            transactions.filter { it.toCardId == currentCard.id }
-        }
+        transactions.filter { signedAmountFor(it) >= 0.0 }
     }
     val outgoing = remember(transactions, currentCard.id, currentCard.isExternal) {
-        if (currentCard.isExternal) {
-            transactions.filter { it.toCardId == currentCard.id }
-        } else {
-            transactions.filter { it.fromCardId == currentCard.id }
-        }
+        transactions.filter { signedAmountFor(it) < 0.0 }
     }
 
     val totalIncoming = incoming.sumOf { it.amount }
