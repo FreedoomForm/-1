@@ -98,29 +98,40 @@ class RenterViewModel(application: Application) : AndroidViewModel(application) 
     ) {
         viewModelScope.launch {
             val now = System.currentTimeMillis()
-            val expiryTime = startTimestamp + duration * 24L * 60 * 60 * 1000
-            val isOverdueAtCreation = expiryTime < now
+            val dayMs = 24L * 60 * 60 * 1000
+            val weekMs = 7L * dayMs
+
+            // ── Временные метки ───────────────────────────────────────────────
+            // expiryTime   — конец ПЕРИОДА АРЕНДЫ (start + duration дней).
+            //                Используется для SMS-уведомлений, отображения
+            //                «срок истекает» и т.д. НЕ влияет на структуру
+            //                контрактов.
+            // firstWeekEnd — конец ПЕРВОЙ НЕДЕЛИ (start + 7 дней).
+            //                Каждая запись-контракт покрывает ровно 1 неделю
+            //                (7 дней), независимо от общей длительности аренды.
+            //                CREATED = неделя 1, AUTO_RENEW = недели 2, 3, …
+            val expiryTime = startTimestamp + duration * dayMs
+            val firstWeekEnd = startTimestamp + weekMs
+
+            // ── Просрочка определяется по концу ПЕРВОЙ недели, а не по концу ─
+            // ── всего периода аренды.                                                    ─
+            // Если первая неделя уже закончилась (now > firstWeekEnd), то
+            // арендатор должен за каждую прошедшую неделю — включая ТЕКУЩУЮ
+            // (незавершённую) неделю.
+            val isOverdueAtCreation = firstWeekEnd < now
+
             val effectiveWeeklyPrice = if (weeklyPrice > 0) weeklyPrice else SettingsRepository.DEFAULT_WEEKLY_PRICE
 
-            // ── Сколько неоплаченных недель будет создано в истории ──────────
-            // При isOverdueAtCreation (дата окончания в прошлом) создаётся:
-            //   • 1 базовый CREATED (isPaid=false) — первая неделя
-            //   • N записей AUTO_RENEW (isPaid=false) — по одной на каждую
-            //     ПОЛНУЮ просроченную неделю после первой
-            //   Итого неоплаченных контрактов = N + 1.
-            //
-            // Баланс ДОЛЖЕН точно совпадать с количеством неоплаченных
-            // контрактов × weeklyPrice, иначе при оплате одной недели
-            // баланс уйдёт в 0 раньше времени (см. предыдущий баг, где
-            // формула использовала только overdueWeeks без учёта CREATED).
-            //
-            // Здесь мы считаем ВСЁ через одно число unpaidContractsCount,
-            // чтобы баланс и цикл создания контрактов всегда были
-            // синхронизированы — независимо от того, 1, 2, 3 или 10
-            // неоплаченных недель.
+            // ── Сколько неоплаченных недель прошло после первой недели ──────
+            // Используем CEIL (округление вверх), чтобы считать ТЕКУЩУЮ
+            // незавершённую неделю как просроченную.
+            //   Пример: прошло 8 дней после firstWeekEnd →
+            //     ceil(8/7) = 2 недели (1 завершённая + 1 текущая).
             val overdueWeeks = if (isOverdueAtCreation) {
-                ((now - expiryTime) / (7L * 24 * 60 * 60 * 1000)).toInt().coerceAtLeast(1)
+                val overdueMs = now - firstWeekEnd
+                kotlin.math.ceil(overdueMs.toDouble() / weekMs).toInt().coerceAtLeast(1)
             } else 0
+
             // 1 CREATED (первая неделя) + overdueWeeks AUTO_RENEW — все неоплачены
             val unpaidContractsCount = if (isOverdueAtCreation) overdueWeeks + 1 else 0
 
@@ -153,7 +164,11 @@ class RenterViewModel(application: Application) : AndroidViewModel(application) 
             // ── Подтягиваем реквизиты скутера из БД для PDF-договора ───────
             val scooter: Scooter? = scooterId?.let { fetchScooterById(it) }
 
-            // ── Запись CREATED ──────────────────────────────────────────
+            // ── Запись CREATED (первая неделя) ───────────────────────────
+            // CREATED покрывает ровно 1 неделю: [startTimestamp, startTimestamp + 7 дней].
+            // Раньше weekEnd = startTimestamp + duration × dayMs (вся аренда),
+            // что приводило к несогласованности: CREATED покрывал 30 дней,
+            // а AUTO_RENEW — по 7 дней. Теперь все контракты — 7-дневные недели.
             viewModelScope.launch(Dispatchers.IO) {
                 try {
                     historyRepository.insert(ContractHistoryEntry(
@@ -166,7 +181,7 @@ class RenterViewModel(application: Application) : AndroidViewModel(application) 
                         renterPhone = savedRenter.phoneNumber,
                         scooterName = savedRenter.scooterName,
                         weekStart = savedRenter.rentStartDateTimestamp,
-                        weekEnd = savedRenter.rentStartDateTimestamp + savedRenter.rentDurationDays * 24L * 60 * 60 * 1000,
+                        weekEnd = savedRenter.rentStartDateTimestamp + weekMs,
                         weeklyPrice = effectiveWeeklyPrice,
                         passportData = savedRenter.passportData,
                         address = savedRenter.address,
@@ -180,13 +195,18 @@ class RenterViewModel(application: Application) : AndroidViewModel(application) 
                         isPaid = isPrepaidContract
                     ))
 
-                    // Если просрочка — создаем N записей AUTO_RENEW
-                    // overdueWeeks уже посчитан выше — НЕ пересчитываем тут,
-                    // чтобы баланс и цикл всегда были синхронизированы.
+                    // Если просрочка — создаем N записей AUTO_RENEW.
+                    // Каждая AUTO_RENEW начинается с конца ПЕРВОЙ недели (firstWeekEnd),
+                    // а не с конца периода аренды (expiryTime).
+                    // Это обеспечивает непрерывное покрытие:
+                    //   CREATED:     [start, start+7]
+                    //   AUTO_RENEW 1: [start+7, start+14]
+                    //   AUTO_RENEW 2: [start+14, start+21]
+                    //   …
                     if (isOverdueAtCreation) {
                         for (i in 1..overdueWeeks) {
-                            val weekStart = expiryTime + (i - 1) * 7L * 24 * 60 * 60 * 1000
-                            val weekEnd = weekStart + 7L * 24 * 60 * 60 * 1000
+                            val weekStart = firstWeekEnd + (i - 1) * weekMs
+                            val weekEnd = weekStart + weekMs
                             historyRepository.insert(ContractHistoryEntry(
                                 renterId = savedRenter.id,
                                 timestamp = now,
@@ -741,10 +761,13 @@ class RenterViewModel(application: Application) : AndroidViewModel(application) 
         } else {
             // ── Предоплата: создаём новый оплаченный контракт (зелёный) ─────
             val latestPaid = historyRepository.getLatestPaidContract(renter.id)
-            val lastWeekEnd = latestPaid?.weekEnd
-                ?: (renter.rentStartDateTimestamp + renter.rentDurationDays * 24L * 60 * 60 * 1000)
             val dayMs = 24L * 60 * 60 * 1000
             val weekMs = 7L * dayMs
+
+            // lastWeekEnd — конец последнего ОПЛАЧЕННОГО контракта (nullable).
+            // Если оплаченных контрактов нет — null, и effectiveLastEnd
+            // использует fallback = конец первой недели (start + 7 дней).
+            val lastWeekEnd: Long? = latestPaid?.weekEnd
 
             // ── НОВАЯ ЛОГИКА: проверка давности последнего контракта ──────
             // Если последний оплаченный контракт закончился БОЛЬШЕ 7 дней назад
@@ -761,9 +784,12 @@ class RenterViewModel(application: Application) : AndroidViewModel(application) 
             // (isReturned = true — скутер возвращён, аренда завершена), то при
             // создании нового контракта он возвращается в активное состояние.
             // Если lastWeekEnd == null (нет оплаченных контрактов) — используем
-            // rentStartDate + duration как «последнюю дату», и ту же логику >7 дней.
+            // конец ПЕРВОЙ недели (start + 7 дней) как базовую точку.
+            // Раньше использовался start + duration × dayMs (вся аренда),
+            // но теперь CREATED покрывает только 1 неделю, поэтому базовая
+            // точка тоже должна быть концом первой недели.
             val effectiveLastEnd = lastWeekEnd
-                ?: (renter.rentStartDateTimestamp + renter.rentDurationDays * dayMs)
+                ?: (renter.rentStartDateTimestamp + weekMs)
             val effectiveGapMs = now - effectiveLastEnd
             val shouldStartFromNow = effectiveGapMs > weekMs
 
