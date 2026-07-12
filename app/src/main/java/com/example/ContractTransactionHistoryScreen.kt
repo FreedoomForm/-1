@@ -89,7 +89,6 @@ fun ContractTransactionHistoryScreen(
     var filterValues by remember { mutableStateOf(mapOf<String, String>()) }
     val txFilterColumns = remember {
         listOf(
-            FilterColumn("col_type", "Turi", "Masalan: To'lov"),
             FilterColumn("col_amount", "Summa", "0", KeyboardType.Number),
             FilterColumn("col_note", "Izoh", "Masalan: To'lov"),
             FilterColumn("col_date", "Sana", "dd.MM.yyyy")
@@ -99,12 +98,15 @@ fun ContractTransactionHistoryScreen(
     val dateFmt = remember { SimpleDateFormat("dd.MM.yyyy HH:mm", Locale.getDefault()) }
     val dateFmtDay = remember { SimpleDateFormat("dd.MM.yyyy", Locale.getDefault()) }
 
-    // ── Разделение транзакций на входящие (положительные) и исходящие (отрицательные) ─
+    // ── Разделение транзакций по ЗНАКУ суммы ─────────────────────────────
+    // Любая транзакция, которая ОТНИМАЕТ деньги (отрицательная сумма) → Chiquvchi.
+    // Любая транзакция, которая ПРИНОСИТ деньги (положительная сумма)  → Kiruvchi.
+    // Тип транзакции больше НЕ используется для классификации — только знак суммы.
     val incoming = remember(transactions) {
-        transactions.filter { TransactionViewModel.typeIsPositive(it.type) }
+        transactions.filter { it.amount >= 0.0 }
     }
     val outgoing = remember(transactions) {
-        transactions.filter { !TransactionViewModel.typeIsPositive(it.type) }
+        transactions.filter { it.amount < 0.0 }
     }
 
     val totalIncoming = incoming.sumOf { it.amount }
@@ -116,9 +118,7 @@ fun ContractTransactionHistoryScreen(
         val startMillis = dateRangePickerState.selectedStartDateMillis
         val endMillis = dateRangePickerState.selectedEndDateMillis
         currentList.filter { t ->
-            val typeLabel = TransactionViewModel.typeLabel(t.type)
             val textMatch = searchQuery.isBlank() ||
-                typeLabel.contains(searchQuery, ignoreCase = true) ||
                 (t.notes?.contains(searchQuery, ignoreCase = true) == true) ||
                 t.amount.toLong().toString().contains(searchQuery) ||
                 t.id.toString().contains(searchQuery) ||
@@ -131,7 +131,6 @@ fun ContractTransactionHistoryScreen(
             val filterMatch = filterValues.all { (colId, filterText) ->
                 if (filterText.isBlank()) true
                 else when (colId) {
-                    "col_type" -> typeLabel.contains(filterText, ignoreCase = true)
                     "col_amount" -> t.amount.toLong().toString().contains(filterText, ignoreCase = true)
                     "col_note" -> (t.notes ?: "").contains(filterText, ignoreCase = true)
                     "col_date" -> dateFmt.format(Date(t.timestamp)).contains(filterText, ignoreCase = true)
@@ -211,7 +210,7 @@ fun ContractTransactionHistoryScreen(
                     horizontalArrangement = Arrangement.SpaceBetween
                 ) {
                     SummaryColumn("Kiruvchi", formatMoney(totalIncoming), StatusOk)
-                    SummaryColumn("Chiquvchi", formatMoney(totalOutgoing), StatusOverdue)
+                    SummaryColumn("Chiquvchi", formatMoney(kotlin.math.abs(totalOutgoing)), StatusOverdue)
                     SummaryColumn("Summa", formatMoney(contract.amount), statusColor)
                     SummaryColumn("Tranzaksiya", "${incoming.size + outgoing.size}")
                 }
@@ -375,10 +374,10 @@ fun ContractTransactionHistoryScreen(
     }
 
     // ── Диалог создания транзакции ─────────────────────────────────────
-    // Тип транзакции определяется автоматически по выбранной вкладке:
-    //   • Kiruvchi (0)  → TYPE_PAYMENT  (положительная, поступление)
-    //   • Chiquvchi (1) → TYPE_CUSTOM   (отрицательная, расход)
-    // Пользователь не выбирает тип вручную — это убирает путаницу.
+    // Тип и знак суммы определяются автоматически по выбранной вкладке:
+    //   • Kiruvchi (0)  → TYPE_PAYMENT, положительная сумма (поступление)
+    //   • Chiquvchi (1) → TYPE_CUSTOM,  отрицательная сумма (расход)
+    // Пользователь не выбирает тип и не вводит знак — только сумму и заметку.
     if (showCreateDialog) {
         CreateContractTransactionDialog(
             contract = contract,
@@ -452,9 +451,10 @@ fun ContractTransactionHistoryScreen(
 /* ============================================================================
    ДИАЛОГ СОЗДАНИЯ ТРАНЗАКЦИИ ДЛЯ КОНТРАКТА
    ----------------------------------------------------------------------------
-   Простой диалог: сумма, дата, заметка. Тип определяется автоматически по
-   выбранной вкладке (Kiruvchi → TYPE_PAYMENT, Chiquvchi → TYPE_CUSTOM).
-   Остальные поля (renter, scooter, contractId) уже предзаполнены из контракта.
+   Минимальный диалог: только сумма, дата и заметка. Тип и знак суммы
+   определяются автоматически по выбранной вкладке (Kiruvchi → PAYMENT/+,
+   Chiquvchi → CUSTOM/−). Поля renter, scooter, contractId уже предзаполнены
+   из контракта. Никакого выбора типа в UI нет.
    ============================================================================ */
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -468,10 +468,10 @@ private fun CreateContractTransactionDialog(
     val dayMs = 24L * 60 * 60 * 1000
     val initialTimestamp = (System.currentTimeMillis() / (15 * 60 * 1000)) * (15 * 60 * 1000)
 
-    // Тип авто-определяется по вкладке: Kiruvchi → положительный (PAYMENT),
-    // Chiquvchi → отрицательный (CUSTOM). Пользователь не выбирает тип.
+    // Тип и знак авто-определяются по вкладке:
+    //   Kiruvchi (0)  → TYPE_PAYMENT, положительная сумма (поступление)
+    //   Chiquvchi (1) → TYPE_CUSTOM,  отрицательная сумма (расход)
     val type = if (selectedTab == 0) Transaction.TYPE_PAYMENT else Transaction.TYPE_CUSTOM
-    val typeLabel = if (selectedTab == 0) "To'lov (kiruvchi)" else "Boshqa (chiquvchi)"
 
     var amountText by remember { mutableStateOf("") }
     var timestamp by remember { mutableStateOf(initialTimestamp) }
@@ -554,34 +554,6 @@ private fun CreateContractTransactionDialog(
                     }
                 }
 
-                // ── Бейдж типа (только для информации, не редактируется) ───
-                Surface(
-                    shape = RoundedCornerShape(10.dp),
-                    color = ClaudeBackground,
-                    border = BorderStroke(1.dp, ClaudeDivider)
-                ) {
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(horizontal = 12.dp, vertical = 10.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Icon(
-                            imageVector = if (selectedTab == 0) Icons.Default.ArrowDownward
-                                          else Icons.Default.ArrowUpward,
-                            contentDescription = null,
-                            tint = if (selectedTab == 0) StatusOk else StatusOverdue,
-                            modifier = Modifier.size(18.dp)
-                        )
-                        Spacer(Modifier.width(8.dp))
-                        Text(
-                            "Turi: $typeLabel",
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = ClaudeTextSecondary
-                        )
-                    }
-                }
-
                 // ── Сумма ──────────────────────────────────────────────────
                 OutlinedTextField(
                     value = amountText,
@@ -644,7 +616,11 @@ private fun CreateContractTransactionDialog(
                 onClick = {
                     val amt = amountText.replace(',', '.').toDoubleOrNull() ?: 0.0
                     if (amt > 0) {
-                        onCreate(type, amt, timestamp, notes.ifBlank { null })
+                        // Знак суммы авто-определяется по вкладке:
+                        //   Kiruvchi (0)  → положительная (поступление)
+                        //   Chiquvchi (1) → отрицательная (расход)
+                        val signedAmount = if (selectedTab == 0) amt else -amt
+                        onCreate(type, signedAmount, timestamp, notes.ifBlank { null })
                     }
                 },
                 enabled = canSave,
@@ -666,6 +642,11 @@ private fun CreateContractTransactionDialog(
 
 /* ============================================================================
    ДИАЛОГ РЕДАКТИРОВАНИЯ ТРАНЗАКЦИИ КОНТРАКТА
+   ----------------------------------------------------------------------------
+   Минимальный диалог: только сумма, дата и заметка. Тип транзакции НЕ
+   редактируется (сохраняется оригинальный). Знак суммы также сохраняется —
+   пользователь вводит положительное число, а знак берётся из исходной
+   транзакции (positive = Kiruvchi, negative = Chiquvchi).
    ============================================================================ */
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -677,27 +658,16 @@ private fun EditContractTransactionDialog(
 ) {
     val dayMs = 24L * 60 * 60 * 1000
 
-    var type by remember { mutableStateOf(tx.type) }
-    var amountText by remember { mutableStateOf(tx.amount.toString()) }
+    // Знак суммы сохраняется из исходной транзакции.
+    val originalSign = if (tx.amount < 0) -1.0 else 1.0
+    // В поле показываем абсолютное значение — пользователь видит положительное число.
+    var amountText by remember { mutableStateOf(kotlin.math.abs(tx.amount).toLong().toString()) }
     var timestamp by remember { mutableStateOf(tx.timestamp) }
     var notes by remember { mutableStateOf(tx.notes ?: "") }
 
-    var expandedType by remember { mutableStateOf(false) }
     var showDatePicker by remember { mutableStateOf(false) }
     val datePickerState = rememberDatePickerState(initialSelectedDateMillis = timestamp)
     val scrollState = rememberScrollState()
-
-    val typeOptions = remember {
-        listOf(
-            Transaction.TYPE_PAYMENT    to "To'lov",
-            Transaction.TYPE_TERMINATED to "Tugatildi",
-            Transaction.TYPE_RETURNED   to "Qaytarildi",
-            Transaction.TYPE_PENALTY    to "Jarima",
-            Transaction.TYPE_REPAIR     to "Ta'mir",
-            Transaction.TYPE_CUSTOM     to "Boshqa"
-        )
-    }
-    val selectedTypeLabel = typeOptions.find { it.first == type }?.second ?: "To'lov"
 
     val amountParsed = amountText.replace(',', '.').toDoubleOrNull()
     val canSave = amountParsed != null && amountParsed > 0.0
@@ -746,44 +716,6 @@ private fun EditContractTransactionDialog(
                     .verticalScroll(scrollState),
                 verticalArrangement = Arrangement.spacedBy(10.dp)
             ) {
-                // ── Тип ────────────────────────────────────────────────────
-                Text("Turi", style = MaterialTheme.typography.labelMedium, color = ClaudeTextSecondary)
-                ExposedDropdownMenuBox(
-                    expanded = expandedType,
-                    onExpandedChange = { expandedType = !expandedType }
-                ) {
-                    OutlinedTextField(
-                        value = selectedTypeLabel,
-                        onValueChange = {},
-                        readOnly = true,
-                        trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = expandedType) },
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .menuAnchor(),
-                        shape = RoundedCornerShape(10.dp),
-                        colors = OutlinedTextFieldDefaults.colors(
-                            unfocusedBorderColor = ClaudeDivider,
-                            focusedBorderColor = ClaudeAccent,
-                            unfocusedContainerColor = ClaudeBackground,
-                            focusedContainerColor = ClaudeBackground
-                        )
-                    )
-                    ExposedDropdownMenu(
-                        expanded = expandedType,
-                        onDismissRequest = { expandedType = false }
-                    ) {
-                        typeOptions.forEach { (value, label) ->
-                            DropdownMenuItem(
-                                text = { Text(label) },
-                                onClick = {
-                                    type = value
-                                    expandedType = false
-                                }
-                            )
-                        }
-                    }
-                }
-
                 OutlinedTextField(
                     value = amountText,
                     onValueChange = { s -> amountText = s.filter { it.isDigit() || it == '.' || it == ',' } },
@@ -842,9 +774,9 @@ private fun EditContractTransactionDialog(
                 onClick = {
                     val amt = amountText.replace(',', '.').toDoubleOrNull() ?: 0.0
                     if (amt > 0) {
+                        // Знак сохраняется из оригинальной транзакции.
                         onSave(tx.copy(
-                            type = type,
-                            amount = amt,
+                            amount = amt * originalSign,
                             timestamp = timestamp,
                             notes = notes.ifBlank { null }
                         ))
@@ -940,7 +872,14 @@ private fun ContractTxRow(
 ) {
     val accentColor = if (isIncoming) StatusOk else StatusOverdue
     val sign = if (isIncoming) "+" else "−"
-    val typeLabel = TransactionViewModel.typeLabel(tx.type)
+    // Заголовок строки — имя арендатора (и скутер, если есть). Тип транзакции
+    // больше нигде не отображается — только сумма и её знак.
+    val title = buildString {
+        append(tx.renterName.ifBlank { "Tranzaksiya #${tx.id}" })
+        if (tx.scooterName.isNotBlank()) append("  •  ${tx.scooterName}")
+    }
+    // Сумма показывается по модулю — знак уже отображён индикатором/префиксом.
+    val absAmount = kotlin.math.abs(tx.amount)
 
     Card(
         modifier = Modifier
@@ -977,7 +916,7 @@ private fun ContractTxRow(
 
             Column(modifier = Modifier.weight(1f)) {
                 Text(
-                    text = typeLabel,
+                    text = title,
                     style = MaterialTheme.typography.bodyMedium,
                     fontWeight = FontWeight.SemiBold,
                     color = ClaudeText,
@@ -1000,7 +939,7 @@ private fun ContractTxRow(
 
             Column(horizontalAlignment = Alignment.End) {
                 Text(
-                    text = "$sign ${formatMoney(tx.amount)}",
+                    text = "$sign ${formatMoney(absAmount)}",
                     color = accentColor,
                     fontWeight = FontWeight.Bold,
                     fontSize = 14.sp,
