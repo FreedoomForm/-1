@@ -43,6 +43,9 @@ import com.example.data.isExternal
 import com.example.data.isExternalIn
 import com.example.data.isExternalOut
 import com.example.ui.FinansiViewModel
+import com.example.ui.components.FilterColumn
+import com.example.ui.components.FilterSidePanel
+import com.example.ui.components.UnifiedSearchBar
 import com.example.ui.theme.ClaudeAccent
 import com.example.ui.theme.ClaudeBackground
 import com.example.ui.theme.ClaudeCard
@@ -852,6 +855,42 @@ fun FinansiPanel(
         inOrder + rest
     }
 
+    // ── Поиск + фильтр колонок ─────────────────────────────────────────────
+    // Раньше на вкладке «Finansi» не было ни поиска, ни фильтра — в отличие
+    // от остальных вкладок (Ijarachilar / Skuterlar / Kontraktlar / Tranzaksiya).
+    // Теперь добавлены UnifiedSearchBar и FilterSidePanel с 4 колонками:
+    // имя, баланс, тип (REGULAR/EXTERNAL_IN/EXTERNAL_OUT), инфо.
+    var searchQuery by remember { mutableStateOf("") }
+    var showFilterPanel by remember { mutableStateOf(false) }
+    var filterValues by remember { mutableStateOf(mapOf<String, String>()) }
+    val cardFilterColumns = remember {
+        listOf(
+            FilterColumn("col_name",    "Nomi",     "Karta nomi"),
+            FilterColumn("col_balance", "Balans",   "summa"),
+            FilterColumn("col_kind",    "Turi",     "REGULAR / EXTERNAL_IN / EXTERNAL_OUT"),
+            FilterColumn("col_info",    "Izoh",     "Qo'shimcha ma'lumot")
+        )
+    }
+    val filteredOrderedCards = remember(orderedCards, searchQuery, filterValues) {
+        orderedCards.filter { card ->
+            val textMatch = searchQuery.isBlank() ||
+                card.name.contains(searchQuery, ignoreCase = true) ||
+                (card.info?.contains(searchQuery, ignoreCase = true) == true) ||
+                card.balance.toLong().toString().contains(searchQuery, ignoreCase = true)
+            val filterMatch = filterValues.all { (colId, filterText) ->
+                if (filterText.isBlank()) true
+                else when (colId) {
+                    "col_name"    -> card.name.contains(filterText, ignoreCase = true)
+                    "col_balance" -> card.balance.toLong().toString().contains(filterText, ignoreCase = true)
+                    "col_kind"    -> card.kind.contains(filterText, ignoreCase = true)
+                    "col_info"    -> (card.info ?: "").contains(filterText, ignoreCase = true)
+                    else -> true
+                }
+            }
+            textMatch && filterMatch
+        }
+    }
+
     fun saveOrder(newOrder: List<Int>) {
         cardOrder = newOrder
         orderPrefs.edit().putString("order", newOrder.joinToString(",")).apply()
@@ -956,51 +995,77 @@ fun FinansiPanel(
     // пользователем при прокрутке карт. Теперь TransactionZone передаётся
     // в CardsGrid как header — первый full-span item в LazyVerticalGrid —
     // и скроллится вместе с картами естественным образом.
-    CardsGrid(
-        cards = orderedCards,
-        selectedIds = selectedIds,
-        onCardClick = { card ->
-            // Тап по карте → открывает экран истории транзакций этой карты
-            // (как тап по арендатору открывает RenterContractHistoryScreen).
-            onCardClick(card)
-        },
-        onCardLongClick = { id, select ->
-            val newSet = selectedIds.toMutableSet()
-            if (select) newSet.add(id) else newSet.remove(id)
-            selectedIds = newSet
-            onSelectedCardIdsChange(newSet)
+    //
+    // Сверху над сеткой добавлены UnifiedSearchBar + FilterSidePanel —
+    // такие же, как в остальных вкладках. Фильтр применяется к
+    // filteredOrderedCards (по имени, балансу, типу, инфо).
+    Column(modifier = Modifier.fillMaxSize()) {
+        UnifiedSearchBar(
+            query = searchQuery,
+            onQueryChange = { searchQuery = it },
+            placeholder = "Karta qidirish",
+            onCalendarClick = { /* у карт нет календаря — кнопка скрыта */ },
+            calendarActive = false,
+            onFilterClick = { showFilterPanel = true },
+            filterActive = filterValues.any { it.value.isNotBlank() }
+        )
+        FilterSidePanel(
+            columns = cardFilterColumns,
+            filterValues = filterValues,
+            onFilterChange = { colId, value ->
+                filterValues = filterValues.toMutableMap().apply { put(colId, value) }
+            },
+            onSearch = { /* applied reactively */ },
+            onReset = { filterValues = emptyMap() },
+            onDismiss = { showFilterPanel = false },
+            visible = showFilterPanel
+        )
+        CardsGrid(
+            cards = filteredOrderedCards,
+            selectedIds = selectedIds,
+            onCardClick = { card ->
+                // Тап по карте → открывает экран истории транзакций этой карты
+                // (как тап по арендатору открывает RenterContractHistoryScreen).
+                onCardClick(card)
+            },
+            onCardLongClick = { id, select ->
+                val newSet = selectedIds.toMutableSet()
+                if (select) newSet.add(id) else newSet.remove(id)
+                selectedIds = newSet
+                onSelectedCardIdsChange(newSet)
 
-            // ── Авто-заполнение зоны транзакции при выборе ровно 2 карт ──
-            // Пользователь долго жмёт на 2 карты → они автоматически
-            // подставляются в слоты from/to зоны транзакции.
-            if (newSet.size == 2) {
-                val list = newSet.toList()
-                val firstCard = orderedCards.firstOrNull { it.id == list[0] }
-                val secondCard = orderedCards.firstOrNull { it.id == list[1] }
-                if (firstCard != null && secondCard != null) {
-                    fromCard = firstCard
-                    toCard = secondCard
+                // ── Авто-заполнение зоны транзакции при выборе ровно 2 карт ──
+                // Пользователь долго жмёт на 2 карты → они автоматически
+                // подставляются в слоты from/to зоны транзакции.
+                if (newSet.size == 2) {
+                    val list = newSet.toList()
+                    val firstCard = orderedCards.firstOrNull { it.id == list[0] }
+                    val secondCard = orderedCards.firstOrNull { it.id == list[1] }
+                    if (firstCard != null && secondCard != null) {
+                        fromCard = firstCard
+                        toCard = secondCard
+                    }
                 }
+            },
+            onMoveUp = { card -> moveCardUp(card) },
+            onMoveDown = { card -> moveCardDown(card) },
+            modifier = Modifier.weight(1f),
+            header = {
+                TransactionZone(
+                    cards = orderedCards,
+                    fromCard = fromCard,
+                    toCard = toCard,
+                    onPickFrom = { pickingSlot = 1 },
+                    onPickTo = { pickingSlot = 2 },
+                    onTransfer = { amount, note, reversed ->
+                        val fromId = fromCard?.id ?: return@TransactionZone
+                        val toId = toCard?.id ?: return@TransactionZone
+                        viewModel.transfer(fromId, toId, amount, note, reversed)
+                    }
+                )
             }
-        },
-        onMoveUp = { card -> moveCardUp(card) },
-        onMoveDown = { card -> moveCardDown(card) },
-        modifier = Modifier.fillMaxSize(),
-        header = {
-            TransactionZone(
-                cards = orderedCards,
-                fromCard = fromCard,
-                toCard = toCard,
-                onPickFrom = { pickingSlot = 1 },
-                onPickTo = { pickingSlot = 2 },
-                onTransfer = { amount, note, reversed ->
-                    val fromId = fromCard?.id ?: return@TransactionZone
-                    val toId = toCard?.id ?: return@TransactionZone
-                    viewModel.transfer(fromId, toId, amount, note, reversed)
-                }
-            )
-        }
-    )
+        )
+    }
 
     // Диалог выбора карты в слот
     pickingSlot?.let { slot ->

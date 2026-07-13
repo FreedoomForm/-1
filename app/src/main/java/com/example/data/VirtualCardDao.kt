@@ -36,4 +36,8 @@ interface VirtualCardDao {
 
     @Query("SELECT COUNT(*) FROM virtual_cards")
     suspend fun count(): Int
+
+    /** Удаляет все карты. Используется BackupManager'ом при импорте. */
+    @Query("DELETE FROM virtual_cards")
+    suspend fun deleteAll()
 }

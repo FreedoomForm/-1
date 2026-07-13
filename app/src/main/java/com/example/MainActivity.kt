@@ -386,6 +386,7 @@ fun MainScreen(
             FilterColumn("col_start",    "Boshlanish sanasi","dd.MM.yyyy"),
             FilterColumn("col_end",      "Tugash sanasi",    "dd.MM.yyyy"),
             FilterColumn("col_balance",  "Balans",           "summa"),
+            FilterColumn("col_status",   "Holat",            "Faol / Qaytgan / Qarzdor"),
             FilterColumn("col_passport", "Pasport",          "AA 1234567"),
             FilterColumn("col_address",  "Manzil",           "Manzil bo'yicha"),
             FilterColumn("col_pinfl",    "JSHSHIR",          "14 raqam")
@@ -635,11 +636,12 @@ fun MainScreen(
                         }
                     }
                 },
-                onBack = { navState = NavigationState.MainView },
+                onBack = { navState = NavigationState.MainView; currentTab = 6 },
                 onSave = { newTemplate, newWeekly, newMonthly, _, _ ->
                     settingsViewModel.updateTemplate(newTemplate)
                     settingsViewModel.updatePrices(newWeekly, newMonthly)
                     navState = NavigationState.MainView
+                    currentTab = 6
                 },
                 onSmsAutoSendChange = { enabled ->
                     settingsViewModel.updateSmsAutoSend(enabled)
@@ -675,6 +677,18 @@ fun MainScreen(
                             }
                             isCheckingUpdate = false
                         }
+                    }
+                },
+                onExportBackup = { uri ->
+                    coroutineScope.launch {
+                        val msg = com.example.data.BackupManager.exportToExcel(localContext, uri)
+                        Toast.makeText(localContext, msg, Toast.LENGTH_LONG).show()
+                    }
+                },
+                onImportBackup = { uri ->
+                    coroutineScope.launch {
+                        val msg = com.example.data.BackupManager.importFromExcel(localContext, uri)
+                        Toast.makeText(localContext, msg, Toast.LENGTH_LONG).show()
                     }
                 }
             )
@@ -826,21 +840,10 @@ fun MainScreen(
                             )
                         }
                     }
-
-                    IconButton(
-                        onClick = { navState = NavigationState.Settings },
-                        modifier = Modifier
-                            .padding(end = 16.dp)
-                            .size(40.dp)
-                            .background(Color.White, CircleShape)
-                            .border(1.dp, ClaudeDivider, CircleShape)
-                    ) {
-                        Icon(
-                            Icons.Outlined.Settings,
-                            contentDescription = "Sozlamalar",
-                            modifier = Modifier.size(20.dp)
-                        )
-                    }
+                    // Кнопка «Настройки» удалена из TopAppBar — теперь
+                    // настройки доступны как 7-я вкладка нижней навигации
+                    // (Tab 6 = Sozlamalar), на одной линии с остальными
+                    // главными страницами.
                 }
             )
         },
@@ -916,6 +919,22 @@ fun MainScreen(
                     onClick = { currentTab = 5 },
                     icon = { Icon(Icons.Default.AccountBalanceWallet, contentDescription = "Finansi") },
                     label = { Text("Finansi") },
+                    colors = NavigationBarItemDefaults.colors(
+                        selectedIconColor = ClaudeAccent,
+                        unselectedIconColor = ClaudeTextSecondary,
+                        selectedTextColor = ClaudeAccent,
+                        unselectedTextColor = ClaudeTextSecondary,
+                        indicatorColor = ClaudeAccentBg
+                    )
+                )
+                // ── 7-я вкладка: Sozlamalar ──────────────────────────────────
+                // Раньше была кнопка-иконка в TopAppBar. Теперь — полноценная
+                // вкладка внизу, рядом с остальными главными страницами.
+                NavigationBarItem(
+                    selected = currentTab == 6,
+                    onClick = { currentTab = 6 },
+                    icon = { Icon(Icons.Outlined.Settings, contentDescription = "Sozlamalar") },
+                    label = { Text("Sozlamalar") },
                     colors = NavigationBarItemDefaults.colors(
                         selectedIconColor = ClaudeAccent,
                         unselectedIconColor = ClaudeTextSecondary,
@@ -1244,6 +1263,11 @@ fun MainScreen(
                             "col_start" -> dateFmtLocal.format(Date(latestStartTs(renter))).contains(filterText, ignoreCase = true)
                             "col_end" -> dateFmtLocal.format(Date(latestEndTs(renter))).contains(filterText, ignoreCase = true)
                             "col_balance" -> renter.balance.toLong().toString().contains(filterText, ignoreCase = true)
+                            "col_status" -> {
+                                // Faol / Qaytgan / Qarzdor — по статусу арендатора.
+                                val s = statusOf(renter)
+                                statusLabel(s).contains(filterText, ignoreCase = true)
+                            }
                             "col_passport" -> renter.passportData.contains(filterText, ignoreCase = true)
                             "col_address" -> renter.address.contains(filterText, ignoreCase = true)
                             "col_pinfl" -> renter.pinfl.contains(filterText, ignoreCase = true)
@@ -1464,6 +1488,89 @@ fun MainScreen(
                         navState = NavigationState.CardHistory(card)
                     }
                 )
+            } else if (currentTab == 6) {
+                // ── Вкладка «Sozlamalar» ─────────────────────────────────
+                // Раньше была отдельная страница, открываемая через кнопку
+                // в TopAppBar. Теперь — 7-я вкладка нижней навигации.
+                val template by settingsViewModel.smsTemplate.collectAsStateWithLifecycle()
+                val weekly by settingsViewModel.weeklyPrice.collectAsStateWithLifecycle()
+                val monthly by settingsViewModel.monthlyPrice.collectAsStateWithLifecycle()
+                val smsAutoSend by settingsViewModel.smsAutoSendEnabled.collectAsStateWithLifecycle()
+                SettingsScreen(
+                    currentTemplate = template,
+                    currentWeeklyPrice = weekly,
+                    currentMonthlyPrice = monthly,
+                    currentSmsAutoSend = smsAutoSend,
+                    updateInfo = updateInfo,
+                    isCheckingUpdate = isCheckingUpdate,
+                    isUpToDate = isUpToDate,
+                    updateState = updateState,
+                    onStartUpdate = { info ->
+                        coroutineScope.launch {
+                            if (!updateManager.canInstallFromUnknownSources()) {
+                                updateManager.openInstallPermissionSettings()
+                                Toast.makeText(localContext, "Ilova sozlamalaridan \"Noma'lum manbalardan o'rnatish\" ruxsatini bering", Toast.LENGTH_LONG).show()
+                            } else {
+                                updateManager.downloadAndInstall(info)
+                            }
+                        }
+                    },
+                    onBack = { currentTab = 0 },
+                    onSave = { newTemplate, newWeekly, newMonthly, _, _ ->
+                        settingsViewModel.updateTemplate(newTemplate)
+                        settingsViewModel.updatePrices(newWeekly, newMonthly)
+                        Toast.makeText(localContext, "Sozlamalar saqlandi", Toast.LENGTH_SHORT).show()
+                    },
+                    onSmsAutoSendChange = { enabled ->
+                        settingsViewModel.updateSmsAutoSend(enabled)
+                        Toast.makeText(
+                            localContext,
+                            if (enabled) "SMS avto-yuborish yoqildi"
+                            else "SMS qo'llanma rejimiga o'tdi",
+                            Toast.LENGTH_SHORT
+                        ).show()
+                    },
+                    onLogout = {
+                        // Просто возврат на главную вкладку — реального logout нет
+                        currentTab = 0
+                    },
+                    onCheckUpdate = {
+                        if (!isCheckingUpdate) {
+                            isCheckingUpdate = true
+                            coroutineScope.launch {
+                                val checker = UpdateChecker(localContext)
+                                val (result, info) = checker.checkForUpdate()
+                                when (result) {
+                                    UpdateCheckResult.UPDATE_AVAILABLE -> {
+                                        updateInfo = info
+                                        isUpToDate = false
+                                    }
+                                    UpdateCheckResult.UP_TO_DATE -> {
+                                        updateInfo = null
+                                        isUpToDate = true
+                                    }
+                                    UpdateCheckResult.ERROR -> {
+                                        updateInfo = null
+                                        isUpToDate = false
+                                    }
+                                }
+                                isCheckingUpdate = false
+                            }
+                        }
+                    },
+                    onExportBackup = { uri ->
+                        coroutineScope.launch {
+                            val msg = com.example.data.BackupManager.exportToExcel(localContext, uri)
+                            Toast.makeText(localContext, msg, Toast.LENGTH_LONG).show()
+                        }
+                    },
+                    onImportBackup = { uri ->
+                        coroutineScope.launch {
+                            val msg = com.example.data.BackupManager.importFromExcel(localContext, uri)
+                            Toast.makeText(localContext, msg, Toast.LENGTH_LONG).show()
+                        }
+                    }
+                )
             }
         }
 
@@ -1568,63 +1675,19 @@ fun MainScreen(
         }
 
         if (showDateRangePicker) {
-            DatePickerDialog(
-                onDismissRequest = { showDateRangePicker = false },
-                confirmButton = {
-                    TextActionButton(
-                        label = "Tanlash",
-                        icon = Icons.Default.Check,
-                        onClick = { showDateRangePicker = false }
-                    )
-                },
-                dismissButton = {
-                    TextActionButton(
-                        label = "Tozalash",
-                        icon = Icons.Default.Clear,
-                        onClick = {
-                            dateRangePickerState.setSelection(null, null)
-                            showDateRangePicker = false
-                        }
-                    )
-                }
-            ) {
-                DateRangePicker(
-                    state = dateRangePickerState,
-                    modifier = Modifier.weight(1f),
-                    title = { Text("Muddati bo'yicha filter", modifier = Modifier.padding(16.dp)) },
-                    headline = { Text("Davrni tanlang", modifier = Modifier.padding(16.dp)) }
-                )
-            }
+            com.example.ui.components.DateRangeFilterDialog(
+                state = dateRangePickerState,
+                onDismiss = { showDateRangePicker = false },
+                title = "Kontrakt tugash sanasi bo'yicha filter"
+            )
         }
 
         if (showScooterDateRangePicker) {
-            DatePickerDialog(
-                onDismissRequest = { showScooterDateRangePicker = false },
-                confirmButton = {
-                    TextActionButton(
-                        label = "Tanlash",
-                        icon = Icons.Default.Check,
-                        onClick = { showScooterDateRangePicker = false }
-                    )
-                },
-                dismissButton = {
-                    TextActionButton(
-                        label = "Tozalash",
-                        icon = Icons.Default.Clear,
-                        onClick = {
-                            scooterDateRangePickerState.setSelection(null, null)
-                            showScooterDateRangePicker = false
-                        }
-                    )
-                }
-            ) {
-                DateRangePicker(
-                    state = scooterDateRangePickerState,
-                    modifier = Modifier.weight(1f),
-                    title = { Text("Kontrakt boshlanishi bo'yicha filter", modifier = Modifier.padding(16.dp)) },
-                    headline = { Text("Davrni tanlang", modifier = Modifier.padding(16.dp)) }
-                )
-            }
+            com.example.ui.components.DateRangeFilterDialog(
+                state = scooterDateRangePickerState,
+                onDismiss = { showScooterDateRangePicker = false },
+                title = "Kontrakt boshlanishi bo'yicha filter"
+            )
         }
 
         // SMS natijalari — dialog o'chirildi, faqat Toast ko'rsatiladi
@@ -2398,7 +2461,9 @@ fun SettingsScreen(
     onSave: (String, Double, Double, String, String) -> Unit,
     onSmsAutoSendChange: (Boolean) -> Unit = {},
     onLogout: () -> Unit = {},
-    onCheckUpdate: () -> Unit = {}
+    onCheckUpdate: () -> Unit = {},
+    onExportBackup: (android.net.Uri) -> Unit = {},
+    onImportBackup: (android.net.Uri) -> Unit = {}
 ) {
     var template by remember { mutableStateOf(currentTemplate) }
     var weekly by remember {
@@ -2443,6 +2508,34 @@ fun SettingsScreen(
             ?: com.example.data.SettingsRepository.DEFAULT_USD_TO_UZS_RATE
         onSave(template, wPrice, mPrice, paymeLink, callCenter)
     }
+
+    // ── Storage Access Framework launchers для экспорта/импорта Excel ────
+    // Используем ACTION_CREATE_DOCUMENT (для экспорта — пользователь выбирает
+    // куда сохранить файл) и ACTION_OPEN_DOCUMENT (для импорта — пользователь
+    // выбирает какой файл загрузить). Никаких runtime-разрешений не нужно,
+    // т.к. доступ к URI выдаётся через SAF.
+    val exportLauncher = rememberLauncherForActivityResult(
+        contract = androidx.activity.result.contract.ActivityResultContracts.CreateDocument("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+    ) { uri ->
+        if (uri != null) onExportBackup(uri)
+    }
+    val importLauncher = rememberLauncherForActivityResult(
+        contract = androidx.activity.result.contract.ActivityResultContracts.OpenDocument()
+    ) { uri ->
+        if (uri != null) {
+            // Постоянное разрешение на чтение — на случай если импорт запустится
+            // в фоновой корутине и пройдёт какое-то время.
+            try {
+                settingsContext.contentResolver.takePersistableUriPermission(
+                    uri,
+                    android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION
+                )
+            } catch (_: SecurityException) { /* ignore */ }
+            onImportBackup(uri)
+        }
+    }
+    val backupDateFormat = remember { java.text.SimpleDateFormat("yyyy-MM-dd", Locale.getDefault()) }
+    val defaultBackupName = remember { "scooter_backup_${backupDateFormat.format(java.util.Date())}.xlsx" }
 
     val settingsScrollState = rememberScrollState()
     Scaffold(
@@ -2882,6 +2975,61 @@ fun SettingsScreen(
                         }
                     }
                 }
+
+                HorizontalDivider()
+
+                // ── Zaxira nusxa (Backup) ──────────────────────────────────
+                // Экспорт всей базы данных в Excel (.xlsx) и импорт обратно.
+                // Позволяет перенести данные между устройствами или
+                // восстановиться после переустановки приложения.
+                // Формат файла: 7 листов (Renters, Scooters, Contracts,
+                // Transactions, VirtualCards, CardTx, Notifications).
+                Text(
+                    "Zaxira nusxa",
+                    style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
+                    modifier = Modifier.padding(vertical = 8.dp)
+                )
+                Text(
+                    "Butun ma'lumot bazasini Excel (.xlsx) faylga eksport qiling " +
+                        "yoki avvalgi zaxiradan tiklang. Fayl barcha 7 jadvalni " +
+                        "o'z ichiga oladi: mijozlar, skuterlar, kontraktlar, " +
+                        "tranzaksiyalar, kartalar, karta tranzaksiyalari va " +
+                        "bildirishnomalar.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = ClaudeTextSecondary,
+                    modifier = Modifier.padding(bottom = 12.dp)
+                )
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    PrimaryButton(
+                        label = "Eksport",
+                        icon = Icons.Default.ArrowDropDown,
+                        onClick = { exportLauncher.launch(defaultBackupName) },
+                        modifier = Modifier.weight(1f)
+                    )
+                    PrimaryButton(
+                        label = "Import",
+                        icon = Icons.Default.ArrowDropUp,
+                        onClick = {
+                            importLauncher.launch(
+                                arrayOf(
+                                    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                                    "application/vnd.ms-excel"
+                                )
+                            )
+                        },
+                        modifier = Modifier.weight(1f)
+                    )
+                }
+                Text(
+                    "⚠ Import paytida joriy ma'lumotlar O'CHIRILADI va " +
+                        "fayldagilar bilan almashtiriladi.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = StatusOverdue,
+                    modifier = Modifier.padding(top = 8.dp)
+                )
 
                 HorizontalDivider()
 

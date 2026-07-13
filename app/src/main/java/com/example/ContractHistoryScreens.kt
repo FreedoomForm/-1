@@ -605,33 +605,11 @@ fun RenterContractHistoryScreen(
 
     // ── Диалог выбора диапазона дат (фильтр по weekStart контракта) ──────
     if (showDateRangePicker) {
-        DatePickerDialog(
-            onDismissRequest = { showDateRangePicker = false },
-            confirmButton = {
-                TextActionButton(
-                    label = "Tanlash",
-                    icon = Icons.Default.Check,
-                    onClick = { showDateRangePicker = false }
-                )
-            },
-            dismissButton = {
-                TextActionButton(
-                    label = "Tozalash",
-                    icon = Icons.Default.Clear,
-                    onClick = {
-                        dateRangePickerState.setSelection(null, null)
-                        showDateRangePicker = false
-                    }
-                )
-            }
-        ) {
-            DateRangePicker(
-                state = dateRangePickerState,
-                modifier = Modifier.weight(1f),
-                title = { Text("Sana bo'yicha filter", modifier = Modifier.padding(16.dp)) },
-                headline = { Text("Davrni tanlang", modifier = Modifier.padding(16.dp)) }
-            )
-        }
+        com.example.ui.components.DateRangeFilterDialog(
+            state = dateRangePickerState,
+            onDismiss = { showDateRangePicker = false },
+            title = "Sana bo'yicha filter"
+        )
     }
 }
 
@@ -1860,33 +1838,11 @@ fun ScooterContractHistoryScreen(
 
     // ── Диалог выбора диапазона дат (фильтр по weekStart/timestamp) ──────
     if (showDateRangePicker) {
-        DatePickerDialog(
-            onDismissRequest = { showDateRangePicker = false },
-            confirmButton = {
-                TextActionButton(
-                    label = "Tanlash",
-                    icon = Icons.Default.Check,
-                    onClick = { showDateRangePicker = false }
-                )
-            },
-            dismissButton = {
-                TextActionButton(
-                    label = "Tozalash",
-                    icon = Icons.Default.Clear,
-                    onClick = {
-                        dateRangePickerState.setSelection(null, null)
-                        showDateRangePicker = false
-                    }
-                )
-            }
-        ) {
-            DateRangePicker(
-                state = dateRangePickerState,
-                modifier = Modifier.weight(1f),
-                title = { Text("Sana bo'yicha filter", modifier = Modifier.padding(16.dp)) },
-                headline = { Text("Davrni tanlang", modifier = Modifier.padding(16.dp)) }
-            )
-        }
+        com.example.ui.components.DateRangeFilterDialog(
+            state = dateRangePickerState,
+            onDismiss = { showDateRangePicker = false },
+            title = "Sana bo'yicha filter"
+        )
     }
 }
 

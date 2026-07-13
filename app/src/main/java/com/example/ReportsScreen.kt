@@ -575,25 +575,11 @@ fun ReportsScreen(
 
     // ── Календарь периода ─────────────────────────────────────────────
     if (showDateRangePicker) {
-        DatePickerDialog(
-            onDismissRequest = { showDateRangePicker = false },
-            confirmButton = {
-                TextButton(onClick = { showDateRangePicker = false }) { Text("Tanlash") }
-            },
-            dismissButton = {
-                TextButton(onClick = {
-                    dateRangePickerState.setSelection(null, null)
-                    showDateRangePicker = false
-                }) { Text("Tozalash") }
-            }
-        ) {
-            DateRangePicker(
-                state = dateRangePickerState,
-                modifier = Modifier.weight(1f),
-                title = { Text("Davrni tanlang", modifier = Modifier.padding(16.dp)) },
-                headline = { Text("Otchet davri", modifier = Modifier.padding(16.dp)) }
-            )
-        }
+        com.example.ui.components.DateRangeFilterDialog(
+            state = dateRangePickerState,
+            onDismiss = { showDateRangePicker = false },
+            title = "Otchet davri"
+        )
     }
 }
 

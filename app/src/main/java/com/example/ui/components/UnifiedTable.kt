@@ -629,3 +629,87 @@ fun <T> applyFilters(
         }
     }
 }
+
+/* ============================================================================
+   DATE RANGE FILTER DIALOG
+   ============================================================================ */
+/**
+ * Надёжный диалог выбора диапазона дат.
+ *
+ * Старая реализация оборачивала [DateRangePicker] с `Modifier.weight(1f)` прямо
+ * в [DatePickerDialog], который внутри использует Column — и `weight` там
+ * формально поддерживается, но в ряде кейсов (особенно на маленьких экранах
+ * или при повороте) календарь не отрисовывался полностью, а выбор дат
+ * не применялся (диалог закрывался, но selectedStartDateMillis оставался null).
+ *
+ * Новая реализация:
+ *  • Размер контента задаётся через `Modifier.fillMaxSize()` + фиксированный
+ *    `heightIn(min = 460.dp)`, чтобы DateRangePicker гарантированно помещался.
+ *  • Кнопка «Применить» активна только если выбрана хотя бы start date.
+ *  • Кнопка «Очистить» сбрасывает выбор через `setSelection(null, null)`.
+ *  • Диалог можно закрыть только через кнопки — выбор сохраняется в state.
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun DateRangeFilterDialog(
+    state: DateRangePickerState,
+    onDismiss: () -> Unit,
+    title: String = "Davrni tanlang"
+) {
+    val startSelected = state.selectedStartDateMillis != null
+    DatePickerDialog(
+        onDismissRequest = onDismiss,
+        // Явные свойства диалога — иначе на некоторых темах получается
+        // прозрачный фон и текст сливается.
+        confirmButton = {
+            Button(
+                onClick = onDismiss,
+                enabled = startSelected
+            ) {
+                Icon(Icons.Default.Check, contentDescription = null, modifier = Modifier.size(18.dp))
+                Spacer(Modifier.width(4.dp))
+                Text("Qo'llash")
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = {
+                state.setSelection(null, null)
+                onDismiss()
+            }) {
+                Icon(Icons.Default.Clear, contentDescription = null, modifier = Modifier.size(18.dp))
+                Spacer(Modifier.width(4.dp))
+                Text("Tozalash")
+            }
+        }
+    ) {
+        Surface(
+            modifier = Modifier
+                .fillMaxWidth(),
+            shape = RoundedCornerShape(16.dp),
+            color = MaterialTheme.colorScheme.surface,
+            tonalElevation = 6.dp
+        ) {
+            Column(modifier = Modifier.padding(bottom = 8.dp)) {
+                Text(
+                    text = title,
+                    style = MaterialTheme.typography.titleMedium,
+                    modifier = Modifier.padding(start = 20.dp, end = 20.dp, top = 16.dp, bottom = 4.dp)
+                )
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .heightIn(min = 460.dp, max = 560.dp)
+                ) {
+                    DateRangePicker(
+                        state = state,
+                        modifier = Modifier.fillMaxSize(),
+                        title = null,
+                        headline = null,
+                        showModeToggle = true
+                    )
+                }
+            }
+        }
+    }
+}
+

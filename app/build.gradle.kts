@@ -80,6 +80,13 @@ dependencies {
   implementation(libs.androidx.room.runtime)
   implementation("androidx.work:work-runtime-ktx:2.9.0")
   implementation("androidx.compose.material:material-icons-extended:1.7.0")
+  // ── Excel для экспорта/импорта базы данных ─────────────────────────────
+  // FastExcel: лёгкая (~500 КБ) библиотека для записи и чтения .xlsx файлов.
+  // Используется BackupManager'ом — кнопки «Eksport» / «Import» на вкладке
+  // «Sozlamalar». FastExcel лучше Apache POI подходит для Android, т.к. не
+  // тянет за собой тяжёлые XML-зависимости (java.xml.bind и т.п.).
+  implementation("org.dhatim:fastexcel:0.18.4")
+  implementation("org.dhatim:fastexcel-reader:0.18.4")
   implementation(libs.kotlinx.coroutines.android)
   implementation(libs.kotlinx.coroutines.core)
   // testImplementation(libs.androidx.compose.ui.test.junit4)
