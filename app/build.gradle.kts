@@ -85,8 +85,22 @@ dependencies {
   // Используется BackupManager'ом — кнопки «Eksport» / «Import» на вкладке
   // «Sozlamalar». FastExcel лучше Apache POI подходит для Android, т.к. не
   // тянет за собой тяжёлые XML-зависимости (java.xml.bind и т.п.).
+  //
+  // ⚠ FastExcel-READER для парсинга .xlsx использует StAX API
+  //   (javax.xml.stream.*), которого НЕТ в Android runtime (Android
+  //   использует XmlPullParser вместо StAX). Поэтому reader'у нужны:
+  //     1. stax-api  — сами интерфейсы javax.xml.stream.*
+  //     2. aalto-xml — асинхронная реализация StAX, работающая на Android.
+  //   Без них импорт падает с:
+  //     NoClassDefFoundError: Lcom/fasterxml/aalto/AsyncXMLInputFactory;
+  //     NoClassDefFoundError: Lorg/codehaus/stax2/XMLInputFactory2;
+  //     NoClassDefFoundError: Ljavax/xml/stream/XMLInputFactory;
+  //   (writer работает и без них — он пишет .xlsx через java.util.zip,
+  //   без StAX. Зависимости нужны только для импорта.)
   implementation("org.dhatim:fastexcel:0.18.4")
   implementation("org.dhatim:fastexcel-reader:0.18.4")
+  implementation("javax.xml.stream:stax-api:1.0-2")
+  implementation("com.fasterxml:aalto-xml:1.3.0")
   implementation(libs.kotlinx.coroutines.android)
   implementation(libs.kotlinx.coroutines.core)
   // testImplementation(libs.androidx.compose.ui.test.junit4)
