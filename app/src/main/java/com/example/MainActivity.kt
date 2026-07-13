@@ -723,8 +723,8 @@ fun MainScreen(
                     // На вкладке «Отчёты» (4) кнопка + НЕ показывается — там нет
                     // сущностей для создания (только виджеты). Edit/delete там тоже
                     // не показываются — нет строк для выбора.
-                    // ── Кнопка «+» — скрыта на вкладке «Отчёты» (4) ──────────────
-                    if (currentTab != 4) {
+                    // ── Кнопка «+» — скрыта на «Отчётах» (4) и «Sozlamalar» (6) ─
+                    if (currentTab != 4 && currentTab != 6) {
                         IconButton(
                             onClick = {
                                 when (currentTab) {
@@ -749,8 +749,8 @@ fun MainScreen(
                         }
                     }
 
-                    // ── Кнопка «✎ Tahrirlash» — универсальная для всех вкладок ─
-                    if (currentTab != 4) {
+                    // ── Кнопка «✎ Tahrirlash» — скрыта на «Отчётах» (4) и «Sozlamalar» (6)
+                    if (currentTab != 4 && currentTab != 6) {
                         val editEnabled = when (currentTab) {
                             0 -> selectedRenters.size == 1
                             1 -> selectedScooters.size == 1
@@ -1517,9 +1517,9 @@ fun MainScreen(
                     },
                     onBack = { currentTab = 0 },
                     onSave = { newTemplate, newWeekly, newMonthly, _, _ ->
+                        // Автосохранение — Toast на каждое нажатие клавиши был бы назойливым.
                         settingsViewModel.updateTemplate(newTemplate)
                         settingsViewModel.updatePrices(newWeekly, newMonthly)
-                        Toast.makeText(localContext, "Sozlamalar saqlandi", Toast.LENGTH_SHORT).show()
                     },
                     onSmsAutoSendChange = { enabled ->
                         settingsViewModel.updateSmsAutoSend(enabled)
@@ -2490,9 +2490,9 @@ fun SettingsScreen(
         })
     }
 
-    // ── Логика сохранения — вынесена в локальную лямбду, чтобы её можно было
-    // вызывать и из TopAppBar action, и из нижней кнопки «Saqla» без дубля.
-    val saveSettings: () -> Unit = {
+    // ── Автосохранение — поля сохраняются автоматически при изменении,
+    // отдельные кнопки «Saqla» больше не нужны (форма живая).
+    LaunchedEffect(template, weekly, monthly, paymeLink, callCenter, scooterPriceUsd, usdToUzsRate) {
         val wPrice = weekly.toDoubleOrNull() ?: 0.0
         val mPrice = monthly.toDoubleOrNull() ?: 0.0
         settingsRepo.paymeLink = paymeLink.trim().ifBlank {
@@ -2549,25 +2549,9 @@ fun SettingsScreen(
                         style = MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.Bold)
                     )
                 },
-                navigationIcon = {
-                    IconButton(onClick = onBack) {
-                        Icon(
-                            Icons.AutoMirrored.Filled.ArrowBack,
-                            contentDescription = "Orqaga"
-                        )
-                    }
-                },
-                actions = {
-                    PrimaryButton(
-                        label = "Saqla",
-                        icon = Icons.Default.Save,
-                        onClick = saveSettings
-                    )
-                },
                 colors = TopAppBarDefaults.topAppBarColors(
                     containerColor = ClaudeBackground,
-                    titleContentColor = ClaudeText,
-                    navigationIconContentColor = ClaudeText
+                    titleContentColor = ClaudeText
                 )
             )
         }
@@ -3031,26 +3015,6 @@ fun SettingsScreen(
                     modifier = Modifier.padding(top = 8.dp)
                 )
 
-                HorizontalDivider()
-
-                DangerOutlinedButton(
-                    label = "Chiqish",
-                    icon = Icons.Default.Logout,
-                    onClick = { onLogout() },
-                    modifier = Modifier.fillMaxWidth()
-                )
-
-                HorizontalDivider()
-
-                // ── Дублирующая кнопка «Saqla» внизу страницы ─────────────
-                // На длинной форме неудобно тянуться к аппбару — даём вторую
-                // кнопку сохранения в самом низу, рядом с «Chiqish».
-                PrimaryButton(
-                    label = "Saqla",
-                    icon = Icons.Default.Save,
-                    onClick = saveSettings,
-                    modifier = Modifier.fillMaxWidth()
-                )
         }
     }
 }
