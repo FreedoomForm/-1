@@ -654,6 +654,7 @@ fun MainScreen(
                         }
                     }
                 },
+                onResetUpdate = { updateManager.reset() },
                 onBack = { navState = NavigationState.MainView; currentTab = 6 },
                 onSave = { newTemplate, newWeekly, newMonthly, _, _ ->
                     settingsViewModel.updateTemplate(newTemplate)
@@ -1028,6 +1029,12 @@ fun MainScreen(
                     }
                 }
                 is InAppUpdateState.Installing -> {
+                    // После запуска системного установщика (ACTION_VIEW) мы не
+                    // получаем обратный вызов о результате. Если пользователь
+                    // отменил установку в системном диалоге, он вернётся в
+                    // приложение, и спиннер останется висеть. Поэтому даём
+                    // кнопку «Yopish» (Close), чтобы пользователь мог сам
+                    // закрыть баннер.
                     Card(
                         modifier = Modifier
                             .fillMaxWidth()
@@ -1037,18 +1044,29 @@ fun MainScreen(
                     ) {
                         Row(
                             modifier = Modifier.padding(12.dp),
-                            verticalAlignment = Alignment.CenterVertically
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween
                         ) {
-                            CircularProgressIndicator(
-                                modifier = Modifier.size(20.dp),
-                                color = Color(0xFF000000),
-                                strokeWidth = 2.dp
-                            )
-                            Spacer(modifier = Modifier.width(12.dp))
-                            Text(
-                                "O'rnatilmoqda...",
-                                style = MaterialTheme.typography.labelMedium,
-                                color = Color(0xFF000000)
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                modifier = Modifier.weight(1f)
+                            ) {
+                                CircularProgressIndicator(
+                                    modifier = Modifier.size(20.dp),
+                                    color = Color(0xFF000000),
+                                    strokeWidth = 2.dp
+                                )
+                                Spacer(modifier = Modifier.width(12.dp))
+                                Text(
+                                    "Tizim o'rnatuvchisini tasdiqlang...",
+                                    style = MaterialTheme.typography.labelMedium,
+                                    color = Color(0xFF000000)
+                                )
+                            }
+                            TextActionButton(
+                                label = "Yopish",
+                                icon = Icons.Default.Close,
+                                onClick = { updateManager.reset() }
                             )
                         }
                     }
@@ -1564,6 +1582,7 @@ fun MainScreen(
                             }
                         }
                     },
+                    onResetUpdate = { updateManager.reset() },
                     onBack = { currentTab = 0 },
                     onSave = { newTemplate, newWeekly, newMonthly, _, _ ->
                         // Автосохранение — Toast на каждое нажатие клавиши был бы назойливым.
@@ -2506,6 +2525,7 @@ fun SettingsScreen(
     isUpToDate: Boolean = false,
     updateState: InAppUpdateState = InAppUpdateState.Idle,
     onStartUpdate: (UpdateInfo) -> Unit = {},
+    onResetUpdate: () -> Unit = {},
     onBack: () -> Unit,
     onSave: (String, Double, Double, String, String) -> Unit,
     onSmsAutoSendChange: (Boolean) -> Unit = {},
@@ -2849,22 +2869,42 @@ fun SettingsScreen(
                             }
                         }
                         is InAppUpdateState.Installing -> {
+                            // После запуска системного установщика (ACTION_VIEW)
+                            // мы не получаем обратный вызов. Даём кнопку
+                            // «Yopish» чтобы пользователь мог закрыть баннер,
+                            // если отменил установку в системном диалоге.
                             Card(
                                 modifier = Modifier.fillMaxWidth(),
                                 colors = CardDefaults.cardColors(containerColor = Color(0xFFF0F0F0)),
                                 shape = RoundedCornerShape(8.dp)
                             ) {
                                 Row(
-                                    modifier = Modifier.padding(12.dp),
-                                    verticalAlignment = Alignment.CenterVertically
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(12.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.SpaceBetween
                                 ) {
-                                    CircularProgressIndicator(
-                                        modifier = Modifier.size(18.dp),
-                                        color = Color(0xFF000000),
-                                        strokeWidth = 2.dp
+                                    Row(
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        modifier = Modifier.weight(1f)
+                                    ) {
+                                        CircularProgressIndicator(
+                                            modifier = Modifier.size(18.dp),
+                                            color = Color(0xFF000000),
+                                            strokeWidth = 2.dp
+                                        )
+                                        Spacer(modifier = Modifier.width(8.dp))
+                                        Text(
+                                            "Tizim o'rnatuvchisini tasdiqlang...",
+                                            color = Color(0xFF000000)
+                                        )
+                                    }
+                                    TextActionButton(
+                                        label = "Yopish",
+                                        icon = Icons.Default.Close,
+                                        onClick = onResetUpdate
                                     )
-                                    Spacer(modifier = Modifier.width(8.dp))
-                                    Text("O'rnatilmoqda...", color = Color(0xFF000000))
                                 }
                             }
                         }
@@ -2874,12 +2914,27 @@ fun SettingsScreen(
                                 colors = CardDefaults.cardColors(containerColor = Color(0xFFF0F0F0)),
                                 shape = RoundedCornerShape(8.dp)
                             ) {
-                                Text(
-                                    updateState.message,
-                                    modifier = Modifier.padding(12.dp),
-                                    color = Color(0xFF000000),
-                                    style = MaterialTheme.typography.bodySmall
-                                )
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(12.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.SpaceBetween
+                                ) {
+                                    Text(
+                                        updateState.message,
+                                        modifier = Modifier
+                                            .weight(1f)
+                                            .padding(end = 8.dp),
+                                        color = Color(0xFF000000),
+                                        style = MaterialTheme.typography.bodySmall
+                                    )
+                                    TextActionButton(
+                                        label = "Yopish",
+                                        icon = Icons.Default.Close,
+                                        onClick = onResetUpdate
+                                    )
+                                }
                             }
                         }
                         else -> {
