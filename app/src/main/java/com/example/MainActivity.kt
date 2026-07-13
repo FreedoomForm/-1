@@ -173,13 +173,31 @@ class MainActivity : ComponentActivity() {
         //   renter_id — ID арендатора для send_sms
         handleWidgetIntent(intent)
 
-        // SMS-воркер для просроченных (как раньше)
-        val smsWorkRequest = PeriodicWorkRequestBuilder<SmsWorker>(4, TimeUnit.HOURS).build()
-        WorkManager.getInstance(applicationContext).enqueueUniquePeriodicWork(
-            "OverdueSmsWork",
-            ExistingPeriodicWorkPolicy.KEEP,
-            smsWorkRequest
-        )
+        // SMS-воркер для просроченных (как раньше).
+        //
+        // ВАЖНО: schedule only if user has AVTO mode ON. Если пользователь
+        // переключил тумблер в ручной режим (красный), SettingsViewModel
+        // вызывает cancelUniqueWork("OverdueSmsWork"). Если бы мы тут слепо
+        // вызвали enqueueUniquePeriodicWork с KEEP, то при отсутствии
+        // существующей работы (она отменена) KEEP создал бы НОВУЮ работу —
+        // и авто-отправка возобновилась бы вопреки выбору пользователя.
+        // Поэтому сначала читаем флаг из DataStore, и только если AVTO —
+        // планируем. SmsWorker.doWork() дополнительно проверяет флаг на
+        // случай, если он изменится в течение 4 часов между запусками.
+        val settingsRepo = com.example.data.SettingsRepository(applicationContext)
+        if (settingsRepo.smsAutoSendEnabled) {
+            val smsWorkRequest = PeriodicWorkRequestBuilder<SmsWorker>(4, TimeUnit.HOURS).build()
+            WorkManager.getInstance(applicationContext).enqueueUniquePeriodicWork(
+                "OverdueSmsWork",
+                ExistingPeriodicWorkPolicy.KEEP,
+                smsWorkRequest
+            )
+        } else {
+            // На всякий случай убеждаемся, что работы нет — возможно, флаг
+            // был изменён в DataStore напрямую, минуя SettingsViewModel.
+            WorkManager.getInstance(applicationContext)
+                .cancelUniqueWork("OverdueSmsWork")
+        }
 
         // Периодическая проверка наступления срока оплаты (раз в час)
         val paymentCheckRequest =

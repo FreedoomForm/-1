@@ -1,15 +1,21 @@
 package com.example.ui
 
 import android.app.Application
+import android.util.Log
 import androidx.lifecycle.AndroidViewModel
+import androidx.work.ExistingPeriodicWorkPolicy
+import androidx.work.PeriodicWorkRequestBuilder
+import androidx.work.WorkManager
 import com.example.data.SettingsRepository
+import com.example.worker.SmsWorker
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import java.util.concurrent.TimeUnit
 
 class SettingsViewModel(application: Application) : AndroidViewModel(application) {
     private val repository = SettingsRepository(application)
-    
+
     private val _smsTemplate = MutableStateFlow(repository.smsTemplate)
     val smsTemplate: StateFlow<String> = _smsTemplate.asStateFlow()
 
@@ -41,8 +47,42 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
         _monthlyPrice.value = effectiveMonthly
     }
 
+    /**
+     * SMS avto-yuborish rejimini almashtirish.
+     *
+     * Rejim o'zgarganda nafaqat SharedPreferences yangilanadi, balki
+     * WorkManager'dagi «OverdueSmsWork» ham boshqariladi:
+     *  • enabled = true  → ish qayta rejalashtiriladi (4 soatda bir).
+     *  • enabled = false → ish BEKOR QILINADI. SmsWorker.doWork() ichida
+     *    ham tekshiruv bor, lekin ish umuman ishlamasligi aniqroq —
+     *    hech qanday SMS yuborilmaydi.
+     */
     fun updateSmsAutoSend(enabled: Boolean) {
         repository.smsAutoSendEnabled = enabled
         _smsAutoSendEnabled.value = enabled
+        try {
+            val wm = WorkManager.getInstance(getApplication())
+            if (enabled) {
+                // Re-jadval: 4 soatda bir. CANCEL_AND_REPLACE emas, KEEP —
+                // agar allaqachon rejalashtirilgan bo'lsa, o'z holida qoldiradi.
+                val req = PeriodicWorkRequestBuilder<SmsWorker>(4, TimeUnit.HOURS).build()
+                wm.enqueueUniquePeriodicWork(
+                    "OverdueSmsWork",
+                    ExistingPeriodicWorkPolicy.KEEP,
+                    req
+                )
+                Log.d(TAG, "OverdueSmsWork re-scheduled (auto mode ON)")
+            } else {
+                // Manual rejim — ishni butunlay bekor qilamiz.
+                wm.cancelUniqueWork("OverdueSmsWork")
+                Log.d(TAG, "OverdueSmsWork cancelled (manual mode OFF)")
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to update OverdueSmsWork schedule", e)
+        }
+    }
+
+    companion object {
+        private const val TAG = "SettingsViewModel"
     }
 }

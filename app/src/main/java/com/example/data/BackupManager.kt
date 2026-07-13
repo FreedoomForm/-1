@@ -101,22 +101,22 @@ object BackupManager {
             val notifications = db.notificationHistoryDao().getAllOnce()
 
             val resolver = context.contentResolver
-            val output: OutputStream? = run {
-                // Вызываем Java-метод openOutputStream(Uri, String) через
-                // reflection-стиль — Kotlin не всегда корректно резолвит
-                // перегрузки Android SDK из-за @RecentlyNonNull аннотаций.
-                val m = android.content.ContentResolver::class.java.getMethod(
-                    "openOutputStream",
-                    android.net.Uri::class.java,
-                    String::class.java
-                )
-                m.invoke(resolver, uri, "w") as? OutputStream
-            }
-            if (output == null) return "Xato: fayl yaratilmadi (openOutputStream = null)"
+            // Прямой вызов openOutputStream(Uri, "w") — без reflection.
+            // Раньше тут был reflection-стиль, который на некоторых прошивках
+            // возвращал OutputStream, не пишущий данные в SAF-провайдер,
+            // из-за чего файл оказывался 0 байт. Прямой вызов стабилен.
+            val rawOutput: OutputStream = resolver.openOutputStream(uri, "w")
+                ?: return "Xato: fayl yaratilmadi (openOutputStream = null)"
 
-            output.use { out ->
+            // BufferedOutputStream обязателен — FastExcel пишет много мелких
+            // chunk'ов; без буфера каждый chunk уходит через ContentProvider
+            // в SAF, что медленно и на некоторых провайдерах приводит к
+            // потере данных при finish(). 8 КБ — стандартный размер буфера.
+            val output = java.io.BufferedOutputStream(rawOutput, 8192)
+
+            try {
                 // Конструктор Workbook(OutputStream, appName, version).
-                val wb = Workbook(out, "ScooterRent", "1.0")
+                val wb = Workbook(output, "ScooterRent", "1.0")
                 writeRenters(wb, renters)
                 writeScooters(wb, scooters)
                 writeContracts(wb, contracts)
@@ -124,7 +124,15 @@ object BackupManager {
                 writeVirtualCards(wb, cards)
                 writeCardTransactions(wb, cardTx)
                 writeNotifications(wb, notifications)
+                // finish() пишет финальные ZIP-entries (central directory)
+                // и flush'ит внутренний writer. Без этого файл был бы пустым.
                 wb.finish()
+                // Явный flush буфера в底层 OutputStream ДО close — иначе
+                // последние байты могут потеряться при закрытии SAF-стрима.
+                output.flush()
+            } finally {
+                // finally гарантирует close даже при исключении в finish().
+                output.close()
             }
 
             val total = renters.size + scooters.size + contracts.size +
@@ -318,14 +326,8 @@ object BackupManager {
         return try {
             val db = AppDatabase.getDatabase(context)
             val resolver = context.contentResolver
-            val input: java.io.InputStream? = run {
-                val m = android.content.ContentResolver::class.java.getMethod(
-                    "openInputStream",
-                    android.net.Uri::class.java
-                )
-                m.invoke(resolver, uri) as? java.io.InputStream
-            }
-            if (input == null) return "Xato: fayl ochilmadi (openInputStream = null)"
+            val input: java.io.InputStream = resolver.openInputStream(uri)
+                ?: return "Xato: fayl ochilmadi (openInputStream = null)"
 
             // Считаем статистику для отчёта
             var rentersCount = 0
