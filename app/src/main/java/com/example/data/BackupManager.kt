@@ -100,39 +100,70 @@ object BackupManager {
             val cardTx = db.cardTransactionDao().getRecentTransactions(Int.MAX_VALUE)
             val notifications = db.notificationHistoryDao().getAllOnce()
 
-            val resolver = context.contentResolver
-            // Прямой вызов openOutputStream(Uri, "w") — без reflection.
-            // Раньше тут был reflection-стиль, который на некоторых прошивках
-            // возвращал OutputStream, не пишущий данные в SAF-провайдер,
-            // из-за чего файл оказывался 0 байт. Прямой вызов стабилен.
-            val rawOutput: OutputStream = resolver.openOutputStream(uri, "w")
-                ?: return "Xato: fayl yaratilmadi (openOutputStream = null)"
-
-            // BufferedOutputStream обязателен — FastExcel пишет много мелких
-            // chunk'ов; без буфера каждый chunk уходит через ContentProvider
-            // в SAF, что медленно и на некоторых провайдерах приводит к
-            // потере данных при finish(). 8 КБ — стандартный размер буфера.
-            val output = java.io.BufferedOutputStream(rawOutput, 8192)
-
+            // ── Двухфазная запись: сначала в temp-файл, потом копирование в SAF ──
+            //
+            // ПРЯМАЯ запись FastExcel в SAF OutputStream на Android 11+ часто
+            // даёт 0-байтный файл. Причина: FastExcel внутри использует
+            // java.util.zip.ZipOutputStream, который буферизует ВСЁ в памяти
+            // до вызова close(). Когда close() дойдёт до SAF-провайдера,
+            // bytes иногда не коммитятся на диск (особенность реализации
+            // ContentProvider для ACTION_CREATE_DOCUMENT на некоторых
+            // прошивках — MIUI, One UI, ColorOS).
+            //
+            // Решение: пишем .xlsx во временный файл в cacheDir (обычный
+            // FileOutputStream, всегда работает), затем копируем bytes 1:1
+            // в SAF OutputStream. После close() SAF-стрима файл становится
+            // валидным .xlsx.
+            val tempFile = java.io.File(context.cacheDir, "export_tmp_${System.currentTimeMillis()}.xlsx")
             try {
-                // Конструктор Workbook(OutputStream, appName, version).
-                val wb = Workbook(output, "ScooterRent", "1.0")
-                writeRenters(wb, renters)
-                writeScooters(wb, scooters)
-                writeContracts(wb, contracts)
-                writeTransactions(wb, transactions)
-                writeVirtualCards(wb, cards)
-                writeCardTransactions(wb, cardTx)
-                writeNotifications(wb, notifications)
-                // finish() пишет финальные ZIP-entries (central directory)
-                // и flush'ит внутренний writer. Без этого файл был бы пустым.
-                wb.finish()
-                // Явный flush буфера в底层 OutputStream ДО close — иначе
-                // последние байты могут потеряться при закрытии SAF-стрима.
-                output.flush()
+                // ── Фаза 1: пишем в tempFile через обычный FileOutputStream ──
+                // FastExcel.finish() закрывает внутренний ZipOutputStream,
+                // который в свою очередь закрывает наш BufferedOutputStream
+                // и底层 FileOutputStream. Поэтому НЕ используем .use { } для
+                // обёртки — finish() сам всё закроет.
+                val fos = java.io.FileOutputStream(tempFile)
+                val buf = java.io.BufferedOutputStream(fos, 8192)
+                try {
+                    val wb = Workbook(buf, "ScooterRent", "1.0")
+                    writeRenters(wb, renters)
+                    writeScooters(wb, scooters)
+                    writeContracts(wb, contracts)
+                    writeTransactions(wb, transactions)
+                    writeVirtualCards(wb, cards)
+                    writeCardTransactions(wb, cardTx)
+                    writeNotifications(wb, notifications)
+                    wb.finish()  // ← flushes all sheets + closes underlying streams
+                } catch (e: Throwable) {
+                    // При ошибке закрываем руками, чтобы не утечка fd.
+                    try { buf.close() } catch (_: Throwable) {}
+                    throw e
+                }
+
+                // Проверка: tempFile должен быть не пустой. Если пустой —
+                // что-то не так с FastExcel (например, все таблицы пустые
+                // и finish() не записал central directory).
+                if (tempFile.length() == 0L) {
+                    return "Xato: eksport bo'sh (ma'lumotlar bazasi bo'sh yoki FastExcel xatosi)"
+                }
+
+                // ── Фаза 2: копируем tempFile → SAF OutputStream ──
+                val resolver = context.contentResolver
+                val rawOutput: OutputStream = resolver.openOutputStream(uri, "w")
+                    ?: return "Xato: fayl yaratilmadi (openOutputStream = null)"
+                java.io.BufferedInputStream(java.io.FileInputStream(tempFile), 8192).use { input ->
+                    java.io.BufferedOutputStream(rawOutput, 8192).use { output ->
+                        val buffer = ByteArray(8192)
+                        while (true) {
+                            val read = input.read(buffer)
+                            if (read <= 0) break
+                            output.write(buffer, 0, read)
+                        }
+                        output.flush()
+                    }
+                }
             } finally {
-                // finally гарантирует close даже при исключении в finish().
-                output.close()
+                // Удаляем temp-файл в любом случае.
+                tempFile.delete()
             }
 
             val total = renters.size + scooters.size + contracts.size +
