@@ -14,6 +14,7 @@ class ContractHistoryRepository(private val dao: ContractHistoryDao) {
 
     suspend fun getById(id: Int): ContractHistoryEntry? = dao.getById(id)
     suspend fun getForRenterOnce(renterId: Int): List<ContractHistoryEntry> = dao.getForRenter(renterId)
+    suspend fun contractsForRenterOnce(renterId: Int): List<ContractHistoryEntry> = dao.getContractsForRenterOnce(renterId)
     suspend fun getEarliestUnpaidContract(renterId: Int): ContractHistoryEntry? =
         dao.getEarliestUnpaidContract(renterId)
     suspend fun getLatestPaidContract(renterId: Int): ContractHistoryEntry? =

@@ -176,7 +176,7 @@ class RenterViewModel(application: Application) : AndroidViewModel(application) 
             // а AUTO_RENEW — по 7 дней. Теперь все контракты — 7-дневные недели.
             viewModelScope.launch(Dispatchers.IO) {
                 try {
-                    historyRepository.insert(ContractHistoryEntry(
+                    val createdContractId = historyRepository.insert(ContractHistoryEntry(
                         renterId = savedRenter.id,
                         timestamp = now,
                         type = ContractHistoryEntry.TYPE_CREATED,
@@ -198,7 +198,57 @@ class RenterViewModel(application: Application) : AndroidViewModel(application) 
                         batteryId2 = scooter?.batteryId2 ?: "",
                         additionalInfo = scooter?.additionalInfo ?: "",
                         isPaid = isPrepaidContract
-                    ))
+                    )).toInt()
+
+                    // ── «Мостик»: для предоплаченного контракта создаём ─────
+                    // положительную Transaction (TYPE_PAYMENT) и зачисляем сумму
+                    // на главную виртуальную карту (TYPE_CONTRACT_INCOME) с
+                    // явным указанием contractId. Раньше при создании арендатора
+                    // с предоплатой баланс карты не обновлялся и в списке
+                    // транзакций ничего не появлялось — деньги «пропадали» из
+                    // фин. системы, хотя контракт числился оплаченным.
+                    //
+                    // Логика:
+                    //   • isPrepaidContract (new renter, без долга/просрочки):
+                    //     создаём Transaction(+weeklyPrice) с contractId,
+                    //     depositContractIncome(+weeklyPrice, contractId).
+                    //   • isOverdueAtCreation или debt > 0:
+                    //     ничего не создаём — платёж ещё не поступал.
+                    if (isPrepaidContract && createdContractId > 0) {
+                        try {
+                            val dateFmt = java.text.SimpleDateFormat("dd.MM.yyyy", java.util.Locale.getDefault())
+                            val wsStr = dateFmt.format(java.util.Date(savedRenter.rentStartDateTimestamp))
+                            val weStr = dateFmt.format(java.util.Date(savedRenter.rentStartDateTimestamp + weekMs))
+                            val contractLabel = "#$createdContractId  $wsStr → $weStr"
+                            transactionRepository.insert(
+                                com.example.data.Transaction(
+                                    contractId = createdContractId,
+                                    renterId = savedRenter.id,
+                                    scooterId = savedRenter.scooterId,
+                                    timestamp = now,
+                                    type = com.example.data.Transaction.TYPE_PAYMENT,
+                                    amount = effectiveWeeklyPrice,
+                                    notes = "Yaratildi (oldindan to'langan)",
+                                    renterName = savedRenter.name,
+                                    renterPhone = savedRenter.phoneNumber,
+                                    scooterName = savedRenter.scooterName ?: "",
+                                    contractLabel = contractLabel
+                                )
+                            )
+                        } catch (e: Exception) {
+                            Log.w(TAG, "Failed to insert prepaid Transaction for contract #$createdContractId: ${e.message}")
+                        }
+
+                        try {
+                            virtualCardRepository.depositContractIncome(
+                                amount = effectiveWeeklyPrice,
+                                note = "To'lov: ${savedRenter.name} (oldindan to'langan) — #$createdContractId",
+                                contractId = createdContractId
+                            )
+                        } catch (e: Exception) {
+                            Log.w(TAG, "depositContractIncome failed for new contract #$createdContractId: ${e.message}")
+                        }
+                    }
 
                     // Если просрочка — создаем N записей AUTO_RENEW.
                     // Каждая AUTO_RENEW начинается с конца ПЕРВОЙ недели (firstWeekEnd),
@@ -766,7 +816,8 @@ class RenterViewModel(application: Application) : AndroidViewModel(application) 
             try {
                 virtualCardRepository.depositContractIncome(
                     amount = effectivePrice,
-                    note = "To'lov: ${renter.name} (qarz yopildi) — $notes"
+                    note = "To'lov: ${renter.name} (qarz yopildi) — $notes",
+                    contractId = unpaid?.id
                 )
             } catch (e: Exception) {
                 Log.w("RenterViewModel", "depositContractIncome failed: ${e.message}")
@@ -914,7 +965,8 @@ class RenterViewModel(application: Application) : AndroidViewModel(application) 
             try {
                 virtualCardRepository.depositContractIncome(
                     amount = effectivePrice,
-                    note = "To'lov: ${renter.name} (oldindan) — $notes"
+                    note = "To'lov: ${renter.name} (oldindan) — $notes",
+                    contractId = newContractId.toInt()
                 )
             } catch (e: Exception) {
                 Log.w("RenterViewModel", "depositContractIncome failed: ${e.message}")
@@ -1039,7 +1091,8 @@ class RenterViewModel(application: Application) : AndroidViewModel(application) 
             try {
                 virtualCardRepository.depositContractIncome(
                     amount = effectivePrice,
-                    note = "To'lov: ${renter.name} (tugatish vaqtida)"
+                    note = "To'lov: ${renter.name} (tugatish vaqtida)",
+                    contractId = unpaid?.id
                 )
             } catch (e: Exception) {
                 Log.w("RenterViewModel", "depositContractIncome failed: ${e.message}")

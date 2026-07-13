@@ -21,6 +21,9 @@ interface CardTransactionDao {
     @Query("SELECT * FROM card_transactions WHERE type = :type ORDER BY timestamp DESC")
     fun getTransactionsByType(type: String): Flow<List<CardTransaction>>
 
+    @Query("SELECT * FROM card_transactions WHERE contractId = :contractId ORDER BY timestamp DESC")
+    suspend fun getForContractOnce(contractId: Int): List<CardTransaction>
+
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertTransaction(tx: CardTransaction): Long
 
@@ -29,6 +32,9 @@ interface CardTransactionDao {
 
     @Query("DELETE FROM card_transactions WHERE id = :id")
     suspend fun deleteTransaction(id: Int)
+
+    @Query("DELETE FROM card_transactions WHERE contractId = :contractId")
+    suspend fun deleteForContract(contractId: Int)
 
     @Query("DELETE FROM card_transactions")
     suspend fun deleteAll()

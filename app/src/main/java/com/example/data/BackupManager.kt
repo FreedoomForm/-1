@@ -323,7 +323,8 @@ object BackupManager {
     private fun writeCardTransactions(wb: Workbook, items: List<CardTransaction>) {
         val ws = wb.newWorksheet(SHEET_CARD_TX)
         val headers = listOf(
-            "id", "timestamp", "fromCardId", "toCardId", "amount", "note", "type"
+            "id", "timestamp", "fromCardId", "toCardId", "amount", "note", "type",
+            "contractId"
         )
         headers.forEachIndexed { i, h -> ws.value(0, i, h) }
         items.forEachIndexed { rowIdx, t ->
@@ -335,6 +336,7 @@ object BackupManager {
             ws.value(r, 4, t.amount)
             t.note?.let { ws.value(r, 5, it) }
             ws.value(r, 6, t.type)
+            t.contractId?.let { ws.value(r, 7, it) }
         }
     }
 
@@ -610,7 +612,10 @@ object BackupManager {
                     toCardId = row.getCell(3)?.asNumber()?.toInt() ?: 0,
                     amount = row.getCell(4)?.asNumber()?.toDouble() ?: 0.0,
                     note = row.getCell(5)?.asString(),
-                    type = row.getCell(6)?.asString() ?: CardTransaction.TYPE_CARD_TRANSFER
+                    type = row.getCell(6)?.asString() ?: CardTransaction.TYPE_CARD_TRANSFER,
+                    // contractId — опциональное поле (добавлено в миграции 14→15).
+                    // Старые .xlsx без этой колонки дадут null — это корректно.
+                    contractId = row.getCell(7)?.asNumber()?.toInt()
                 )
             } catch (e: Exception) {
                 Log.w(TAG, "Skip card tx row: ${e.message}")

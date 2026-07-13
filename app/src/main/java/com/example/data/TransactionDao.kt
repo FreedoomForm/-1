@@ -27,6 +27,9 @@ interface TransactionDao {
     @Query("SELECT * FROM transactions WHERE contractId = :contractId ORDER BY timestamp DESC")
     fun getForContract(contractId: Int): Flow<List<Transaction>>
 
+    @Query("SELECT * FROM transactions WHERE contractId = :contractId ORDER BY timestamp DESC")
+    suspend fun getForContractOnce(contractId: Int): List<Transaction>
+
     @Insert(onConflict = OnConflictStrategy.IGNORE)
     suspend fun insert(transaction: Transaction): Long
 
@@ -38,6 +41,9 @@ interface TransactionDao {
 
     @Query("DELETE FROM transactions WHERE id IN (:ids)")
     suspend fun deleteByIds(ids: List<Int>)
+
+    @Query("DELETE FROM transactions WHERE contractId = :contractId")
+    suspend fun deleteForContract(contractId: Int)
 
     @Query("DELETE FROM transactions")
     suspend fun clear()

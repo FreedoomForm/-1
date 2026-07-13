@@ -19,6 +19,14 @@ import androidx.room.PrimaryKey
  *   на главную карту (fromCardId = 0 = «внешний источник», toCardId = MAIN_CARD_ID).
  *   В этом случае fromCardId может быть 0 (внешний доход) — отображается как
  *   «Контракт» в UI вместо имени карты.
+ *
+ * contractId — «мостик» к ContractHistoryEntry. Заполняется только для
+ *   CONTRACT_INCOME (когда деньги от оплаты контракта падают на главную
+ *   карту). null для обычных CARD_TRANSFER и EXPENSE. Это позволяет:
+ *     1. При удалении контракта каскадно удалить/реверснуть связанные
+ *        CardTransaction (см. ContractHistoryViewModel.deleteContractWithCascade).
+ *     2. Показывать связь «контракт → деньги на карте» в UI.
+ *   Поле добавлено в migration 14 → 15; у старых записей contractId = null.
  */
 @Entity(tableName = "card_transactions")
 data class CardTransaction(
@@ -30,7 +38,9 @@ data class CardTransaction(
     val toCardId: Int,
     val amount: Double,
     val note: String? = null,
-    val type: String = TYPE_CARD_TRANSFER
+    val type: String = TYPE_CARD_TRANSFER,
+    /** ID контракта, для TYPE_CONTRACT_INCOME. null в остальных случаях. */
+    val contractId: Int? = null
 ) {
     companion object {
         const val TYPE_CARD_TRANSFER = "CARD_TRANSFER"

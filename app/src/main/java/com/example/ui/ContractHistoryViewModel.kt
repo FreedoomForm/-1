@@ -201,11 +201,196 @@ class ContractHistoryViewModel(application: Application) : AndroidViewModel(appl
     }
 
     fun deleteContract(id: Int) {
-        viewModelScope.launch(Dispatchers.IO) { repo.deleteById(id) }
+        viewModelScope.launch(Dispatchers.IO) {
+            deleteContractWithCascade(id)
+        }
     }
 
     fun deleteContracts(ids: List<Int>) {
-        viewModelScope.launch(Dispatchers.IO) { repo.deleteByIds(ids) }
+        viewModelScope.launch(Dispatchers.IO) {
+            ids.forEach { deleteContractWithCascade(it) }
+        }
+    }
+
+    /**
+     * Каскадное удаление контракта — «мостик» между всеми связанными сущностями.
+     *
+     * Когда пользователь удаляет контракт C, выполняются следующие шаги
+     * (порядок важен — сначала собираем данные, потом удаляем):
+     *
+     * 1. Загружаем сам контракт C из БД (нужны renterId, amount, isPaid, type).
+     * 2. Загружаем все Transaction-записи с contractId = C.id. Запоминаем их
+     *    суммы (для реверса баланса арендатора).
+     * 3. Загружаем все CardTransaction-записи с contractId = C.id
+     *    (это TYPE_CONTRACT_INCOME — деньги, упавшие на главную карту).
+     *    Запоминаем их суммы (для реверса баланса главной карты).
+     * 4. Удаляем все Transaction с contractId = C.id.
+     * 5. Для каждой CardTransaction с contractId = C.id:
+     *    - реверсим баланс главной карты на -amount (деньги возвращаются
+     *      «во внешний источник»);
+     *    - удаляем саму CardTransaction.
+     * 6. Корректируем баланс арендатора:
+     *    - если C.isPaid (оплачен) → balance -= C.amount (платёж был зачислен,
+     *      теперь откатываем);
+     *    - если C.isPaid = false (долг) → balance += C.amount (долг списывается,
+     *      т.к. контракт больше не существует);
+     *    - то же самое для TYPE_PAYMENT транзакций в истории контрактов: они
+     *      учитываются в шаге 2 через Transaction-таблицу.
+     *    У renter.debtAmount пересчитывается как max(0, -balance).
+     * 7. Если удалённый контракт был «последним оплаченным» — обновляем
+     *    renter.lastPaymentTimestamp на дату предыдущего оплаченного контракта
+     *    (или null, если такового нет).
+     * 8. Если у арендатора больше не осталось ни одного контракта (CREATED /
+     *    AUTO_RENEW), помечаем его isReturned = true и освобождаем скутер
+     *    (scooterId = null, scooterName = null).
+     * 9. Удаляем сам контракт C.
+     * 10. Обновляем нативные виджеты Android.
+     *
+     * ВАЖНО: остальные контракты этого арендатора НЕ удаляются — каждый
+     * контракт независим. Если нужно удалить всю историю целиком, см.
+     * [deleteAllForRenter].
+     *
+     * Все операции выполняются в одной coroutine на Dispatchers.IO. Room не
+     * гарантирует транзакционность без явного @Transaction, но на практике
+     * последовательность safe: даже если упадёт посередине, останутся
+     * «осиротевшие» записи, которые не влияют на UI (фильтры по contractId
+     * просто не найдут ничего).
+     */
+    private suspend fun deleteContractWithCascade(contractId: Int) {
+        try {
+            // ── 1. Загружаем контракт ──────────────────────────────────────
+            val contract = repo.getById(contractId)
+            if (contract == null) {
+                Log.w(TAG, "deleteContractWithCascade: contract #$contractId not found, nothing to do")
+                return
+            }
+
+            // ── 2. Загружаем связанные Transaction-записи ─────────────────
+            // Это записи TYPE_PAYMENT, созданные при оплате этого контракта
+            // (applyWeeklyPayment / updateContract status-change).
+            val relatedTx = transactionRepo.forContractOnce(contractId)
+
+            // ── 3. Загружаем связанные CardTransaction-записи ─────────────
+            // Это TYPE_CONTRACT_INCOME — деньги, упавшие на Glavnaya карту.
+            val relatedCardTx = virtualCardRepo.getCardTxForContract(contractId)
+
+            // ── 4. Удаляем Transaction-записи ─────────────────────────────
+            if (relatedTx.isNotEmpty()) {
+                transactionRepo.deleteForContract(contractId)
+                Log.d(TAG, "Deleted ${relatedTx.size} Transaction rows for contract #$contractId")
+            }
+
+            // ── 5. Реверсим и удаляем CardTransaction-записи ──────────────
+            // Каждая CardTransaction с type=CONTRACT_INCOME увеличивала баланс
+            // главной карты на +amount при оплате. Удаление контракта должно
+            // откатить это: subtract amount с главной карты.
+            // (CardTransaction.amount всегда > 0; реверс = -amount.)
+            for (cardTx in relatedCardTx) {
+                try {
+                    virtualCardRepo.adjustCardBalance(
+                        cardId = cardTx.toCardId,
+                        delta = -cardTx.amount
+                    )
+                } catch (e: Exception) {
+                    Log.w(TAG, "Failed to reverse cardTx #${cardTx.id} balance: ${e.message}")
+                }
+            }
+            if (relatedCardTx.isNotEmpty()) {
+                virtualCardRepo.deleteCardTxForContract(contractId)
+                Log.d(TAG, "Deleted ${relatedCardTx.size} CardTransaction rows for contract #$contractId")
+            }
+
+            // ── 6. Корректируем баланс арендатора ─────────────────────────
+            val renter = renterRepo.getById(contract.renterId)
+            if (renter != null) {
+                val isContractType = contract.type == ContractHistoryEntry.TYPE_CREATED ||
+                                     contract.type == ContractHistoryEntry.TYPE_AUTO_RENEW
+                var balanceDelta = 0.0
+
+                if (isContractType) {
+                    // Контракт: если оплачен → откатываем платёж (balance -= amount).
+                    // Если долг → списываем долг (balance += amount).
+                    balanceDelta = if (contract.isPaid) -contract.amount else +contract.amount
+                }
+                // Для TYPE_PAYMENT / TYPE_TERMINATED / TYPE_RETURNED баланс арендатора
+                // не меняется — это аудиторские записи; фактическое изменение баланса
+                // происходило в момент создания TYPE_PAYMENT через applyWeeklyPayment,
+                // и откатывается через удаление связанных Transaction (шаг 4).
+
+                // Дополнительно: учитываем сумму всех связанных Transaction,
+                // которые мы только что удалили. Каждая TYPE_PAYMENT добавляла
+                // +amount к балансу (через applyWeeklyPayment). Их удаление должно
+                // откатить баланс на -amount каждой. Но мы УЖЕ учли contract.amount
+                // выше для isContractType. Чтобы не двойной счёт, делаем так:
+                // - Если контракт isContractType (CREATED/AUTO_RENEW) — откат только
+                //   по контракту (balanceDelta уже учёл isPaid).
+                // - Для TYPE_PAYMENT контракта — откатываем по сумме relatedTx.
+                if (!isContractType) {
+                    balanceDelta = -relatedTx.sumOf { it.amount }
+                }
+
+                if (balanceDelta != 0.0) {
+                    val newBalance = renter.balance + balanceDelta
+                    val updated = renter.copy(
+                        balance = newBalance,
+                        debtAmount = maxOf(0.0, -newBalance)
+                    )
+                    renterRepo.update(updated)
+                    Log.d(TAG, "Renter #${renter.id} balance adjusted by $balanceDelta → $newBalance")
+                }
+
+                // ── 7. Обновляем lastPaymentTimestamp ────────────────────
+                // Если удалённый контракт был оплачен, ищем предыдущий оплаченный
+                // контракт и берём его timestamp. Если таких не осталось — null.
+                if (contract.isPaid || contract.type == ContractHistoryEntry.TYPE_PAYMENT) {
+                    try {
+                        val latestPaid = repo.getLatestPaidContract(renter.id)
+                        val newLastPayment = latestPaid?.timestamp ?: latestPaid?.weekEnd
+                        renterRepo.update(
+                            (renterRepo.getById(renter.id) ?: renter).copy(
+                                lastPaymentTimestamp = newLastPayment
+                            )
+                        )
+                    } catch (e: Exception) {
+                        Log.w(TAG, "Failed to update lastPaymentTimestamp: ${e.message}")
+                    }
+                }
+
+                // ── 8. Если контрактов не осталось — освобождаем арендатора ──
+                val remainingContracts = repo.contractsForRenterOnce(renter.id)
+                if (remainingContracts.isEmpty()) {
+                    val current = renterRepo.getById(renter.id) ?: renter
+                    renterRepo.update(
+                        current.copy(
+                            isReturned = true,
+                            scooterId = null,
+                            scooterName = null
+                        )
+                    )
+                    Log.d(TAG, "Renter #${renter.id} marked returned (no contracts left)")
+                }
+            }
+
+            // ── 9. Удаляем сам контракт ───────────────────────────────────
+            repo.deleteById(contractId)
+            Log.d(TAG, "Contract #$contractId deleted with cascade " +
+                "(tx=${relatedTx.size}, cardTx=${relatedCardTx.size})")
+
+            // ── 10. Обновляем виджеты ─────────────────────────────────────
+            try { com.example.widget.WidgetUpdater.updateAll(getApplication()) } catch (_: Exception) {}
+        } catch (e: Exception) {
+            Log.e(TAG, "deleteContractWithCascade failed for #$contractId", e)
+        }
+    }
+
+    /**
+     * Удаляет ВСЕ контракты арендатора [renterId] с полным каскадом.
+     * Используется при удалении арендатора целиком (если такое когда-то
+     * понадобится). Сейчас не вызывается из UI — оставлено как утилита.
+     */
+    suspend fun deleteAllForRenter(renterId: Int) {
+        val contracts = repo.getForRenterOnce(renterId)
+        contracts.forEach { deleteContractWithCascade(it.id) }
     }
 
     /**
@@ -358,7 +543,8 @@ class ContractHistoryViewModel(application: Application) : AndroidViewModel(appl
                     }
                     virtualCardRepo.depositContractIncome(
                         amount = signedAmount,
-                        note = noteText
+                        note = noteText,
+                        contractId = entry.id
                     )
                 } catch (e: Exception) {
                     Log.w("ContractHistoryVM", "depositContractIncome failed: ${e.message}")

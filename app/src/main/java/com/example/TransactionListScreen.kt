@@ -97,6 +97,14 @@ fun TransactionListScreen(
     val allRenters by renterViewModel.rentersList.collectAsStateWithLifecycle()
     val allScooters by scooterViewModel.scootersList.collectAsStateWithLifecycle()
     val allHistory by contractHistoryViewModel.history.collectAsStateWithLifecycle()
+    // ── Карточные транзакции (переводы между виртуальными картами) ────────
+    // Раньше были отдельной секцией ВНЕ LazyColumn, без поиска/фильтра и с
+    // лимитом 20 строк. Теперь включаем их в общую ленту: пользователь видит
+    // все движения денег (и контрактные платежи, и переводы между картами)
+    // в одном списке, с единым поиском, фильтром по дате и колонкам.
+    val cardTxs by finansiViewModel.transactions.collectAsStateWithLifecycle()
+    val cards by finansiViewModel.cards.collectAsStateWithLifecycle()
+    val cardById = remember(cards) { cards.associateBy { it.id } }
     val context = LocalContext.current
 
     var searchQuery by remember { mutableStateOf("") }
@@ -166,6 +174,10 @@ fun TransactionListScreen(
     }
 
     // ── Фильтрация ───────────────────────────────────────────────────────
+    // Объединённая лента: Transaction (контрактные платежи) + CardTransaction
+    // (переводы между виртуальными картами). Оба типа фильтруются одними и
+    // теми же критериями (searchQuery, dateRange, column filters) и потом
+    // сливаются в один список, отсортированный по timestamp DESC.
     val filteredTxs = remember(transactions, searchQuery, filterValues, dateRangePickerState.selectedStartDateMillis, dateRangePickerState.selectedEndDateMillis) {
         transactions.filter { t ->
             val textMatch = searchQuery.isBlank() ||
@@ -194,6 +206,50 @@ fun TransactionListScreen(
                     "col_contract" -> t.contractLabel.contains(filterText, ignoreCase = true)
                     "col_type"     -> TransactionViewModel.typeLabel(t.type).contains(filterText, ignoreCase = true)
                     "col_amount"   -> t.amount.toLong().toString().contains(filterText, ignoreCase = true)
+                    else -> true
+                }
+            }
+            textMatch && dateMatch && filterMatch
+        }
+    }
+
+    // ── Фильтрация CardTransaction (переводы между картами) ──────────────
+    // Применяем ТЕ ЖЕ критерии: searchQuery ищет по именам карт и note,
+    // dateRange — по timestamp, column filters — по date/amount/type.
+    val filteredCardTxs = remember(cardTxs, cardById, searchQuery, filterValues, dateRangePickerState.selectedStartDateMillis, dateRangePickerState.selectedEndDateMillis) {
+        cardTxs.filter { ctx ->
+            val fromName = cardById[ctx.fromCardId]?.name ?: "Kontrakt"
+            val toName = cardById[ctx.toCardId]?.name ?: "—"
+            val typeLabel = when (ctx.type) {
+                com.example.data.CardTransaction.TYPE_CONTRACT_INCOME -> "Kontrakt to'lovi"
+                com.example.data.CardTransaction.TYPE_EXPENSE -> "Xarajat"
+                else -> "Karta o'tkazmasi"
+            }
+            val textMatch = searchQuery.isBlank() ||
+                fromName.contains(searchQuery, ignoreCase = true) ||
+                toName.contains(searchQuery, ignoreCase = true) ||
+                typeLabel.contains(searchQuery, ignoreCase = true) ||
+                (ctx.note?.contains(searchQuery, ignoreCase = true) == true) ||
+                ctx.id.toString().contains(searchQuery)
+
+            val startMillis = dateRangePickerState.selectedStartDateMillis
+            val endMillis = dateRangePickerState.selectedEndDateMillis
+            val dateMatch = if (startMillis != null) {
+                if (endMillis != null) ctx.timestamp in startMillis..endMillis
+                else ctx.timestamp >= startMillis
+            } else true
+
+            val filterMatch = filterValues.all { (colId, filterText) ->
+                if (filterText.isBlank()) true
+                else when (colId) {
+                    "col_id"       -> ("K${ctx.id}").contains(filterText, ignoreCase = true)
+                    "col_date"     -> dateTimeFmt.format(Date(ctx.timestamp)).contains(filterText, ignoreCase = true)
+                    "col_renter"   -> fromName.contains(filterText, ignoreCase = true)
+                    "col_phone"    -> false  // у CardTransaction нет телефона
+                    "col_scooter"  -> false  // у CardTransaction нет скутера
+                    "col_contract" -> (ctx.contractId?.toString() ?: "").contains(filterText, ignoreCase = true)
+                    "col_type"     -> typeLabel.contains(filterText, ignoreCase = true)
+                    "col_amount"   -> ctx.amount.toLong().toString().contains(filterText, ignoreCase = true)
                     else -> true
                 }
             }
@@ -271,8 +327,16 @@ fun TransactionListScreen(
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Spacer(Modifier.weight(1f))
+                val totalCount = filteredTxs.size + filteredCardTxs.size
+                val parts = buildString {
+                    if (filteredTxs.isNotEmpty()) append("Kontrakt: ${filteredTxs.size}")
+                    if (filteredCardTxs.isNotEmpty()) {
+                        if (isNotEmpty()) append(" • ")
+                        append("Karta: ${filteredCardTxs.size}")
+                    }
+                }
                 Text(
-                    "Jami: ${filteredTxs.size}",
+                    "Jami: $totalCount" + if (parts.isNotEmpty()) " ($parts)" else "",
                     style = MaterialTheme.typography.bodySmall,
                     color = ClaudeTextSecondary
                 )
@@ -298,8 +362,8 @@ fun TransactionListScreen(
             }
             HorizontalDivider(color = ClaudeDivider)
 
-            // ── Список транзакций ──────────────────────────────────────
-            if (filteredTxs.isEmpty()) {
+            // ── Список транзакций (объединённая лента Transaction + CardTransaction) ──
+            if (filteredTxs.isEmpty() && filteredCardTxs.isEmpty()) {
                 Box(
                     modifier = Modifier
                         .fillMaxSize()
@@ -313,157 +377,296 @@ fun TransactionListScreen(
                     )
                 }
             } else {
-                LazyColumn(modifier = Modifier.fillMaxSize()) {
-                    items(filteredTxs, key = { it.id }) { tx ->
-                        val isSelected = tx.id in selectedTxs
-                        val isPositive = TransactionViewModel.typeIsPositive(tx.type)
-                        // Если сумма отрицательная (например, отмена оплаты контракта),
-                        // это всегда расход/возврат, независимо от типа.
-                        val effectivePositive = isPositive && tx.amount >= 0
-                        val statusColor = when (tx.type) {
-                            Transaction.TYPE_CUSTOM -> ClaudeTextSecondary
-                            else -> if (effectivePositive) StatusOk else StatusOverdue
-                        }
-                        val typeLabel = TransactionViewModel.typeLabel(tx.type)
+                // ── Сортируем обе ленты вместе по timestamp DESC ──────────
+                // Используем sealed class для统一 типа элемента списка.
+                val mergedItems: List<UnifiedTxItem> = buildList {
+                    filteredTxs.forEach { add(UnifiedTxItem.ContractTx(it)) }
+                    filteredCardTxs.forEach { add(UnifiedTxItem.CardTx(it)) }
+                }.sortedByDescending { it.timestamp }
 
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(horizontal = 8.dp, vertical = 3.dp)
-                        ) {
-                            Row(
-                                modifier = Modifier
-                                    .horizontalScroll(hScrollState)
-                                    .border(
-                                        width = if (isSelected) 2.dp else 1.5.dp,
-                                        color = statusColor,
-                                        shape = RoundedCornerShape(8.dp)
-                                    )
-                                    .background(if (isSelected) ClaudeAccentBg else ClaudeCard)
-                                    .combinedClickable(
-                                        onClick = {
-                                            // Один клик = выбрать/снять выделение.
-                                            // Диалог редактирования открывается универсальной
-                                            // кнопкой ✎ в верхней панели (TopAppBar).
-                                            onSelectedTxsChange(
-                                                if (isSelected) selectedTxs - tx.id
-                                                else selectedTxs + tx.id
-                                            )
-                                        },
-                                        onLongClick = {
-                                            // Долгое нажатие — резервный способ выбора.
-                                            onSelectedTxsChange(
-                                                if (isSelected) selectedTxs - tx.id
-                                                else selectedTxs + tx.id
-                                            )
-                                        }
-                                    )
-                                    .padding(horizontal = 8.dp, vertical = 10.dp),
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                if (showId) {
-                                    Text(
-                                        "#${tx.id}",
-                                        modifier = Modifier.width(wId).padding(horizontal = 4.dp),
-                                        style = MaterialTheme.typography.labelSmall,
-                                        color = ClaudeTextSecondary,
-                                        maxLines = 1
-                                    )
+                LazyColumn(modifier = Modifier.fillMaxSize()) {
+                    items(mergedItems, key = { it.uniqueKey }) { item ->
+                        when (item) {
+                            is UnifiedTxItem.ContractTx -> {
+                                val tx = item.tx
+                                val isSelected = tx.id in selectedTxs
+                                val isPositive = TransactionViewModel.typeIsPositive(tx.type)
+                                // Если сумма отрицательная (например, отмена оплаты контракта),
+                                // это всегда расход/возврат, независимо от типа.
+                                val effectivePositive = isPositive && tx.amount >= 0
+                                val statusColor = when (tx.type) {
+                                    Transaction.TYPE_CUSTOM -> ClaudeTextSecondary
+                                    else -> if (effectivePositive) StatusOk else StatusOverdue
                                 }
-                                if (showDate) {
-                                    Text(
-                                        dateTimeFmt.format(Date(tx.timestamp)),
-                                        modifier = Modifier.width(wDate).padding(horizontal = 4.dp),
-                                        style = MaterialTheme.typography.labelSmall,
-                                        color = ClaudeText,
-                                        fontWeight = FontWeight.SemiBold,
-                                        maxLines = 1
-                                    )
-                                }
-                                if (showRenter) {
-                                    Text(
-                                        tx.renterName.ifBlank { "—" },
-                                        modifier = Modifier.width(wRenter).padding(horizontal = 4.dp),
-                                        style = MaterialTheme.typography.bodyMedium,
-                                        color = ClaudeText,
-                                        fontWeight = FontWeight.SemiBold,
-                                        maxLines = 1
-                                    )
-                                }
-                                if (showPhone) {
-                                    Text(
-                                        tx.renterPhone.ifBlank { "—" },
-                                        modifier = Modifier.width(wPhone).padding(horizontal = 4.dp),
-                                        style = MaterialTheme.typography.bodySmall,
-                                        color = ClaudeTextSecondary,
-                                        maxLines = 1
-                                    )
-                                }
-                                if (showScooter) {
-                                    Text(
-                                        tx.scooterName.ifBlank { "—" },
-                                        modifier = Modifier.width(wScooter).padding(horizontal = 4.dp),
-                                        style = MaterialTheme.typography.bodySmall,
-                                        color = ClaudeText,
-                                        maxLines = 1
-                                    )
-                                }
-                                if (showContract) {
-                                    Text(
-                                        tx.contractLabel.ifBlank { "—" },
-                                        modifier = Modifier.width(wContract).padding(horizontal = 4.dp),
-                                        style = MaterialTheme.typography.labelSmall,
-                                        color = ClaudeTextSecondary,
-                                        maxLines = 1
-                                    )
-                                }
-                                if (showType) {
+                                val typeLabel = TransactionViewModel.typeLabel(tx.type)
+
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(horizontal = 8.dp, vertical = 3.dp)
+                                ) {
                                     Row(
-                                        modifier = Modifier.width(wType).padding(horizontal = 4.dp),
+                                        modifier = Modifier
+                                            .horizontalScroll(hScrollState)
+                                            .border(
+                                                width = if (isSelected) 2.dp else 1.5.dp,
+                                                color = statusColor,
+                                                shape = RoundedCornerShape(8.dp)
+                                            )
+                                            .background(if (isSelected) ClaudeAccentBg else ClaudeCard)
+                                            .combinedClickable(
+                                                onClick = {
+                                                    onSelectedTxsChange(
+                                                        if (isSelected) selectedTxs - tx.id
+                                                        else selectedTxs + tx.id
+                                                    )
+                                                },
+                                                onLongClick = {
+                                                    onSelectedTxsChange(
+                                                        if (isSelected) selectedTxs - tx.id
+                                                        else selectedTxs + tx.id
+                                                    )
+                                                }
+                                            )
+                                            .padding(horizontal = 8.dp, vertical = 10.dp),
                                         verticalAlignment = Alignment.CenterVertically
                                     ) {
-                                        Box(
-                                            modifier = Modifier
-                                                .size(8.dp)
-                                                .background(statusColor, CircleShape)
-                                        )
-                                        Spacer(Modifier.width(4.dp))
-                                        Text(
-                                            typeLabel,
-                                            style = MaterialTheme.typography.labelSmall,
-                                            color = statusColor,
-                                            fontWeight = FontWeight.SemiBold,
-                                            maxLines = 1
-                                        )
+                                        if (showId) {
+                                            Text(
+                                                "#${tx.id}",
+                                                modifier = Modifier.width(wId).padding(horizontal = 4.dp),
+                                                style = MaterialTheme.typography.labelSmall,
+                                                color = ClaudeTextSecondary,
+                                                maxLines = 1
+                                            )
+                                        }
+                                        if (showDate) {
+                                            Text(
+                                                dateTimeFmt.format(Date(tx.timestamp)),
+                                                modifier = Modifier.width(wDate).padding(horizontal = 4.dp),
+                                                style = MaterialTheme.typography.labelSmall,
+                                                color = ClaudeText,
+                                                fontWeight = FontWeight.SemiBold,
+                                                maxLines = 1
+                                            )
+                                        }
+                                        if (showRenter) {
+                                            Text(
+                                                tx.renterName.ifBlank { "—" },
+                                                modifier = Modifier.width(wRenter).padding(horizontal = 4.dp),
+                                                style = MaterialTheme.typography.bodyMedium,
+                                                color = ClaudeText,
+                                                fontWeight = FontWeight.SemiBold,
+                                                maxLines = 1
+                                            )
+                                        }
+                                        if (showPhone) {
+                                            Text(
+                                                tx.renterPhone.ifBlank { "—" },
+                                                modifier = Modifier.width(wPhone).padding(horizontal = 4.dp),
+                                                style = MaterialTheme.typography.bodySmall,
+                                                color = ClaudeTextSecondary,
+                                                maxLines = 1
+                                            )
+                                        }
+                                        if (showScooter) {
+                                            Text(
+                                                tx.scooterName.ifBlank { "—" },
+                                                modifier = Modifier.width(wScooter).padding(horizontal = 4.dp),
+                                                style = MaterialTheme.typography.bodySmall,
+                                                color = ClaudeText,
+                                                maxLines = 1
+                                            )
+                                        }
+                                        if (showContract) {
+                                            Text(
+                                                tx.contractLabel.ifBlank { "—" },
+                                                modifier = Modifier.width(wContract).padding(horizontal = 4.dp),
+                                                style = MaterialTheme.typography.labelSmall,
+                                                color = ClaudeTextSecondary,
+                                                maxLines = 1
+                                            )
+                                        }
+                                        if (showType) {
+                                            Row(
+                                                modifier = Modifier.width(wType).padding(horizontal = 4.dp),
+                                                verticalAlignment = Alignment.CenterVertically
+                                            ) {
+                                                Box(
+                                                    modifier = Modifier
+                                                        .size(8.dp)
+                                                        .background(statusColor, CircleShape)
+                                                )
+                                                Spacer(Modifier.width(4.dp))
+                                                Text(
+                                                    typeLabel,
+                                                    style = MaterialTheme.typography.labelSmall,
+                                                    color = statusColor,
+                                                    fontWeight = FontWeight.SemiBold,
+                                                    maxLines = 1
+                                                )
+                                            }
+                                        }
+                                        if (showAmount) {
+                                            val sign = if (effectivePositive) "+" else "−"
+                                            val displayAmount = kotlin.math.abs(tx.amount.toLong())
+                                            Text(
+                                                "$sign $displayAmount",
+                                                modifier = Modifier.width(wAmount).padding(horizontal = 4.dp),
+                                                style = MaterialTheme.typography.bodyMedium,
+                                                color = statusColor,
+                                                fontWeight = FontWeight.Bold,
+                                                textAlign = TextAlign.End,
+                                                maxLines = 1
+                                            )
+                                        }
                                     }
                                 }
-                                if (showAmount) {
-                                    val sign = if (effectivePositive) "+" else "−"
-                                    // Для отрицательных сумм amount уже содержит минус,
-                                    // используем abs, чтобы не получить "− -420000".
-                                    val displayAmount = kotlin.math.abs(tx.amount.toLong())
-                                    Text(
-                                        "$sign $displayAmount",
-                                        modifier = Modifier.width(wAmount).padding(horizontal = 4.dp),
-                                        style = MaterialTheme.typography.bodyMedium,
-                                        color = statusColor,
-                                        fontWeight = FontWeight.Bold,
-                                        textAlign = TextAlign.End,
-                                        maxLines = 1
-                                    )
+                            }
+                            is UnifiedTxItem.CardTx -> {
+                                // ── Строка CardTransaction (перевод между картами) ──
+                                // Та же структура столбцов, но поля — из CardTransaction.
+                                // Имя «арендатора» заменяем на «Карта-источник → Карта-назначения».
+                                val ctx = item.tx
+                                val from = cardById[ctx.fromCardId]
+                                val to = cardById[ctx.toCardId]
+                                val isIncome = ctx.type == com.example.data.CardTransaction.TYPE_CONTRACT_INCOME
+                                val fromLabel = when {
+                                    isIncome || ctx.fromCardId == 0 -> "Kontrakt"
+                                    ctx.fromCardId == com.example.data.VirtualCard.EXTERNAL_IN_CARD_ID -> "Tashqidan"
+                                    ctx.fromCardId == com.example.data.VirtualCard.EXTERNAL_OUT_CARD_ID -> "Tashqiga"
+                                    else -> from?.name ?: "—"
+                                }
+                                val toLabel = when (ctx.toCardId) {
+                                    com.example.data.VirtualCard.EXTERNAL_IN_CARD_ID -> "Tashqidan"
+                                    com.example.data.VirtualCard.EXTERNAL_OUT_CARD_ID -> "Tashqiga"
+                                    else -> to?.name ?: "—"
+                                }
+                                val typeLabel = when (ctx.type) {
+                                    com.example.data.CardTransaction.TYPE_CONTRACT_INCOME -> "Kontrakt to'lovi"
+                                    com.example.data.CardTransaction.TYPE_EXPENSE -> "Xarajat"
+                                    else -> "Karta o'tkazmasi"
+                                }
+                                // Для CardTransaction «контракт» — это ID, если есть.
+                                val contractLabel = ctx.contractId?.let { "#$it" } ?: ""
+                                val statusColor = when (ctx.type) {
+                                    com.example.data.CardTransaction.TYPE_CONTRACT_INCOME -> StatusOk
+                                    com.example.data.CardTransaction.TYPE_EXPENSE -> StatusOverdue
+                                    else -> Color(0xFF1565C0)
+                                }
+
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(horizontal = 8.dp, vertical = 3.dp)
+                                ) {
+                                    Row(
+                                        modifier = Modifier
+                                            .horizontalScroll(hScrollState)
+                                            .border(
+                                                width = 1.5.dp,
+                                                color = statusColor,
+                                                shape = RoundedCornerShape(8.dp)
+                                            )
+                                            .background(ClaudeCard)
+                                            .padding(horizontal = 8.dp, vertical = 10.dp),
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        if (showId) {
+                                            Text(
+                                                "K${ctx.id}",
+                                                modifier = Modifier.width(wId).padding(horizontal = 4.dp),
+                                                style = MaterialTheme.typography.labelSmall,
+                                                color = ClaudeTextSecondary,
+                                                maxLines = 1
+                                            )
+                                        }
+                                        if (showDate) {
+                                            Text(
+                                                dateTimeFmt.format(Date(ctx.timestamp)),
+                                                modifier = Modifier.width(wDate).padding(horizontal = 4.dp),
+                                                style = MaterialTheme.typography.labelSmall,
+                                                color = ClaudeText,
+                                                fontWeight = FontWeight.SemiBold,
+                                                maxLines = 1
+                                            )
+                                        }
+                                        if (showRenter) {
+                                            // Для CardTransaction показываем «откуда → куда»
+                                            Text(
+                                                "$fromLabel → $toLabel",
+                                                modifier = Modifier.width(wRenter).padding(horizontal = 4.dp),
+                                                style = MaterialTheme.typography.bodyMedium,
+                                                color = ClaudeText,
+                                                fontWeight = FontWeight.SemiBold,
+                                                maxLines = 1
+                                            )
+                                        }
+                                        if (showPhone) {
+                                            Text(
+                                                "—",
+                                                modifier = Modifier.width(wPhone).padding(horizontal = 4.dp),
+                                                style = MaterialTheme.typography.bodySmall,
+                                                color = ClaudeTextSecondary,
+                                                maxLines = 1
+                                            )
+                                        }
+                                        if (showScooter) {
+                                            Text(
+                                                "—",
+                                                modifier = Modifier.width(wScooter).padding(horizontal = 4.dp),
+                                                style = MaterialTheme.typography.bodySmall,
+                                                color = ClaudeTextSecondary,
+                                                maxLines = 1
+                                            )
+                                        }
+                                        if (showContract) {
+                                            Text(
+                                                contractLabel.ifBlank { "—" },
+                                                modifier = Modifier.width(wContract).padding(horizontal = 4.dp),
+                                                style = MaterialTheme.typography.labelSmall,
+                                                color = ClaudeTextSecondary,
+                                                maxLines = 1
+                                            )
+                                        }
+                                        if (showType) {
+                                            Row(
+                                                modifier = Modifier.width(wType).padding(horizontal = 4.dp),
+                                                verticalAlignment = Alignment.CenterVertically
+                                            ) {
+                                                Box(
+                                                    modifier = Modifier
+                                                        .size(8.dp)
+                                                        .background(statusColor, CircleShape)
+                                                )
+                                                Spacer(Modifier.width(4.dp))
+                                                Text(
+                                                    typeLabel,
+                                                    style = MaterialTheme.typography.labelSmall,
+                                                    color = statusColor,
+                                                    fontWeight = FontWeight.SemiBold,
+                                                    maxLines = 1
+                                                )
+                                            }
+                                        }
+                                        if (showAmount) {
+                                            Text(
+                                                "+${ctx.amount.toLong()}",
+                                                modifier = Modifier.width(wAmount).padding(horizontal = 4.dp),
+                                                style = MaterialTheme.typography.bodyMedium,
+                                                color = statusColor,
+                                                fontWeight = FontWeight.Bold,
+                                                textAlign = TextAlign.End,
+                                                maxLines = 1
+                                            )
+                                        }
+                                    }
                                 }
                             }
                         }
                     }
                 }
             }
-
-            // ── Карточные переводы (из Finansi) ──────────────────────────
-            // Показываем ленту переводов между виртуальными картами
-            // (CardTransaction) под списком контрактных транзакций.
-            // Это объединённая лента — пользователь видит и контрактные
-            // платежи, и перемещения денег между картами в одном месте.
-            CardTransfersSection(finansiViewModel = finansiViewModel)
         }
 
     // ── Диалог редактирования ────────────────────────────────────────────
@@ -1221,149 +1424,20 @@ private fun EditTransactionDialog(
 }
 
 /**
- * Секция переводов между виртуальными картами.
+ * Секция переводов между виртуальными картами — УДАЛЕНА.
  *
- * Показывается внизу вкладки «Tranzaksiya» — объединяет ленту контрактных
- * платежей (Transaction) и ленту карточных переводов (CardTransaction)
- * в едином финансовом потоке.
+ * Раньше внизу вкладки «Tranzaksiya» была отдельная секция с переводами
+ * между картами (CardTransaction), но она показывалась ВНЕ основного
+ * LazyColumn, без поиска/фильтра и с лимитом 20 строк.
  *
- * Для каждой транзакции отображается:
- *   • Цветной кружок-источник → цветной кружок-назначение
- *   • Имена карт-источника и назначения (или «Контракт» для входящих)
- *   • Сумма и время
- *   • Примечание (если есть)
+ * Теперь CardTransaction включены в общую ленту через sealed class
+ * [UnifiedTxItem] и рендерятся в том же LazyColumn, что и Transaction,
+ * с единым фильтром по дате, поиску и колонкам. См. основной экран
+ * TransactionListScreen — там используется `mergedItems: List<UnifiedTxItem>`.
+ *
+ * Эта функция оставлена как placeholder для совместимости, если вдруг
+ * где-то остались ссылки — но в UI больше не вызывается.
  */
-@Composable
-private fun CardTransfersSection(
-    finansiViewModel: com.example.ui.FinansiViewModel
-) {
-    val cardTxs by finansiViewModel.transactions.collectAsStateWithLifecycle()
-    val cards by finansiViewModel.cards.collectAsStateWithLifecycle()
-    val cardById = remember(cards) { cards.associateBy { it.id } }
-
-    if (cardTxs.isEmpty()) return
-
-    Column(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(horizontal = 16.dp, vertical = 8.dp)
-    ) {
-        Text(
-            text = "Kartalar o'tkazmalari",
-            style = MaterialTheme.typography.titleMedium,
-            fontWeight = FontWeight.Bold,
-            color = ClaudeText,
-            modifier = Modifier.padding(bottom = 8.dp)
-        )
-
-        Card(
-            modifier = Modifier.fillMaxWidth(),
-            colors = CardDefaults.cardColors(containerColor = ClaudeCard),
-            shape = RoundedCornerShape(12.dp),
-            border = androidx.compose.foundation.BorderStroke(1.dp, ClaudeDivider)
-        ) {
-            Column(modifier = Modifier.padding(8.dp)) {
-                cardTxs.take(20).forEach { tx ->
-                    val from = cardById[tx.fromCardId]
-                    val to = cardById[tx.toCardId]
-                    val time = SimpleDateFormat("dd.MM HH:mm", Locale.getDefault())
-                        .format(Date(tx.timestamp))
-                    val isIncome = tx.type == com.example.data.CardTransaction.TYPE_CONTRACT_INCOME
-                    val fromLabel = when {
-                        isIncome || tx.fromCardId == 0 -> "Kontrakt"
-                        tx.fromCardId == com.example.data.VirtualCard.EXTERNAL_IN_CARD_ID -> "Tashqidan"
-                        tx.fromCardId == com.example.data.VirtualCard.EXTERNAL_OUT_CARD_ID -> "Tashqiga"
-                        else -> from?.name ?: "—"
-                    }
-                    val toLabel = when (tx.toCardId) {
-                        com.example.data.VirtualCard.EXTERNAL_IN_CARD_ID -> "Tashqidan"
-                        com.example.data.VirtualCard.EXTERNAL_OUT_CARD_ID -> "Tashqiga"
-                        else -> to?.name ?: "—"
-                    }
-                    val fromColor = when {
-                        isIncome || tx.fromCardId == 0 -> Color(0xFF34C759)
-                        tx.fromCardId == com.example.data.VirtualCard.EXTERNAL_IN_CARD_ID -> Color(0xFF00838F)
-                        tx.fromCardId == com.example.data.VirtualCard.EXTERNAL_OUT_CARD_ID -> Color(0xFFC62828)
-                        else -> from?.colorHex?.let { parseHexColor(it) } ?: ClaudeDivider
-                    }
-                    val toColor = when (tx.toCardId) {
-                        com.example.data.VirtualCard.EXTERNAL_IN_CARD_ID -> Color(0xFF00838F)
-                        com.example.data.VirtualCard.EXTERNAL_OUT_CARD_ID -> Color(0xFFC62828)
-                        else -> to?.colorHex?.let { parseHexColor(it) } ?: ClaudeDivider
-                    }
-
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(vertical = 6.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(6.dp)
-                    ) {
-                        Box(
-                            modifier = Modifier
-                                .size(10.dp)
-                                .background(fromColor, CircleShape)
-                        )
-                        Text(
-                            text = fromLabel,
-                            style = MaterialTheme.typography.bodySmall,
-                            color = ClaudeText,
-                            modifier = Modifier.weight(1f),
-                            maxLines = 1
-                        )
-                        Icon(
-                            imageVector = Icons.Default.ArrowForward,
-                            contentDescription = null,
-                            tint = ClaudeTextSecondary,
-                            modifier = Modifier.size(14.dp)
-                        )
-                        Box(
-                            modifier = Modifier
-                                .size(10.dp)
-                                .background(toColor, CircleShape)
-                        )
-                        Text(
-                            text = toLabel,
-                            style = MaterialTheme.typography.bodySmall,
-                            color = ClaudeText,
-                            modifier = Modifier.weight(1f),
-                            maxLines = 1
-                        )
-                        Column(horizontalAlignment = Alignment.End) {
-                            Text(
-                                text = "+${tx.amount.toLong()}",
-                                style = MaterialTheme.typography.bodyMedium,
-                                fontWeight = FontWeight.Bold,
-                                color = Color(0xFF16A34A)
-                            )
-                            Text(
-                                text = time,
-                                style = MaterialTheme.typography.labelSmall,
-                                color = ClaudeTextSecondary
-                            )
-                        }
-                    }
-                    if (!tx.note.isNullOrBlank()) {
-                        Text(
-                            text = tx.note,
-                            style = MaterialTheme.typography.bodySmall,
-                            color = ClaudeTextSecondary,
-                            modifier = Modifier.padding(start = 16.dp, bottom = 4.dp)
-                        )
-                    }
-                }
-                if (cardTxs.size > 20) {
-                    Text(
-                        text = "Va yana ${cardTxs.size - 20} ta...",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = ClaudeTextSecondary,
-                        modifier = Modifier.padding(top = 4.dp)
-                    )
-                }
-            }
-        }
-    }
-}
 
 /** Парсит hex-строку в Compose Color. */
 private fun parseHexColor(hex: String): Color {
@@ -1373,5 +1447,40 @@ private fun parseHexColor(hex: String): Color {
         Color(full.toLong(16))
     } catch (_: Exception) {
         Color.Gray
+    }
+}
+
+/**
+ * Объединённый элемент ленты транзакций — «мостик» между двумя типами
+ * движения денег в приложении:
+ *
+ *   • [ContractTx] — платежи по контрактам (таблица `transactions`).
+ *     Привязаны к арендатору и (опционально) к контракту через contractId.
+ *     Это деньги, которые платит арендатор за аренду скутера.
+ *
+ *   • [CardTx] — переводы между виртуальными картами (таблица `card_transactions`).
+ *     Включает TYPE_CONTRACT_INCOME (зачисление оплаты контракта на главную
+ *     карту), TYPE_CARD_TRANSFER (ручной перевод между картами) и TYPE_EXPENSE
+ *     (списание денег «во вне»). Если cardTx.contractId != null — это
+ *     зачисление, связанное с конкретным контрактом; его можно каскадно
+ *     удалить при удалении контракта.
+ *
+ * Оба типа имеют общий `timestamp` (по нему лента сортируется) и общий
+ * `uniqueKey` (для Compose `items(key = ...)`). Поля телефона/скутера/имени
+ * арендатора у CardTransaction заменяются на «Карта-источник → Карта-назначения»
+ * и прочерки, т.к. у CardTransaction нет этих данных.
+ */
+sealed class UnifiedTxItem {
+    abstract val timestamp: Long
+    abstract val uniqueKey: String
+
+    data class ContractTx(val tx: Transaction) : UnifiedTxItem() {
+        override val timestamp: Long get() = tx.timestamp
+        override val uniqueKey: String get() = "t${tx.id}"
+    }
+
+    data class CardTx(val tx: com.example.data.CardTransaction) : UnifiedTxItem() {
+        override val timestamp: Long get() = tx.timestamp
+        override val uniqueKey: String get() = "k${tx.id}"
     }
 }

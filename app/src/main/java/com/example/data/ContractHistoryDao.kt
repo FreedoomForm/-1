@@ -72,6 +72,19 @@ interface ContractHistoryDao {
     """)
     fun getContractsForRenterFlow(renterId: Int): Flow<List<ContractHistoryEntry>>
 
+    /**
+     * Suspend-вариант [getContractsForRenterFlow] — используется каскадным
+     * удалением контракта для проверки, остались ли у арендатора ещё контракты
+     * после удаления (если не осталось — помечаем isReturned=true).
+     */
+    @Query("""
+        SELECT * FROM contract_history
+        WHERE renterId = :renterId
+          AND type IN ('CREATED', 'AUTO_RENEW')
+        ORDER BY weekStart ASC
+    """)
+    suspend fun getContractsForRenterOnce(renterId: Int): List<ContractHistoryEntry>
+
     @Insert(onConflict = OnConflictStrategy.IGNORE)
     suspend fun insert(entry: ContractHistoryEntry): Long
 

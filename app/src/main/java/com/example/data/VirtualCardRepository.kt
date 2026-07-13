@@ -78,8 +78,18 @@ class VirtualCardRepository(
      * (id=0). Вызывается автоматически при оплате контракта арендатором.
      *
      * [note] — описание платежа (например, "To'lov: Akmal, 1 hafta").
+     *
+     * [contractId] — ID контракта ContractHistoryEntry, для которого выполняется
+     *   зачисление. Заполняет поле `contractId` в создаваемой CardTransaction,
+     *   что позволяет каскадно удалить/реверснуть эту запись при удалении
+     *   контракта (см. ContractHistoryViewModel.deleteContractWithCascade).
+     *   null допустим для обратной совместимости (старые вызовы).
      */
-    suspend fun depositContractIncome(amount: Double, note: String?): Long {
+    suspend fun depositContractIncome(
+        amount: Double,
+        note: String?,
+        contractId: Int? = null
+    ): Long {
         cardDao.adjustBalance(VirtualCard.MAIN_CARD_ID, +amount)
         return txDao.insertTransaction(
             CardTransaction(
@@ -87,7 +97,8 @@ class VirtualCardRepository(
                 toCardId = VirtualCard.MAIN_CARD_ID,
                 amount = amount,
                 note = note,
-                type = CardTransaction.TYPE_CONTRACT_INCOME
+                type = CardTransaction.TYPE_CONTRACT_INCOME,
+                contractId = contractId
             )
         )
     }
@@ -95,4 +106,34 @@ class VirtualCardRepository(
     suspend fun deleteTransaction(id: Int) = txDao.deleteTransaction(id)
     suspend fun updateTransaction(tx: CardTransaction) = txDao.updateTransaction(tx)
     suspend fun countCards(): Int = cardDao.count()
+
+    /**
+     * Возвращает все CardTransaction, привязанные к контракту [contractId].
+     * Используется каскадным удалением контракта для определения, какие
+     * записи нужно реверснуть и удалить.
+     */
+    suspend fun getCardTxForContract(contractId: Int): List<CardTransaction> =
+        txDao.getForContractOnce(contractId)
+
+    /**
+     * Удаляет все CardTransaction, привязанные к контракту [contractId].
+     * Возвращает количество удалённых строк. Сам баланс карт НЕ трогает —
+     * вызывающий код должен сначала реверснуть баланс через adjustBalance
+     * для каждой удаляемой записи, иначе деньги «потеряются».
+     */
+    suspend fun deleteCardTxForContract(contractId: Int): Int {
+        // Room не возвращает count из @Query DELETE напрямую; используем
+        // getForContractOnce для подсчёта, затем deleteForContract.
+        val list = txDao.getForContractOnce(contractId)
+        txDao.deleteForContract(contractId)
+        return list.size
+    }
+
+    /**
+     * Прямой доступ к VirtualCardDao.adjustBalance — нужен каскадному удалению
+     * для реверса баланса главной карты при удалении оплаченного контракта.
+     */
+    suspend fun adjustCardBalance(cardId: Int, delta: Double) {
+        cardDao.adjustBalance(cardId, delta)
+    }
 }

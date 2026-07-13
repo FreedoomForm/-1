@@ -17,7 +17,7 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         VirtualCard::class,
         CardTransaction::class
     ],
-    version = 14,
+    version = 15,
     exportSchema = false
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -149,6 +149,35 @@ abstract class AppDatabase : RoomDatabase() {
             }
         }
 
+        /**
+         * Migration 14 → 15: добавляем колонку `contractId` (Int?) в card_transactions.
+         *
+         * Это «мостик» между CardTransaction и ContractHistoryEntry. Колонка
+         * заполняется только для записей type=CONTRACT_INCOME (когда деньги от
+         * оплаты контракта падают на главную карту). Для старых CONTRACT_INCOME
+         * записей contractId остаётся null — мы не можем ретроактивно связать
+         * их с контрактами, потому что раньше поле вообще отсутствовало.
+         *
+         * Для новых CONTRACT_INCOME записей (создаваемых после этой миграции)
+         * VirtualCardRepository.depositContractIncome(contractId, ...) проставит
+         * поле явно. Это позволяет:
+         *   1. Каскадно удалять CardTransaction при удалении контракта.
+         *   2. Реверсить баланс главной карты при отмене оплаты контракта.
+         *   3. Показывать связь в UI (если понадобится).
+         *
+         * ALTER TABLE ... ADD COLUMN с NULL-значением по умолчанию — стандартный
+         * способ добавить nullable-колонку в SQLite, не пересоздавая таблицу.
+         */
+        private val MIGRATION_14_15 = object : Migration(14, 15) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                // contractId — nullable, без DEFAULT. У всех существующих строк
+                // значение станет NULL, что корректно (старые записи не привязаны).
+                db.execSQL(
+                    "ALTER TABLE `card_transactions` ADD COLUMN `contractId` INTEGER"
+                )
+            }
+        }
+
         fun getDatabase(context: Context): AppDatabase {
             return INSTANCE ?: synchronized(this) {
                 val instance = Room.databaseBuilder(
@@ -156,7 +185,7 @@ abstract class AppDatabase : RoomDatabase() {
                     AppDatabase::class.java,
                     "scooter_rent_db"
                 )
-                    .addMigrations(MIGRATION_11_12, MIGRATION_12_13, MIGRATION_13_14)
+                    .addMigrations(MIGRATION_11_12, MIGRATION_12_13, MIGRATION_13_14, MIGRATION_14_15)
                     // На случай если кто-то перескакивает через несколько версий —
                     // лучше потерять локальные данные, чем крашнуться при старте.
                     .fallbackToDestructiveMigration(true)
