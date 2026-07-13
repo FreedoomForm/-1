@@ -117,10 +117,18 @@ object BackupManager {
             val tempFile = java.io.File(context.cacheDir, "export_tmp_${System.currentTimeMillis()}.xlsx")
             try {
                 // ── Фаза 1: пишем в tempFile через обычный FileOutputStream ──
-                // FastExcel.finish() закрывает внутренний ZipOutputStream,
-                // который в свою очередь закрывает наш BufferedOutputStream
-                // и底层 FileOutputStream. Поэтому НЕ используем .use { } для
-                // обёртки — finish() сам всё закроет.
+                //
+                // ⚠ ВАЖНО: FastExcel 0.18.4 Workbook.finish() НЕ закрывает
+                //   и НЕ flush'ит переданный OutputStream! finish() только
+                //   flush'ит внутренний OutputStreamWriter — байты доходят
+                //   до BufferedOutputStream, но остаются в его 8КБ-буфере
+                //   и на диск не попадают. Поэтому после finish() ОБЯЗАТЕЛЬНО
+                //   нужно явно flush()+close() обёртки — иначе tempFile будет
+                //   0 байт и в SAF скопируется пустота.
+                //
+                //   Предыдущая версия этого кода полагалась на комментарий
+                //   «finish() сам всё закроет» — это было НЕВЕРНО, и именно
+                //   поэтому экспорт выдавал 0-байтный файл.
                 val fos = java.io.FileOutputStream(tempFile)
                 val buf = java.io.BufferedOutputStream(fos, 8192)
                 try {
@@ -132,11 +140,15 @@ object BackupManager {
                     writeVirtualCards(wb, cards)
                     writeCardTransactions(wb, cardTx)
                     writeNotifications(wb, notifications)
-                    wb.finish()  // ← flushes all sheets + closes underlying streams
-                } catch (e: Throwable) {
-                    // При ошибке закрываем руками, чтобы не утечка fd.
+                    wb.finish()
+                    // ⚠ КРИТИЧНО: flush буфера в FileOutputStream, иначе
+                    // байты останутся в памяти и tempFile будет 0 байт.
+                    buf.flush()
+                    fos.fd.sync()  // дополнительно — fsync на диск
+                } finally {
+                    // close() гарантированно flush'ит буфер повторно и
+                    // освобождает fd даже при исключении в finish().
                     try { buf.close() } catch (_: Throwable) {}
-                    throw e
                 }
 
                 // Проверка: tempFile должен быть не пустой. Если пустой —
