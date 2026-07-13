@@ -714,6 +714,37 @@ fun MainScreen(
                     actionIconContentColor = ClaudeText
                 ),
                 actions = {
+                    // ── Кнопка-переключатель режима SMS ───────────────────────────
+                    // Круглая, рядом с «+». Красная = QO'LLANMA (ручной),
+                    // зелёная = AVTO (автоматический). Тап переключает режим.
+                    val smsAutoSend by settingsViewModel.smsAutoSendEnabled.collectAsStateWithLifecycle()
+                    IconButton(
+                        onClick = {
+                            val newValue = !smsAutoSend
+                            settingsViewModel.updateSmsAutoSend(newValue)
+                            Toast.makeText(
+                                localContext,
+                                if (newValue) "SMS avto-yuborish yoqildi"
+                                else "SMS qo'llanma rejimiga o'tdi",
+                                Toast.LENGTH_SHORT
+                            ).show()
+                        },
+                        modifier = Modifier
+                            .padding(end = 6.dp)
+                            .size(40.dp)
+                            .background(
+                                if (smsAutoSend) StatusOk else StatusOverdue,
+                                CircleShape
+                            )
+                    ) {
+                        Icon(
+                            Icons.Default.Sms,
+                            contentDescription = if (smsAutoSend) "SMS avto" else "SMS qo'llanma",
+                            tint = Color.White,
+                            modifier = Modifier.size(20.dp)
+                        )
+                    }
+
                     // ── Универсальные кнопки верхнего бара ──────────────────────
                     // +  — добавление сущности для текущей вкладки (всегда активна)
                     // ✎  — редактирование выбранной строки (активна при выборе 1)
@@ -2646,65 +2677,9 @@ fun SettingsScreen(
 
                 HorizontalDivider()
 
-                // ── SMS yuborish rejimi: Avto / Qo'llanma ───────────────────
-                Column {
-                    Text(
-                        "SMS yuborish rejimi",
-                        style = MaterialTheme.typography.labelMedium,
-                        color = ClaudeText
-                    )
-                    Spacer(modifier = Modifier.height(4.dp))
-                    Text(
-                        if (smsAutoSend)
-                            "AVTO — kechikkan mijozlarga SMS avtomatik yuboriladi (har 4 soatda va yangi kechikkan renter yaratilganda)."
-                        else
-                            "QO'LLANMA — SMS faqat \"SMS\" tugmasi orqali yuboriladi. Avto-yuborish o'chirilgan, lekin bildirishnomalar va yozuvlar saqlanadi.",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = ClaudeTextSecondary
-                    )
-                    Spacer(modifier = Modifier.height(8.dp))
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .clip(RoundedCornerShape(8.dp))
-                            .background(Color(0xFFF7F7F7))
-                            .padding(horizontal = 12.dp, vertical = 10.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text(
-                                if (smsAutoSend) "Avto yuborish" else "Qo'llanma",
-                                style = MaterialTheme.typography.bodyMedium,
-                                fontWeight = FontWeight.Bold,
-                                color = Color(0xFF000000)
-                            )
-                            Text(
-                                if (smsAutoSend) "Yoqilgan" else "O'chirilgan",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = ClaudeTextSecondary
-                            )
-                        }
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Switch(
-                            checked = smsAutoSend,
-                            onCheckedChange = { newValue ->
-                                smsAutoSend = newValue
-                                settingsRepo.smsAutoSendEnabled = newValue
-                                onSmsAutoSendChange(newValue)
-                            },
-                            colors = SwitchDefaults.colors(
-                                checkedThumbColor = Color(0xFF000000),
-                                checkedTrackColor = Color(0xFFBDBDBD),
-                                uncheckedThumbColor = Color(0xFFFFFFFF),
-                                uncheckedTrackColor = Color(0xFFCCCCCC)
-                            )
-                        )
-                    }
-                }
-
-                HorizontalDivider()
-
                 // ── SIM karta tanlash ───────────────────────
+                // (Переключатель SMS Avto/Qo'llanma перенесён в верхний бар —
+                // круглая SMS-кнопка рядом с «+».)
                 Column {
                     Text(
                         "SIM karta",
