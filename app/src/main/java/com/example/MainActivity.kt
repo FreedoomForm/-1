@@ -466,6 +466,90 @@ fun MainScreen(
     val renters by viewModel.rentersList.collectAsStateWithLifecycle()
     val history by historyViewModel.history.collectAsStateWithLifecycle()
 
+    // ── Авто-восстановление из публичной папки Downloads ──────────────────
+    // При первом запуске (если БД пуста и есть бэкап в Downloads/ScooterRent/)
+    // автоматически восстанавливаем данные. Это работает после удаления и
+    // переустановки приложения — файл .xlsx в публичной папке переживает
+    // удаление приложения.
+    var autoRestoreMessage by remember { mutableStateOf<String?>(null) }
+    LaunchedEffect(Unit) {
+        try {
+            val settingsRepo = com.example.data.SettingsRepository(localContext)
+            // Авто-восстановление выполняется только один раз — при первой
+            // установке. Флаг autoRestoreAttempted переживает переустановку
+            // через Auto Backup, поэтому при втором запуске мы не пытаемся
+            // восстановиться снова (это было бы бессмысленно — данные уже есть).
+            if (!settingsRepo.autoRestoreAttempted) {
+                settingsRepo.autoRestoreAttempted = true
+                val localBackupManager = com.example.data.LocalBackupManager(localContext)
+                // Ждём пока БД загрузится — проверяем renters. Если renters
+                // пуста, значит это fresh install — ищем бэкап.
+                kotlinx.coroutines.delay(500) // даём Room время загрузиться
+                val rentersCount = viewModel.rentersList.value.size
+                val scootersCount = scooterViewModel.scootersList.value.size
+                if (rentersCount == 0 && scootersCount == 0) {
+                    Log.d("MainScreen", "DB is empty — checking for backup in Downloads/ScooterRent/")
+                    val hasBackup = localBackupManager.hasBackup()
+                    if (hasBackup) {
+                        Log.d("MainScreen", "Backup found — auto-restoring...")
+                        val result = localBackupManager.restoreBackup()
+                        if (result != null && !result.startsWith("Xato")) {
+                            autoRestoreMessage = "Ma'lumotlar avtomatik tiklandi: $result"
+                            Log.d("MainScreen", "Auto-restore success: $result")
+                        } else {
+                            autoRestoreMessage = "Avto-tiklash amalga oshmadi: ${result ?: "noma'lum xato"}"
+                            Log.w("MainScreen", "Auto-restore failed: $result")
+                        }
+                    } else {
+                        Log.d("MainScreen", "No backup found — fresh install, nothing to restore")
+                    }
+                } else {
+                    Log.d("MainScreen", "DB not empty (renters=$rentersCount, scooters=$scootersCount) — skipping auto-restore")
+                }
+            }
+        } catch (e: Exception) {
+            Log.w("MainScreen", "Auto-restore check failed", e)
+        }
+    }
+
+    // Показываем Toast с результатом авто-восстановления
+    LaunchedEffect(autoRestoreMessage) {
+        autoRestoreMessage?.let { msg ->
+            Toast.makeText(localContext, msg, Toast.LENGTH_LONG).show()
+            autoRestoreMessage = null
+        }
+    }
+
+    // ── Авто-сохранение в Downloads после изменений данных (debounced) ─────
+    // Следим за изменениями в renters/scooters/history. После каждого изменения
+    // ждём 2 секунды (debounce) и пишем бэкап в Downloads/ScooterRent/.
+    val rentersForBackup by viewModel.rentersList.collectAsStateWithLifecycle()
+    val scootersForBackup by scooterViewModel.scootersList.collectAsStateWithLifecycle()
+    LaunchedEffect(rentersForBackup, scootersForBackup) {
+        try {
+            val settingsRepo = com.example.data.SettingsRepository(localContext)
+            if (settingsRepo.autoBackupEnabled) {
+                // Debounce: ждём 2 секунды. Если за это время пришли новые
+                // изменения, LaunchedEffect перезапустится и таймер начнётся
+                // заново — бэкап пишется только после "успокоения" данных.
+                kotlinx.coroutines.delay(2000)
+                // Не пишем бэкап если БД пуста — это либо fresh install
+                // (нет смысла писать пустой бэкап), либо после ручной очистки.
+                if (rentersForBackup.isNotEmpty() || scootersForBackup.isNotEmpty()) {
+                    val localBackupManager = com.example.data.LocalBackupManager(localContext)
+                    val success = localBackupManager.writeBackup()
+                    if (success) {
+                        Log.d("MainScreen", "Auto-backup written to Downloads/ScooterRent/")
+                    } else {
+                        Log.w("MainScreen", "Auto-backup failed — will retry on next change")
+                    }
+                }
+            }
+        } catch (e: Exception) {
+            Log.w("MainScreen", "Auto-backup failed", e)
+        }
+    }
+
     // ── Обработка действий от нативных виджетов ──────────────────────
     // Читаем WidgetActionBus при запуске и выполняем соответствующее действие:
     //   open_tab — переключаемся на нужную вкладку
@@ -3005,6 +3089,63 @@ fun SettingsScreen(
                                 )
                             }
                         }
+                    }
+                }
+
+                HorizontalDivider()
+
+                // ── Avto-zaxira (Auto-backup to Downloads) ─────────────────
+                // При включении приложение автоматически пишет .xlsx-бэкап в
+                // публичную папку Download/ScooterRent/ после каждого изменения
+                // данных. Файл переживает удаление приложения — при повторной
+                // установке данные автоматически восстанавливаются.
+                val settingsRepoForBackup = remember { com.example.data.SettingsRepository(settingsContext) }
+                var autoBackupEnabled by remember { mutableStateOf(settingsRepoForBackup.autoBackupEnabled) }
+
+                Text(
+                    "Avto-zaxira nusxa",
+                    style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
+                    modifier = Modifier.padding(vertical = 8.dp)
+                )
+                Card(
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = CardDefaults.cardColors(containerColor = Color(0xFFF0F0F0)),
+                    shape = RoundedCornerShape(8.dp)
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(12.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                "Avto-saqlash (Download/ScooterRent/)",
+                                style = MaterialTheme.typography.bodyMedium,
+                                fontWeight = FontWeight.Medium
+                            )
+                            Text(
+                                "Har bir o'zgarishdan so'ng ilova .xlsx nusxasini " +
+                                    "yuklab olishlar papkasiga saqlaydi. Fayl ilovani " +
+                                    "o'chirishdan keyin ham saqlanadi — qayta o'rnatishda " +
+                                    "ma'lumotlar avtomatik tiklanadi.",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = ClaudeTextSecondary
+                            )
+                        }
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Switch(
+                            checked = autoBackupEnabled,
+                            onCheckedChange = { enabled ->
+                                autoBackupEnabled = enabled
+                                settingsRepoForBackup.autoBackupEnabled = enabled
+                            },
+                            colors = SwitchDefaults.colors(
+                                checkedThumbColor = Color(0xFF000000),
+                                checkedTrackColor = Color(0xFF666666)
+                            )
+                        )
                     }
                 }
 

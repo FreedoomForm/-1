@@ -1,19 +1,29 @@
-<?xml version="1.0" encoding="utf-8"?><!--
-   Sample data extraction rules file; uncomment and customize as necessary.
-   See https://developer.android.com/about/versions/12/backup-restore#xml-changes
-   for details.
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    Data extraction rules для Android 12+ (API 31+).
+    Заменяет backup_rules.xml на устройствах с API 31+.
+
+    Определяет, какие данные включаются в:
+      - cloud-backup: резервное копирование в Google Drive
+      - device-transfer: перенос данных на новое устройство (через кабель
+        или локально)
+
+    Включаем базу данных Room и SharedPreferences — те же данные, что и в
+    LocalBackupManager, но через системный механизм.
 -->
 <data-extraction-rules>
     <cloud-backup>
-        <!-- TODO: Use <include> and <exclude> to control what is backed up.
-        <include .../>
-        <exclude .../>
-        -->
+        <!-- База данных Room -->
+        <include domain="database" path="scooter_rent_db" />
+        <!-- Настройки приложения -->
+        <include domain="sharedpref" path="app_settings.xml" />
+        <include domain="sharedpref" path="." />
     </cloud-backup>
-    <!--
     <device-transfer>
-        <include .../>
-        <exclude .../>
+        <!-- База данных Room -->
+        <include domain="database" path="scooter_rent_db" />
+        <!-- Настройки приложения -->
+        <include domain="sharedpref" path="app_settings.xml" />
+        <include domain="sharedpref" path="." />
     </device-transfer>
-    -->
 </data-extraction-rules>

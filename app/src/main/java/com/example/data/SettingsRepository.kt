@@ -61,6 +61,28 @@ class SettingsRepository(context: Context) {
         get() = prefs.getBoolean("sms_auto_send_enabled", true)
         set(value) = prefs.edit().putBoolean("sms_auto_send_enabled", value).apply()
 
+    /**
+     * Avto-zaxira nusxa (auto-backup to Downloads/ScooterRent/).
+     * Yoqilgan bo'lsa, har bir ma'lumot o'zgarishidan so'ng ilova .xlsx
+     * nusxasini public Downloads/ScooterRent/ papkasiga yozadi. Fayl
+     * ilovani o'chirishdan keyin ham saqlanib qoladi va qayta o'rnatishda
+     * avtomatik tiklanadi.
+     *
+     * Standart: yoqilgan (true).
+     */
+    var autoBackupEnabled: Boolean
+        get() = prefs.getBoolean("auto_backup_enabled", true)
+        set(value) = prefs.edit().putBoolean("auto_backup_enabled", value).apply()
+
+    /**
+     * Flag: ilova birinchi marta ishga tushganmi?
+     * Avto-tiklash (auto-restore) faqat birinchi ishga tushishda bajariladi.
+     * Bu flag true bo'lsa, avto-tiklash allaqachon bajarilgan degani.
+     */
+    var autoRestoreAttempted: Boolean
+        get() = prefs.getBoolean("auto_restore_attempted", false)
+        set(value) = prefs.edit().putBoolean("auto_restore_attempted", value).apply()
+
     companion object {
         const val DEFAULT_WEEKLY_PRICE = 420_000.0
         const val DEFAULT_MONTHLY_PRICE = 1_680_000.0

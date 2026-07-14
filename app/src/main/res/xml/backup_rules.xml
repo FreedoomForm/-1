@@ -1,13 +1,35 @@
-<?xml version="1.0" encoding="utf-8"?><!--
-   Sample backup rules file; uncomment and customize as necessary.
-   See https://developer.android.com/guide/topics/data/autobackup
-   for details.
-   Note: This file is ignored for devices older than API 31
-   See https://developer.android.com/about/versions/12/backup-restore
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    Auto Backup for Apps rules.
+    Включает в облачное/локальное резервное копирование Android:
+      - Базу данных Room (scooter_rent_db)
+      - Настройки приложения (SharedPreferences: app_settings)
+      - DataStore preferences (если будут добавлены)
+
+    Эти правила работают ПАРАЛЛЕЛЬНО с LocalBackupManager, который пишет
+    .xlsx-бэкап в публичную папку Downloads/ScooterRent/.
+
+    Auto Backup for Apps:
+      - Восстанавливает данные автоматически при повторной установке
+        (если на устройстве есть Google-аккаунт и включён бэкап).
+      - Не требует никаких разрешений или действий пользователя.
+      - Работает на всех устройствах с Google Play Services.
+
+    Локальный бэкап (LocalBackupManager):
+      - Работает офлайн, без Google-аккаунта.
+      - Файл .xlsx переживает удаление приложения.
+      - Восстанавливается при первом запуске если БД пуста.
+
+    Примечание: этот файл используется на Android < 31.
+    Для Android 31+ см. data_extraction_rules.xml.
 -->
 <full-backup-content>
-    <!--
-   <include domain="sharedpref" path="."/>
-   <exclude domain="sharedpref" path="device.xml"/>
--->
+    <!-- База данных Room — все таблицы приложения -->
+    <include domain="database" path="scooter_rent_db" />
+
+    <!-- Настройки приложения (SharedPreferences) -->
+    <include domain="sharedpref" path="app_settings.xml" />
+
+    <!-- DataStore preferences (если используется) -->
+    <include domain="sharedpref" path="." />
 </full-backup-content>
