@@ -308,25 +308,46 @@ class ContractHistoryViewModel(application: Application) : AndroidViewModel(appl
                 var balanceDelta = 0.0
 
                 if (isContractType) {
-                    // Контракт: если оплачен → откатываем платёж (balance -= amount).
-                    // Если долг → списываем долг (balance += amount).
-                    balanceDelta = if (contract.isPaid) -contract.amount else +contract.amount
+                    // ── Логика корректировки баланса при удалении контракта ──
+                    //
+                    // isPaid = false (долг):
+                    //   При создании контракта баланс был уменьшен на -amount
+                    //   (арендатор должен). Удаление контракта списывает долг:
+                    //   balanceDelta = +amount.
+                    //
+                    // isPaid = true (оплачен):
+                    //   Контракт «закрыт» — арендатор заплатил amount, контракт
+                    //   помечен оплаченным. Баланс УЖЕ отражает эту оплату
+                    //   (либо 0 при предоплате, либо 0 после погашения долга).
+                    //   Удаление контракта НЕ должно менять баланс:
+                    //   balanceDelta = 0.
+                    //
+                    //   ⚠ Предыдущая версия делала balanceDelta = -amount для
+                    //   isPaid=true — это был БАГ: после удаления оплаченного
+                    //   контракта баланс уходил в минус (например 0 → -amount),
+                    //   хотя арендатор ничего не должен. Платёж уже поступил
+                    //   (CardTransaction на главной карте), и откатывается он
+                    //   на шаге 5 (reverse CardTransaction). Баланс арендатора
+                    //   при этом трогать НЕ нужно.
+                    //
+                    //   Сценарии, которые работали неправильно:
+                    //   1) Создание арендатора с предоплатой (balance=0,
+                    //      contract.isPaid=true) → удаление → balance=-amount ❌
+                    //   2) Просрочка + оплата (balance=-amount → 0 после оплаты,
+                    //      contract.isPaid=true) → удаление → balance=-amount ❌
+                    //   Теперь оба сценария оставляют баланс = 0. ✓
+                    balanceDelta = if (contract.isPaid) 0.0 else +contract.amount
                 }
                 // Для TYPE_PAYMENT / TYPE_TERMINATED / TYPE_RETURNED баланс арендатора
                 // не меняется — это аудиторские записи; фактическое изменение баланса
-                // происходило в момент создания TYPE_PAYMENT через applyWeeklyPayment,
-                // и откатывается через удаление связанных Transaction (шаг 4).
-
-                // Дополнительно: учитываем сумму всех связанных Transaction,
-                // которые мы только что удалили. Каждая TYPE_PAYMENT добавляла
-                // +amount к балансу (через applyWeeklyPayment). Их удаление должно
-                // откатить баланс на -amount каждой. Но мы УЖЕ учли contract.amount
-                // выше для isContractType. Чтобы не двойной счёт, делаем так:
-                // - Если контракт isContractType (CREATED/AUTO_RENEW) — откат только
-                //   по контракту (balanceDelta уже учёл isPaid).
-                // - Для TYPE_PAYMENT контракта — откатываем по сумме relatedTx.
+                // происходило в момент создания через applyWeeklyPayment /
+                // applyTermination, и откатывается через удаление связанных
+                // Transaction (шаг 4) — но step 4 только удаляет записи, не
+                // меняя баланс. Поэтому для этих типов balanceDelta = 0.
+                // (relatedTx для них обычно пуст, т.к. Transactions привязываются
+                // к CREATED/AUTO_RENEW контрактам, а не к PAYMENT/TERMINATED.)
                 if (!isContractType) {
-                    balanceDelta = -relatedTx.sumOf { it.amount }
+                    balanceDelta = 0.0
                 }
 
                 if (balanceDelta != 0.0) {
@@ -337,6 +358,8 @@ class ContractHistoryViewModel(application: Application) : AndroidViewModel(appl
                     )
                     renterRepo.update(updated)
                     Log.d(TAG, "Renter #${renter.id} balance adjusted by $balanceDelta → $newBalance")
+                } else {
+                    Log.d(TAG, "Renter #${renter.id} balance unchanged (contract isPaid=${contract.isPaid}, type=${contract.type})")
                 }
 
                 // ── 7. Обновляем lastPaymentTimestamp ────────────────────
