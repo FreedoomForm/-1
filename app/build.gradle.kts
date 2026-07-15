@@ -101,6 +101,19 @@ dependencies {
   implementation("org.dhatim:fastexcel-reader:0.18.4")
   implementation("javax.xml.stream:stax-api:1.0-2")
   implementation("com.fasterxml:aalto-xml:1.3.0")
+  // ── CameraX для сканера документов ( Mistral OCR ) ────────────────────────
+  // Используется на экране ScannerScreen: preview + захват фото.
+  // Версии CameraX стабильны и совместимы с minSdk 24.
+  implementation("androidx.camera:camera-core:1.3.4")
+  implementation("androidx.camera:camera-camera2:1.3.4")
+  implementation("androidx.camera:camera-lifecycle:1.3.4")
+  implementation("androidx.camera:camera-view:1.3.4")
+  // ── OkHttp для отправки фото в Mistral OCR API ────────────────────────────
+  // Mistral OCR принимает multipart/form-data с base64-картинкой; OkHttp —
+  // самый лёгкий и проверенный способ делать HTTP-запросы на Android.
+  implementation("com.squareup.okhttp3:okhttp:4.12.0")
+  // JSON-парсинг ответов Mistral — используем встроенный org.json (Android SDK),
+  // отдельная зависимость не нужна.
   implementation(libs.kotlinx.coroutines.android)
   implementation(libs.kotlinx.coroutines.core)
   // testImplementation(libs.androidx.compose.ui.test.junit4)

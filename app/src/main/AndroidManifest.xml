@@ -15,6 +15,22 @@
         android:maxSdkVersion="28" />
     <!-- Чтобы обновлять виджеты после перезагрузки устройства -->
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+    <!-- Для сканера документов (Mistral OCR) — захват фото камеры -->
+    <uses-permission android:name="android.permission.CAMERA" />
+
+    <!-- Для показа последней фотографии из галереи в превью сканера -->
+    <!-- Android 13+ (API 33+) -->
+    <uses-permission android:name="android.permission.READ_MEDIA_IMAGES" />
+    <!-- Android 12 и ниже (API 32-) -->
+    <uses-permission
+        android:name="android.permission.READ_EXTERNAL_STORAGE"
+        android:maxSdkVersion="32" />
+
+    <!-- Атрибуты для камеры (не требуются, но помогают Google Play фильтровать
+         устройства без камеры — приложение всё равно работает без неё, просто
+         сканер недоступен) -->
+    <uses-feature android:name="android.hardware.camera" android:required="false" />
+    <uses-feature android:name="android.hardware.camera.autofocus" android:required="false" />
 
     <application
         android:allowBackup="true"

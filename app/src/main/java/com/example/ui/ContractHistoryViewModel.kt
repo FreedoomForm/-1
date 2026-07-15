@@ -380,17 +380,39 @@ class ContractHistoryViewModel(application: Application) : AndroidViewModel(appl
                 }
 
                 // ── 8. Если контрактов не осталось — освобождаем арендатора ──
+                // ВАЖНО: помимо освобождения скутера, СБРАСЫВАЕМ БАЛАНС в 0.
+                //
+                // Почему это нужно:
+                //   Шаг 6 корректирует баланс только на contract.amount, но
+                //   реальный баланс арендатора мог быть более отрицательным из-за:
+                //     • Ручного ввода долга при создании (debt > weeklyPrice —
+                //       например, debt=200 при weeklyPrice=100 создаёт баланс=-200,
+                //       но contract.amount=100; удаление контракта вернёт только 100);
+                //     • Нескольких смен статуса isPaid, оставивших «артефакты»;
+                //     • Рассинхрона между суммами контрактов и фактическим долгом.
+                //
+                //   Если у арендатора больше НЕТ контрактов — значит, он ничего
+                //   не должен (нет активной аренды). Баланс обязан быть 0.
+                //   Это исправляет баг «удалил контракт, а баланс в минусе».
+                //
+                //   Положительный баланс (аванс) тоже сбрасывается — пользователь
+                //   удалил ВСЕ контракты, значит, арендные отношения прекращены,
+                //   и никакая предоплата не имеет смысла без контракта.
                 val remainingContracts = repo.contractsForRenterOnce(renter.id)
                 if (remainingContracts.isEmpty()) {
                     val current = renterRepo.getById(renter.id) ?: renter
+                    val oldBalance = current.balance
                     renterRepo.update(
                         current.copy(
                             isReturned = true,
                             scooterId = null,
-                            scooterName = null
+                            scooterName = null,
+                            balance = 0.0,
+                            debtAmount = 0.0
                         )
                     )
-                    Log.d(TAG, "Renter #${renter.id} marked returned (no contracts left)")
+                    Log.d(TAG, "Renter #${renter.id} marked returned + balance reset " +
+                        "from $oldBalance to 0.0 (no contracts left)")
                 }
             }
 

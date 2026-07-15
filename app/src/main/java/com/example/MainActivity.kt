@@ -41,6 +41,7 @@ import androidx.compose.material.icons.filled.Notifications
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.Phone
 import androidx.compose.material.icons.filled.CalendarToday
+import androidx.compose.material.icons.filled.CameraAlt
 import androidx.compose.material.icons.filled.Event
 import androidx.compose.material.icons.filled.AccountBalanceWallet
 import androidx.compose.material.icons.filled.Tune
@@ -300,6 +301,8 @@ sealed class NavigationState {
     data class CardHistory(val card: com.example.data.VirtualCard) : NavigationState()
     data class ContractTransactionHistory(val contract: com.example.data.ContractHistoryEntry) : NavigationState()
     data object Settings : NavigationState()
+    /** Экран сканера документов с Mistral OCR — доступен с любой вкладки. */
+    data object Scanner : NavigationState()
 }
 
 /**
@@ -797,6 +800,20 @@ fun MainScreen(
             )
             return
         }
+        NavigationState.Scanner -> {
+            // ── Экран сканера документов с Mistral OCR ────────────────────
+            // Отдельный full-screen экран с камерой. Пользователь делает
+            // фото списка (арендаторы / скутеры / транзакции / контракты /
+            // виртуальные карты), фото уходит в Mistral OCR → Mistral Large
+            // → JSON-команды → CommandExecutor создаёт сущности в БД.
+            //
+            // Кнопка сканера (иконка Camera) — в верхнем баре рядом с
+            // переключателем SMS-режима, доступна с любой вкладки.
+            ScannerScreen(
+                onBack = { navState = NavigationState.MainView }
+            )
+            return
+        }
         NavigationState.MainView -> { /* продолжаем — основной Scaffold ниже */ }
     }
 
@@ -817,6 +834,28 @@ fun MainScreen(
                     actionIconContentColor = ClaudeText
                 ),
                 actions = {
+                    // ── Кнопка сканера (Mistral OCR) ──────────────────────────────
+                    // Иконка камеры, доступна с любой вкладки. Открывает экран
+                    // сканера документов: пользователь фотографирует список
+                    // (арендаторы / скутеры / транзакции / контракты / карты),
+                    // фото уходит в Mistral OCR → Mistral Large → JSON-команды,
+                    // которые автоматически создают сущности в БД.
+                    IconButton(
+                        onClick = { navState = NavigationState.Scanner },
+                        modifier = Modifier
+                            .padding(end = 6.dp)
+                            .size(40.dp)
+                            .background(ClaudeAccentBg, CircleShape)
+                            .border(1.dp, ClaudeAccent, CircleShape)
+                    ) {
+                        Icon(
+                            Icons.Default.CameraAlt,
+                            contentDescription = "Skaner",
+                            tint = ClaudeAccent,
+                            modifier = Modifier.size(20.dp)
+                        )
+                    }
+
                     // ── Кнопка-переключатель режима SMS ───────────────────────────
                     // Круглая, рядом с «+». Красная = QO'LLANMA (ручной),
                     // зелёная = AVTO (автоматический). Тап переключает режим.
