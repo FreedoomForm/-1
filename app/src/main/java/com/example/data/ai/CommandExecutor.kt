@@ -205,53 +205,56 @@ class CommandExecutor(private val context: Context) {
             val scooterId = scooter?.id
             val scooterNameResolved = scooter?.name ?: scooterName
 
-            // ── Логика баланса ────────────────────────────────────────────
-            //   debt > 0       → balance = -debt, debtAmount = debt
-            //   prepayment > 0 → balance = +prepayment, debtAmount = 0
-            //   оба 0          → balance = 0, debtAmount = 0
-            //   оба указаны    → приоритет у debt (долг важнее аванса)
-            val balance: Double
-            val debtAmount: Double
-            val isPrepaid: Boolean
-            when {
-                debt > 0 -> {
-                    balance = -debt
-                    debtAmount = debt
-                    isPrepaid = false
-                }
-                prepayment > 0 -> {
-                    balance = prepayment
-                    debtAmount = 0.0
-                    isPrepaid = true
-                }
-                else -> {
-                    balance = 0.0
-                    debtAmount = 0.0
-                    isPrepaid = true  // нет долга = считаем оплаченным
-                }
-            }
+            // ── Логика баланса ────────────────────────────────────────────────
+            //   debt > 0       → арендатор должен. balance = -debt, контракт
+            //                    НЕ оплачен. Transaction НЕ создаётся, на карту
+            //                    ничего не зачисляется (деньги ещё не пришли).
+            //   prepayment > 0 → арендатор заплатил заранее. Создаётся
+            //                    Transaction PAYMENT, на карту зачисляется
+            //                    prepayment. Контракт считается оплаченным
+            //                    (isPaid=true) ТОЛЬКО если prepayment >= weeklyPrice.
+            //                    Остаток prepayment - weeklyPrice остаётся как
+            //                    аванс на балансе арендатора.
+            //                    Если prepayment < weeklyPrice — контракт НЕ
+            //                    оплачен, баланс = -(weeklyPrice - prepayment)
+            //                    (арендатор должен остаток).
+            //   оба 0          → новый арендатор без явного платежа. Считаем
+            //                    первую неделю предоплаченной (как в
+            //                    RenterViewModel.addRenter): создаём Transaction
+            //                    PAYMENT на weeklyPrice, зачисляем на карту,
+            //                    контракт isPaid=true, баланс = 0.
+            //   оба указаны    → приоритет у debt (долг важнее аванса).
+            //
+            // ВАЖНО: раньше balance сразу выставлялся как +prepayment, и затем
+            // создавалась Transaction с тем же amount — из-за этого казалось,
+            // что Transaction «не влияет на баланс» (он уже был выставлен
+            // заранее). Теперь: арендатор создаётся с balance=0, а затем
+            // Transaction PAYMENT корректно изменяет баланс через updateRenter.
 
+            val dayMs = 24L * 60 * 60 * 1000
+            val durationMs = duration.toLong() * dayMs
+
+            // Шаг 1: создаём арендатора с нейтральным балансом (0).
             val renter = Renter(
                 name = name,
                 phoneNumber = phone,
-                debtAmount = debtAmount,
+                debtAmount = 0.0,
                 rentDurationDays = duration,
                 rentStartDateTimestamp = rentStartTs,
                 isReturned = isReturned,
                 isOverdueSmsSent = false,
                 scooterId = scooterId,
                 scooterName = scooterNameResolved,
-                balance = balance,
+                balance = 0.0,
                 passportData = passportData,
                 address = address,
                 pinfl = pinfl
             )
             val newId = db.renterDao().insertRenter(renter).toInt()
+            val savedRenter = renter.copy(id = newId)
 
-            // Создаём начальный контракт (CREATED) — как при ручном создании.
-            // Используем дату из фото для weekStart/weekEnd, а не сегодня.
-            val dayMs = 24L * 60 * 60 * 1000
-            val durationMs = duration.toLong() * dayMs
+            // Шаг 2: создаём начальный контракт (CREATED) — пока НЕ оплачен.
+            // isPaid проставим ниже после анализа prepayment.
             val contract = ContractHistoryEntry(
                 renterId = newId,
                 timestamp = rentStartTs,
@@ -277,46 +280,146 @@ class CommandExecutor(private val context: Context) {
                 batteryId1 = scooter?.batteryId1 ?: "",
                 batteryId2 = scooter?.batteryId2 ?: "",
                 additionalInfo = scooter?.additionalInfo ?: "",
-                isPaid = isPrepaid
+                isPaid = false  // временно; обновим ниже
             )
-            db.contractHistoryDao().insert(contract)
+            val contractId = db.contractHistoryDao().insert(contract).toInt()
 
-            // Для предоплаченного контракта — создаём Transaction и
-            // зачисляем на главную карту (как при ручном создании).
-            // Timestamp транзакции = дата аренды, а не сегодня.
-            // Сумма = weeklyPrice (если был только долг или ничего — не создаём платёж).
-            // Если есть prepayment > weeklyPrice — зачисляем prepayment как платёж.
-            if (isPrepaid) {
-                val paymentAmount = when {
-                    prepayment > 0 -> prepayment
-                    else -> weeklyPrice
+            // Шаг 3: применяем платежи / долг к балансу арендатора.
+            //
+            // Случай A — долг (debt > 0):
+            //   balance = -debt, debtAmount = debt, контракт НЕ оплачен.
+            //   Transaction НЕ создаём (деньги ещё не поступали).
+            //   На карту ничего не зачисляем.
+            //
+            // Случай B — предоплата (prepayment > 0):
+            //   • Создаём Transaction PAYMENT с amount=prepayment
+            //   • balance += prepayment
+            //   • Зачисляем prepayment на главную карту (depositContractIncome)
+            //   • Если balance >= weeklyPrice:
+            //       - контракт isPaid = true
+            //       - balance -= weeklyPrice (списываем стоимость недели)
+            //   • debtAmount = max(0, -balance)
+            //   • lastPaymentTimestamp = rentStartTs
+            //
+            // Случай C — ничего не указано (prepayment = 0, debt = 0):
+            //   Считаем первую неделю предоплаченной (как в RenterViewModel):
+            //   • Создаём Transaction PAYMENT с amount=weeklyPrice
+            //   • balance += weeklyPrice
+            //   • Зачисляем weeklyPrice на карту
+            //   • контракт isPaid = true
+            //   • balance -= weeklyPrice (списываем за неделю)
+            //   • Итог: balance = 0, контракт оплачен.
+            //
+            // Случай D — оба указаны (debt > 0 и prepayment > 0):
+            //   Приоритет у debt (см. case A).
+
+            var currentBalance = 0.0
+            var currentDebtAmount = 0.0
+            var contractPaid = false
+            var lastPaymentTs: Long? = null
+
+            when {
+                debt > 0 -> {
+                    // Случай A: долг
+                    currentBalance = -debt
+                    currentDebtAmount = debt
+                    contractPaid = false
                 }
-                val tx = Transaction(
-                    contractId = null,  // не знаем ID только что созданного контракта
-                    renterId = newId,
-                    scooterId = scooterId,
-                    timestamp = rentStartTs,
-                    type = Transaction.TYPE_PAYMENT,
-                    amount = paymentAmount,
-                    notes = "Skaner orqali oldindan to'lov",
-                    renterName = name,
-                    renterPhone = phone,
-                    scooterName = scooterNameResolved ?: "",
-                    contractLabel = ""
-                )
-                db.transactionDao().insert(tx)
+                prepayment > 0 -> {
+                    // Случай B: предоплата
+                    val paymentAmount = prepayment
 
-                try {
-                    val cardRepo = VirtualCardRepository(
-                        db.virtualCardDao(), db.cardTransactionDao()
-                    )
-                    cardRepo.depositContractIncome(
+                    val tx = Transaction(
+                        contractId = contractId,
+                        renterId = newId,
+                        scooterId = scooterId,
+                        timestamp = rentStartTs,
+                        type = Transaction.TYPE_PAYMENT,
                         amount = paymentAmount,
-                        note = "Skaner: ${name} (oldindan to'langan)",
-                        contractId = null
+                        notes = "Skaner orqali oldindan to'lov",
+                        renterName = name,
+                        renterPhone = phone,
+                        scooterName = scooterNameResolved ?: "",
+                        contractLabel = "#$contractId"
                     )
-                } catch (e: Exception) {
-                    Log.w(TAG, "depositContractIncome failed for scanned renter: ${e.message}")
+                    db.transactionDao().insert(tx)
+
+                    // Зачисляем на главную карту
+                    try {
+                        val cardRepo = VirtualCardRepository(
+                            db.virtualCardDao(), db.cardTransactionDao()
+                        )
+                        cardRepo.depositContractIncome(
+                            amount = paymentAmount,
+                            note = "Skaner: $name (oldindan to'lov) — #$contractId",
+                            contractId = contractId
+                        )
+                    } catch (e: Exception) {
+                        Log.w(TAG, "depositContractIncome failed for scanned renter: ${e.message}")
+                    }
+
+                    // Обновляем баланс арендатора: +prepayment
+                    currentBalance = savedRenter.balance + paymentAmount
+
+                    // Если prepayment покрывает weeklyPrice — оплата контракта
+                    if (currentBalance >= weeklyPrice) {
+                        contractPaid = true
+                        currentBalance -= weeklyPrice  // списываем за неделю
+                    }
+                    currentDebtAmount = maxOf(0.0, -currentBalance)
+                    lastPaymentTs = rentStartTs
+                }
+                else -> {
+                    // Случай C: предоплата по умолчанию (как в RenterViewModel)
+                    val paymentAmount = weeklyPrice
+
+                    val tx = Transaction(
+                        contractId = contractId,
+                        renterId = newId,
+                        scooterId = scooterId,
+                        timestamp = rentStartTs,
+                        type = Transaction.TYPE_PAYMENT,
+                        amount = paymentAmount,
+                        notes = "Skaner orqali yaratildi (oldindan to'langan)",
+                        renterName = name,
+                        renterPhone = phone,
+                        scooterName = scooterNameResolved ?: "",
+                        contractLabel = "#$contractId"
+                    )
+                    db.transactionDao().insert(tx)
+
+                    try {
+                        val cardRepo = VirtualCardRepository(
+                            db.virtualCardDao(), db.cardTransactionDao()
+                        )
+                        cardRepo.depositContractIncome(
+                            amount = paymentAmount,
+                            note = "Skaner: $name (oldindan to'langan) — #$contractId",
+                            contractId = contractId
+                        )
+                    } catch (e: Exception) {
+                        Log.w(TAG, "depositContractIncome failed for scanned renter: ${e.message}")
+                    }
+
+                    currentBalance = savedRenter.balance + paymentAmount - weeklyPrice
+                    contractPaid = true
+                    currentDebtAmount = maxOf(0.0, -currentBalance)
+                    lastPaymentTs = rentStartTs
+                }
+            }
+
+            // Шаг 4: сохраняем итоговое состояние арендатора (баланс + долг)
+            db.renterDao().updateRenter(savedRenter.copy(
+                balance = currentBalance,
+                debtAmount = currentDebtAmount,
+                lastPaymentTimestamp = lastPaymentTs
+            ))
+
+            // Шаг 5: помечаем контракт как оплаченный, если применимо
+            if (contractPaid && contractId > 0) {
+                val unpaid = db.contractHistoryDao().getById(contractId)
+                if (unpaid != null && !unpaid.isPaid) {
+                    db.contractHistoryDao().update(unpaid.copy(isPaid = true))
                 }
             }
 

@@ -58,6 +58,7 @@ import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
 import com.example.data.ai.CommandExecutor
 import com.example.data.ai.CommandResult
+import com.example.data.ai.DatabaseSnapshot
 import com.example.data.ai.MistralApiService
 import com.example.ui.theme.ClaudeAccent
 import com.example.ui.theme.ClaudeAccentBg
@@ -294,7 +295,7 @@ fun ScannerScreen(
                 val executor = CommandExecutor(context)
 
                 // Шаг 1: OCR для каждого фото, тексты склеиваем
-                statusMessage = "1/3 OCR — matn tanilmoqda... (${photos.size} ta rasm)"
+                statusMessage = "1/4 OCR — matn tanilmoqda... (${photos.size} ta rasm)"
                 val imageFiles = photos.map { it.file }
                 val ocrText = withContext(Dispatchers.IO) {
                     mistral.performOcrMultiple(imageFiles)
@@ -305,10 +306,22 @@ fun ScannerScreen(
                     return@launch
                 }
 
-                // Шаг 2: генерация JSON-команд
-                statusMessage = "2/3 Mistral Large — komandalar tuzilmoqda..."
+                // Шаг 2: снимок БД — агент Mistral получит весь текущий контекст приложения
+                //   (renters, scooters, virtualCards, recentTransactions, recentContracts,
+                //    recentCardTransactions, settings, todayDate) и на его основе решит:
+                //      • что создавать,
+                //      • что обновлять (вместо создания дублей),
+                //      • что пропустить (дубликаты),
+                //      • о чём сообщить пользователю в summary.
+                statusMessage = "2/4 Bazaning holati olinmoqda..."
+                val dbSnapshot = withContext(Dispatchers.IO) {
+                    DatabaseSnapshot.buildJson(context)
+                }
+
+                // Шаг 3: генерация JSON-команд (со снимком БД в контексте)
+                statusMessage = "3/4 Mistral Large — komandalar tuzilmoqda..."
                 val mistralResponse = withContext(Dispatchers.IO) {
-                    mistral.generateCommand(ocrText)
+                    mistral.generateCommand(ocrText, dbSnapshot)
                 }
                 if (mistralResponse.isBlank()) {
                     statusMessage = "Mistral javob bermadi. Qayta urinib ko'ring."
@@ -316,8 +329,8 @@ fun ScannerScreen(
                     return@launch
                 }
 
-                // Шаг 3: выполнение команд
-                statusMessage = "3/3 Komandalar bajarilmoqda..."
+                // Шаг 4: выполнение команд
+                statusMessage = "4/4 Komandalar bajarilmoqda..."
                 val (success, results) = executor.execute(mistralResponse)
                 commandResults = results
                 state = ScannerState.Done

@@ -101,24 +101,52 @@ class MistralApiService(
     }
 
     /**
-     * Шаг 2: на основе распознанного текста сгенерировать JSON-команду для
-     * выполнения в приложении.
+     * Шаг 2: на основе распознанного текста и снимка БД сгенерировать
+     * JSON-команду для выполнения в приложении.
      *
      * Модель получает:
      *   • системный промпт с описанием всех доступных команд и их схемы
-     *   • пользовательское сообщение с OCR-текстом
+     *   • пользовательское сообщение, содержащее:
+     *       - снимок текущего состояния БД (renters, scooters, virtualCards,
+     *         recentTransactions, recentContracts, recentCardTransactions,
+     *         settings, todayDate)
+     *       - OCR-текст фотографии
      *
-     * Модель должна ответить одним JSON-объектом (или массивом объектов)
-     * согласно схеме, описанной в [SYSTEM_PROMPT].
+     * На основе снимка модель решает:
+     *   • что создавать (новые сущности)
+     *   • что НЕ создавать (дубликаты по имени/телефону/VIN/паспорту)
+     *   • что обновлять (UPDATE_RENTER вместо CREATE_RENTER для существующих)
+     *   • о чём сообщить пользователю в поле "summary"
      *
      * @param ocrText распознанный текст (из [performOcr])
-     * @return "сырая" строка ответа модели (нужно парсить через [CommandParser])
+     * @param dbSnapshot JSON-снимок базы данных (из [DatabaseSnapshot.buildJson]).
+     *        Если пустая строка — снимок не отправляется (старое поведение).
+     * @return "сырая" строка ответа модели (нужно парсить через [CommandExecutor])
      */
-    fun generateCommand(ocrText: String): String {
+    fun generateCommand(ocrText: String, dbSnapshot: String = ""): String {
         try {
             if (ocrText.isBlank()) {
                 Log.w(TAG, "generateCommand: ocrText is empty, nothing to send")
                 return ""
+            }
+
+            // ── Собираем пользовательское сообщение ─────────────────────────
+            // Сначала отправляем снимок БД (контекст «что уже есть в приложении»),
+            // затем — OCR-текст (что модель видит на фото).
+            // Между ними — разделительная разметка, чтобы модель не путала,
+            // где заканчивается снимок и начинается фото-текст.
+            val userContent = buildString {
+                if (dbSnapshot.isNotBlank()) {
+                    append("=== CURRENT DATABASE SNAPSHOT (состояние приложения ПРЯМО СЕЙЧАС) ===\n")
+                    append(dbSnapshot)
+                    append("\n\n=== END DATABASE SNAPSHOT ===\n\n")
+                    append("Используй этот снимок, чтобы решить: что создавать, что обновлять, ")
+                    append("что пропустить (дубликаты), и о чём сообщить пользователю. ")
+                    append("Снимок актуален на момент сканирования фото.\n\n")
+                }
+                append("=== OCR TEXT (распознанный текст с фотографии) ===\n")
+                append(ocrText)
+                append("\n=== END OCR TEXT ===")
             }
 
             val messages = JSONArray().apply {
@@ -128,7 +156,7 @@ class MistralApiService(
                 })
                 put(JSONObject().apply {
                     put("role", "user")
-                    put("content", "OCR natijasi:\n\n$ocrText")
+                    put("content", userContent)
                 })
             }
 
@@ -259,8 +287,76 @@ class MistralApiService(
          * т.д.) и применить его к соответствующей сущности.
          */
         const val SYSTEM_PROMPT = """You are an assistant for a scooter rental app (Uzbekistan).
-Your job: take OCR text from a photo and produce JSON commands that create or update entities in the app.
+Your job: take OCR text from a photo PLUS a database snapshot of the app's current state, and produce
+JSON commands that create or update entities in the app — WITHOUT creating duplicates and WITHOUT
+destroying existing data.
 
+== INPUT YOU RECEIVE ==
+1. **Database snapshot** — a JSON object with the current state of the app:
+   - `renters` (active first, then returned) — id, name, phone, debt, balance, scooterId, scooterName,
+     rentDurationDays, rentStartDate, passportData, pinfl, address, isReturned, lastPaymentDate
+   - `scooters` — id, name, documentedNumber, vin, engine, serial, battery1, battery2, info
+   - `virtualCards` — id, name, balance, kind, isExternal, isDefault, info
+   - `recentTransactions` — last 100 (id, date, type, amount, renterName, scooterName, notes)
+   - `recentContracts` — last 100 contract history entries (id, date, type, amount, renterName,
+     scooterName, weekStart, weekEnd, isPaid, notes)
+   - `recentCardTransactions` — last 50 transfers between cards
+   - `settings` — weeklyPrice, monthlyPrice, scooterPriceUsd, usdToUzsRate, paymeLink, callCenter,
+     smsAutoSendEnabled
+   - `todayDate` — current date (YYYY-MM-DD)
+
+2. **OCR text** — the recognized text from the user's photo. May contain a list of renters,
+   scooters, transactions, contracts, transfers, returns, terminations, or any mix.
+
+== HOW TO USE THE SNAPSHOT — CRITICAL ==
+BEFORE emitting ANY command, scan the snapshot and decide:
+
+1. **CREATE vs UPDATE vs SKIP**
+   - For each renter found in OCR: search `renters` in the snapshot by name (case-insensitive,
+     ignoring extra spaces) OR by phone (normalized). If found → use UPDATE_RENTER (or skip if no
+     field changed). If NOT found → use CREATE_RENTER.
+   - For each scooter found in OCR: search `scooters` by name OR by VIN OR by documentedNumber.
+     If found → SKIP (scooter updates are not supported via commands; just reference its name).
+     If NOT found → use CREATE_SCOOTER.
+   - For each transaction: ensure renterName matches an existing renter in the snapshot. If renter
+     doesn't exist → emit CREATE_RENTER first.
+   - For each card transfer: ensure fromCardName/toCardName match existing virtualCards. If a card
+     name doesn't exist → SKIP this transfer and explain in summary.
+
+2. **DEDUPLICATION — most important rule**
+   - NEVER create a second renter with the same name+phone as an existing one.
+   - NEVER create a second scooter with the same VIN, same name, or same documentedNumber.
+   - NEVER create a second virtual card with the same name.
+   - If a duplicate is detected → use UPDATE_RENTER (for renters) or SKIP (for everything else).
+     In the summary, mention: "X уже существует в БД — обновлено" or "X уже существует — пропущено".
+
+3. **WHAT NOT TO DO**
+   - Do NOT emit CREATE_RENTER for a renter that already exists — use UPDATE_RENTER.
+   - Do NOT emit CREATE_SCOOTER for a scooter that already exists.
+   - Do NOT emit CREATE_TRANSACTION for a payment that already exists (same renterName + same amount
+     + same date — likely a duplicate). Compare with `recentTransactions`.
+   - Do NOT emit CREATE_CARD_TRANSACTION if an identical transfer (same fromCard, toCard, amount,
+     date) is already in `recentCardTransactions`.
+   - Do NOT emit CREATE_CONTRACT if a contract with same renterName + weekStart already exists
+     (compare with `recentContracts`).
+
+4. **WHAT TO REPORT TO USER (in `summary`)**
+   The `summary` field is the ONLY message the user sees. Make it informative in Uzbek:
+   - What was CREATED (new entities added): "Yangi ijarachi qo'shildi: Akmal (+998901234567)"
+   - What was UPDATED (existing entities modified): "Akmal telefoni yangilandi: +998901234567"
+   - What was SKIPPED (duplicates): "Skuter 'N5' allaqachon mavjud — o'tkazib yuborildi"
+   - What was UNCLEAR (couldn't parse): "2-qator: telefon raqami o'qib bo'lmadi"
+   - Final count: "Jami: 3 yangi ijarachi, 1 yangi skuter, 2 to'lov"
+   If NOTHING was created/updated (everything was duplicate or unclear), still emit FINISH with a
+   summary explaining what happened.
+
+5. **ACTIVE vs RETURNED renters**
+   - If a renter is marked as `isReturned: true` in the snapshot but the photo shows them renting
+     AGAIN → emit CREATE_RENTER with a fresh start (not UPDATE).
+   - If a renter is active in snapshot and photo shows a RETURN → emit RETURN_RENTER.
+   - If a renter is active and photo shows TERMINATION → emit TERMINATE_RENTER.
+
+== COMMAND SCHEMAS ==
 You receive a photo of a handwritten or printed list, contract, receipt, passport, vehicle document,
 payment receipt, or any other document. It can contain:
 - list of renters (ijarachilar) — names, phones, debts, dates, passport data, addresses, PINFL
@@ -435,8 +531,28 @@ Rules:
 - Always include at least one command in "commands" array.
 - Always emit FINISH as the LAST command after all real commands.
 - If photo is unclear or empty, emit FINISH only with summary explaining the issue.
+- If EVERYTHING in the photo is a duplicate of what's already in the snapshot, emit FINISH only
+  with a summary listing what was checked and why it was skipped.
 - Phone numbers: normalize to +998XXXXXXXXX format. If only 9 digits given, prepend +998.
 - Money amounts: parse as numbers in UZS (Uzbek so'm). "420 ming" = 420000. "1 million" = 1000000.
+
+DEDUPLICATION CHECKLIST (apply BEFORE emitting each command):
+- CREATE_RENTER: search snapshot.renters by name (case-insensitive) and by phone. If match found →
+  emit UPDATE_RENTER instead (or skip if nothing to update).
+- CREATE_SCOOTER: search snapshot.scooters by name, VIN, documentedNumber. If match → SKIP.
+- CREATE_TRANSACTION: search snapshot.recentTransactions by renterName+amount+date. If match → SKIP.
+- CREATE_CONTRACT: search snapshot.recentContracts by renterName+weekStart. If match → SKIP.
+- CREATE_VIRTUAL_CARD: search snapshot.virtualCards by name. If match → SKIP.
+- CREATE_CARD_TRANSACTION: search snapshot.recentCardTransactions by fromCard+toCard+amount+date.
+  If match → SKIP.
+- UPDATE_RENTER / RETURN_RENTER / TERMINATE_RENTER: renter MUST exist in snapshot.renters (by name
+  or phone). If not → emit CREATE_RENTER first (for UPDATE) or SKIP with explanation in summary
+  (for RETURN/TERMINATE, because they require an existing renter).
+
+SUMMARY FORMAT (Uzbek, mandatory, informative):
+  "Jami: 3 yangi ijarachi (Akmal, Bekzod, Dilshod), 1 yangi skuter (N7), 2 to'lov (200000 + 150000).
+   Akmal telefoni yangilandi. Skuter N5 allaqachon mavjud — o'tkazib yuborildi."
+Make it short (1-3 sentences) but cover: created / updated / skipped / unclear counts.
 
 DATES — CRITICAL RULE:
 - The photo often contains a date column ("Sana", "Дата", "Date") or a single date heading at the top of the list.
