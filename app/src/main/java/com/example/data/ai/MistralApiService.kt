@@ -284,6 +284,7 @@ Each command is an object with a "type" field. Supported types:
      "phoneNumber": "string (required, digits, can start with +998)",
      "debt": number (initial debt in UZS, default 0),
      "rentDurationDays": integer (default 7),
+     "rentStartDate": "ISO date string YYYY-MM-DD (REQUIRED if photo shows a date — e.g. '2025-03-15'; default: today)",
      "scooterName": "string or null (if photo mentions scooter)",
      "weeklyPrice": number (default 420000),
      "passportData": "string (default empty)",
@@ -311,7 +312,8 @@ Each command is an object with a "type" field. Supported types:
      "amount": number (required, positive),
      "txType": "PAYMENT | PENALTY | REPAIR | RETURNED | TERMINATED | CUSTOM (default PAYMENT)",
      "notes": "string (default empty)",
-     "scooterName": "string or null"
+     "scooterName": "string or null",
+     "date": "ISO date string YYYY-MM-DD (REQUIRED if photo shows a date for this transaction; default: today)"
    }
 
 4. CREATE_CONTRACT — create a contract for an existing renter
@@ -320,8 +322,8 @@ Each command is an object with a "type" field. Supported types:
      "renterName": "string (required, must match existing renter)",
      "scooterName": "string or null",
      "amount": number (default weeklyPrice from settings)",
-     "weekStart": "ISO date string or null (default today)",
-     "weekEnd": "ISO date string or null (default today + 7 days)",
+     "weekStart": "ISO date string YYYY-MM-DD (REQUIRED if photo shows a date — use the date from photo; default: today)",
+     "weekEnd": "ISO date string or null (default weekStart + 7 days)",
      "isPaid": boolean (default false),
      "notes": "string (default empty)"
    }
@@ -344,7 +346,17 @@ Rules:
 - If photo is unclear or empty, emit FINISH only with summary explaining the issue.
 - Phone numbers: normalize to +998XXXXXXXXX format. If only 9 digits given, prepend +998.
 - Money amounts: parse as numbers in UZS (Uzbek so'm). "420 ming" = 420000.
-- Dates: ISO format "YYYY-MM-DD". If relative like "bugun" use today.
+
+DATES — CRITICAL RULE:
+- The photo often contains a date column ("Sana", "Дата", "Date") or a single date heading at the top of the list.
+- ALWAYS extract that date and put it into "rentStartDate" (for CREATE_RENTER) or "date" (for CREATE_TRANSACTION).
+- If the photo has a per-row date column, use each row's own date.
+- If the photo has one shared date for the whole list, use that date for every renter/transaction.
+- Date format in output MUST be ISO "YYYY-MM-DD".
+- Acceptable input formats from OCR: "15.03.2025", "15/03/2025", "2025-03-15", "15-mar", "15 mart", "15.03".
+- If year is missing, assume current year.
+- Only use today's date as fallback when the photo genuinely has NO date anywhere.
+
 - For CREATE_RENTER: if photo shows debt, set "debt" field. If shows prepaid, set debt=0.
 - For CREATE_TRANSACTION: renterName MUST match an existing renter (case-insensitive). If unsure, use CREATE_RENTER instead.
 - Fill missing required fields with reasonable defaults. Never ask user for clarification.

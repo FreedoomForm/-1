@@ -160,18 +160,35 @@ class CommandExecutor(private val context: Context) {
             val address = cmd.optString("address", "").trim()
             val pinfl = cmd.optString("pinfl", "").trim()
 
+            // ── Дата аренды ────────────────────────────────────────────────
+            // Mistral извлекает дату из фото и кладёт её в "rentStartDate"
+            // в формате ISO "YYYY-MM-DD". Если поле отсутствует или не
+            // парсится — fallback на сегодня.
+            //
+            // ВАЖНО: эта дата используется для:
+            //   • rentStartDateTimestamp арендатора
+            //   • timestamp контракта (для истории)
+            //   • weekStart контракта
+            //   • weekEnd = weekStart + rentDurationDays
+            //   • timestamp транзакции (если предоплата)
+            //
+            // Раньше здесь всегда стояло System.currentTimeMillis() — из-за
+            // этого все арендаторы создавались "сегодня", даже если на фото
+            // была дата недели/месяца назад.
+            val rentStartTs = parseDate(cmd.optString("rentStartDate", "").trim())
+                ?: System.currentTimeMillis()
+
             // Находим скутер по имени (если указан)
             val scooter = scooterName?.let { findScooterByName(it) }
             val scooterId = scooter?.id
             val scooterNameResolved = scooter?.name ?: scooterName
 
-            val now = System.currentTimeMillis()
             val renter = Renter(
                 name = name,
                 phoneNumber = phone,
                 debtAmount = if (debt > 0) debt else 0.0,
                 rentDurationDays = duration,
-                rentStartDateTimestamp = now,
+                rentStartDateTimestamp = rentStartTs,
                 isReturned = false,
                 isOverdueSmsSent = false,
                 scooterId = scooterId,
@@ -184,21 +201,20 @@ class CommandExecutor(private val context: Context) {
             val newId = db.renterDao().insertRenter(renter).toInt()
 
             // Создаём начальный контракт (CREATED) — как при ручном создании.
-            // Логика упрощена: всегда создаётся один CREATED контракт с
-            // weekStart=now, weekEnd=now+7days, isPaid = (debt == 0).
+            // Используем дату из фото для weekStart/weekEnd, а не сегодня.
             val dayMs = 24L * 60 * 60 * 1000
-            val weekMs = 7L * dayMs
+            val durationMs = duration.toLong() * dayMs
             val contract = ContractHistoryEntry(
                 renterId = newId,
-                timestamp = now,
+                timestamp = rentStartTs,
                 type = ContractHistoryEntry.TYPE_CREATED,
                 amount = weeklyPrice,
                 notes = if (debt > 0) "Skaner orqali yaratildi (qarz bilan)" else "Skaner orqali yaratildi (oldindan to'langan)",
                 renterName = name,
                 renterPhone = phone,
                 scooterName = scooterNameResolved,
-                weekStart = now,
-                weekEnd = now + weekMs,
+                weekStart = rentStartTs,
+                weekEnd = rentStartTs + durationMs,
                 weeklyPrice = weeklyPrice,
                 passportData = passportData,
                 address = address,
@@ -215,12 +231,13 @@ class CommandExecutor(private val context: Context) {
 
             // Для предоплаченного контракта — создаём Transaction и
             // зачисляем на главную карту (как при ручном создании).
+            // Timestamp транзакции = дата аренды, а не сегодня.
             if (debt <= 0) {
                 val tx = Transaction(
                     contractId = null,  // не знаем ID только что созданного контракта
                     renterId = newId,
                     scooterId = scooterId,
-                    timestamp = now,
+                    timestamp = rentStartTs,
                     type = Transaction.TYPE_PAYMENT,
                     amount = weeklyPrice,
                     notes = "Skaner orqali oldindan to'lov",
@@ -245,9 +262,11 @@ class CommandExecutor(private val context: Context) {
                 }
             }
 
+            val dateStr = SimpleDateFormat("dd.MM.yyyy", Locale.US).format(Date(rentStartTs))
             return CommandResult(true,
                 "✓ Ijarachi yaratildi: $name ($phone)" +
-                (if (debt > 0) ", qarz: ${formatMoney(debt)}" else ""))
+                (if (debt > 0) ", qarz: ${formatMoney(debt)}" else "") +
+                ", sana: $dateStr")
         } catch (e: Exception) {
             Log.e(TAG, "createRenter failed", e)
             return CommandResult(false, "CREATE_RENTER xato: ${e.message}")
@@ -302,12 +321,21 @@ class CommandExecutor(private val context: Context) {
             val notes = cmd.optString("notes", "").trim()
             val scooterName = cmd.optString("scooterName", "").trim().ifEmpty { null }
 
-            val now = System.currentTimeMillis()
+            // ── Дата транзакции ────────────────────────────────────────────
+            // Mistral извлекает дату из фото и кладёт её в "date" в формате
+            // ISO "YYYY-MM-DD". Если поле отсутствует — fallback на сегодня.
+            //
+            // ВАЖНО: раньше здесь всегда стояло System.currentTimeMillis() —
+            // из-за этого все транзакции создавались "сегодня", даже если на
+            // фото была дата недели/месяца назад.
+            val txTimestamp = parseDate(cmd.optString("date", "").trim())
+                ?: System.currentTimeMillis()
+
             val tx = Transaction(
                 contractId = null,
                 renterId = renter.id,
                 scooterId = renter.scooterId,
-                timestamp = now,
+                timestamp = txTimestamp,
                 type = txType,
                 amount = amount,
                 notes = notes.ifEmpty { "Skaner orqali: $txType" },
@@ -325,7 +353,7 @@ class CommandExecutor(private val context: Context) {
                 db.renterDao().updateRenter(renter.copy(
                     balance = newBalance,
                     debtAmount = maxOf(0.0, -newBalance),
-                    lastPaymentTimestamp = now,
+                    lastPaymentTimestamp = txTimestamp,
                     isOverdueSmsSent = false
                 ))
 
@@ -343,8 +371,9 @@ class CommandExecutor(private val context: Context) {
                 }
             }
 
+            val dateStr = SimpleDateFormat("dd.MM.yyyy", Locale.US).format(Date(txTimestamp))
             return CommandResult(true,
-                "✓ Tranzaksiya: ${renter.name} — ${formatMoney(amount)} ($txType)")
+                "✓ Tranzaksiya: ${renter.name} — ${formatMoney(amount)} ($txType), sana: $dateStr")
         } catch (e: Exception) {
             Log.e(TAG, "createTransaction failed", e)
             return CommandResult(false, "CREATE_TRANSACTION xato: ${e.message}")
@@ -479,20 +508,84 @@ class CommandExecutor(private val context: Context) {
     }
 
     /**
-     * Парсит дату в формате ISO "YYYY-MM-DD" или "DD.MM.YYYY".
-     * Возвращает timestamp в миллисекундах, или null если не удалось.
+     * Парсит дату из строки. Поддерживаемые форматы:
+     *   • "yyyy-MM-dd"        — ISO (2025-03-15)
+     *   • "dd.MM.yyyy"        — европейский (15.03.2025)
+     *   • "dd/MM/yyyy"        — слэш-разделитель (15/03/2025)
+     *   • "dd.MM.yy"          — короткий год (15.03.25)
+     *   • "dd.MM"             — без года (используется текущий год)
+     *   • "d MMM" / "d MMMM"  — Uzbek/Russian month name ("15 mart", "15 март")
+     *
+     * Возвращает timestamp в миллисекундах (начало дня, локальный timezone),
+     * или null если не удалось распарсить.
      */
     private fun parseDate(s: String): Long? {
         if (s.isBlank()) return null
-        val patterns = listOf("yyyy-MM-dd", "dd.MM.yyyy", "dd/MM/yyyy")
+        val input = s.trim()
+
+        // Сначала пробуем строгие форматы
+        val patterns = listOf(
+            "yyyy-MM-dd", "dd.MM.yyyy", "dd/MM/yyyy", "dd-MM-yyyy",
+            "dd.MM.yy", "dd/MM/yy", "yy-MM-dd"
+        )
         for (p in patterns) {
             try {
                 val fmt = SimpleDateFormat(p, Locale.US).apply {
                     timeZone = TimeZone.getDefault()
+                    isLenient = false
                 }
-                return fmt.parse(s)?.time
+                return fmt.parse(input)?.time
             } catch (_: Exception) { /* try next */ }
         }
+
+        // Формат "dd.MM" без года — добавляем текущий год
+        if (input.matches(Regex("""^\d{1,2}[./-]\d{1,2}$"""))) {
+            try {
+                val parts = input.split("[./-]".toRegex())
+                val day = parts[0].toInt()
+                val month = parts[1].toInt()
+                if (month in 1..12 && day in 1..31) {
+                    val cal = java.util.Calendar.getInstance().apply {
+                        set(java.util.Calendar.YEAR, get(java.util.Calendar.YEAR))
+                        set(java.util.Calendar.MONTH, month - 1)
+                        set(java.util.Calendar.DAY_OF_MONTH, day)
+                        set(java.util.Calendar.HOUR_OF_DAY, 0)
+                        set(java.util.Calendar.MINUTE, 0)
+                        set(java.util.Calendar.SECOND, 0)
+                        set(java.util.Calendar.MILLISECOND, 0)
+                    }
+                    return cal.timeInMillis
+                }
+            } catch (_: Exception) { /* fall through */ }
+        }
+
+        // Форматы с названием месяца — Uzbek ("mart", "may") и Russian ("марта", "мая")
+        val monthFormats = listOf("d MMM yyyy", "d MMMM yyyy", "d MMM", "d MMMM")
+        val locales = listOf(Locale("ru"), Locale("uz"), Locale.US)
+        for (loc in locales) {
+            for (p in monthFormats) {
+                try {
+                    val fmt = SimpleDateFormat(p, loc).apply {
+                        timeZone = TimeZone.getDefault()
+                        isLenient = true
+                    }
+                    val parsed = fmt.parse(input)
+                    if (parsed != null) {
+                        // Если год не указан в формате — SimpleDateFormat ставит 1970.
+                        // Заменяем на текущий год.
+                        val cal = java.util.Calendar.getInstance().apply {
+                            time = parsed
+                            if (get(java.util.Calendar.YEAR) < 2000) {
+                                set(java.util.Calendar.YEAR,
+                                    java.util.Calendar.getInstance().get(java.util.Calendar.YEAR))
+                            }
+                        }
+                        return cal.timeInMillis
+                    }
+                } catch (_: Exception) { /* try next */ }
+            }
+        }
+
         return null
     }
 
