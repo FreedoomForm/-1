@@ -175,6 +175,10 @@ class CommandExecutor(private val context: Context) {
                     "CREATE_VIRTUAL_CARD" -> createVirtualCard(cmd)
                     "CREATE_CARD_TRANSACTION" -> createCardTransaction(cmd)
                     "UPDATE_RENTER" -> updateRenter(cmd)
+                    "UPDATE_SCOOTER" -> updateScooter(cmd)
+                    "UPDATE_VIRTUAL_CARD" -> updateVirtualCard(cmd)
+                    "UPDATE_CONTRACT" -> updateContract(cmd)
+                    "UPDATE_TRANSACTION" -> updateTransaction(cmd)
                     "RETURN_RENTER" -> returnRenter(cmd)
                     "TERMINATE_RENTER" -> terminateRenter(cmd)
                     "FINISH" -> CommandResult(true, "✓ Bajarildi")
@@ -919,6 +923,213 @@ class CommandExecutor(private val context: Context) {
         } catch (e: Exception) {
             Log.e(TAG, "updateRenter failed", e)
             return CommandResult(false, "UPDATE_RENTER xato: ${e.message}")
+        }
+    }
+
+    // ── Команда: UPDATE_SCOOTER ─────────────────────────────────────────────
+    // Обновляет поля существующего скутера. ТОЛЬКО поля, явно присутствующие
+    // в JSON, изменяются — все остальные остаются без изменений.
+    // ВАЖНО: ничего не придумываем — если фото не показывает поле, мы его
+    // не трогаем.
+    private suspend fun updateScooter(cmd: JSONObject): CommandResult {
+        try {
+            val scooterName = cmd.optString("scooterName", "").trim()
+            if (scooterName.isEmpty()) {
+                return CommandResult(false, "UPDATE_SCOOTER: 'scooterName' majburiy")
+            }
+            val scooter = findScooterByName(scooterName)
+                ?: return CommandResult(false,
+                    "UPDATE_SCOOTER: '$scooterName' skuter topilmadi")
+
+            // Читаем только те поля, которые явно присутствуют в JSON.
+            // null = не трогать.
+            val newName = if (cmd.has("newName"))
+                cmd.optString("newName", "").trim().ifEmpty { null } else null
+            val newDocumentedNumber = if (cmd.has("newDocumentedNumber"))
+                cmd.optString("newDocumentedNumber", "").trim().ifEmpty { null } else null
+            val newVinNumber = if (cmd.has("newVinNumber"))
+                cmd.optString("newVinNumber", "").trim().ifEmpty { null } else null
+            val newEngineNumber = if (cmd.has("newEngineNumber"))
+                cmd.optString("newEngineNumber", "").trim().ifEmpty { null } else null
+            val newScooterSerialNumber = if (cmd.has("newScooterSerialNumber"))
+                cmd.optString("newScooterSerialNumber", "").trim().ifEmpty { null } else null
+            val newBatteryId1 = if (cmd.has("newBatteryId1"))
+                cmd.optString("newBatteryId1", "").trim().ifEmpty { null } else null
+            val newBatteryId2 = if (cmd.has("newBatteryId2"))
+                cmd.optString("newBatteryId2", "").trim().ifEmpty { null } else null
+            val newAdditionalInfo = if (cmd.has("newAdditionalInfo"))
+                cmd.optString("newAdditionalInfo", "").trim().ifEmpty { null } else null
+
+            val updated = scooter.copy(
+                name = newName ?: scooter.name,
+                documentedNumber = newDocumentedNumber ?: scooter.documentedNumber,
+                vinNumber = newVinNumber ?: scooter.vinNumber,
+                engineNumber = newEngineNumber ?: scooter.engineNumber,
+                scooterSerialNumber = newScooterSerialNumber ?: scooter.scooterSerialNumber,
+                batteryId1 = newBatteryId1 ?: scooter.batteryId1,
+                batteryId2 = newBatteryId2 ?: scooter.batteryId2,
+                additionalInfo = newAdditionalInfo ?: scooter.additionalInfo
+            )
+            db.scooterDao().updateScooter(updated)
+
+            val changedFields = mutableListOf<String>()
+            if (newName != null) changedFields.add("nomi")
+            if (newDocumentedNumber != null) changedFields.add("raqami")
+            if (newVinNumber != null) changedFields.add("VIN")
+            if (newEngineNumber != null) changedFields.add("dvigatel")
+            if (newScooterSerialNumber != null) changedFields.add("seriya")
+            if (newBatteryId1 != null) changedFields.add("batareya1")
+            if (newBatteryId2 != null) changedFields.add("batareya2")
+            if (newAdditionalInfo != null) changedFields.add("info")
+            val changeSummary = if (changedFields.isEmpty()) "o'zgartirishsiz" else changedFields.joinToString(", ")
+
+            return CommandResult(true,
+                "✓ Skuter yangilandi: ${scooter.name} — $changeSummary")
+        } catch (e: Exception) {
+            Log.e(TAG, "updateScooter failed", e)
+            return CommandResult(false, "UPDATE_SCOOTER xato: ${e.message}")
+        }
+    }
+
+    // ── Команда: UPDATE_VIRTUAL_CARD ────────────────────────────────────────
+    // Обновляет поля существующей виртуальной карты. ТОЛЬКО поля, явно
+    // присутствующие в JSON, изменяются — все остальные остаются без изменений.
+    private suspend fun updateVirtualCard(cmd: JSONObject): CommandResult {
+        try {
+            val cardName = cmd.optString("cardName", "").trim()
+            if (cardName.isEmpty()) {
+                return CommandResult(false, "UPDATE_VIRTUAL_CARD: 'cardName' majburiy")
+            }
+            val card = findCardByName(cardName)
+                ?: return CommandResult(false,
+                    "UPDATE_VIRTUAL_CARD: '$cardName' karta topilmadi")
+
+            val newName = if (cmd.has("newName"))
+                cmd.optString("newName", "").trim().ifEmpty { null } else null
+            val newColorHex = if (cmd.has("newColorHex"))
+                cmd.optString("newColorHex", "").trim().ifEmpty { null } else null
+            val newInfo = if (cmd.has("newInfo"))
+                cmd.optString("newInfo", "").trim().ifEmpty { null } else null
+            val balanceAdjustment = if (cmd.has("balanceAdjustment"))
+                cmd.optDouble("balanceAdjustment", 0.0) else null
+
+            val newBalance = card.balance + (balanceAdjustment ?: 0.0)
+
+            val updated = card.copy(
+                name = newName ?: card.name,
+                colorHex = newColorHex ?: card.colorHex,
+                info = newInfo ?: card.info,
+                balance = newBalance
+            )
+            db.virtualCardDao().updateCard(updated)
+
+            val changedFields = mutableListOf<String>()
+            if (newName != null) changedFields.add("nomi")
+            if (newColorHex != null) changedFields.add("rang")
+            if (newInfo != null) changedFields.add("info")
+            if (balanceAdjustment != null) changedFields.add("balans=${formatMoney(balanceAdjustment)}")
+            val changeSummary = if (changedFields.isEmpty()) "o'zgartirishsiz" else changedFields.joinToString(", ")
+
+            return CommandResult(true,
+                "✓ Karta yangilandi: ${card.name} — $changeSummary")
+        } catch (e: Exception) {
+            Log.e(TAG, "updateVirtualCard failed", e)
+            return CommandResult(false, "UPDATE_VIRTUAL_CARD xato: ${e.message}")
+        }
+    }
+
+    // ── Команда: UPDATE_CONTRACT ────────────────────────────────────────────
+    // Обновляет поля существующего контракта (по contractId). ТОЛЬКО поля,
+    // явно присутствующие в JSON, изменяются — все остальные остаются без изменений.
+    private suspend fun updateContract(cmd: JSONObject): CommandResult {
+        try {
+            val contractId = cmd.optInt("contractId", -1)
+            if (contractId <= 0) {
+                return CommandResult(false, "UPDATE_CONTRACT: 'contractId' majburiy (>0)")
+            }
+            val contract = db.contractHistoryDao().getById(contractId)
+                ?: return CommandResult(false,
+                    "UPDATE_CONTRACT: kontrakt #$contractId topilmadi")
+
+            val newAmount = if (cmd.has("newAmount"))
+                cmd.optDouble("newAmount", 0.0) else null
+            val newWeekStart = if (cmd.has("newWeekStart"))
+                parseDate(cmd.optString("newWeekStart", "").trim()) else null
+            val newWeekEnd = if (cmd.has("newWeekEnd"))
+                parseDate(cmd.optString("newWeekEnd", "").trim()) else null
+            val newIsPaid = if (cmd.has("newIsPaid"))
+                cmd.optBoolean("newIsPaid", false) else null
+            val newNotes = if (cmd.has("newNotes"))
+                cmd.optString("newNotes", "").trim().ifEmpty { null } else null
+
+            val updated = contract.copy(
+                amount = newAmount ?: contract.amount,
+                weeklyPrice = newAmount ?: contract.weeklyPrice,
+                weekStart = newWeekStart ?: contract.weekStart,
+                weekEnd = newWeekEnd ?: contract.weekEnd,
+                isPaid = newIsPaid ?: contract.isPaid,
+                notes = newNotes ?: contract.notes
+            )
+            db.contractHistoryDao().update(updated)
+
+            val changedFields = mutableListOf<String>()
+            if (newAmount != null) changedFields.add("summa=${formatMoney(newAmount)}")
+            if (newWeekStart != null) changedFields.add("boshlanish")
+            if (newWeekEnd != null) changedFields.add("tugash")
+            if (newIsPaid != null) changedFields.add(if (newIsPaid) "to'langan" else "to'lanmagan")
+            if (newNotes != null) changedFields.add("izoh")
+            val changeSummary = if (changedFields.isEmpty()) "o'zgartirishsiz" else changedFields.joinToString(", ")
+
+            return CommandResult(true,
+                "✓ Kontrakt yangilandi: #${contract.id} (${contract.renterName}) — $changeSummary")
+        } catch (e: Exception) {
+            Log.e(TAG, "updateContract failed", e)
+            return CommandResult(false, "UPDATE_CONTRACT xato: ${e.message}")
+        }
+    }
+
+    // ── Команда: UPDATE_TRANSACTION ─────────────────────────────────────────
+    // Обновляет поля существующей транзакции (по transactionId). ТОЛЬКО поля,
+    // явно присутствующие в JSON, изменяются — все остальные остаются без изменений.
+    private suspend fun updateTransaction(cmd: JSONObject): CommandResult {
+        try {
+            val transactionId = cmd.optInt("transactionId", -1)
+            if (transactionId <= 0) {
+                return CommandResult(false, "UPDATE_TRANSACTION: 'transactionId' majburiy (>0)")
+            }
+            val tx = db.transactionDao().getById(transactionId)
+                ?: return CommandResult(false,
+                    "UPDATE_TRANSACTION: tranzaksiya #$transactionId topilmadi")
+
+            val newAmount = if (cmd.has("newAmount"))
+                cmd.optDouble("newAmount", 0.0) else null
+            val newType = if (cmd.has("newType"))
+                cmd.optString("newType", "").trim().uppercase().ifEmpty { null } else null
+            val newDate = if (cmd.has("newDate"))
+                parseDate(cmd.optString("newDate", "").trim()) else null
+            val newNotes = if (cmd.has("newNotes"))
+                cmd.optString("newNotes", "").trim().ifEmpty { null } else null
+
+            val updated = tx.copy(
+                amount = newAmount ?: tx.amount,
+                type = newType ?: tx.type,
+                timestamp = newDate ?: tx.timestamp,
+                notes = newNotes ?: tx.notes
+            )
+            db.transactionDao().update(updated)
+
+            val changedFields = mutableListOf<String>()
+            if (newAmount != null) changedFields.add("summa=${formatMoney(newAmount)}")
+            if (newType != null) changedFields.add("tur=$newType")
+            if (newDate != null) changedFields.add("sana")
+            if (newNotes != null) changedFields.add("izoh")
+            val changeSummary = if (changedFields.isEmpty()) "o'zgartirishsiz" else changedFields.joinToString(", ")
+
+            return CommandResult(true,
+                "✓ Tranzaksiya yangilandi: #${tx.id} (${tx.renterName}) — $changeSummary")
+        } catch (e: Exception) {
+            Log.e(TAG, "updateTransaction failed", e)
+            return CommandResult(false, "UPDATE_TRANSACTION xato: ${e.message}")
         }
     }
 
