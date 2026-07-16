@@ -44,10 +44,12 @@ object DatabaseSnapshot {
     private const val TAG = "DatabaseSnapshot"
 
     /** Лимиты, чтобы не раздувать промпт. */
-    private const val MAX_RECENT_TRANSACTIONS = 100
-    private const val MAX_RECENT_CONTRACTS = 100
-    private const val MAX_RECENT_CARD_TX = 50
-    private const val MAX_RETURNED_RENTERS = 50
+    private const val MAX_RECENT_TRANSACTIONS = 30
+    private const val MAX_RECENT_CONTRACTS = 30
+    private const val MAX_RECENT_CARD_TX = 20
+    private const val MAX_RETURNED_RENTERS = 20
+    /** Жёсткий лимит размера JSON-снимка в символах (~16KB ≈ 4K токенов). */
+    private const val MAX_SNAPSHOT_CHARS = 16000
 
     /**
      * Построить JSON-снимок базы данных и настроек приложения.
@@ -228,7 +230,26 @@ object DatabaseSnapshot {
                 put("recentCardTransactions", cardTxArray)
             }
 
-            root.toString(2)
+            val fullJson = root.toString(2)
+            // Жёсткий лимит: если снимок слишком большой, обрезаем.
+            // Это предотвратит ошибки парсинга ответа Mistral (когда вход
+            // слишком длинный, модель может выдать пустой/обрезанный ответ).
+            if (fullJson.length > MAX_SNAPSHOT_CHARS) {
+                Log.w(TAG, "buildJson: snapshot too large (${fullJson.length} chars), truncating to $MAX_SNAPSHOT_CHARS")
+                // Обрезаем и закрываем JSON вручную, чтобы оставался валидным
+                val truncated = fullJson.substring(0, MAX_SNAPSHOT_CHARS)
+                // Находим последнюю закрывающую скобку объекта/массива
+                val lastBrace = truncated.lastIndexOf('}')
+                if (lastBrace > 0) {
+                    // Обрезаем до последней полной записи + закрываем root-объект
+                    val safeCut = truncated.substring(0, lastBrace + 1)
+                    val result = safeCut + "\n  \"_truncated\": true\n}"
+                    Log.d(TAG, "buildJson: truncated to ${result.length} chars")
+                    return@withContext result
+                }
+            }
+            Log.d(TAG, "buildJson: snapshot size = ${fullJson.length} chars")
+            fullJson
         } catch (e: Exception) {
             Log.e(TAG, "buildJson failed", e)
             JSONObject().apply {

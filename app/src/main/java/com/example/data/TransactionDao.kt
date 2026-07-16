@@ -21,6 +21,9 @@ interface TransactionDao {
     @Query("SELECT * FROM transactions WHERE renterId = :renterId ORDER BY timestamp DESC")
     fun getForRenter(renterId: Int): Flow<List<Transaction>>
 
+    @Query("SELECT * FROM transactions WHERE renterId = :renterId ORDER BY timestamp DESC")
+    suspend fun getForRenterOnce(renterId: Int): List<Transaction>
+
     @Query("SELECT * FROM transactions WHERE scooterId = :scooterId ORDER BY timestamp DESC")
     fun getForScooter(scooterId: Int): Flow<List<Transaction>>
 

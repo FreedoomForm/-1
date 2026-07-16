@@ -704,8 +704,65 @@ class RenterViewModel(application: Application) : AndroidViewModel(application) 
 
     fun deleteRenter(id: Int) {
         viewModelScope.launch {
-            historyRepository.deleteForRenter(id)
-            repository.delete(id)
+            // ── Каскадное удаление арендатора ──────────────────────────────
+            // Полная цепочка:
+            //   1. Найти все контракты (ContractHistoryEntry) этого арендатора
+            //   2. Для каждого контракта:
+            //      a) Найти все CardTransaction с contractId = contract.id
+            //         (это TYPE_CONTRACT_INCOME — деньги, упавшие на Glavnaya)
+            //      b) Реверснуть баланс главной карты: adjustBalance(toCardId, -amount)
+            //      c) Удалить эти CardTransaction
+            //   3. Удалить все Transaction арендатора (renterId = id)
+            //   4. Удалить все ContractHistoryEntry арендатора (renterId = id)
+            //   5. Удалить самого арендатора
+            //
+            // Без шагов 2-3 деньги «зависнут» на главной карте, а в списке
+            // транзакций останутся «осиротевшие» записи без арендатора.
+            try {
+                val contracts = historyRepository.getForRenterOnce(id)
+                for (contract in contracts) {
+                    // Реверсим и удаляем CardTransaction для этого контракта
+                    val cardTxList = virtualCardRepository.getCardTxForContract(contract.id)
+                    for (cardTx in cardTxList) {
+                        try {
+                            // cardTx.toCardId обычно = MAIN_CARD_ID (1).
+                            // Реверс: вычитаем amount из баланса карты-получателя.
+                            virtualCardRepository.adjustCardBalance(
+                                cardId = cardTx.toCardId,
+                                delta = -cardTx.amount
+                            )
+                        } catch (e: Exception) {
+                            Log.w(TAG, "deleteRenter: failed to reverse cardTx #${cardTx.id}: ${e.message}")
+                        }
+                    }
+                    if (cardTxList.isNotEmpty()) {
+                        virtualCardRepository.deleteCardTxForContract(contract.id)
+                    }
+                }
+
+                // Удаляем все Transaction арендатора (PAYMENT, PENALTY, REPAIR и т.д.)
+                val renterTransactions = transactionRepository.forRenterOnce(id)
+                if (renterTransactions.isNotEmpty()) {
+                    transactionRepository.deleteByIds(renterTransactions.map { it.id })
+                    Log.d(TAG, "deleteRenter: deleted ${renterTransactions.size} transactions for renter #$id")
+                }
+
+                // Удаляем все контракты арендатора
+                historyRepository.deleteForRenter(id)
+                Log.d(TAG, "deleteRenter: deleted ${contracts.size} contracts for renter #$id")
+
+                // Удаляем самого арендатора
+                repository.delete(id)
+                Log.d(TAG, "deleteRenter: renter #$id deleted with full cascade")
+            } catch (e: Exception) {
+                Log.e(TAG, "deleteRenter cascade failed for #$id", e)
+                // Fallback: хотя бы удалить арендатора (старое поведение)
+                try {
+                    historyRepository.deleteForRenter(id)
+                    repository.delete(id)
+                } catch (_: Exception) {}
+            }
+
             // Обновляем нативные виджеты Android
             try {
                 com.example.widget.WidgetUpdater.updateAll(getApplication())

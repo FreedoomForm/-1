@@ -164,8 +164,7 @@ class MistralApiService(
                 put("model", MODEL_CHAT)
                 put("messages", messages)
                 put("temperature", 0.1)           // минимальная креативность — нужен чёткий JSON
-                put("max_tokens", 4000)
-                //_force_response_format = "json_object"  // Mistral поддерживает response_format
+                put("max_tokens", 8000)           // увеличено с 4000 — для больших ответов с snapshot
                 put("response_format", JSONObject().apply {
                     put("type", "json_object")
                 })
@@ -188,12 +187,18 @@ class MistralApiService(
                 val json = JSONObject(body)
                 val choices = json.optJSONArray("choices") ?: JSONArray()
                 if (choices.length() == 0) {
-                    Log.w(TAG, "Chat: empty choices")
+                    Log.w(TAG, "Chat: empty choices, body=${body.take(500)}")
                     return ""
                 }
                 val message = choices.optJSONObject(0)?.optJSONObject("message") ?: JSONObject()
                 val content = message.optString("content", "").trim()
-                Log.d(TAG, "Chat success: ${content.length} chars")
+                val finishReason = choices.optJSONObject(0)?.optString("finish_reason", "unknown")
+                Log.d(TAG, "Chat success: ${content.length} chars, finish_reason=$finishReason, " +
+                    "usage=${json.optJSONObject("usage")}")
+                if (content.isBlank()) {
+                    Log.w(TAG, "Chat: empty content, full response=${body.take(500)}")
+                    return ""
+                }
                 return content
             }
         } catch (e: Exception) {

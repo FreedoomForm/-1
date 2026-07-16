@@ -6,6 +6,7 @@ class TransactionRepository(private val dao: TransactionDao) {
     val all: Flow<List<Transaction>> = dao.getAll()
     suspend fun getById(id: Int): Transaction? = dao.getById(id)
     fun forRenter(renterId: Int): Flow<List<Transaction>> = dao.getForRenter(renterId)
+    suspend fun forRenterOnce(renterId: Int): List<Transaction> = dao.getForRenterOnce(renterId)
     fun forScooter(scooterId: Int): Flow<List<Transaction>> = dao.getForScooter(scooterId)
     fun forContract(contractId: Int): Flow<List<Transaction>> = dao.getForContract(contractId)
     suspend fun forContractOnce(contractId: Int): List<Transaction> = dao.getForContractOnce(contractId)

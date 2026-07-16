@@ -117,19 +117,26 @@ class CommandExecutor(private val context: Context) {
      */
     private fun parseResponseJson(raw: String): JSONObject? {
         val trimmed = raw.trim()
-        if (trimmed.isEmpty()) return null
+        if (trimmed.isEmpty()) {
+            Log.w(TAG, "parseResponseJson: empty input")
+            return null
+        }
 
         // Прямой парсинг (если ответ — чистый JSON)
         try {
             return JSONObject(trimmed)
-        } catch (_: Exception) { /* fall through */ }
+        } catch (e: Exception) {
+            Log.d(TAG, "parseResponseJson: direct parse failed (${e.message}), trying markdown/brace extraction")
+        }
 
         // Поиск markdown-блока ```json ... ```
         val mdPattern = Regex("""```(?:json)?\s*(\{[\s\S]*\})\s*```""", RegexOption.IGNORE_CASE)
         mdPattern.find(trimmed)?.let { match ->
             try {
                 return JSONObject(match.groupValues[1])
-            } catch (_: Exception) { /* fall through */ }
+            } catch (e: Exception) {
+                Log.d(TAG, "parseResponseJson: markdown block parse failed: ${e.message}")
+            }
         }
 
         // Поиск первого "{" и последнего "}"
@@ -139,7 +146,13 @@ class CommandExecutor(private val context: Context) {
             val candidate = trimmed.substring(firstBrace, lastBrace + 1)
             try {
                 return JSONObject(candidate)
-            } catch (_: Exception) { /* fall through */ }
+            } catch (e: Exception) {
+                Log.w(TAG, "parseResponseJson: brace extraction parse failed: ${e.message}, " +
+                    "candidate (first 300 chars)=${candidate.take(300)}")
+            }
+        } else {
+            Log.w(TAG, "parseResponseJson: no braces found in response (first 500 chars)=" +
+                "${trimmed.take(500)}")
         }
 
         return null
@@ -206,30 +219,27 @@ class CommandExecutor(private val context: Context) {
             val scooterNameResolved = scooter?.name ?: scooterName
 
             // ── Логика баланса ────────────────────────────────────────────────
-            //   debt > 0       → арендатор должен. balance = -debt, контракт
-            //                    НЕ оплачен. Transaction НЕ создаётся, на карту
-            //                    ничего не зачисляется (деньги ещё не пришли).
-            //   prepayment > 0 → арендатор заплатил заранее. Создаётся
-            //                    Transaction PAYMENT, на карту зачисляется
-            //                    prepayment. Контракт считается оплаченным
-            //                    (isPaid=true) ТОЛЬКО если prepayment >= weeklyPrice.
-            //                    Остаток prepayment - weeklyPrice остаётся как
-            //                    аванс на балансе арендатора.
-            //                    Если prepayment < weeklyPrice — контракт НЕ
-            //                    оплачен, баланс = -(weeklyPrice - prepayment)
-            //                    (арендатор должен остаток).
-            //   оба 0          → новый арендатор без явного платежа. Считаем
-            //                    первую неделю предоплаченной (как в
-            //                    RenterViewModel.addRenter): создаём Transaction
-            //                    PAYMENT на weeklyPrice, зачисляем на карту,
-            //                    контракт isPaid=true, баланс = 0.
-            //   оба указаны    → приоритет у debt (долг важнее аванса).
+            // Модель (соответствует applyWeeklyPayment в RenterViewModel):
+            //   • Transaction PAYMENT → balance += amount (всегда добавляет)
+            //   • Contract isPaid=true  → balance НЕ меняется (просто флаг «оплачено»)
+            //   • Contract isPaid=false → balance -= weeklyPrice (долг за неделю)
             //
-            // ВАЖНО: раньше balance сразу выставлялся как +prepayment, и затем
-            // создавалась Transaction с тем же amount — из-за этого казалось,
-            // что Transaction «не влияет на баланс» (он уже был выставлен
-            // заранее). Теперь: арендатор создаётся с balance=0, а затем
-            // Transaction PAYMENT корректно изменяет баланс через updateRenter.
+            // Сценарии:
+            //   debt > 0       → balance = -debt, контракт НЕ оплачен, Transaction
+            //                    НЕ создаётся, на карту ничего не зачисляется.
+            //   prepayment > 0 → Transaction PAYMENT prepayment, balance += prepayment,
+            //                    зачисление на карту. Контракт isPaid=true если
+            //                    prepayment >= weeklyPrice, иначе isPaid=false и
+            //                    balance -= weeklyPrice (долг за неделю).
+            //                    Для prepayment=weeklyPrice: balance=+weeklyPrice, isPaid=true.
+            //   оба 0          → предоплата по умолчанию: Transaction PAYMENT weeklyPrice,
+            //                    balance += weeklyPrice, контракт isPaid=true.
+            //                    Итог: balance = +weeklyPrice (аванс).
+            //   оба указаны    → приоритет у debt.
+            //
+            // ВАЖНО: раньше balance вычитал weeklyPrice при оплате контракта —
+            // из-за этого при prepayment=weeklyPrice баланс становился 0 вместо
+            // +weeklyPrice. Теперь оплаченный контракт НЕ вычитает из баланса.
 
             val dayMs = 24L * 60 * 60 * 1000
             val durationMs = duration.toLong() * dayMs
@@ -358,13 +368,17 @@ class CommandExecutor(private val context: Context) {
                         Log.w(TAG, "depositContractIncome failed for scanned renter: ${e.message}")
                     }
 
-                    // Обновляем баланс арендатора: +prepayment
+                    // balance += prepayment (Transaction добавляет к балансу)
                     currentBalance = savedRenter.balance + paymentAmount
 
-                    // Если prepayment покрывает weeklyPrice — оплата контракта
-                    if (currentBalance >= weeklyPrice) {
+                    // Определяем, покрыт ли контракт
+                    if (prepayment >= weeklyPrice) {
+                        // Контракт оплачен — НЕ вычитаем weeklyPrice из баланса
                         contractPaid = true
-                        currentBalance -= weeklyPrice  // списываем за неделю
+                    } else {
+                        // Контракт НЕ оплачен — вычитаем weeklyPrice (долг за неделю)
+                        contractPaid = false
+                        currentBalance -= weeklyPrice
                     }
                     currentDebtAmount = maxOf(0.0, -currentBalance)
                     lastPaymentTs = rentStartTs
@@ -401,7 +415,9 @@ class CommandExecutor(private val context: Context) {
                         Log.w(TAG, "depositContractIncome failed for scanned renter: ${e.message}")
                     }
 
-                    currentBalance = savedRenter.balance + paymentAmount - weeklyPrice
+                    // balance += weeklyPrice (Transaction добавляет); контракт isPaid=true
+                    // НЕ вычитаем weeklyPrice — оплаченный контракт не создаёт долг
+                    currentBalance = savedRenter.balance + paymentAmount
                     contractPaid = true
                     currentDebtAmount = maxOf(0.0, -currentBalance)
                     lastPaymentTs = rentStartTs
