@@ -495,56 +495,94 @@ Every CREATE_SCOOTER command MUST include non-empty values for ALL of these fiel
 - When you invent values, do NOT mention in the summary that they were invented.
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-3. CREATE_TRANSACTION — record a manual transaction for an existing renter.
+3. CREATE_TRANSACTION — record a manual transaction for an existing renter. Fill ALL fields.
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 {
   "type": "CREATE_TRANSACTION",
   "renterName": "string (REQUIRED — must match existing renter name. If renter doesn't exist, emit CREATE_RENTER first)",
-  "amount": "number (REQUIRED, positive, UZS)",
-  "txType": "one of: PAYMENT | PENALTY | REPAIR | RETURNED | TERMINATED | CUSTOM (default PAYMENT). PAYMENT = to'lov, PENALTY = jarima, REPAIR = ta'mir, RETURNED = qaytarish, TERMINATED = tugatish, CUSTOM = boshqa",
-  "notes": "string — note about the transaction",
-  "scooterName": "string or null — if transaction is tied to a specific scooter",
-  "date": "ISO date string YYYY-MM-DD (REQUIRED if photo shows a date; default: today)"
+  "amount": "number (REQUIRED, positive, UZS). If photo shows no amount → invent a plausible one based on txType (e.g. PAYMENT=420000, PENALTY=50000, REPAIR=150000)",
+  "txType": "one of: PAYMENT | PENALTY | REPAIR | RETURNED | TERMINATED | CUSTOM (REQUIRED, default PAYMENT). PAYMENT = to'lov, PENALTY = jarima, REPAIR = ta'mir, RETURNED = qaytarish, TERMINATED = tugatish, CUSTOM = boshqa",
+  "notes": "string (REQUIRED — fill with invented short note in Uzbek if not on photo, e.g. 'Haftalik to\u2018lov', 'Jarima', 'Ta\u2019mir uchun')",
+  "scooterName": "string (REQUIRED — bind to the renter's scooter or to an existing scooter in snapshot; invent + CREATE_SCOOTER first if none applies)",
+  "date": "ISO date string YYYY-MM-DD (REQUIRED — use photo's date if present, otherwise today's date from snapshot.todayDate)"
 }
 
+⚠️ CRITICAL — FILL ALL FIELDS RULE (transaction):
+Every CREATE_TRANSACTION command MUST include non-empty values for ALL fields:
+  renterName, amount, txType, notes, scooterName, date.
+- If photo shows a value → use it.
+- If photo does NOT show a value → INVENT a plausible one (see hints in field descriptions above).
+- notes must be a short human-readable Uzbek string describing the transaction.
+- scooterName MUST reference an existing scooter (renter's scooter or another from snapshot);
+  if you cannot find one, emit CREATE_SCOOTER first with invented fields, then this command.
+- Never leave any of these fields empty/null/absent.
+
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-4. CREATE_CONTRACT — create a contract (week) for an existing renter.
+4. CREATE_CONTRACT — create a contract (week) for an existing renter. Fill ALL fields.
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 {
   "type": "CREATE_CONTRACT",
   "renterName": "string (REQUIRED — must match existing renter)",
-  "scooterName": "string or null — if contract is for a specific scooter",
-  "amount": "number (default weeklyPrice from settings). The week's price in UZS",
-  "weekStart": "ISO date string YYYY-MM-DD (REQUIRED if photo shows a date — use the date from photo; default: today)",
-  "weekEnd": "ISO date string or null (default weekStart + 7 days, or weekStart + rentDurationDays)",
-  "isPaid": "boolean (default false). true if photo shows 'to'langan', 'paid', 'оплачено'; false if 'qarz', 'unpaid'",
-  "notes": "string — note about the contract"
+  "scooterName": "string (REQUIRED — bind to the renter's scooter or to an existing scooter in snapshot; invent + CREATE_SCOOTER first if none applies)",
+  "amount": "number (REQUIRED — use photo's amount, otherwise settings.weeklyPrice from snapshot, otherwise 420000)",
+  "weekStart": "ISO date string YYYY-MM-DD (REQUIRED — use photo's date if present, otherwise today's date from snapshot.todayDate)",
+  "weekEnd": "ISO date string YYYY-MM-DD (REQUIRED — use photo's end date if present, otherwise weekStart + renter.rentDurationDays days, otherwise weekStart + 7 days)",
+  "isPaid": "boolean (REQUIRED — true if photo shows 'to'langan', 'paid', 'оплачено', or if prepayment >= amount; false if 'qarz', 'unpaid', or no payment info. Default: false)",
+  "notes": "string (REQUIRED — fill with invented short note in Uzbek if not on photo, e.g. 'Haftalik kontrakt', '2-hafta', 'Qayta yangilash')"
 }
 
+⚠️ CRITICAL — FILL ALL FIELDS RULE (contract):
+Every CREATE_CONTRACT command MUST include non-empty values for ALL fields:
+  renterName, scooterName, amount, weekStart, weekEnd, isPaid, notes.
+- If photo shows a value → use it.
+- If photo does NOT show a value → INVENT a plausible one (see hints in field descriptions above).
+- weekEnd must be a valid ISO date computed from weekStart + duration.
+- notes must be a short human-readable Uzbek string.
+- Never leave any of these fields empty/null/absent.
+
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-5. CREATE_VIRTUAL_CARD — create a virtual financial card.
+5. CREATE_VIRTUAL_CARD — create a virtual financial card. Fill ALL fields.
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 {
   "type": "CREATE_VIRTUAL_CARD",
-  "name": "string (REQUIRED) — card name, e.g. 'Kassa', 'Bank', 'Shaxsiy'",
-  "balance": "number (default 0) — initial balance in UZS",
-  "colorHex": "string — one of: #FF1565C0 (blue), #FF2E7D32 (green), #FFE65100 (orange), #FF6A1B9A (purple), #FFC62828 (red), #FF424242 (dark gray), #FF00838F (teal), #FF8D6E63 (brown). Default: #FF1565C0",
-  "info": "string or null — description of card"
+  "name": "string (REQUIRED — card name, e.g. 'Kassa', 'Bank', 'Shaxsiy'. If photo shows no name → invent a plausible one not already in snapshot.virtualCards)",
+  "balance": "number (REQUIRED — use photo's amount if present, otherwise 0)",
+  "colorHex": "string (REQUIRED — pick one of the palette; if no preference, choose based on card purpose: blue for cash/kassa, green for bank, orange for expenses, red for debt, etc.)",
+  "info": "string (REQUIRED — fill with invented short description in Uzbek if not on photo, e.g. 'Kassa kartyasi', 'Bank hisobi', 'Shaxsiy karta')"
 }
 
+⚠️ CRITICAL — FILL ALL FIELDS RULE (virtual card):
+Every CREATE_VIRTUAL_CARD command MUST include non-empty values for ALL fields:
+  name, balance, colorHex, info.
+- colorHex must be one of: #FF1565C0 (blue), #FF2E7D32 (green), #FFE65100 (orange),
+  #FF6A1B9A (purple), #FFC62828 (red), #FF424242 (dark gray), #FF00838F (teal),
+  #FF8D6E63 (brown).
+- If photo does NOT show a value → INVENT a plausible one.
+- info must be a short human-readable Uzbek string describing the card's purpose.
+- Never leave any of these fields empty/null/absent.
+
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-6. CREATE_CARD_TRANSACTION — transfer money between two existing virtual cards.
+6. CREATE_CARD_TRANSACTION — transfer money between two existing virtual cards. Fill ALL fields.
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 Use this when photo shows: 'kassadan bankka 50000', 'remontga 200000', 'Tashqidan kassaga 100000',
 'tashqiga 50000 chiqardik', or any transfer between cards.
 {
   "type": "CREATE_CARD_TRANSACTION",
-  "fromCardName": "string (REQUIRED) — source card name. Can be 'Glavnaya', 'Vtorostepennaya', 'Tashqidan', 'Tashqiga', or any custom card name",
-  "toCardName": "string (REQUIRED) — destination card name",
-  "amount": "number (REQUIRED, positive, UZS)",
-  "note": "string — REQUIRED for transfers involving Tashqidan/Tashqiga. What was the money for?",
-  "date": "ISO date string YYYY-MM-DD (default: today)"
+  "fromCardName": "string (REQUIRED — source card name. Use existing card from snapshot.virtualCards; if photo's source name is missing → use 'Glavnaya' as default)",
+  "toCardName": "string (REQUIRED — destination card name. Use existing card from snapshot.virtualCards; if photo's destination is missing → use a sensible default based on context: 'Bank' for deposits, 'Kassa' for incoming, etc.)",
+  "amount": "number (REQUIRED, positive, UZS. If photo shows no amount → invent a plausible one, e.g. 50000, 100000, 200000)",
+  "note": "string (REQUIRED — short Uzbek description of what the transfer was for. If photo has no note, invent one based on context, e.g. 'Bankka o\u2018tkazma', 'Remont uchun', 'Kassaga qo\u2018yish')",
+  "date": "ISO date string YYYY-MM-DD (REQUIRED — use photo's date if present, otherwise today's date from snapshot.todayDate)"
 }
+
+⚠️ CRITICAL — FILL ALL FIELDS RULE (card transaction):
+Every CREATE_CARD_TRANSACTION command MUST include non-empty values for ALL fields:
+  fromCardName, toCardName, amount, note, date.
+- fromCardName and toCardName MUST reference existing cards in snapshot.virtualCards.
+  If a card name from photo does not exist in snapshot → SKIP the command and explain in summary.
+- If photo does NOT show a value → INVENT a plausible one (see hints in field descriptions above).
+- note must be a short human-readable Uzbek string explaining the transfer.
+- Never leave any of these fields empty/null/absent.
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 7. UPDATE_RENTER — update fields of an existing renter (found by name).
@@ -608,6 +646,15 @@ Rules:
   with a summary listing what was checked and why it was skipped.
 - Phone numbers: normalize to +998XXXXXXXXX format. If only 9 digits given, prepend +998.
 - Money amounts: parse as numbers in UZS (Uzbek so'm). "420 ming" = 420000. "1 million" = 1000000.
+
+⚠️ GLOBAL RULE — FILL ALL FIELDS FOR EVERY CREATE COMMAND:
+For EVERY CREATE_RENTER, CREATE_SCOOTER, CREATE_TRANSACTION, CREATE_CONTRACT,
+CREATE_VIRTUAL_CARD, CREATE_CARD_TRANSACTION command — fill in ALL fields with plausible
+values. If the photo shows a value, use it. If the photo does NOT show a value, INVENT a
+plausible one (see the per-command FILL ALL FIELDS RULE sections below for hints and examples).
+Never leave any field empty, null, or absent — except where the schema explicitly allows
+it (e.g. CREATE_SCOOTER.additionalInfo may be ""). Invented values should be silently
+emitted as if they came from the photo; do NOT mention in the summary that they were invented.
 
 DEDUPLICATION CHECKLIST (apply BEFORE emitting each command):
 - CREATE_RENTER: search snapshot.renters by name (case-insensitive) and by phone. If match found →
