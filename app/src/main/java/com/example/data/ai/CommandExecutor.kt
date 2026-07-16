@@ -10,6 +10,7 @@ import com.example.data.SettingsRepository
 import com.example.data.Transaction
 import com.example.data.VirtualCard
 import com.example.data.VirtualCardRepository
+import com.example.data.isExternal
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
@@ -85,6 +86,10 @@ class CommandExecutor(private val context: Context) {
                     "CREATE_TRANSACTION" -> createTransaction(cmd)
                     "CREATE_CONTRACT" -> createContract(cmd)
                     "CREATE_VIRTUAL_CARD" -> createVirtualCard(cmd)
+                    "CREATE_CARD_TRANSACTION" -> createCardTransaction(cmd)
+                    "UPDATE_RENTER" -> updateRenter(cmd)
+                    "RETURN_RENTER" -> returnRenter(cmd)
+                    "TERMINATE_RENTER" -> terminateRenter(cmd)
                     "FINISH" -> CommandResult(true, "✓ Bajarildi")
                     else -> CommandResult(false, "Noma'lum komanda: $type")
                 }
@@ -152,13 +157,30 @@ class CommandExecutor(private val context: Context) {
                 return CommandResult(false, "CREATE_RENTER: 'phoneNumber' majburiy")
             }
             val debt = cmd.optDouble("debt", 0.0)
+            // prepayment — положительный аванс (если фото показывает "oldindan to'lov"
+            // или положительный баланс). В отличие от debt, prepayment увеличивает
+            // баланс арендатора в плюс (credit). debt и prepayment взаимно исключают
+            // друг друга; если указаны оба — приоритет у debt.
+            val prepayment = cmd.optDouble("prepayment", 0.0)
             val duration = cmd.optInt("rentDurationDays", 7)
             val scooterName = cmd.optString("scooterName", "").trim().ifEmpty { null }
             val weeklyPrice = cmd.optDouble("weeklyPrice", settings.weeklyPrice.takeIf { it > 0 }
                 ?: SettingsRepository.DEFAULT_WEEKLY_PRICE)
-            val passportData = cmd.optString("passportData", "").trim()
+
+            // ── Паспортные данные ─────────────────────────────────────────
+            // passportData — серия+номер (например "AB 1234567").
+            // passportIssuedBy — кем выдан. Если указано, добавляем в passportData
+            // в формате "AB 1234567, berilgan: Toshkent sh. IIB".
+            val rawPassport = cmd.optString("passportData", "").trim()
+            val issuedBy = cmd.optString("passportIssuedBy", "").trim()
+            val passportData = when {
+                rawPassport.isEmpty() -> issuedBy
+                issuedBy.isEmpty() -> rawPassport
+                else -> "$rawPassport, berilgan: $issuedBy"
+            }
             val address = cmd.optString("address", "").trim()
             val pinfl = cmd.optString("pinfl", "").trim()
+            val isReturned = cmd.optBoolean("isReturned", false)
 
             // ── Дата аренды ────────────────────────────────────────────────
             // Mistral извлекает дату из фото и кладёт её в "rentStartDate"
@@ -183,17 +205,43 @@ class CommandExecutor(private val context: Context) {
             val scooterId = scooter?.id
             val scooterNameResolved = scooter?.name ?: scooterName
 
+            // ── Логика баланса ────────────────────────────────────────────
+            //   debt > 0       → balance = -debt, debtAmount = debt
+            //   prepayment > 0 → balance = +prepayment, debtAmount = 0
+            //   оба 0          → balance = 0, debtAmount = 0
+            //   оба указаны    → приоритет у debt (долг важнее аванса)
+            val balance: Double
+            val debtAmount: Double
+            val isPrepaid: Boolean
+            when {
+                debt > 0 -> {
+                    balance = -debt
+                    debtAmount = debt
+                    isPrepaid = false
+                }
+                prepayment > 0 -> {
+                    balance = prepayment
+                    debtAmount = 0.0
+                    isPrepaid = true
+                }
+                else -> {
+                    balance = 0.0
+                    debtAmount = 0.0
+                    isPrepaid = true  // нет долга = считаем оплаченным
+                }
+            }
+
             val renter = Renter(
                 name = name,
                 phoneNumber = phone,
-                debtAmount = if (debt > 0) debt else 0.0,
+                debtAmount = debtAmount,
                 rentDurationDays = duration,
                 rentStartDateTimestamp = rentStartTs,
-                isReturned = false,
+                isReturned = isReturned,
                 isOverdueSmsSent = false,
                 scooterId = scooterId,
                 scooterName = scooterNameResolved,
-                balance = if (debt > 0) -debt else 0.0,
+                balance = balance,
                 passportData = passportData,
                 address = address,
                 pinfl = pinfl
@@ -209,7 +257,11 @@ class CommandExecutor(private val context: Context) {
                 timestamp = rentStartTs,
                 type = ContractHistoryEntry.TYPE_CREATED,
                 amount = weeklyPrice,
-                notes = if (debt > 0) "Skaner orqali yaratildi (qarz bilan)" else "Skaner orqali yaratildi (oldindan to'langan)",
+                notes = when {
+                    debt > 0 -> "Skaner orqali yaratildi (qarz bilan)"
+                    prepayment > 0 -> "Skaner orqali yaratildi (oldindan to'lov: ${formatMoney(prepayment)})"
+                    else -> "Skaner orqali yaratildi (oldindan to'langan)"
+                },
                 renterName = name,
                 renterPhone = phone,
                 scooterName = scooterNameResolved,
@@ -225,21 +277,27 @@ class CommandExecutor(private val context: Context) {
                 batteryId1 = scooter?.batteryId1 ?: "",
                 batteryId2 = scooter?.batteryId2 ?: "",
                 additionalInfo = scooter?.additionalInfo ?: "",
-                isPaid = debt <= 0
+                isPaid = isPrepaid
             )
             db.contractHistoryDao().insert(contract)
 
             // Для предоплаченного контракта — создаём Transaction и
             // зачисляем на главную карту (как при ручном создании).
             // Timestamp транзакции = дата аренды, а не сегодня.
-            if (debt <= 0) {
+            // Сумма = weeklyPrice (если был только долг или ничего — не создаём платёж).
+            // Если есть prepayment > weeklyPrice — зачисляем prepayment как платёж.
+            if (isPrepaid) {
+                val paymentAmount = when {
+                    prepayment > 0 -> prepayment
+                    else -> weeklyPrice
+                }
                 val tx = Transaction(
                     contractId = null,  // не знаем ID только что созданного контракта
                     renterId = newId,
                     scooterId = scooterId,
                     timestamp = rentStartTs,
                     type = Transaction.TYPE_PAYMENT,
-                    amount = weeklyPrice,
+                    amount = paymentAmount,
                     notes = "Skaner orqali oldindan to'lov",
                     renterName = name,
                     renterPhone = phone,
@@ -253,7 +311,7 @@ class CommandExecutor(private val context: Context) {
                         db.virtualCardDao(), db.cardTransactionDao()
                     )
                     cardRepo.depositContractIncome(
-                        amount = weeklyPrice,
+                        amount = paymentAmount,
                         note = "Skaner: ${name} (oldindan to'langan)",
                         contractId = null
                     )
@@ -263,10 +321,13 @@ class CommandExecutor(private val context: Context) {
             }
 
             val dateStr = SimpleDateFormat("dd.MM.yyyy", Locale.US).format(Date(rentStartTs))
+            val balanceNote = when {
+                debt > 0 -> ", qarz: ${formatMoney(debt)}"
+                prepayment > 0 -> ", oldindan: ${formatMoney(prepayment)}"
+                else -> ""
+            }
             return CommandResult(true,
-                "✓ Ijarachi yaratildi: $name ($phone)" +
-                (if (debt > 0) ", qarz: ${formatMoney(debt)}" else "") +
-                ", sana: $dateStr")
+                "✓ Ijarachi yaratildi: $name ($phone)$balanceNote, sana: $dateStr")
         } catch (e: Exception) {
             Log.e(TAG, "createRenter failed", e)
             return CommandResult(false, "CREATE_RENTER xato: ${e.message}")
@@ -465,13 +526,320 @@ class CommandExecutor(private val context: Context) {
                 colorHex = colorHex,
                 info = info,
                 isDefault = false,
-                kind = VirtualCard.KIND_REGULAR
+                kind = VirtualCard.KIND_REGULAR  // сканер не может создавать внешние карты
             )
             db.virtualCardDao().insertCard(card)
             return CommandResult(true, "✓ Karta yaratildi: $name (${formatMoney(balance)})")
         } catch (e: Exception) {
             Log.e(TAG, "createVirtualCard failed", e)
             return CommandResult(false, "CREATE_VIRTUAL_CARD xato: ${e.message}")
+        }
+    }
+
+    // ── Команда: CREATE_CARD_TRANSACTION ────────────────────────────────────
+    // Перевод между двумя виртуальными картами. Используется когда фото показывает
+    // "kassadan bankka 50000", "Tashqidan kassaga 100000", "remontga 200000" и т.д.
+    private suspend fun createCardTransaction(cmd: JSONObject): CommandResult {
+        try {
+            val fromName = cmd.optString("fromCardName", "").trim()
+            val toName = cmd.optString("toCardName", "").trim()
+            if (fromName.isEmpty() || toName.isEmpty()) {
+                return CommandResult(false,
+                    "CREATE_CARD_TRANSACTION: 'fromCardName' va 'toCardName' majburiy")
+            }
+            val amount = cmd.optDouble("amount", 0.0)
+            if (amount <= 0) {
+                return CommandResult(false, "CREATE_CARD_TRANSACTION: 'amount' > 0 bo'lishi kerak")
+            }
+            val note = cmd.optString("note", "").trim().ifEmpty { null }
+
+            val fromCard = findCardByName(fromName)
+                ?: return CommandResult(false,
+                    "CREATE_CARD_TRANSACTION: '$fromName' karta topilmadi")
+            val toCard = findCardByName(toName)
+                ?: return CommandResult(false,
+                    "CREATE_CARD_TRANSACTION: '$toName' karta topilmadi")
+
+            // Внешние карты требуют обязательный note
+            val involvesExternal = fromCard.isExternal || toCard.isExternal
+            if (involvesExternal && note.isNullOrEmpty()) {
+                return CommandResult(false,
+                    "CREATE_CARD_TRANSACTION: tashqi kartalar uchun 'note' majburiy")
+            }
+
+            val cardRepo = VirtualCardRepository(
+                db.virtualCardDao(), db.cardTransactionDao()
+            )
+            cardRepo.transfer(
+                fromCardId = fromCard.id,
+                toCardId = toCard.id,
+                amount = amount,
+                note = note ?: "Skaner orqali o'tkazma: $fromName → $toName"
+            )
+
+            return CommandResult(true,
+                "✓ Karta o'tkazmasi: $fromName → $toName, ${formatMoney(amount)}")
+        } catch (e: Exception) {
+            Log.e(TAG, "createCardTransaction failed", e)
+            return CommandResult(false, "CREATE_CARD_TRANSACTION xato: ${e.message}")
+        }
+    }
+
+    // ── Команда: UPDATE_RENTER ──────────────────────────────────────────────
+    // Обновляет поля существующего арендатора. Только указанные поля меняются.
+    private suspend fun updateRenter(cmd: JSONObject): CommandResult {
+        try {
+            val renterName = cmd.optString("renterName", "").trim()
+            if (renterName.isEmpty()) {
+                return CommandResult(false, "UPDATE_RENTER: 'renterName' majburiy")
+            }
+            val renter = findRenterByName(renterName)
+                ?: return CommandResult(false,
+                    "UPDATE_RENTER: '$renterName' ijarachi topilmadi")
+
+            val newPhone = cmd.optString("newPhoneNumber", "").trim().ifEmpty { null }
+            val newDebt = if (cmd.has("newDebt")) cmd.optDouble("newDebt", 0.0) else null
+            val balanceAdjustment = if (cmd.has("balanceAdjustment"))
+                cmd.optDouble("balanceAdjustment", 0.0) else null
+            val newAddress = cmd.optString("newAddress", "").trim().ifEmpty { null }
+            val newPassport = cmd.optString("newPassportData", "").trim().ifEmpty { null }
+            val newPinfl = cmd.optString("newPinfl", "").trim().ifEmpty { null }
+            val newScooterName = cmd.optString("newScooterName", "").trim().ifEmpty { null }
+            // newWeeklyPrice парсится для будущих контрактов — но Renter entity
+            // не хранит weeklyPrice (он в settings + в каждом ContractHistoryEntry).
+            // Если Mistral прислал это поле, мы его игнорируем на уровне renter,
+            // но логируем в notes.
+            val newWeeklyPriceStr = if (cmd.has("newWeeklyPrice"))
+                formatMoney(cmd.optDouble("newWeeklyPrice", 0.0)) else null
+            val newDuration = if (cmd.has("newRentDurationDays"))
+                cmd.optInt("newRentDurationDays", 7) else null
+            val notes = cmd.optString("notes", "").trim()
+
+            // Находим новый скутер если указан
+            val newScooter = newScooterName?.let { findScooterByName(it) }
+
+            // Вычисляем новый баланс
+            val currentBalance = renter.balance +
+                (balanceAdjustment ?: 0.0) +
+                (if (newDebt != null) (-newDebt - renter.debtAmount) else 0.0)
+            val newDebtAmount = when {
+                newDebt != null -> newDebt
+                balanceAdjustment != null -> maxOf(0.0, -(renter.balance + balanceAdjustment))
+                else -> renter.debtAmount
+            }
+
+            val updated = renter.copy(
+                phoneNumber = newPhone ?: renter.phoneNumber,
+                balance = currentBalance,
+                debtAmount = newDebtAmount,
+                address = newAddress ?: renter.address,
+                passportData = newPassport ?: renter.passportData,
+                pinfl = newPinfl ?: renter.pinfl,
+                scooterId = newScooter?.id ?: renter.scooterId,
+                scooterName = newScooter?.name ?: newScooterName ?: renter.scooterName,
+                rentDurationDays = newDuration ?: renter.rentDurationDays
+            )
+            db.renterDao().updateRenter(updated)
+
+            val changedFields = mutableListOf<String>()
+            if (newPhone != null) changedFields.add("tel")
+            if (newDebt != null) changedFields.add("qarz=${formatMoney(newDebt)}")
+            if (balanceAdjustment != null) changedFields.add("balans=${formatMoney(balanceAdjustment)}")
+            if (newAddress != null) changedFields.add("manzil")
+            if (newPassport != null) changedFields.add("pasport")
+            if (newPinfl != null) changedFields.add("PINFL")
+            if (newScooterName != null) changedFields.add("skuter=$newScooterName")
+            if (newWeeklyPriceStr != null) changedFields.add("haftalik=$newWeeklyPriceStr")
+            if (newDuration != null) changedFields.add("muddat=${newDuration}kun")
+            val changeSummary = if (changedFields.isEmpty()) "yangilandi" else changedFields.joinToString(", ")
+
+            return CommandResult(true,
+                "✓ Ijarachi yangilandi: ${renter.name} — $changeSummary" +
+                if (notes.isNotEmpty()) " ($notes)" else "")
+        } catch (e: Exception) {
+            Log.e(TAG, "updateRenter failed", e)
+            return CommandResult(false, "UPDATE_RENTER xato: ${e.message}")
+        }
+    }
+
+    // ── Команда: RETURN_RENTER ──────────────────────────────────────────────
+    // Помечает арендатора как вернувшего скутер. Создаёт RETURNED запись в
+    // истории контрактов и RETURNED транзакцию.
+    private suspend fun returnRenter(cmd: JSONObject): CommandResult {
+        try {
+            val renterName = cmd.optString("renterName", "").trim()
+            if (renterName.isEmpty()) {
+                return CommandResult(false, "RETURN_RENTER: 'renterName' majburiy")
+            }
+            val renter = findRenterByName(renterName)
+                ?: return CommandResult(false,
+                    "RETURN_RENTER: '$renterName' ijarachi topilmadi")
+
+            val returnTs = parseDate(cmd.optString("date", "").trim())
+                ?: System.currentTimeMillis()
+            val notes = cmd.optString("notes", "").trim().ifEmpty { "Skaner orqali qaytarish" }
+
+            val scooter = renter.scooterId?.let { findScooterById(it) }
+
+            // Шаг 1: помечаем арендатора как isReturned
+            val updated = renter.copy(
+                isReturned = true,
+                isOverdueSmsSent = false,
+                lastPaymentTimestamp = returnTs
+            )
+            db.renterDao().updateRenter(updated)
+
+            // Шаг 2: создаём RETURNED запись в истории контрактов
+            val entry = ContractHistoryEntry(
+                renterId = renter.id,
+                timestamp = returnTs,
+                type = ContractHistoryEntry.TYPE_RETURNED,
+                amount = 0.0,
+                notes = notes,
+                renterName = renter.name,
+                renterPhone = renter.phoneNumber,
+                scooterName = renter.scooterName,
+                weekStart = renter.rentStartDateTimestamp,
+                weekEnd = returnTs,
+                weeklyPrice = 0.0,
+                passportData = renter.passportData,
+                address = renter.address,
+                pinfl = renter.pinfl,
+                vinNumber = scooter?.vinNumber ?: "",
+                engineNumber = scooter?.engineNumber ?: "",
+                scooterSerialNumber = scooter?.scooterSerialNumber ?: "",
+                batteryId1 = scooter?.batteryId1 ?: "",
+                batteryId2 = scooter?.batteryId2 ?: "",
+                additionalInfo = scooter?.additionalInfo ?: "",
+                isPaid = false
+            )
+            db.contractHistoryDao().insert(entry)
+
+            // Шаг 3: создаём RETURNED транзакцию
+            val tx = Transaction(
+                contractId = null,
+                renterId = renter.id,
+                scooterId = renter.scooterId,
+                timestamp = returnTs,
+                type = Transaction.TYPE_RETURNED,
+                amount = 0.0,
+                notes = notes,
+                renterName = renter.name,
+                renterPhone = renter.phoneNumber,
+                scooterName = renter.scooterName ?: "",
+                contractLabel = ""
+            )
+            db.transactionDao().insert(tx)
+
+            val dateStr = SimpleDateFormat("dd.MM.yyyy", Locale.US).format(Date(returnTs))
+            return CommandResult(true,
+                "✓ Skuter qaytarildi: ${renter.name}, sana: $dateStr")
+        } catch (e: Exception) {
+            Log.e(TAG, "returnRenter failed", e)
+            return CommandResult(false, "RETURN_RENTER xato: ${e.message}")
+        }
+    }
+
+    // ── Команда: TERMINATE_RENTER ───────────────────────────────────────────
+    // Досрочное расторжение контракта. Создаёт TERMINATED запись в истории
+    // контрактов и TERMINATED транзакцию. Помечает арендатора isReturned=true.
+    // Если есть finalPayment > 0 — зачисляет его на главную карту.
+    private suspend fun terminateRenter(cmd: JSONObject): CommandResult {
+        try {
+            val renterName = cmd.optString("renterName", "").trim()
+            if (renterName.isEmpty()) {
+                return CommandResult(false, "TERMINATE_RENTER: 'renterName' majburiy")
+            }
+            val renter = findRenterByName(renterName)
+                ?: return CommandResult(false,
+                    "TERMINATE_RENTER: '$renterName' ijarachi topilmadi")
+
+            val finalPayment = cmd.optDouble("finalPayment", 0.0)
+            val termTs = parseDate(cmd.optString("date", "").trim())
+                ?: System.currentTimeMillis()
+            val notes = cmd.optString("notes", "").trim().ifEmpty { "Skaner orqali tugatish" }
+
+            val scooter = renter.scooterId?.let { findScooterById(it) }
+
+            // Шаг 1: корректируем баланс арендатора
+            // Если был долг и finalPayment его покрывает — баланс становится 0 или положительным
+            // Если был долг и finalPayment < долга — баланс остаётся отрицательным
+            val newBalance = renter.balance + finalPayment
+            val updated = renter.copy(
+                isReturned = true,
+                balance = newBalance,
+                debtAmount = maxOf(0.0, -newBalance),
+                isOverdueSmsSent = false,
+                lastPaymentTimestamp = termTs
+            )
+            db.renterDao().updateRenter(updated)
+
+            // Шаг 2: создаём TERMINATED запись в истории контрактов
+            val entry = ContractHistoryEntry(
+                renterId = renter.id,
+                timestamp = termTs,
+                type = ContractHistoryEntry.TYPE_TERMINATED,
+                amount = finalPayment,
+                notes = notes,
+                renterName = renter.name,
+                renterPhone = renter.phoneNumber,
+                scooterName = renter.scooterName,
+                weekStart = renter.rentStartDateTimestamp,
+                weekEnd = termTs,
+                weeklyPrice = finalPayment,
+                passportData = renter.passportData,
+                address = renter.address,
+                pinfl = renter.pinfl,
+                vinNumber = scooter?.vinNumber ?: "",
+                engineNumber = scooter?.engineNumber ?: "",
+                scooterSerialNumber = scooter?.scooterSerialNumber ?: "",
+                batteryId1 = scooter?.batteryId1 ?: "",
+                batteryId2 = scooter?.batteryId2 ?: "",
+                additionalInfo = scooter?.additionalInfo ?: "",
+                isPaid = newBalance >= 0
+            )
+            db.contractHistoryDao().insert(entry)
+
+            // Шаг 3: создаём TERMINATED транзакцию
+            val tx = Transaction(
+                contractId = null,
+                renterId = renter.id,
+                scooterId = renter.scooterId,
+                timestamp = termTs,
+                type = Transaction.TYPE_TERMINATED,
+                amount = finalPayment,
+                notes = notes,
+                renterName = renter.name,
+                renterPhone = renter.phoneNumber,
+                scooterName = renter.scooterName ?: "",
+                contractLabel = ""
+            )
+            db.transactionDao().insert(tx)
+
+            // Шаг 4: если был finalPayment — зачисляем на главную карту
+            if (finalPayment > 0) {
+                try {
+                    val cardRepo = VirtualCardRepository(
+                        db.virtualCardDao(), db.cardTransactionDao()
+                    )
+                    cardRepo.depositContractIncome(
+                        amount = finalPayment,
+                        note = "Skaner: ${renter.name} (tugatish to'lovi)",
+                        contractId = null
+                    )
+                } catch (e: Exception) {
+                    Log.w(TAG, "depositContractIncome for terminate failed: ${e.message}")
+                }
+            }
+
+            val dateStr = SimpleDateFormat("dd.MM.yyyy", Locale.US).format(Date(termTs))
+            val paymentNote = if (finalPayment > 0)
+                ", to'lov: ${formatMoney(finalPayment)}" else ""
+            return CommandResult(true,
+                "✓ Kontrakt tugatildi: ${renter.name}$paymentNote, sana: $dateStr")
+        } catch (e: Exception) {
+            Log.e(TAG, "terminateRenter failed", e)
+            return CommandResult(false, "TERMINATE_RENTER xato: ${e.message}")
         }
     }
 
@@ -491,6 +859,22 @@ class CommandExecutor(private val context: Context) {
     }
 
     private suspend fun findScooterById(id: Int): Scooter? = db.scooterDao().getScooterById(id)
+
+    /**
+     * Поиск виртуальной карты по имени (case-insensitive, с fallback на
+     * startsWith). Если точного совпадения нет — возвращает карту, имя
+     * которой начинается с заданной строки (или наоборот).
+     *
+     * Поддерживает как обычные, так и системные/внешние карты
+     * (Glavnaya, Vtorostepennaya, Tashqidan, Tashqiga).
+     */
+    private suspend fun findCardByName(name: String): VirtualCard? {
+        val all = db.virtualCardDao().getAllCardsOnce()
+        val trimmed = name.trim()
+        return all.firstOrNull { it.name.trim().equals(trimmed, ignoreCase = true) }
+            ?: all.firstOrNull { it.name.trim().startsWith(trimmed, ignoreCase = true) }
+            ?: all.firstOrNull { trimmed.startsWith(it.name.trim(), ignoreCase = true) }
+    }
 
     /**
      * Нормализует номер телефона в формат +998XXXXXXXXX.
