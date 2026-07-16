@@ -2753,7 +2753,16 @@ fun SettingsScreen(
                 .fillMaxSize()
                 .padding(padding)
                 .verticalScroll(settingsScrollState)
-                .padding(horizontal = 16.dp, vertical = 16.dp),
+                // ── Убрали вертикальный padding 16.dp ──────────────────────
+                // Раньше здесь было .padding(horizontal = 16.dp, vertical = 16.dp),
+                // что добавляло лишние 16dp пустого цветного пространства сверху
+                // (между TopAppBar и первой секцией "Tariflar") и снизу (после
+                // последней кнопки). На странице «Арендаторы» этого лишнего
+                // вертикального padding нет — содержимое начинается сразу под
+                // TopAppBar. Приводим Settings к тому же поведению: только
+                // горизонтальные отступы по бокам, без вертикальных.
+                // Между элементами остаётся Arrangement.spacedBy(16.dp).
+                .padding(horizontal = 16.dp),
             verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
                 Column {
