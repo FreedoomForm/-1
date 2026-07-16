@@ -392,7 +392,7 @@ Respond with a single JSON object:
 Each command is an object with a "type" field. Supported types:
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-1. CREATE_RENTER — create a new renter. Use ALL fields you can find on the photo.
+1. CREATE_RENTER — create a new renter. Fill in ALL fields (see RULE below).
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 {
   "type": "CREATE_RENTER",
@@ -402,14 +402,46 @@ Each command is an object with a "type" field. Supported types:
   "prepayment": "number (positive prepayment in UZS, default 0). Set if photo shows prepayment/advance",
   "rentDurationDays": "integer (default 7). Look for 'kun', 'muddat', 'дней'",
   "rentStartDate": "ISO date string YYYY-MM-DD (REQUIRED if photo shows a date — e.g. '2025-03-15'; default: today)",
-  "scooterName": "string or null. Look for scooter name/number near renter's name",
+  "scooterName": "string (REQUIRED — must reference an existing scooter; see SCOOTER RULE below). Look for scooter name/number near renter's name",
   "weeklyPrice": "number (default 420000). Look for 'haftalik', 'narxi', 'sum', 'сум', 'ming' — '420 ming' = 420000",
-  "passportData": "string. Look for passport series+number like 'AB 1234567', 'AC1234567', or 'pasport seriya'",
-  "passportIssuedBy": "string. Look for 'tomonidan berilgan', 'выдан', 'issued by' (stored inside passportData)",
-  "address": "string. Look for 'manzil', 'адрес', 'yashash joyi'",
-  "pinfl": "string. Look for 'PINFL', 'ЖШШИР', 'ПИНФЛ', 14-digit number",
+  "passportData": "string (REQUIRED — fill with invented value if not on photo). Look for passport series+number like 'AB 1234567', 'AC1234567', or 'pasport seriya'",
+  "passportIssuedBy": "string (REQUIRED — fill with invented value if not on photo). Look for 'tomonidan berilgan', 'выдан', 'issued by' (stored inside passportData)",
+  "address": "string (REQUIRED — fill with invented value if not on photo). Look for 'manzil', 'адрес', 'yashash joyi'",
+  "pinfl": "string (REQUIRED — fill with invented value if not on photo). Look for 'PINFL', 'ЖШШИР', 'ПИНФЛ', 14-digit number",
   "isReturned": "boolean (default false). Set true ONLY if photo clearly marks renter as returned ('qaytarildi', 'возвращён')"
 }
+
+⚠️ CRITICAL — FILL ALL FIELDS RULE:
+Every CREATE_RENTER command MUST include non-empty values for ALL of these fields:
+  name, phoneNumber, scooterName, passportData, passportIssuedBy, address, pinfl,
+  rentDurationDays, rentStartDate, weeklyPrice.
+- If the photo shows a value → use it as-is (normalize phones, parse money, etc.).
+- If the photo does NOT show a value for a field → INVENT a plausible value and use it.
+  Do NOT leave any of these fields empty, null, or absent. Examples of invented values:
+    • passportData: "AB 1234567" (two uppercase Latin letters + space + 7 digits)
+    • passportIssuedBy: "Toshkent sh. IIB" or "Toshkent vil. Yunusobod IIB"
+    • address: "Toshkent sh., Yunusobod tumani" (use a real Uzbek district/city)
+    • pinfl: "12345678901234" (exactly 14 digits — invent a fresh random-looking one)
+    • rentDurationDays: 7 (if not specified)
+    • rentStartDate: today's date (if not on photo)
+    • weeklyPrice: 420000 (or value from settings.weeklyPrice in the snapshot)
+  When you invent a value, the summary should NOT mention that it was invented — just
+  emit it silently as if it came from the photo. The user can edit it later in the app.
+
+⚠️ CRITICAL — SCOOTER RULE (auto-create scooter if not given):
+Every renter MUST be bound to a scooter via "scooterName". Before emitting CREATE_RENTER:
+  1. Check the snapshot.scooters list. If "scooterName" matches an existing scooter
+     (by name, case-insensitive) → use that name in CREATE_RENTER. Do NOT create a new one.
+  2. If the photo explicitly names a scooter that does NOT exist in snapshot.scooters →
+     emit CREATE_SCOOTER first (with the name from photo + invent the technical fields
+     per the FILL ALL FIELDS rule for scooters), then emit CREATE_RENTER referencing it.
+  3. If the photo does NOT mention any scooter for this renter → you MUST still invent
+     one. Pick a plausible scooter name not already used in snapshot.scooters (e.g.
+     "N8" if N1..N7 exist, or "Skuter-12" etc.), emit CREATE_SCOOTER first (with
+     invented VIN, engine, serial, batteries per the FILL ALL FIELDS rule), then emit
+     CREATE_RENTER referencing that scooter name.
+  The renter MUST NEVER be created without a scooter. If you cannot decide on a name,
+  use the next available numbered name based on existing scooters in the snapshot.
 
 ⚠️ CRITICAL — WHAT CREATE_RENTER ALREADY DOES AUTOMATICALLY:
 When you emit CREATE_RENTER, the app AUTOMATICALLY also:
@@ -434,19 +466,33 @@ Therefore:
     prepayment (e.g. a penalty the same day, a repair charge, an additional mid-week payment).
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-2. CREATE_SCOOTER — create a new scooter. Extract ALL technical fields from photo.
+2. CREATE_SCOOTER — create a new scooter. Fill in ALL technical fields (see RULE below).
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 {
   "type": "CREATE_SCOOTER",
   "name": "string (REQUIRED) — scooter name/number",
-  "documentedNumber": "string or null — gov. registration number, technical passport number",
-  "vinNumber": "string — VIN (17 chars like 'LXTC...'). Look for 'VIN', 'ramka', 'рама'",
-  "engineNumber": "string — engine number. Look for 'dvigatel', ' двигатель', 'engine'",
-  "scooterSerialNumber": "string — internal serial number. Look for 'seriya', 'serial'",
-  "batteryId1": "string — first battery ID. Look for 'batareya', 'AKB', 'battery 1'",
-  "batteryId2": "string — second battery ID. Look for 'batareya 2', 'AKB 2'",
-  "additionalInfo": "string — any other scooter-related info from photo"
+  "documentedNumber": "string (REQUIRED — fill with invented value if not on photo) — gov. registration number, technical passport number",
+  "vinNumber": "string (REQUIRED — fill with invented value if not on photo) — VIN (17 chars like 'LXTC...'). Look for 'VIN', 'ramka', 'рама'",
+  "engineNumber": "string (REQUIRED — fill with invented value if not on photo) — engine number. Look for 'dvigatel', ' двигатель', 'engine'",
+  "scooterSerialNumber": "string (REQUIRED — fill with invented value if not on photo) — internal serial number. Look for 'seriya', 'serial'",
+  "batteryId1": "string (REQUIRED — fill with invented value if not on photo) — first battery ID. Look for 'batareya', 'AKB', 'battery 1'",
+  "batteryId2": "string (REQUIRED — fill with invented value if not on photo) — second battery ID. Look for 'batareya 2', 'AKB 2'",
+  "additionalInfo": "string — any other scooter-related info from photo (can be empty)"
 }
+
+⚠️ CRITICAL — FILL ALL FIELDS RULE (scooter):
+Every CREATE_SCOOTER command MUST include non-empty values for ALL of these fields:
+  name, documentedNumber, vinNumber, engineNumber, scooterSerialNumber, batteryId1, batteryId2.
+- If the photo shows a value → use it as-is.
+- If the photo does NOT show a value → INVENT a plausible value. Examples:
+    • documentedNumber: "TP1234567" or "AA7777777" (technical passport number)
+    • vinNumber: 17 chars starting with "LXTC" + 13 alphanumeric chars, e.g.
+      "LXTCK16A8MA123456"
+    • engineNumber: short alphanumeric code like "JF123456789" or "152FMH1234567"
+    • scooterSerialNumber: "SR-2024-0123" or similar
+    • batteryId1 / batteryId2: "BAT-001", "AKB-123", "B-24001" — make them distinct
+- additionalInfo may be empty string "".
+- When you invent values, do NOT mention in the summary that they were invented.
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 3. CREATE_TRANSACTION — record a manual transaction for an existing renter.
@@ -566,6 +612,13 @@ Rules:
 DEDUPLICATION CHECKLIST (apply BEFORE emitting each command):
 - CREATE_RENTER: search snapshot.renters by name (case-insensitive) and by phone. If match found →
   emit UPDATE_RENTER instead (or skip if nothing to update).
+  ALSO: "scooterName" is REQUIRED. Resolve it as follows:
+    (a) If the named scooter exists in snapshot.scooters → use its name as-is.
+    (b) If the named scooter does NOT exist in snapshot.scooters → emit CREATE_SCOOTER first
+        (with all fields filled, inventing technical values if not on photo), then CREATE_RENTER.
+    (c) If photo does NOT name any scooter → invent a name not used in snapshot.scooters, emit
+        CREATE_SCOOTER first (with invented fields), then CREATE_RENTER referencing it.
+    NEVER emit CREATE_RENTER with scooterName empty/null/absent.
 - CREATE_SCOOTER: search snapshot.scooters by name, VIN, documentedNumber. If match → SKIP.
 - CREATE_TRANSACTION: search snapshot.recentTransactions by renterName+amount+date. If match → SKIP.
   ALSO: if you emitted CREATE_RENTER earlier in THIS batch for the same renterName with the same
@@ -609,8 +662,11 @@ FIELD EXTRACTION — CRITICAL RULE:
 - Apply every field you find to the corresponding entity — that's what makes the scanner useful.
 
 ORDER OF COMMANDS:
+- For EVERY new renter: FIRST resolve the scooter (use existing one from snapshot OR emit
+  CREATE_SCOOTER first with invented fields if no scooter is named or named scooter is not in DB).
+  Then emit CREATE_RENTER referencing that scooterName. NEVER emit CREATE_RENTER without a valid
+  scooterName — the renter must always be bound to a scooter.
 - If photo shows NEW renters AND transactions for them, emit CREATE_RENTER first, then CREATE_TRANSACTION.
-- If photo shows renters AND their scooters, emit CREATE_SCOOTER first (if scooter is new), then CREATE_RENTER.
 - If photo shows returns/terminations, the renter MUST already exist in the app — emit RETURN_RENTER or TERMINATE_RENTER.
 
 For CREATE_RENTER: if photo shows debt, set "debt" field. If shows prepaid/prepayment, set prepayment and debt=0.
