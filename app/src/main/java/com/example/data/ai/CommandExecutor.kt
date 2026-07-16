@@ -373,11 +373,17 @@ class CommandExecutor(private val context: Context) {
 
             // Шаг 2: создаём начальный контракт (CREATED) — пока НЕ оплачен.
             // isPaid проставим ниже после анализа prepayment.
+            //
+            // contract.amount / weeklyPrice — если фото показало weeklyPrice,
+            // используем его. Иначе fallback на autoPaymentAmount (settings или
+            // DEFAULT_WEEKLY_PRICE), чтобы контракт имел осмысленную сумму, а
+            // не 0. Это совпадает с тем, как RenterViewModel создаёт контракты.
+            val contractWeeklyPrice = if (weeklyPrice > 0) weeklyPrice else autoPaymentAmount
             val contract = ContractHistoryEntry(
                 renterId = newId,
                 timestamp = rentStartTs,
                 type = ContractHistoryEntry.TYPE_CREATED,
-                amount = weeklyPrice,
+                amount = contractWeeklyPrice,
                 notes = when {
                     debt > 0 -> "Skaner orqali yaratildi (qarz bilan)"
                     prepayment > 0 -> "Skaner orqali yaratildi (oldindan to'lov: ${formatMoney(prepayment)})"
@@ -388,7 +394,7 @@ class CommandExecutor(private val context: Context) {
                 scooterName = scooterNameResolved,
                 weekStart = rentStartTs,
                 weekEnd = rentStartTs + durationMs,
-                weeklyPrice = weeklyPrice,
+                weeklyPrice = contractWeeklyPrice,
                 passportData = passportData,
                 address = address,
                 pinfl = pinfl,
@@ -420,10 +426,24 @@ class CommandExecutor(private val context: Context) {
             //   • lastPaymentTimestamp = rentStartTs
             //
             // Случай C — ничего не указано (prepayment = 0, debt = 0):
-            //   Контракт остаётся НЕ оплаченным. balance = 0. Transaction НЕ создаётся.
-            //   На карту ничего не зачисляется.
-            //   Раньше тут был auto-default на weeklyPrice — убран, потому что это
-            //   выдуманное значение. Если фото не показывает предоплату — её нет.
+            //   Считаем первую неделю предоплаченной (как в RenterViewModel):
+            //   • Создаём Transaction PAYMENT с amount=autoPaymentAmount
+            //   • balance += autoPaymentAmount, затем -= weeklyPrice (за неделю)
+            //   • Зачисляем autoPaymentAmount на главную карту
+            //   • контракт isPaid = true
+            //   • Итог: balance = 0, контракт оплачен.
+            //
+            // autoPaymentAmount — это системный авто-платёж за первую неделю,
+            // НЕ выдуманное значение поля. Если фото показывает weeklyPrice —
+            // используем его; иначе берём settings.weeklyPrice; иначе
+            // DEFAULT_WEEKLY_PRICE (420 000 UZS). Это совпадает с поведением
+            // applyWeeklyPayment в RenterViewModel — пользователь ожидает, что
+            // при создании арендатора первая неделя сразу закрыта как оплаченная.
+            val autoPaymentAmount = when {
+                weeklyPrice > 0 -> weeklyPrice
+                settings.weeklyPrice > 0 -> settings.weeklyPrice
+                else -> SettingsRepository.DEFAULT_WEEKLY_PRICE
+            }
 
             var currentBalance = 0.0
             var currentDebtAmount = 0.0
@@ -486,13 +506,48 @@ class CommandExecutor(private val context: Context) {
                     lastPaymentTs = rentStartTs
                 }
                 else -> {
-                    // Случай C: фото не показывает ни prepayment, ни debt.
-                    // Контракт остаётся НЕ оплаченным. balance = 0.
-                    // Transaction НЕ создаём, на карту ничего не зачисляем.
-                    // Никаких выдуманных авто-предоплат.
-                    currentBalance = 0.0
-                    currentDebtAmount = 0.0
-                    contractPaid = false
+                    // Случай C: авто-предоплата за первую неделю (как в RenterViewModel).
+                    // Фото не показало ни prepayment, ни debt — считаем, что
+                    // арендатор заплатил за первую неделю сразу при создании.
+                    val paymentAmount = autoPaymentAmount
+
+                    val tx = Transaction(
+                        contractId = contractId,
+                        renterId = newId,
+                        scooterId = scooterId,
+                        timestamp = rentStartTs,
+                        type = Transaction.TYPE_PAYMENT,
+                        amount = paymentAmount,
+                        notes = "Skaner orqali yaratildi (oldindan to'langan)",
+                        renterName = name,
+                        renterPhone = phone,
+                        scooterName = scooterNameResolved ?: "",
+                        contractLabel = "#$contractId"
+                    )
+                    db.transactionDao().insert(tx)
+
+                    // Зачисляем на главную карту
+                    try {
+                        val cardRepo = VirtualCardRepository(
+                            db.virtualCardDao(), db.cardTransactionDao()
+                        )
+                        cardRepo.depositContractIncome(
+                            amount = paymentAmount,
+                            note = "Skaner: $name (oldindan to'langan) — #$contractId",
+                            contractId = contractId
+                        )
+                    } catch (e: Exception) {
+                        Log.w(TAG, "depositContractIncome failed for scanned renter (Case C): ${e.message}")
+                    }
+
+                    // balance += autoPaymentAmount, затем -= weeklyPrice (за неделю).
+                    // Если weeklyPrice=0 (фото не показало цену) — используем
+                    // autoPaymentAmount и для списания, чтобы баланс стал 0.
+                    val chargeForWeek = if (weeklyPrice > 0) weeklyPrice else autoPaymentAmount
+                    currentBalance = savedRenter.balance + paymentAmount - chargeForWeek
+                    currentDebtAmount = maxOf(0.0, -currentBalance)
+                    contractPaid = true
+                    lastPaymentTs = rentStartTs
                 }
             }
 

@@ -454,9 +454,11 @@ When you emit CREATE_RENTER, the app AUTOMATICALLY also:
       contract.isPaid = false and renter.balance = -debt.
   (b) If prepayment > 0 → creates a Transaction PAYMENT with amount = prepayment, date = rentStartDate,
       and deposits prepayment to the main virtual card.
-  (c) If prepayment = 0 AND debt = 0 → NO Transaction is created. contract.isPaid = false.
-      renter.balance = 0. NOTHING is deposited to the card. NEVER fabricate a default prepayment
-      or default weeklyPrice when the photo does not show payment info — just leave it at 0.
+  (c) If prepayment = 0 AND debt = 0 → the app AUTO-PAYS the first week: creates a Transaction PAYMENT
+      with amount = weeklyPrice (or settings.weeklyPrice, or DEFAULT_WEEKLY_PRICE = 420 000 UZS if
+      neither is set), marks contract.isPaid = true, and deposits the amount to the main virtual card.
+      renter.balance ends up at 0 (paid in, then charged for the week). This matches the behavior of
+      the manual renter creation form (RenterViewModel) — the first week is always closed as paid.
 
 Therefore:
   ✗ DO NOT emit CREATE_CONTRACT for the same renter + same week (rentStartDate) right after CREATE_RENTER —
