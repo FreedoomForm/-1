@@ -1760,7 +1760,12 @@ fun MainScreen(
                             val msg = com.example.data.BackupManager.importFromExcel(localContext, uri)
                             Toast.makeText(localContext, msg, Toast.LENGTH_LONG).show()
                         }
-                    }
+                    },
+                    // Вкладка внутри MainView — НЕ рендерим собственный TopAppBar,
+                    // т.к. внешний Scaffold уже даёт «Skuter Ijarasi» + универсальные
+                    // кнопки. Это убирает пустое пространство сверху (дублирующий
+                    // TopAppBar «Sozlamalar») и снизу (contentWindowInsets).
+                    showTopBar = false
                 )
             }
         }
@@ -2655,7 +2660,20 @@ fun SettingsScreen(
     onLogout: () -> Unit = {},
     onCheckUpdate: () -> Unit = {},
     onExportBackup: (android.net.Uri) -> Unit = {},
-    onImportBackup: (android.net.Uri) -> Unit = {}
+    onImportBackup: (android.net.Uri) -> Unit = {},
+    // ── showTopBar ───────────────────────────────────────────────────────
+    // true  — рендерить собственный Scaffold + TopAppBar с «Sozlamalar».
+    //         Используется когда SettingsScreen открыт как отдельная страница
+    //         (NavigationState.Settings) — нужен свой top bar с заголовком.
+    // false — НЕ рендерить собственный Scaffold/TopAppBar. Используется когда
+    //         SettingsScreen встроен во вкладку MainView (currentTab == 6) —
+    //         там уже есть внешний Scaffold с TopAppBar «Skuter Ijarasi» и
+    //         универсальными кнопками (сканер, SMS). Без этого параметра
+    //         получался nested Scaffold: второй TopAppBar «Sozlamalar»
+    //         рисовался ниже внешнего, создавая пустое пространство сверху,
+    //         а contentWindowInsets внутреннего Scaffold'а добавлял лишний
+    //         отступ снизу перед нижней навигацией.
+    showTopBar: Boolean = true
 ) {
     var template by remember { mutableStateOf(currentTemplate) }
     var weekly by remember {
@@ -2730,38 +2748,29 @@ fun SettingsScreen(
     val defaultBackupName = remember { "scooter_backup_${backupDateFormat.format(java.util.Date())}.xlsx" }
 
     val settingsScrollState = rememberScrollState()
-    Scaffold(
-        modifier = Modifier.fillMaxSize(),
-        containerColor = ClaudeBackground,
-        topBar = {
-            TopAppBar(
-                title = {
-                    Text(
-                        "Sozlamalar",
-                        style = MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.Bold)
-                    )
-                },
-                colors = TopAppBarDefaults.topAppBarColors(
-                    containerColor = ClaudeBackground,
-                    titleContentColor = ClaudeText
-                )
-            )
-        }
-    ) { padding ->
+
+    // ── Контент страницы настроек ─────────────────────────────────────────
+    // Вынесен в отдельную composable-лямбду, чтобы переиспользовать его в двух
+    // сценариях:
+    //   1. showTopBar = true  → отдельная страница (NavigationState.Settings)
+    //      со своим Scaffold + TopAppBar «Sozlamalar»
+    //   2. showTopBar = false → вкладка внутри MainView (currentTab == 6),
+    //      где внешний Scaffold уже даёт TopAppBar «Skuter Ijarasi» с
+    //      универсальными кнопками и нижнюю навигацию. В этом случае мы НЕ
+    //      рендерим свой Scaffold — иначе получается nested Scaffold с
+    //      дублирующим TopAppBar (лишнее пустое пространство сверху) и
+    //      contentWindowInsets (лишний отступ снизу перед bottom nav).
+    @Composable
+    fun settingsContent(extraPadding: PaddingValues) {
         Column(
             modifier = Modifier
                 .fillMaxSize()
-                .padding(padding)
+                .padding(extraPadding)
                 .verticalScroll(settingsScrollState)
-                // ── Убрали вертикальный padding 16.dp ──────────────────────
-                // Раньше здесь было .padding(horizontal = 16.dp, vertical = 16.dp),
-                // что добавляло лишние 16dp пустого цветного пространства сверху
-                // (между TopAppBar и первой секцией "Tariflar") и снизу (после
-                // последней кнопки). На странице «Арендаторы» этого лишнего
-                // вертикального padding нет — содержимое начинается сразу под
-                // TopAppBar. Приводим Settings к тому же поведению: только
-                // горизонтальные отступы по бокам, без вертикальных.
-                // Между элементами остаётся Arrangement.spacedBy(16.dp).
+                // Только горизонтальные отступы по бокам, без вертикальных —
+                // содержимое начинается сразу под TopAppBar (или под внешним
+                // TopAppBar, если showTopBar=false) и заканчивается у нижней
+                // навигации. Между элементами остаётся spacedBy(16.dp).
                 .padding(horizontal = 16.dp),
             verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
@@ -3253,6 +3262,38 @@ fun SettingsScreen(
                 )
 
         }
+        }  // ← конец settingsContent()
+
+    // ── Рендер: с собственным TopAppBar или без ──────────────────────────
+    if (showTopBar) {
+        // Отдельная страница (NavigationState.Settings) — нужен свой TopAppBar
+        // с заголовком «Sozlamalar».
+        Scaffold(
+            modifier = Modifier.fillMaxSize(),
+            containerColor = ClaudeBackground,
+            topBar = {
+                TopAppBar(
+                    title = {
+                        Text(
+                            "Sozlamalar",
+                            style = MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.Bold)
+                        )
+                    },
+                    colors = TopAppBarDefaults.topAppBarColors(
+                        containerColor = ClaudeBackground,
+                        titleContentColor = ClaudeText
+                    )
+                )
+            }
+        ) { padding ->
+            settingsContent(padding)
+        }
+    } else {
+        // Вкладка внутри MainView (currentTab == 6) — внешний Scaffold уже
+        // даёт TopAppBar «Skuter Ijarasi» с универсальными кнопками и нижнюю
+        // навигацию. Рендерим контент напрямую с нулевым padding, чтобы
+        // избежать nested Scaffold и лишних отступов сверху/снизу.
+        settingsContent(PaddingValues(0.dp))
     }
 }
 
