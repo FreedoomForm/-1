@@ -252,14 +252,23 @@ class CommandExecutor(private val context: Context) {
     // ── Команда: CREATE_RENTER ──────────────────────────────────────────────
     private suspend fun createRenter(cmd: JSONObject, batch: BatchContext): CommandResult {
         try {
-            val name = cmd.optString("name", "").trim()
-            if (name.isEmpty()) {
-                return CommandResult(false, "CREATE_RENTER: 'name' majburiy")
-            }
+            // ── Все поля OPTIONAL ────────────────────────────────────────────
+            // Если имя/телефон отсутствуют на фото — НЕ отказываемся от создания,
+            // а подставляем auto-сгенерированное имя ("Noma'lum ijarachi #N") и
+            // пустой телефон. Пользователь потом доредактирует вручную.
+            // Это соответствует правилу: «агент не обязан заполнять ни одно поле;
+            // если поля нет — ставится значение от предыдущего, а если предыдущего
+            // нет — дефолт (0 / пустая строка / auto-сгенерированное имя)».
+            val rawName = cmd.optString("name", "").trim()
+            val name = if (rawName.isEmpty()) {
+                // Берём следующий свободный номер после "Noma'lum ijarachi #N"
+                val all = db.renterDao().getAllRentersOnce()
+                val nextN = (all.mapNotNull {
+                    it.name.removePrefix("Noma'lum ijarachi #").toIntOrNull()
+                }.maxOrNull() ?: 0) + 1
+                "Noma'lum ijarachi #$nextN"
+            } else rawName
             val phone = normalizePhone(cmd.optString("phoneNumber", ""))
-            if (phone.isEmpty()) {
-                return CommandResult(false, "CREATE_RENTER: 'phoneNumber' majburiy")
-            }
             val debt = cmd.optDouble("debt", 0.0)
             // prepayment — положительный аванс (если фото показывает "oldindan to'lov"
             // или положительный баланс). В отличие от debt, prepayment увеличивает
@@ -536,10 +545,16 @@ class CommandExecutor(private val context: Context) {
     // ── Команда: CREATE_SCOOTER ─────────────────────────────────────────────
     private suspend fun createScooter(cmd: JSONObject): CommandResult {
         try {
-            val name = cmd.optString("name", "").trim()
-            if (name.isEmpty()) {
-                return CommandResult(false, "CREATE_SCOOTER: 'name' majburiy")
-            }
+            // name — OPTIONAL. Если фото не показало имя, auto-генерируем
+            // "Skillmax-NNN" (следующий свободный номер после существующих).
+            val rawName = cmd.optString("name", "").trim()
+            val name = if (rawName.isEmpty()) {
+                val all = db.scooterDao().getAllScootersOnce()
+                val nextN = (all.mapNotNull {
+                    it.name.removePrefix("Skillmax-").trimStart('0').toIntOrNull()
+                }.maxOrNull() ?: 0) + 1
+                "Skillmax-" + nextN.toString().padStart(3, '0')
+            } else rawName
             val documentedNumber = cmd.optString("documentedNumber", "").trim().ifEmpty { null }
             val scooter = Scooter(
                 name = name,
@@ -562,14 +577,20 @@ class CommandExecutor(private val context: Context) {
     // ── Команда: CREATE_TRANSACTION ─────────────────────────────────────────
     private suspend fun createTransaction(cmd: JSONObject, batch: BatchContext): CommandResult {
         try {
+            // renterName — OPTIONAL. Если фото не показало имя арендатора,
+            // привязываем транзакцию к ПОСЛЕДНЕМУ созданному арендатору в БД
+            // (это соответствует правилу «значение от предыдущего»). Если в БД
+            // вообще нет арендаторов — пропускаем команду.
             val renterName = cmd.optString("renterName", "").trim()
-            if (renterName.isEmpty()) {
-                return CommandResult(false, "CREATE_TRANSACTION: 'renterName' majburiy")
+            val renter = if (renterName.isEmpty()) {
+                db.renterDao().getAllRentersOnce().maxByOrNull { it.id }
+            } else {
+                findRenterByName(renterName)
             }
-            val renter = findRenterByName(renterName)
             if (renter == null) {
                 return CommandResult(false,
-                    "CREATE_TRANSACTION: '$renterName' ijarachi topilmadi. " +
+                    "CREATE_TRANSACTION: ijarachi topilmadi " +
+                    "(renterName='$renterName' va bazada ijarachilar yo'q). " +
                     "Avval ijarachini skaner orqali yarating.")
             }
             val amount = cmd.optDouble("amount", 0.0)
@@ -662,14 +683,19 @@ class CommandExecutor(private val context: Context) {
     // ── Команда: CREATE_CONTRACT ────────────────────────────────────────────
     private suspend fun createContract(cmd: JSONObject, batch: BatchContext): CommandResult {
         try {
+            // renterName — OPTIONAL. Если фото не показало имя арендатора,
+            // привязываем контракт к ПОСЛЕДНЕМУ созданному арендатору в БД.
+            // Если в БД вообще нет арендаторов — пропускаем команду.
             val renterName = cmd.optString("renterName", "").trim()
-            if (renterName.isEmpty()) {
-                return CommandResult(false, "CREATE_CONTRACT: 'renterName' majburiy")
+            val renter = if (renterName.isEmpty()) {
+                db.renterDao().getAllRentersOnce().maxByOrNull { it.id }
+            } else {
+                findRenterByName(renterName)
             }
-            val renter = findRenterByName(renterName)
             if (renter == null) {
                 return CommandResult(false,
-                    "CREATE_CONTRACT: '$renterName' ijarachi topilmadi")
+                    "CREATE_CONTRACT: ijarachi topilmadi " +
+                    "(renterName='$renterName' va bazada ijarachilar yo'q).")
             }
             // amount — строго из фото. Если не указано → 0.
             // Раньше был fallback на settings.weeklyPrice (420000) — это
@@ -750,10 +776,16 @@ class CommandExecutor(private val context: Context) {
     // ── Команда: CREATE_VIRTUAL_CARD ────────────────────────────────────────
     private suspend fun createVirtualCard(cmd: JSONObject): CommandResult {
         try {
-            val name = cmd.optString("name", "").trim()
-            if (name.isEmpty()) {
-                return CommandResult(false, "CREATE_VIRTUAL_CARD: 'name' majburiy")
-            }
+            // name — OPTIONAL. Если фото не показало имя, auto-генерируем
+            // "Yangi karta #N" (следующий свободный номер).
+            val rawName = cmd.optString("name", "").trim()
+            val name = if (rawName.isEmpty()) {
+                val all = db.virtualCardDao().getAllCardsOnce()
+                val nextN = (all.mapNotNull {
+                    it.name.removePrefix("Yangi karta #").toIntOrNull()
+                }.maxOrNull() ?: 0) + 1
+                "Yangi karta #$nextN"
+            } else rawName
             val balance = cmd.optDouble("balance", 0.0)
             val colorHex = cmd.optString("colorHex", "#FF1565C0").trim().ifEmpty { "#FF1565C0" }
             val info = cmd.optString("info", "").trim().ifEmpty { null }
@@ -779,24 +811,42 @@ class CommandExecutor(private val context: Context) {
     // "kassadan bankka 50000", "Tashqidan kassaga 100000", "remontga 200000" и т.д.
     private suspend fun createCardTransaction(cmd: JSONObject): CommandResult {
         try {
+            // fromCardName / toCardName — OPTIONAL. Если фото не показало имя
+            // карты, используем основную (isDefault=true) карту. Если основных
+            // несколько — берём первую. Если основных нет — берём первую попавшуюся
+            // обычную карту (KIND_REGULAR). Если и таких нет — пропускаем.
             val fromName = cmd.optString("fromCardName", "").trim()
             val toName = cmd.optString("toCardName", "").trim()
-            if (fromName.isEmpty() || toName.isEmpty()) {
+            val allCards = db.virtualCardDao().getAllCardsOnce()
+            val defaultCard = allCards.firstOrNull { it.isDefault }
+                ?: allCards.firstOrNull { it.kind == VirtualCard.KIND_REGULAR }
+
+            val fromCard = if (fromName.isEmpty()) {
+                defaultCard
+            } else {
+                findCardByName(fromName) ?: defaultCard
+            }
+            val toCard = if (toName.isEmpty()) {
+                defaultCard
+            } else {
+                findCardByName(toName) ?: defaultCard
+            }
+
+            if (fromCard == null || toCard == null) {
                 return CommandResult(false,
-                    "CREATE_CARD_TRANSACTION: 'fromCardName' va 'toCardName' majburiy")
+                    "CREATE_CARD_TRANSACTION: bazada kartalar topilmadi. " +
+                    "Avval kamida bitta karta yarating.")
+            }
+            if (fromCard.id == toCard.id) {
+                return CommandResult(false,
+                    "CREATE_CARD_TRANSACTION: fromCard va toCard bir xil — o'tkazma ma'nosiz. " +
+                    "Photo'da kamida bitta karta nomi aniq ko'rsatilishi kerak.")
             }
             val amount = cmd.optDouble("amount", 0.0)
             // Раньше тут была проверка amount > 0 с отказом — убрана.
             // Если фото не показывает сумму → агент присылает 0, и мы создаём
             // перевод с нулевой суммой (валидный сценарий по требованию пользователя).
             val note = cmd.optString("note", "").trim().ifEmpty { null }
-
-            val fromCard = findCardByName(fromName)
-                ?: return CommandResult(false,
-                    "CREATE_CARD_TRANSACTION: '$fromName' karta topilmadi")
-            val toCard = findCardByName(toName)
-                ?: return CommandResult(false,
-                    "CREATE_CARD_TRANSACTION: '$toName' karta topilmadi")
 
             // Внешние карты требуют обязательный note
             val involvesExternal = fromCard.isExternal || toCard.isExternal
