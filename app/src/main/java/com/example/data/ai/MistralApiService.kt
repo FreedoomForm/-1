@@ -398,12 +398,12 @@ Each command is an object with a "type" field. Supported types:
   "type": "CREATE_RENTER",
   "name": "string (REQUIRED) — full name as written on photo",
   "phoneNumber": "string (REQUIRED) — digits, normalize to +998XXXXXXXXX",
-  "debt": "number (initial debt in UZS, default 0). Set if photo shows 'qarz', 'долг', or unpaid amount",
-  "prepayment": "number (positive prepayment in UZS, default 0). Set if photo shows prepayment/advance",
-  "rentDurationDays": "integer (default 7). Look for 'kun', 'muddat', 'дней'",
-  "rentStartDate": "ISO date string YYYY-MM-DD (REQUIRED if photo shows a date — e.g. '2025-03-15'; default: today)",
-  "scooterName": "string (REQUIRED — must reference an existing scooter; see SCOOTER RULE below). Look for scooter name/number near renter's name",
-  "weeklyPrice": "number (default 420000). Look for 'haftalik', 'narxi', 'sum', 'сум', 'ming' — '420 ming' = 420000",
+  "debt": "number — initial debt in UZS. Use photo value ONLY. If photo does not show debt → 0. NEVER invent a debt amount.",
+  "prepayment": "number — positive prepayment in UZS. Use photo value ONLY. If photo does not show prepayment → 0. NEVER invent a prepayment amount.",
+  "rentDurationDays": "integer — use photo value ONLY. If photo does not show duration → 0. NEVER invent a duration.",
+  "rentStartDate": "ISO date string YYYY-MM-DD — use photo's date if visible. If photo has NO date at all → use snapshot.todayDate. NEVER invent a date that is not on the photo.",
+  "scooterName": "string (REQUIRED — must reference an existing scooter; see SCOOTER RULE below). Look for scooter name/number near renter's name. If photo does not name any scooter → follow SCOOTER RULE step 3.",
+  "weeklyPrice": "number — use photo value ONLY. If photo does not show weekly price → 0. NEVER use 420000 or settings.weeklyPrice as default; if photo shows no price, write 0.",
   "passportData": "string (use photo value; empty string if not on photo). Look for passport series+number like 'AB 1234567', 'AC1234567', or 'pasport seriya'",
   "passportIssuedBy": "string (use photo value; empty string if not on photo). Look for 'tomonidan berilgan', 'выдан', 'issued by' (stored inside passportData)",
   "address": "string (use photo value; empty string if not on photo). Look for 'manzil', 'адрес', 'yashash joyi'",
@@ -411,22 +411,25 @@ Each command is an object with a "type" field. Supported types:
   "isReturned": "boolean (default false). Set true ONLY if photo clearly marks renter as returned ('qaytarildi', 'возвращён')"
 }
 
-⚠️ CRITICAL — DO NOT INVENT VALUES:
-For ALL fields in ALL commands: if the photo does NOT show a value, use a SAFE DEFAULT,
-NEVER invent a plausible-looking specific value. Safe defaults:
+⚠️ CRITICAL — DO NOT INVENT VALUES (applies to ALL commands):
+For ALL fields in ALL commands: if the photo does NOT explicitly show a value, you MUST
+use a SAFE NEUTRAL DEFAULT — NEVER invent a plausible-looking specific value. Safe defaults:
   • strings → "" (empty string)
   • numbers → 0
-  • dates → today's date (from snapshot.todayDate)
-  • phone → "+998000000000" placeholder (only if absolutely required; otherwise SKIP the command)
+  • dates → snapshot.todayDate (only because schema requires a date; never invent a date)
   • boolean → false
+  • phone → SKIP the command (phone is a required identifier, never write a placeholder)
   • nullable fields → null / omit the field entirely
 DO NOT invent passport series, VINs, engine numbers, PINFLs, addresses, battery IDs,
-or any other specific-looking data. If the photo does not show such a field, leave it
-empty or omit it. Invented garbage overwrites real user data and is worse than missing.
+phone numbers, names, amounts, or any other specific-looking data. If the photo does not
+show such a field, leave it empty/0. Invented garbage overwrites real user data and is
+WORSE than missing.
 
 This rule OVERRIDES any previous 'fill all fields with invented values' instruction.
-Required-name fields (renterName, scooterName, cardName) still MUST be present — if the
-photo does not give a name for a required field, SKIP the command with a summary note.
+Required-identifier fields (name, renterName, scooterName, cardName, fromCardName,
+toCardName) MUST come from the photo — if the photo does not show one of these, SKIP the
+command with a summary note. NEVER write 0 or empty string for these fields — they are
+identifiers, not numbers.
 
 ⚠️ CRITICAL — SCOOTER RULE (use existing or SKIP):
 Every renter MUST be bound to a scooter via "scooterName". Before emitting CREATE_RENTER:
@@ -449,8 +452,9 @@ When you emit CREATE_RENTER, the app AUTOMATICALLY also:
       contract.isPaid = false and renter.balance = -debt.
   (b) If prepayment > 0 → creates a Transaction PAYMENT with amount = prepayment, date = rentStartDate,
       and deposits prepayment to the main virtual card.
-  (c) If prepayment = 0 and debt = 0 → creates a Transaction PAYMENT with amount = weeklyPrice,
-      date = rentStartDate, marks contract as paid, and deposits weeklyPrice to the main virtual card.
+  (c) If prepayment = 0 AND debt = 0 → NO Transaction is created. contract.isPaid = false.
+      renter.balance = 0. NOTHING is deposited to the card. NEVER fabricate a default prepayment
+      or default weeklyPrice when the photo does not show payment info — just leave it at 0.
 
 Therefore:
   ✗ DO NOT emit CREATE_CONTRACT for the same renter + same week (rentStartDate) right after CREATE_RENTER —
@@ -492,17 +496,17 @@ database with fake data the user will have to clean up.
 {
   "type": "CREATE_TRANSACTION",
   "renterName": "string (REQUIRED — must match existing renter name. If renter doesn't exist, emit CREATE_RENTER first)",
-  "amount": "number (REQUIRED, positive, UZS. Use photo's amount. If photo shows no amount → SKIP the command)",
-  "txType": "one of: PAYMENT | PENALTY | REPAIR | RETURNED | TERMINATED | CUSTOM (REQUIRED, default PAYMENT). PAYMENT = to'lov, PENALTY = jarima, REPAIR = ta'mir, RETURNED = qaytarish, TERMINATED = tugatish, CUSTOM = boshqa",
-  "notes": "string (use photo value; empty string if not on photo)",
+  "amount": "number — UZS. Use photo value ONLY. If photo does not show amount → 0. NEVER invent a plausible amount.",
+  "txType": "one of: PAYMENT | PENALTY | REPAIR | RETURNED | TERMINATED | CUSTOM. Use photo value if identifiable; otherwise PAYMENT. PAYMENT = to'lov, PENALTY = jarima, REPAIR = ta'mir, RETURNED = qaytarish, TERMINATED = tugatish, CUSTOM = boshqa",
+  "notes": "string — use photo value ONLY. If photo has no description → empty string \"\". NEVER invent notes.",
   "scooterName": "string or null — bind to the renter's scooter or to an existing scooter from snapshot; omit if not relevant",
-  "date": "ISO date string YYYY-MM-DD (REQUIRED — use photo's date if present, otherwise today's date from snapshot.todayDate)"
+  "date": "ISO date string YYYY-MM-DD — use photo's date if visible. If photo has NO date → use snapshot.todayDate. NEVER invent a date."
 }
 
 ⚠️ CRITICAL — DO NOT INVENT TRANSACTION VALUES:
 For CREATE_TRANSACTION, use ONLY values from the photo. If amount is not on the photo →
-SKIP the command (do NOT invent a plausible amount). notes may be empty string "" if
-the photo has no description. scooterName may be omitted if not relevant.
+write 0 (do NOT invent a plausible amount, do NOT SKIP — just write 0). notes may be
+empty string "" if the photo has no description. scooterName may be omitted if not relevant.
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 4. CREATE_CONTRACT — create a contract (week) for an existing renter. Use photo values only.
@@ -511,11 +515,11 @@ the photo has no description. scooterName may be omitted if not relevant.
   "type": "CREATE_CONTRACT",
   "renterName": "string (REQUIRED — must match existing renter)",
   "scooterName": "string or null — bind to the renter's scooter or to an existing scooter from snapshot; omit if not relevant",
-  "amount": "number (use photo's amount, otherwise settings.weeklyPrice from snapshot, otherwise 420000)",
-  "weekStart": "ISO date string YYYY-MM-DD (REQUIRED — use photo's date if present, otherwise today's date from snapshot.todayDate)",
-  "weekEnd": "ISO date string YYYY-MM-DD (use photo's end date if present, otherwise weekStart + renter.rentDurationDays days, otherwise weekStart + 7 days)",
-  "isPaid": "boolean (true if photo shows 'to'langan', 'paid', 'оплачено', or if prepayment >= amount; false if 'qarz', 'unpaid', or no payment info. Default: false)",
-  "notes": "string (use photo value; empty string if not on photo)"
+  "amount": "number — UZS. Use photo value ONLY. If photo does not show amount → 0. NEVER use settings.weeklyPrice or 420000 as default.",
+  "weekStart": "ISO date string YYYY-MM-DD — use photo's date if visible. If photo has NO date → use snapshot.todayDate. NEVER invent a date.",
+  "weekEnd": "ISO date string YYYY-MM-DD — use photo's end date if visible. If photo does not show end date → weekStart + renter.rentDurationDays days (from snapshot); if renter has no duration → weekStart + 7 days. NEVER invent a date.",
+  "isPaid": "boolean — true ONLY if photo clearly shows 'to'langan', 'paid', 'оплачено'. false if 'qarz', 'unpaid', or no payment info. Default: false.",
+  "notes": "string — use photo value ONLY. If photo has no description → empty string \"\". NEVER invent notes."
 }
 
 ⚠️ CRITICAL — DO NOT INVENT CONTRACT VALUES:
@@ -529,15 +533,15 @@ the photo has no description. scooterName may be omitted if not relevant.
 {
   "type": "CREATE_VIRTUAL_CARD",
   "name": "string (REQUIRED — card name from photo, e.g. 'Kassa', 'Bank', 'Shaxsiy'. If photo shows no name → SKIP the command)",
-  "balance": "number (use photo's amount if present, otherwise 0)",
+  "balance": "number — use photo value ONLY. If photo does not show balance → 0. NEVER invent a balance.",
   "colorHex": "string (pick one of the palette; default #FF1565C0)",
-  "info": "string (use photo value; empty string if not on photo)"
+  "info": "string — use photo value ONLY. If photo has no info → empty string \"\". NEVER invent info."
 }
 
 ⚠️ CRITICAL — DO NOT INVENT CARD VALUES:
 For CREATE_VIRTUAL_CARD, use ONLY values from the photo. name MUST be from the photo;
-if photo has no name → SKIP the command. info may be empty string "". balance defaults
-to 0 if not on photo. colorHex defaults to #FF1565C0 if not specified.
+if photo has no name → SKIP the command. info may be empty string "". balance is 0
+if not on photo. colorHex defaults to #FF1565C0 if not specified.
 - colorHex must be one of: #FF1565C0 (blue), #FF2E7D32 (green), #FFE65100 (orange),
   #FF6A1B9A (purple), #FFC62828 (red), #FF424242 (dark gray), #FF00838F (teal),
   #FF8D6E63 (brown).
@@ -551,16 +555,16 @@ Use this when photo shows: 'kassadan bankka 50000', 'remontga 200000', 'Tashqida
   "type": "CREATE_CARD_TRANSACTION",
   "fromCardName": "string (REQUIRED — source card name. MUST match existing card in snapshot.virtualCards; if photo's source name doesn't match any existing card → SKIP the command)",
   "toCardName": "string (REQUIRED — destination card name. MUST match existing card in snapshot.virtualCards; if photo's destination name doesn't match any existing card → SKIP the command)",
-  "amount": "number (REQUIRED, positive, UZS. Use photo's amount. If photo shows no amount → SKIP the command)",
-  "note": "string (use photo value; empty string if not on photo. Required for external-card transfers)",
-  "date": "ISO date string YYYY-MM-DD (REQUIRED — use photo's date if present, otherwise today's date from snapshot.todayDate)"
+  "amount": "number — UZS. Use photo value ONLY. If photo does not show amount → 0. NEVER invent a plausible amount.",
+  "note": "string — use photo value ONLY. If photo has no note → empty string \"\". Required for external-card transfers. NEVER invent a note.",
+  "date": "ISO date string YYYY-MM-DD — use photo's date if visible. If photo has NO date → use snapshot.todayDate. NEVER invent a date."
 }
 
 ⚠️ CRITICAL — DO NOT INVENT CARD TRANSACTION VALUES:
 For CREATE_CARD_TRANSACTION, use ONLY values from the photo. fromCardName and toCardName
 MUST match existing cards in snapshot.virtualCards. If either doesn't match → SKIP the
-command with a summary note. amount MUST be present and > 0; if photo shows no amount →
-SKIP the command. note may be empty string "" for non-external transfers.
+command with a summary note. amount is 0 if photo shows no amount (do NOT SKIP, do NOT
+invent). note may be empty string "" for non-external transfers.
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 7. UPDATE_RENTER — update fields of an existing renter (found by name). ONLY fields present in JSON are modified.
@@ -697,13 +701,25 @@ Rules:
 - Phone numbers: normalize to +998XXXXXXXXX format. If only 9 digits given, prepend +998.
 - Money amounts: parse as numbers in UZS (Uzbek so'm). "420 ming" = 420000. "1 million" = 1000000.
 
-⚠️ GLOBAL RULE — DO NOT INVENT VALUES:
-For EVERY command (CREATE or UPDATE): if the photo does NOT show a value for a field,
-use a SAFE DEFAULT (empty string "", 0, today's date, false) OR omit the field entirely.
+⚠️ GLOBAL RULE — DO NOT INVENT VALUES (HIGHEST PRIORITY):
+For EVERY command (CREATE or UPDATE): if the photo does NOT explicitly show a value for
+a field, you MUST use a SAFE NEUTRAL DEFAULT:
+  • number fields → 0
+  • string fields → "" (empty string)
+  • boolean fields → false
+  • date fields → snapshot.todayDate (only because a date is structurally required; never
+    invent a date that is not visible on the photo)
 NEVER invent plausible-looking specific values (passport series, VINs, engine numbers,
-PINFLs, addresses, battery IDs, amounts, notes, etc.). Invented garbage overwrites or
-pollutes real user data and is worse than missing. Use the photo's values where present;
-otherwise leave defaults or SKIP the command if a required field is missing.
+PINFLs, addresses, battery IDs, amounts, notes, phone numbers, names). Invented garbage
+overwrites or pollutes real user data and is WORSE than missing.
+
+REQUIRED fields (name, renterName, scooterName, fromCardName, toCardName, cardName)
+MUST come from the photo — if the photo does not show a value for one of these, SKIP the
+command and explain in summary. NEVER write 0 / empty / placeholder for these — they
+are identifiers, not numeric fields.
+
+This rule overrides every other instruction in this prompt. The user trusts the scanner
+with real data; fabricated values are a critical failure.
 
 ⚠️ GLOBAL RULE — UPDATE COMMANDS ONLY MODIFY FIELDS EXPLICITLY PRESENT IN JSON:
 For every UPDATE_* command (UPDATE_RENTER, UPDATE_SCOOTER, UPDATE_VIRTUAL_CARD,
@@ -776,10 +792,16 @@ ORDER OF COMMANDS:
 - If photo shows NEW renters AND transactions for them, emit CREATE_RENTER first, then CREATE_TRANSACTION.
 - If photo shows returns/terminations, the renter MUST already exist in the app — emit RETURN_RENTER or TERMINATE_RENTER.
 
-For CREATE_RENTER: if photo shows debt, set "debt" field. If shows prepaid/prepayment, set prepayment and debt=0.
+For CREATE_RENTER: if photo shows debt, set "debt" field. If shows prepaid/prepayment, set prepayment and debt=0. If photo shows NEITHER debt NOR prepayment → set both to 0 (do NOT fabricate a default prepayment).
 For CREATE_TRANSACTION: renterName MUST match an existing renter (case-insensitive). If unsure, use CREATE_RENTER instead.
 For UPDATE_RENTER / RETURN_RENTER / TERMINATE_RENTER: renter MUST already exist. If not, emit CREATE_RENTER first.
-Fill missing required fields with reasonable defaults. Never ask user for clarification.
+
+⚠️ FINAL REMINDER: NEVER fabricate values. Every number not on the photo = 0. Every string
+not on the photo = empty. Every required identifier not on the photo = SKIP the command.
+Do NOT use 420000, 7 days, or any other "reasonable default" — those are invented values.
+The ONLY exception is dates, which fall back to snapshot.todayDate because the schema requires
+a date field. Never ask user for clarification — emit FINISH with a summary if uncertain.
+
 Respond ONLY with the JSON object. No markdown, no explanations outside JSON.
 
 Today's date: use current date.

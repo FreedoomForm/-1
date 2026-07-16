@@ -720,11 +720,12 @@ fun VirtualCardFormDialog(
             Button(
                 onClick = {
                     val balance = balanceText.replace(" ", "").replace(",", ".").toDoubleOrNull() ?: 0.0
-                    if (name.isNotBlank()) {
-                        onSave(name.trim(), balance, selectedColor, info.ifBlank { null })
-                    }
+                    // Все поля необязательны — сохраняем даже с пустым именем.
+                    // Раньше требовалось name.isNotBlank() — убрано.
+                    onSave(name.trim(), balance, selectedColor, info.ifBlank { null })
                 },
-                enabled = name.isNotBlank(),
+                // Кнопка всегда активна — ничего не блокирует сохранение.
+                enabled = true,
                 shape = RoundedCornerShape(12.dp),
                 colors = ButtonDefaults.buttonColors(containerColor = ClaudeAccent)
             ) {

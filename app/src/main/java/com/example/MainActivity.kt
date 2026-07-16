@@ -617,6 +617,21 @@ fun MainScreen(
                             )
                         }
                         renterToEdit = null
+                    },
+                    // Inline-создание скутера доступно и из экрана истории
+                    // арендатора — там тоже может быть сценарий, когда нужно
+                    // перевыбрать скутер, а нужного нет в списке.
+                    onCreateScooterInline = { name, docNum, vin, engine, serial, batt1, batt2, info ->
+                        scooterViewModel.addScooter(
+                            name = name,
+                            documentedNumber = docNum,
+                            vinNumber = vin,
+                            engineNumber = engine,
+                            scooterSerialNumber = serial,
+                            batteryId1 = batt1,
+                            batteryId2 = batt2,
+                            additionalInfo = info
+                        )
                     }
                 )
             }
@@ -1823,6 +1838,22 @@ fun MainScreen(
                     }
                     showAddDialog = false
                     renterToEdit = null
+                },
+                // ── Inline-создание скутера ────────────────────────────────
+                // Пользователь может внутри формы арендатора создать новый
+                // скутер, не выходя из диалога. Форма автоматически выберет
+                // свежесозданный скутер в качестве scooterId для арендатора.
+                onCreateScooterInline = { name, docNum, vin, engine, serial, batt1, batt2, info ->
+                    scooterViewModel.addScooter(
+                        name = name,
+                        documentedNumber = docNum,
+                        vinNumber = vin,
+                        engineNumber = engine,
+                        scooterSerialNumber = serial,
+                        batteryId1 = batt1,
+                        batteryId2 = batt2,
+                        additionalInfo = info
+                    )
                 }
             )
         }
@@ -2278,7 +2309,24 @@ fun RenterFormDialog(
     scooters: List<Scooter> = emptyList(),
     activeRenters: List<Renter> = emptyList(),
     onDismiss: () -> Unit,
-    onSave: (RenterFormResult) -> Unit
+    onSave: (RenterFormResult) -> Unit,
+    // ── Inline-создание скутера ────────────────────────────────────────────
+    // Когда пользователь нажимает «+ Yangi skuter yaratish» в конце списка
+    // скутеров, внизу формы арендатора появляются поля для ввода данных
+    // нового скутера. При сохранении вызывается этот callback — родитель
+    // вызывает scooterViewModel.addScooter, после чего список `scooters`
+    // обновляется через Flow, и LaunchedEffect ниже автоматически выбирает
+    // свежесозданный скутер в качестве selectedScooterId.
+    onCreateScooterInline: (
+        name: String,
+        documentedNumber: String?,
+        vinNumber: String,
+        engineNumber: String,
+        scooterSerialNumber: String,
+        batteryId1: String,
+        batteryId2: String,
+        additionalInfo: String
+    ) -> Unit = { _, _, _, _, _, _, _, _ -> }
 ) {
     var name by remember { mutableStateOf(initialRenter?.name ?: "") }
     var phone by remember {
@@ -2325,6 +2373,48 @@ fun RenterFormDialog(
 
     var selectedScooterId by remember { mutableStateOf<Int?>(initialRenter?.scooterId) }
     var expandedScooter by remember { mutableStateOf(false) }
+
+    // ── Inline-создание скутера: state ───────────────────────────────────
+    // showCreateScooterInline — раскрыта ли внизу формы секция создания скутера.
+    // pendingScooterName — имя скутера, который только что был создан через
+    //   onCreateScooterInline. После того как `scooters` обновится (Flow
+    //   репозитрия) и в нём появится скутер с таким именем, мы автоматически
+    //   выбираем его в selectedScooterId и сбрасываем pending.
+    var showCreateScooterInline by remember { mutableStateOf(false) }
+    var pendingScooterName by remember { mutableStateOf<String?>(null) }
+
+    // Поля формы создания скутера. Авто-нумерация имени — берём следующий
+    // свободный номер после префикса "Skillmax-".
+    val initialScooterName = remember(scooters) {
+        if (showCreateScooterInline) {
+            val nextN = (scooters
+                .mapNotNull { it.name.removePrefix("Skillmax-").trimStart('0').toIntOrNull() }
+                .maxOrNull() ?: 0) + 1
+            "Skillmax-" + nextN.toString().padStart(3, '0')
+        } else ""
+    }
+    var newScooterName by remember(showCreateScooterInline) {
+        mutableStateOf(initialScooterName)
+    }
+    var newScooterDocNum by remember(showCreateScooterInline) { mutableStateOf("") }
+    var newScooterVin by remember(showCreateScooterInline) { mutableStateOf("") }
+    var newScooterEngine by remember(showCreateScooterInline) { mutableStateOf("") }
+    var newScooterSerial by remember(showCreateScooterInline) { mutableStateOf("") }
+    var newScooterBatt1 by remember(showCreateScooterInline) { mutableStateOf("") }
+    var newScooterBatt2 by remember(showCreateScooterInline) { mutableStateOf("") }
+    var newScooterInfo by remember(showCreateScooterInline) { mutableStateOf("") }
+
+    // Авто-выбор свежесозданного скутера, как только он появится в списке.
+    LaunchedEffect(scooters, pendingScooterName) {
+        val pending = pendingScooterName
+        if (pending != null) {
+            val match = scooters.firstOrNull { it.name.equals(pending, ignoreCase = true) }
+            if (match != null) {
+                selectedScooterId = match.id
+                pendingScooterName = null
+            }
+        }
+    }
 
     val isEdit = initialRenter != null
 
@@ -2512,6 +2602,37 @@ fun RenterFormDialog(
                                 }
                             )
                         }
+                        // ── Кнопка «+ Yangi skuter yaratish» в самом низу ────
+                        // Сценарий: пользователь открывает список скутеров,
+                        // не находит нужный — может создать новый, не выходя
+                        // из окна создания арендатора. При клике: dropdown
+                        // закрывается, и внизу формы разворачивается секция
+                        // с полями для ввода данных нового скутера.
+                        HorizontalDivider(color = ClaudeDivider, thickness = 1.dp)
+                        DropdownMenuItem(
+                            text = {
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Icon(
+                                        Icons.Default.Add,
+                                        contentDescription = null,
+                                        tint = ClaudeAccent,
+                                        modifier = Modifier.size(18.dp)
+                                    )
+                                    Spacer(modifier = Modifier.width(8.dp))
+                                    Text(
+                                        "Yangi skuter yaratish",
+                                        color = ClaudeAccent,
+                                        fontWeight = FontWeight.SemiBold
+                                    )
+                                }
+                            },
+                            onClick = {
+                                showCreateScooterInline = true
+                                expandedScooter = false
+                            }
+                        )
                     }
                 }
 
@@ -2551,18 +2672,140 @@ fun RenterFormDialog(
                     modifier = Modifier.fillMaxWidth(),
                     shape = RoundedCornerShape(8.dp)
                 )
+
+                // ── Inline-секция создания нового скутера ────────────────────
+                // Появляется только если пользователь нажал «Yangi skuter
+                // yaratish» в выпадающем списке скутеров выше. Все поля
+                // необязательны — кнопка «Skuterni saqlash» всегда активна.
+                if (showCreateScooterInline) {
+                    HorizontalDivider(color = ClaudeDivider, thickness = 1.dp)
+                    SectionLabel("Yangi skuter yaratish")
+
+                    OutlinedTextField(
+                        value = newScooterName,
+                        onValueChange = { newScooterName = it },
+                        label = { Text("Skuter nomi (ixtiyoriy)") },
+                        modifier = Modifier.fillMaxWidth(),
+                        shape = RoundedCornerShape(8.dp)
+                    )
+                    OutlinedTextField(
+                        value = newScooterDocNum,
+                        onValueChange = { newScooterDocNum = it },
+                        label = { Text("Hujjat raqami (ixtiyoriy)") },
+                        modifier = Modifier.fillMaxWidth(),
+                        shape = RoundedCornerShape(8.dp)
+                    )
+                    OutlinedTextField(
+                        value = newScooterVin,
+                        onValueChange = { newScooterVin = it },
+                        label = { Text("VIN (ixtiyoriy)") },
+                        modifier = Modifier.fillMaxWidth(),
+                        shape = RoundedCornerShape(8.dp)
+                    )
+                    OutlinedTextField(
+                        value = newScooterEngine,
+                        onValueChange = { newScooterEngine = it },
+                        label = { Text("Dvigatel (ixtiyoriy)") },
+                        modifier = Modifier.fillMaxWidth(),
+                        shape = RoundedCornerShape(8.dp)
+                    )
+                    OutlinedTextField(
+                        value = newScooterSerial,
+                        onValueChange = { newScooterSerial = it },
+                        label = { Text("ID (ixtiyoriy)") },
+                        modifier = Modifier.fillMaxWidth(),
+                        shape = RoundedCornerShape(8.dp)
+                    )
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        OutlinedTextField(
+                            value = newScooterBatt1,
+                            onValueChange = { newScooterBatt1 = it },
+                            label = { Text("Akkumulyator 1") },
+                            modifier = Modifier.weight(1f),
+                            shape = RoundedCornerShape(8.dp)
+                        )
+                        OutlinedTextField(
+                            value = newScooterBatt2,
+                            onValueChange = { newScooterBatt2 = it },
+                            label = { Text("Akkumulyator 2") },
+                            modifier = Modifier.weight(1f),
+                            shape = RoundedCornerShape(8.dp)
+                        )
+                    }
+                    OutlinedTextField(
+                        value = newScooterInfo,
+                        onValueChange = { newScooterInfo = it },
+                        label = { Text("Qo'shimcha ma'lumot (ixtiyoriy)") },
+                        modifier = Modifier.fillMaxWidth(),
+                        shape = RoundedCornerShape(8.dp)
+                    )
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        PrimaryButton(
+                            label = "Skuterni saqlash",
+                            icon = Icons.Default.Check,
+                            enabled = true,
+                            onClick = {
+                                val nameToSave = newScooterName.trim()
+                                    .ifBlank {
+                                        // Если имя пустое — генерируем авто-имя,
+                                        // иначе скутер сохранится безымянным.
+                                        val nextN = (scooters
+                                            .mapNotNull {
+                                                it.name.removePrefix("Skillmax-")
+                                                    .trimStart('0').toIntOrNull()
+                                            }
+                                            .maxOrNull() ?: 0) + 1
+                                        "Skillmax-" + nextN.toString().padStart(3, '0')
+                                    }
+                                onCreateScooterInline(
+                                    nameToSave,
+                                    newScooterDocNum.trim().ifBlank { null },
+                                    newScooterVin.trim(),
+                                    newScooterEngine.trim(),
+                                    newScooterSerial.trim(),
+                                    newScooterBatt1.trim(),
+                                    newScooterBatt2.trim(),
+                                    newScooterInfo.trim()
+                                )
+                                // Запоминаем имя — LaunchedEffect(scooters)
+                                // подхватит свежесозданный скутер и установит
+                                // selectedScooterId автоматически.
+                                pendingScooterName = nameToSave
+                                // Скрываем inline-форму.
+                                showCreateScooterInline = false
+                            }
+                        )
+                        TextActionButton(
+                            label = "Bekor",
+                            icon = Icons.Default.Close,
+                            onClick = {
+                                showCreateScooterInline = false
+                            }
+                        )
+                    }
+                }
             }
         },
         confirmButton = {
             PrimaryButton(
                 label = "Saqla",
                 icon = Icons.Default.Save,
-                enabled = name.isNotBlank() && phone.isNotBlank() &&
-                    passportData.isNotBlank() && address.isNotBlank() && pinfl.isNotBlank(),
+                // Все поля необязательны — кнопка всегда активна.
+                // Раньше требовалось name+phone+passport+address+pinfl — убрано
+                // по требованию пользователя: ничего не должно блокировать сохранение.
+                enabled = true,
                 onClick = {
                     val debtValue = debt.toDoubleOrNull() ?: 0.0
                     val durationValue = duration.toIntOrNull() ?: 7
-                    val phoneToSave = "+998$phone"
+                    val phoneToSave = if (phone.isBlank()) "" else "+998$phone"
                     val scooterName = scooters.find { it.id == selectedScooterId }?.name
                     onSave(
                         RenterFormResult(
@@ -3726,10 +3969,9 @@ fun ScooterFormDialog(
             PrimaryButton(
                 label = "Saqla",
                 icon = Icons.Default.Save,
-                enabled = name.isNotBlank() && documentedNumber.isNotBlank() &&
-                    vinNumber.isNotBlank() && engineNumber.isNotBlank() &&
-                    scooterSerialNumber.isNotBlank() && batteryId1.isNotBlank() &&
-                    batteryId2.isNotBlank(),
+                // Все поля необязательны — кнопка всегда активна.
+                // Раньше требовалось name+docNum+vin+engine+serial+batt1+batt2 — убрано.
+                enabled = true,
                 onClick = {
                     onSave(
                         name,

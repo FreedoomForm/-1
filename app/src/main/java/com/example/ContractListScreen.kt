@@ -1004,7 +1004,9 @@ private fun CreateContractDialogForMain(
             PrimaryButton(
                 label = "Yaratish",
                 icon = Icons.Default.Add,
-                enabled = renterName.isNotBlank() && renterPhone.isNotBlank(),
+                // Все поля необязательны — кнопка всегда активна.
+                // Раньше требовалось renterName+renterPhone — убрано.
+                enabled = true,
                 onClick = {
                     val parsedAmount = amount.toDoubleOrNull() ?: defaultAmount
                     onCreateWithOverrides(

@@ -977,7 +977,9 @@ private fun CreateTransactionForRenterDialog(
             PrimaryButton(
                 label = "Yaratish",
                 icon = Icons.Default.Add,
-                enabled = amount.isNotBlank(),
+                // Все поля необязательны — кнопка всегда активна.
+                // Раньше требовалось amount.isNotBlank() — убрано.
+                enabled = true,
                 onClick = {
                     val parsedAmount = amount.toDoubleOrNull() ?: 0.0
                     onCreate(
@@ -1585,7 +1587,9 @@ private fun CreateTransactionForScooterDialog(
             PrimaryButton(
                 label = "Yaratish",
                 icon = Icons.Default.Add,
-                enabled = renterName.isNotBlank() && amount.isNotBlank(),
+                // Все поля необязательны — кнопка всегда активна.
+                // Раньше требовалось renterName.isNotBlank() && amount.isNotBlank() — убрано.
+                enabled = true,
                 onClick = {
                     val parsedAmount = amount.toDoubleOrNull() ?: 0.0
                     onCreate(
@@ -1872,7 +1876,9 @@ private fun EditTransactionForScooterDialog(
             PrimaryButton(
                 label = "Saqla",
                 icon = Icons.Default.Save,
-                enabled = renterName.isNotBlank(),
+                // Все поля необязательны — кнопка всегда активна.
+                // Раньше требовалось renterName.isNotBlank() — убрано.
+                enabled = true,
                 onClick = {
                     val parsedAmount = amount.toDoubleOrNull() ?: 0.0
                     onSave(tx.copy(

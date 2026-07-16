@@ -265,11 +265,19 @@ class CommandExecutor(private val context: Context) {
             // или положительный баланс). В отличие от debt, prepayment увеличивает
             // баланс арендатора в плюс (credit). debt и prepayment взаимно исключают
             // друг друга; если указаны оба — приоритет у debt.
+            // ВАЖНО: если фото НЕ показывает ни debt, ни prepayment — оба остаются 0,
+            // и контракт создаётся неоплаченным с balance=0. Никаких выдуманных
+            // авто-предоплат (раньше тут был auto-default на weeklyPrice).
             val prepayment = cmd.optDouble("prepayment", 0.0)
-            val duration = cmd.optInt("rentDurationDays", 7)
+            // duration — если фото не указывает, ставим 0 (строгое правило: ничего
+            // не выдумываем). 0 дней означает, что weekEnd = weekStart, но контракт
+            // всё равно создаётся.
+            val duration = cmd.optInt("rentDurationDays", 0)
             val scooterName = cmd.optString("scooterName", "").trim().ifEmpty { null }
-            val weeklyPrice = cmd.optDouble("weeklyPrice", settings.weeklyPrice.takeIf { it > 0 }
-                ?: SettingsRepository.DEFAULT_WEEKLY_PRICE)
+            // weeklyPrice — строго из фото. Если фото не указывает цену → 0.
+            // Раньше был fallback на settings.weeklyPrice (420000) — это
+            // выдуманное значение, убрано.
+            val weeklyPrice = cmd.optDouble("weeklyPrice", 0.0)
 
             // ── Паспортные данные ─────────────────────────────────────────
             // passportData — серия+номер (например "AB 1234567").
@@ -403,16 +411,10 @@ class CommandExecutor(private val context: Context) {
             //   • lastPaymentTimestamp = rentStartTs
             //
             // Случай C — ничего не указано (prepayment = 0, debt = 0):
-            //   Считаем первую неделю предоплаченной (как в RenterViewModel):
-            //   • Создаём Transaction PAYMENT с amount=weeklyPrice
-            //   • balance += weeklyPrice
-            //   • Зачисляем weeklyPrice на карту
-            //   • контракт isPaid = true
-            //   • balance -= weeklyPrice (списываем за неделю)
-            //   • Итог: balance = 0, контракт оплачен.
-            //
-            // Случай D — оба указаны (debt > 0 и prepayment > 0):
-            //   Приоритет у debt (см. case A).
+            //   Контракт остаётся НЕ оплаченным. balance = 0. Transaction НЕ создаётся.
+            //   На карту ничего не зачисляется.
+            //   Раньше тут был auto-default на weeklyPrice — убран, потому что это
+            //   выдуманное значение. Если фото не показывает предоплату — её нет.
 
             var currentBalance = 0.0
             var currentDebtAmount = 0.0
@@ -475,43 +477,13 @@ class CommandExecutor(private val context: Context) {
                     lastPaymentTs = rentStartTs
                 }
                 else -> {
-                    // Случай C: предоплата по умолчанию (как в RenterViewModel)
-                    val paymentAmount = weeklyPrice
-
-                    val tx = Transaction(
-                        contractId = contractId,
-                        renterId = newId,
-                        scooterId = scooterId,
-                        timestamp = rentStartTs,
-                        type = Transaction.TYPE_PAYMENT,
-                        amount = paymentAmount,
-                        notes = "Skaner orqali yaratildi (oldindan to'langan)",
-                        renterName = name,
-                        renterPhone = phone,
-                        scooterName = scooterNameResolved ?: "",
-                        contractLabel = "#$contractId"
-                    )
-                    db.transactionDao().insert(tx)
-
-                    try {
-                        val cardRepo = VirtualCardRepository(
-                            db.virtualCardDao(), db.cardTransactionDao()
-                        )
-                        cardRepo.depositContractIncome(
-                            amount = paymentAmount,
-                            note = "Skaner: $name (oldindan to'langan) — #$contractId",
-                            contractId = contractId
-                        )
-                    } catch (e: Exception) {
-                        Log.w(TAG, "depositContractIncome failed for scanned renter: ${e.message}")
-                    }
-
-                    // balance += weeklyPrice (Transaction добавляет); контракт isPaid=true
-                    // НЕ вычитаем weeklyPrice — оплаченный контракт не создаёт долг
-                    currentBalance = savedRenter.balance + paymentAmount
-                    contractPaid = true
-                    currentDebtAmount = maxOf(0.0, -currentBalance)
-                    lastPaymentTs = rentStartTs
+                    // Случай C: фото не показывает ни prepayment, ни debt.
+                    // Контракт остаётся НЕ оплаченным. balance = 0.
+                    // Transaction НЕ создаём, на карту ничего не зачисляем.
+                    // Никаких выдуманных авто-предоплат.
+                    currentBalance = 0.0
+                    currentDebtAmount = 0.0
+                    contractPaid = false
                 }
             }
 
@@ -601,9 +573,10 @@ class CommandExecutor(private val context: Context) {
                     "Avval ijarachini skaner orqali yarating.")
             }
             val amount = cmd.optDouble("amount", 0.0)
-            if (amount <= 0) {
-                return CommandResult(false, "CREATE_TRANSACTION: 'amount' > 0 bo'lishi kerak")
-            }
+            // Раньше тут была проверка amount > 0 с отказом — убрана.
+            // Если фото не показывает сумму → агент присылает 0, и мы создаём
+            // транзакцию с нулевой суммой (это валидный сценарий по требованию
+            // пользователя: никаких выдуманных значений).
             val txType = cmd.optString("txType", "PAYMENT").uppercase()
                 .let { if (it.isBlank()) "PAYMENT" else it }
             val notes = cmd.optString("notes", "").trim()
@@ -698,9 +671,10 @@ class CommandExecutor(private val context: Context) {
                 return CommandResult(false,
                     "CREATE_CONTRACT: '$renterName' ijarachi topilmadi")
             }
-            val amount = cmd.optDouble("amount",
-                settings.weeklyPrice.takeIf { it > 0 }
-                    ?: SettingsRepository.DEFAULT_WEEKLY_PRICE)
+            // amount — строго из фото. Если не указано → 0.
+            // Раньше был fallback на settings.weeklyPrice (420000) — это
+            // выдуманное значение, убрано.
+            val amount = cmd.optDouble("amount", 0.0)
             val weekStart = parseDate(cmd.optString("weekStart", "")) ?: System.currentTimeMillis()
             val weekEnd = parseDate(cmd.optString("weekEnd", ""))
                 ?: (weekStart + 7L * 24 * 60 * 60 * 1000)
@@ -812,9 +786,9 @@ class CommandExecutor(private val context: Context) {
                     "CREATE_CARD_TRANSACTION: 'fromCardName' va 'toCardName' majburiy")
             }
             val amount = cmd.optDouble("amount", 0.0)
-            if (amount <= 0) {
-                return CommandResult(false, "CREATE_CARD_TRANSACTION: 'amount' > 0 bo'lishi kerak")
-            }
+            // Раньше тут была проверка amount > 0 с отказом — убрана.
+            // Если фото не показывает сумму → агент присылает 0, и мы создаём
+            // перевод с нулевой суммой (валидный сценарий по требованию пользователя).
             val note = cmd.optString("note", "").trim().ifEmpty { null }
 
             val fromCard = findCardByName(fromName)
