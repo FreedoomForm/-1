@@ -411,6 +411,28 @@ Each command is an object with a "type" field. Supported types:
   "isReturned": "boolean (default false). Set true ONLY if photo clearly marks renter as returned ('qaytarildi', 'возвращён')"
 }
 
+⚠️ CRITICAL — WHAT CREATE_RENTER ALREADY DOES AUTOMATICALLY:
+When you emit CREATE_RENTER, the app AUTOMATICALLY also:
+  (a) Creates an initial ContractHistoryEntry for the week [rentStartDate → rentStartDate + rentDurationDays]
+      with weeklyPrice. If prepayment >= weeklyPrice → contract.isPaid = true. If prepayment > 0 but
+      < weeklyPrice → contract.isPaid = false and renter.balance += prepayment. If debt > 0 →
+      contract.isPaid = false and renter.balance = -debt.
+  (b) If prepayment > 0 → creates a Transaction PAYMENT with amount = prepayment, date = rentStartDate,
+      and deposits prepayment to the main virtual card.
+  (c) If prepayment = 0 and debt = 0 → creates a Transaction PAYMENT with amount = weeklyPrice,
+      date = rentStartDate, marks contract as paid, and deposits weeklyPrice to the main virtual card.
+
+Therefore:
+  ✗ DO NOT emit CREATE_CONTRACT for the same renter + same week (rentStartDate) right after CREATE_RENTER —
+    it would create a DUPLICATE contract for the same week.
+  ✗ DO NOT emit CREATE_TRANSACTION for the same renter + same amount + same date as the initial
+    prepayment/weeklyPrice — it would create a DUPLICATE transaction, double the renter's balance,
+    and double-deposit to the card.
+  ✓ Use CREATE_CONTRACT ONLY for ADDITIONAL weeks/renewals of a renter who was ALREADY in the DB
+    BEFORE this photo was taken (i.e. renter is in the snapshot, not created in this batch).
+  ✓ Use CREATE_TRANSACTION ONLY for EXTRA payments/penalties/repairs that are NOT the initial
+    prepayment (e.g. a penalty the same day, a repair charge, an additional mid-week payment).
+
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 2. CREATE_SCOOTER — create a new scooter. Extract ALL technical fields from photo.
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -546,7 +568,14 @@ DEDUPLICATION CHECKLIST (apply BEFORE emitting each command):
   emit UPDATE_RENTER instead (or skip if nothing to update).
 - CREATE_SCOOTER: search snapshot.scooters by name, VIN, documentedNumber. If match → SKIP.
 - CREATE_TRANSACTION: search snapshot.recentTransactions by renterName+amount+date. If match → SKIP.
+  ALSO: if you emitted CREATE_RENTER earlier in THIS batch for the same renterName with the same
+  amount (prepayment or weeklyPrice) and the same date — SKIP, because CREATE_RENTER already
+  recorded that transaction internally.
 - CREATE_CONTRACT: search snapshot.recentContracts by renterName+weekStart. If match → SKIP.
+  ALSO: if you emitted CREATE_RENTER earlier in THIS batch for the same renterName with the same
+  rentStartDate — SKIP, because CREATE_RENTER already created an initial contract for that week.
+  Use CREATE_CONTRACT ONLY for renewals / additional weeks of a renter who already existed in the
+  snapshot BEFORE this batch.
 - CREATE_VIRTUAL_CARD: search snapshot.virtualCards by name. If match → SKIP.
 - CREATE_CARD_TRANSACTION: search snapshot.recentCardTransactions by fromCard+toCard+amount+date.
   If match → SKIP.

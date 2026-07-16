@@ -32,6 +32,84 @@ data class CommandResult(
 )
 
 /**
+ * Контекст текущего батча команд: отслеживает сущности, созданные в этом
+ * запуске [CommandExecutor.execute]. Используется для дедупликации на стороне
+ * приложения — на случай, если Mistral прислал CREATE_CONTRACT или
+ * CREATE_TRANSACTION, которые дублируют то, что уже создано командой
+ * CREATE_RENTER в этом же батче.
+ *
+ * Mistral не видит сущности, созданные внутри CREATE_RENTER (они не были в
+ * snapshot), поэтому промпт иногда всё равно присылает дубль. Этот контекст
+ * ловит такие дубли и пропускает их.
+ */
+private class BatchContext {
+    /**
+     * Арендаторы, созданные в этом батче: ключ — нормализованное имя,
+     * значение — данные об их начальном контракте (если был).
+     */
+    val renters: MutableMap<String, RenterCreated> = mutableMapOf()
+
+    /**
+     * Контракты, созданные в этом батче: ключ — нормализованное имя
+     * арендатора, значение — список weekStart-ов (ms).
+     */
+    val contractsByRenter: MutableMap<String, MutableList<Long>> = mutableMapOf()
+
+    /**
+     * PAYMENT-транзакции, созданные в этом батче: ключ — нормализованное имя
+     * арендатора, значение — список (amount, timestamp).
+     */
+    val paymentsByRenter: MutableMap<String, MutableList<Pair<Double, Long>>> = mutableMapOf()
+
+    fun key(name: String): String = name.trim().lowercase()
+
+    /** Запомнить, что арендатор с указанным именем был создан в этом батче
+     *  вместе с начальным контрактом на неделю, начинающуюся [weekStartMs]. */
+    fun recordRenter(name: String, weekStartMs: Long, paymentAmount: Double, paymentTs: Long) {
+        val k = key(name)
+        renters[k] = RenterCreated(weekStartMs = weekStartMs)
+        contractsByRenter.getOrPut(k) { mutableListOf() }.add(weekStartMs)
+        if (paymentAmount > 0.0) {
+            paymentsByRenter.getOrPut(k) { mutableListOf() }.add(paymentAmount to paymentTs)
+        }
+    }
+
+    /** Запомнить дополнительный контракт для [name] с началом недели [weekStartMs]. */
+    fun recordContract(name: String, weekStartMs: Long) {
+        val k = key(name)
+        contractsByRenter.getOrPut(k) { mutableListOf() }.add(weekStartMs)
+    }
+
+    /** Запомнить дополнительнюю PAYMENT-транзакцию для [name]. */
+    fun recordPayment(name: String, amount: Double, ts: Long) {
+        val k = key(name)
+        paymentsByRenter.getOrPut(k) { mutableListOf() }.add(amount to ts)
+    }
+
+    /** Есть ли уже контракт для [name] с началом недели, попадающим в диапазон
+     *  [weekStartMs ± 1 день] (защита от мелких расхождений в датах OCR)? */
+    fun hasContract(name: String, weekStartMs: Long): Boolean {
+        val k = key(name)
+        val list = contractsByRenter[k] ?: return false
+        val dayMs = 24L * 60 * 60 * 1000
+        return list.any { Math.abs(it - weekStartMs) <= dayMs }
+    }
+
+    /** Есть ли уже PAYMENT-транзакция для [name] с тем же amount (±1 UZS) и
+     *  датой ±1 день? */
+    fun hasPayment(name: String, amount: Double, ts: Long): Boolean {
+        val k = key(name)
+        val list = paymentsByRenter[k] ?: return false
+        val dayMs = 24L * 60 * 60 * 1000
+        return list.any { p ->
+            Math.abs(p.first - amount) < 1.0 && Math.abs(p.second - ts) <= dayMs
+        }
+    }
+}
+
+private data class RenterCreated(val weekStartMs: Long)
+
+/**
  * Парсер и исполнитель JSON-команд, сгенерированных Mistral Large.
  *
  * Принимает "сырой" ответ модели (строку), извлекает из него JSON-объект
@@ -76,15 +154,24 @@ class CommandExecutor(private val context: Context) {
                 return@withContext Pair(false, results)
             }
 
+            // ── Batch-level deduplication context ──────────────────────────
+            // Mistral иногда ошибается и после CREATE_RENTER (который уже
+            // создаёт контракт + транзакцию внутри себя) присылает отдельный
+            // CREATE_CONTRACT или CREATE_TRANSACTION для той же недели/того
+            // же платежа — это приводило к дублям. Этот контекст отслеживает
+            // что уже создано в текущем батче, и createContract/createTransaction
+            // проверяют его перед вставкой.
+            val batchCtx = BatchContext()
+
             var allSuccess = true
             for (i in 0 until commandsArray.length()) {
                 val cmd = commandsArray.optJSONObject(i) ?: continue
                 val type = cmd.optString("type", "").uppercase()
                 val result = when (type) {
-                    "CREATE_RENTER" -> createRenter(cmd)
+                    "CREATE_RENTER" -> createRenter(cmd, batchCtx)
                     "CREATE_SCOOTER" -> createScooter(cmd)
-                    "CREATE_TRANSACTION" -> createTransaction(cmd)
-                    "CREATE_CONTRACT" -> createContract(cmd)
+                    "CREATE_TRANSACTION" -> createTransaction(cmd, batchCtx)
+                    "CREATE_CONTRACT" -> createContract(cmd, batchCtx)
                     "CREATE_VIRTUAL_CARD" -> createVirtualCard(cmd)
                     "CREATE_CARD_TRANSACTION" -> createCardTransaction(cmd)
                     "UPDATE_RENTER" -> updateRenter(cmd)
@@ -159,7 +246,7 @@ class CommandExecutor(private val context: Context) {
     }
 
     // ── Команда: CREATE_RENTER ──────────────────────────────────────────────
-    private suspend fun createRenter(cmd: JSONObject): CommandResult {
+    private suspend fun createRenter(cmd: JSONObject, batch: BatchContext): CommandResult {
         try {
             val name = cmd.optString("name", "").trim()
             if (name.isEmpty()) {
@@ -439,6 +526,23 @@ class CommandExecutor(private val context: Context) {
                 }
             }
 
+            // Шаг 6: регистрируем в batch-контексте, что для этого арендатора
+            // уже создан контракт с weekStart = rentStartTs и (возможно) PAYMENT
+            // транзакция на сумму prepayment (или weeklyPrice, если prepayment=0
+            // и debt=0). Это нужно, чтобы createContract/createTransaction ниже
+            // по батчу могли пропустить дублирующие команды.
+            val paymentForBatch = when {
+                debt > 0 -> 0.0
+                prepayment > 0 -> prepayment
+                else -> weeklyPrice
+            }
+            batch.recordRenter(
+                name = name,
+                weekStartMs = rentStartTs,
+                paymentAmount = paymentForBatch,
+                paymentTs = rentStartTs
+            )
+
             val dateStr = SimpleDateFormat("dd.MM.yyyy", Locale.US).format(Date(rentStartTs))
             val balanceNote = when {
                 debt > 0 -> ", qarz: ${formatMoney(debt)}"
@@ -480,7 +584,7 @@ class CommandExecutor(private val context: Context) {
     }
 
     // ── Команда: CREATE_TRANSACTION ─────────────────────────────────────────
-    private suspend fun createTransaction(cmd: JSONObject): CommandResult {
+    private suspend fun createTransaction(cmd: JSONObject, batch: BatchContext): CommandResult {
         try {
             val renterName = cmd.optString("renterName", "").trim()
             if (renterName.isEmpty()) {
@@ -510,6 +614,20 @@ class CommandExecutor(private val context: Context) {
             // фото была дата недели/месяца назад.
             val txTimestamp = parseDate(cmd.optString("date", "").trim())
                 ?: System.currentTimeMillis()
+
+            // ── Batch-level дедупликация ──────────────────────────────────
+            // Если в этом же батче CREATE_RENTER уже создал PAYMENT транзакцию
+            // для того же арендатора на ту же сумму и дату (±1 день) — это дубль,
+            // пропускаем. Иначе баланс арендатора удваивался бы и зачисление
+            // на карту происходило бы дважды.
+            if (txType == Transaction.TYPE_PAYMENT &&
+                batch.hasPayment(renterName, amount, txTimestamp)) {
+                Log.i(TAG, "createTransaction: SKIP duplicate PAYMENT for '$renterName' " +
+                    "(amount=${amount}, ts=$txTimestamp) — already created in this batch by CREATE_RENTER")
+                return CommandResult(true,
+                    "✓ To'lov avval qayd qilingan (CREATE_RENTER ichida): ${renter.name}, " +
+                    "${formatMoney(amount)} — o'tkazib yuborildi")
+            }
 
             val tx = Transaction(
                 contractId = null,
@@ -549,6 +667,10 @@ class CommandExecutor(private val context: Context) {
                 } catch (e: Exception) {
                     Log.w(TAG, "depositContractIncome for tx failed: ${e.message}")
                 }
+
+                // Регистрируем в batch-контексте, чтобы следующие команды
+                // CREATE_TRANSACTION для того же арендатора могли проверить дубли.
+                batch.recordPayment(renter.name, amount, txTimestamp)
             }
 
             val dateStr = SimpleDateFormat("dd.MM.yyyy", Locale.US).format(Date(txTimestamp))
@@ -561,7 +683,7 @@ class CommandExecutor(private val context: Context) {
     }
 
     // ── Команда: CREATE_CONTRACT ────────────────────────────────────────────
-    private suspend fun createContract(cmd: JSONObject): CommandResult {
+    private suspend fun createContract(cmd: JSONObject, batch: BatchContext): CommandResult {
         try {
             val renterName = cmd.optString("renterName", "").trim()
             if (renterName.isEmpty()) {
@@ -582,6 +704,21 @@ class CommandExecutor(private val context: Context) {
             val notes = cmd.optString("notes", "").trim().ifEmpty { "Skaner orqali yaratildi" }
             val scooterName = cmd.optString("scooterName", "").trim().ifEmpty { null }
             val scooter = scooterName?.let { findScooterByName(it) } ?: renter.scooterId?.let { findScooterById(it) }
+
+            // ── Batch-level дедупликация ──────────────────────────────────
+            // Если в этом же батче CREATE_RENTER уже создал начальный контракт
+            // для того же арендатора с weekStart в диапазоне ±1 день — это дубль.
+            // Mistral иногда присылает CREATE_CONTRACT после CREATE_RENTER для
+            // той же недели, потому что не видит контракт, созданный внутри
+            // CREATE_RENTER (его не было в snapshot). Пропускаем, иначе у
+            // арендатора появятся два контракта на одну и ту же неделю.
+            if (batch.hasContract(renterName, weekStart)) {
+                Log.i(TAG, "createContract: SKIP duplicate contract for '$renterName' " +
+                    "(weekStart=$weekStart) — already created in this batch by CREATE_RENTER")
+                return CommandResult(true,
+                    "✓ Kontrakt avval yaratilgan (CREATE_RENTER ichida): ${renter.name}, " +
+                    "${formatMoney(amount)} — o'tkazib yuborildi")
+            }
 
             val now = System.currentTimeMillis()
             val contract = ContractHistoryEntry(
@@ -608,6 +745,10 @@ class CommandExecutor(private val context: Context) {
                 isPaid = isPaid
             )
             db.contractHistoryDao().insert(contract)
+
+            // Регистрируем в batch-контексте, чтобы следующие CREATE_CONTRACT
+            // для того же арендатора могли проверить дубли.
+            batch.recordContract(renter.name, weekStart)
 
             // Корректируем баланс арендатора
             val delta = if (isPaid) 0.0 else -amount
