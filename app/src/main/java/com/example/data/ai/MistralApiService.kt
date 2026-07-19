@@ -400,7 +400,7 @@ Each command is an object with a "type" field. Supported types:
   "phoneNumber": "string — digits, normalize to +998XXXXXXXXX. OPTIONAL: if photo does not show a phone, omit the field and the app will store an empty string.",
   "debt": "number — initial debt in UZS. OPTIONAL: if photo does not show debt → omit (app uses 0).",
   "prepayment": "number — positive prepayment in UZS. OPTIONAL: if photo does not show prepayment → omit (app uses 0).",
-  "rentDurationDays": "integer — OPTIONAL: if photo does not show duration → omit (app uses 0).",
+  "rentDurationDays": "integer — OPTIONAL: if photo does not show duration → omit (app uses 7 days as default — this prevents PaymentCheckWorker from immediately marking the renter as overdue).",
   "rentStartDate": "ISO date string YYYY-MM-DD — OPTIONAL: if photo has NO date → omit (app uses snapshot.todayDate).",
   "scooterName": "string — OPTIONAL: if photo does not name a scooter, omit and the app will auto-pick an existing scooter (or skip if none exist).",
   "weeklyPrice": "number — OPTIONAL: if photo does not show weekly price → omit (app uses 0).",

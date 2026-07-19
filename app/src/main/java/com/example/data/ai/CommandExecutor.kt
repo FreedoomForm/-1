@@ -278,10 +278,15 @@ class CommandExecutor(private val context: Context) {
             // и контракт создаётся неоплаченным с balance=0. Никаких выдуманных
             // авто-предоплат (раньше тут был auto-default на weeklyPrice).
             val prepayment = cmd.optDouble("prepayment", 0.0)
-            // duration — если фото не указывает, ставим 0 (строгое правило: ничего
-            // не выдумываем). 0 дней означает, что weekEnd = weekStart, но контракт
-            // всё равно создаётся.
-            val duration = cmd.optInt("rentDurationDays", 0)
+            // duration — если фото не указывает, ставим 7 (стандартная неделя).
+            // Раньше тут было 0, но это ломало PaymentCheckWorker: expiryTime
+            // = rentStartTs + 0 = rentStartTs, и worker сразу же считал арендатора
+            // просроченным при первом же запуске, создавая AUTO_RENEW контракт со
+            // смещённой датой. 7 дней — это безопасное значение по умолчанию,
+            // совпадающее с DEFAULT_WEEKLY_PRICE (недельная аренда).
+            // coerceAtLeast(1) защищает от Mistral, который прислал бы 0 или
+            // отрицательное число.
+            val duration = cmd.optInt("rentDurationDays", 7).coerceAtLeast(1)
             val scooterName = cmd.optString("scooterName", "").trim().ifEmpty { null }
             // weeklyPrice — строго из фото. Если фото не указывает цену → 0.
             // Раньше был fallback на settings.weeklyPrice (420000) — это

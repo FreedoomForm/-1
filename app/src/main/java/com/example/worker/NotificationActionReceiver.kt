@@ -199,11 +199,17 @@ class NotificationActionReceiver : BroadcastReceiver() {
                             additionalInfo = sExtra
                         )
                     )
+                    // ── ВАЖНО: rentStartDateTimestamp и rentDurationDays НЕ МЕНЯЕМ ──
+                    // Это первоначальные условия аренды — они должны оставаться
+                    // неизменными до явного редактирования через форму. Раньше тут
+                    // было `rentStartDateTimestamp = weekStart` и `rentDurationDays = 7`,
+                    // что приводило к тому, что каждая оплата через виджет/уведомление
+                    // перезаписывала исходную дату начала аренды на «сегодня» —
+                    // через 2 дня использования у всех арендаторов даты «плыли».
+                    // Эта же логика уже исправлена в RenterViewModel.applyWeeklyPayment.
                     val updated = renter.copy(
                         balance = newBalance,
                         debtAmount = maxOf(0.0, -newBalance),
-                        rentStartDateTimestamp = weekStart,
-                        rentDurationDays = 7,
                         lastPaymentTimestamp = now,
                         isOverdueSmsSent = false,
                         isReturned = false  // реактивация
