@@ -12,6 +12,8 @@ import com.example.data.ContractHistoryRepository
 import com.example.data.Renter
 import com.example.data.RenterRepository
 import com.example.data.Scooter
+import com.example.data.SettingsRepository
+import com.example.data.Transaction
 import com.example.data.TransactionRepository
 import com.example.data.VirtualCard
 import com.example.data.VirtualCardRepository
@@ -132,6 +134,118 @@ class ContractHistoryViewModel(application: Application) : AndroidViewModel(appl
             overrideVin = "", overrideEngine = "", overrideSerial = "",
             overrideBatt1 = "", overrideBatt2 = "", overrideExtra = ""
         )
+    }
+
+    /**
+     * Создаёт новый контракт с полной обработкой — как при оплате недели в UI.
+     *
+     * Используется календарём на странице деталей арендатора (editable=false
+     * + onAddGroup callback). Когда пользователь выбирает период и статус
+     * в календаре, вызывается этот метод. Он:
+     *   • Создаёт ContractHistoryEntry (TYPE_AUTO_RENEW) с переданным isPaid.
+     *   • Если isPaid=true → создаёт Transaction(TYPE_PAYMENT) с contractId
+     *     и depositContractIncome на главную карту.
+     *   • Обновляет баланс арендатора: +amount если isPaid, -amount если нет.
+     *   • Обновляет нативные виджеты.
+     *
+     * Это гарантирует, что добавление контракта через календарь на странице
+     * деталей приводит к тем же эффектам, что и нажатие кнопки "To'lash" —
+     * баланс, Transaction и карта корректно обновляются.
+     */
+    fun createContractFromCalendar(
+        renter: Renter,
+        weekStart: Long,
+        weekEnd: Long,
+        amount: Double,
+        isPaid: Boolean
+    ) {
+        viewModelScope.launch(Dispatchers.IO) {
+            val now = System.currentTimeMillis()
+            val scooter: Scooter? = renter.scooterId?.let {
+                AppDatabase.getDatabase(getApplication()).scooterDao().getScooterById(it)
+            }
+            val effectiveAmount = if (amount > 0) amount
+                                  else SettingsRepository(getApplication()).weeklyPrice
+                                      .let { if (it > 0) it else SettingsRepository.DEFAULT_WEEKLY_PRICE }
+
+            // ── 1. Создаём контракт (TYPE_AUTO_RENEW) ────────────────────
+            val entry = ContractHistoryEntry(
+                renterId = renter.id,
+                timestamp = now,
+                type = ContractHistoryEntry.TYPE_AUTO_RENEW,
+                amount = effectiveAmount,
+                notes = if (isPaid) "Kalendar orqali yaratildi (to'langan)"
+                        else "Kalendar orqali yaratildi (to'lanmagan)",
+                renterName = renter.name,
+                renterPhone = renter.phoneNumber,
+                scooterName = renter.scooterName ?: scooter?.name ?: "",
+                weekStart = weekStart,
+                weekEnd = weekEnd,
+                weeklyPrice = effectiveAmount,
+                passportData = renter.passportData,
+                address = renter.address,
+                pinfl = renter.pinfl,
+                vinNumber = scooter?.vinNumber ?: "",
+                engineNumber = scooter?.engineNumber ?: "",
+                scooterSerialNumber = scooter?.scooterSerialNumber ?: "",
+                batteryId1 = scooter?.batteryId1 ?: "",
+                batteryId2 = scooter?.batteryId2 ?: "",
+                additionalInfo = scooter?.additionalInfo ?: "",
+                isPaid = isPaid
+            )
+            val contractId = repo.insert(entry).toInt()
+
+            // ── 2. Если оплачен — создаём Transaction + зачисляем на карту ──
+            if (isPaid && contractId > 0) {
+                val dateFmt = SimpleDateFormat("dd.MM.yyyy", Locale.getDefault())
+                val wsStr = dateFmt.format(Date(weekStart))
+                val weStr = dateFmt.format(Date(weekEnd))
+                val contractLabel = "#$contractId  $wsStr → $weStr"
+                try {
+                    transactionRepo.insert(
+                        Transaction(
+                            contractId = contractId,
+                            renterId = renter.id,
+                            scooterId = renter.scooterId,
+                            timestamp = now,
+                            type = Transaction.TYPE_PAYMENT,
+                            amount = effectiveAmount,
+                            notes = "Kalendar orqali to'lov",
+                            renterName = renter.name,
+                            renterPhone = renter.phoneNumber,
+                            scooterName = renter.scooterName ?: "",
+                            contractLabel = contractLabel
+                        )
+                    )
+                } catch (e: Exception) {
+                    Log.w("ContractHistoryVM", "Failed to insert calendar Transaction: ${e.message}")
+                }
+                try {
+                    virtualCardRepo.depositContractIncome(
+                        amount = effectiveAmount,
+                        note = "To'lov: ${renter.name} (kalendar) — #$contractId",
+                        contractId = contractId
+                    )
+                } catch (e: Exception) {
+                    Log.w("ContractHistoryVM", "depositContractIncome failed: ${e.message}")
+                }
+            }
+
+            // ── 3. Обновляем баланс арендатора ───────────────────────────
+            // isPaid=true → +amount (предоплата), isPaid=false → -amount (долг).
+            val newBalance = renter.balance + if (isPaid) effectiveAmount else -effectiveAmount
+            val updated = renter.copy(
+                balance = newBalance,
+                debtAmount = maxOf(0.0, -newBalance),
+                lastPaymentTimestamp = if (isPaid) now else renter.lastPaymentTimestamp
+            )
+            renterRepo.update(updated)
+
+            // ── 4. Обновляем виджеты ─────────────────────────────────────
+            try {
+                com.example.widget.WidgetUpdater.updateAll(getApplication())
+            } catch (_: Exception) {}
+        }
     }
 
     /**

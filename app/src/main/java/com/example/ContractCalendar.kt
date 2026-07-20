@@ -20,6 +20,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.ChevronLeft
 import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material.icons.filled.Close
@@ -62,27 +63,31 @@ import java.util.Locale
    CONTRACT CALENDAR — календарь с поддержкой групп контрактов
    ----------------------------------------------------------------------------
    Используется в двух местах:
-     1) RenterFormDialog — выбор периодов (групп контрактов) при создании/
-        редактировании арендатора. Пользователь нажимает "+", выбирает две
-        даты → формируется группа. Можно создать несколько групп (вкладки
-        1, 2, 3...). У каждой вкладки есть "x" для удаления группы.
-     2) RenterContractHistoryScreen — отображение сверху страницы деталей
-        арендатора. Дни раскрашиваются:
-           • зелёный фон — день оплачен арендатором
-           • красный фон — день не оплачен
-           • серый фон — контракт приостановлен в этот день
-           • белый фон — все остальные дни
+     1) RenterFormDialog — выбор периодов (групп контрактов). Пользователь:
+        • Нажимает "+" → выбирает две даты → создаётся группа с ТЕКУЩИМ
+          статусом (кнопки "To'langan" / "To'lanmagan" сверху календаря).
+        • Может выбрать одну дату дважды — система создаёт однодневный
+          период (как старый календарь выбора одной даты).
+        • Можно создать несколько групп (вкладки 1, 2, 3...).
+        • У каждой вкладки есть "x" для удаления группы.
+     2) RenterContractHistoryScreen — отображение + редактирование:
+        • В режиме просмотра дни раскрашиваются по статусу контракта.
+        • В режиме редактирования пользователь может добавить новые группы
+          контрактов с выбранным статусом, которые сразу создаются в БД.
 
    Для режима (1) используется `editable = true` + onGroupsChange callback.
    Для режима (2) используется `editable = false` + `dayStatusFor` callback,
-      который для каждой даты возвращает один из статусов.
+      но при этом также доступны кнопки статуса — для добавления новых
+      контрактов через onAddGroup callback.
    ============================================================================ */
 
 /** Один диапазон дат = одна группа контрактов. */
 data class ContractGroup(
     val id: Int,
     val startMs: Long,
-    val endMs: Long
+    val endMs: Long,
+    /** true = оплаченная группа (зелёная), false = долг (красная). */
+    val isPaid: Boolean = true
 ) {
     /** Цветовая метка группы (циклический выбор по id). */
     val colorIndex: Int get() = ((id - 1).coerceAtLeast(0)) % 6
@@ -115,16 +120,44 @@ fun ContractCalendar(
     modifier: Modifier = Modifier,
     /** Режим редактирования: true = выбор периодов (форма), false = просмотр (детали). */
     editable: Boolean = false,
-    /** Текущие группы (только для editable=true). */
+    /**
+     * Текущие группы.
+     * - Для editable=true (форма): локальный список, который пользователь собирает.
+     *   «x» на вкладке удаляет группу из локального state через onGroupsChange.
+     * - Для editable=false (страница деталей): существующие контракты из БД.
+     *   «x» на вкладке вызывает onRemoveGroup (родитель удаляет контракт из БД).
+     */
     groups: List<ContractGroup> = emptyList(),
     /** Активная группа (вкладка, выбранная пользователем). null = новая группа в процессе создания. */
     activeGroupId: Int? = null,
-    /** Callback при изменении списка групп. */
+    /** Callback при изменении списка групп (только для editable=true). */
     onGroupsChange: (List<ContractGroup>) -> Unit = {},
     /** Callback при изменении активной группы. */
     onActiveGroupChange: (Int?) -> Unit = {},
     /** Статус дня (для editable=false). */
     dayStatusFor: (Long) -> DayStatus = { DayStatus.EMPTY },
+    /**
+     * Доп. callback при добавлении новой группы (для editable=false).
+     * В режиме просмотра, когда пользователь выбирает период и статус,
+     * этот callback вызывается вместо onGroupsChange — родитель должен
+     * создать реальные контракты в БД (через ContractHistoryViewModel).
+     */
+    onAddGroup: ((ContractGroup) -> Unit)? = null,
+    /**
+     * Callback при удалении существующей группы (для editable=false).
+     * В режиме просмотра «x» на вкладке существующего контракта вызывает
+     * этот callback — родитель должен удалить контракт из БД.
+     * Для editable=true этот callback не используется (вместо него работает
+     * onGroupsChange с обновлённым списком).
+     */
+    onRemoveGroup: ((ContractGroup) -> Unit)? = null,
+    /**
+     * Callback при тапе на день, который попадает в существующий контракт
+     * (для editable=false). Родитель должен открыть диалог редактирования
+     * контракта, которому принадлежит этот день. Если null или день пустой —
+     * работает обычная логика выбора диапазона (для создания нового контракта).
+     */
+    onEditDayContract: ((Long) -> Unit)? = null,
     /** Доп. callback при тапе на день (опционально, для просмотра деталей). */
     onDayClick: (Long) -> Unit = {}
 ) {
@@ -134,9 +167,15 @@ fun ContractCalendar(
 
     // ── Состояние выбора для новой группы ──────────────────────────────
     // В режиме editable: при тапе на день в "новой группе" (activeGroupId == null)
-    // пользователь выбирает сначала start, потом end. После выбора end группа
-    // создаётся и активной становится следующая "новая" (activeGroupId = null).
+    // пользователь выбирает сначала start, потом end (или ту же дату дважды
+    // для однодневного периода). После выбора end группа создаётся и активной
+    // становится следующая "новая" (activeGroupId = null).
     var pendingStartMs by remember { mutableStateOf<Long?>(null) }
+
+    // ── Текущий статус для новых групп (To'langan / To'lanmagan) ───────
+    // По умолчанию "To'langan" (оплаченный). Пользователь может переключить
+    // кнопками в шапке календаря перед выбором периода.
+    var newGroupIsPaid by remember { mutableStateOf(true) }
 
     val monthTitle = remember(viewYear, viewMonth) {
         val fmt = java.text.SimpleDateFormat("LLLL yyyy", Locale.getDefault())
@@ -197,11 +236,18 @@ fun ContractCalendar(
 
             Spacer(Modifier.height(4.dp))
 
-            // ── Панель групп (только в editable-режиме) ─────────────────
-            if (editable) {
+            // ── Панель управления (только в editable-режиме или при наличии onAddGroup) ──
+            // Содержит:
+            //   • Кнопку "+" для начала новой группы
+            //   • Кнопки статуса "To'langan" / "To'lanmagan" — выбирают статус
+            //     для следующей группы
+            //   • Вкладки существующих групп (1, 2, 3...) с кнопкой "x"
+            if (editable || onAddGroup != null) {
                 GroupsPanel(
                     groups = groups,
                     activeGroupId = activeGroupId,
+                    newGroupIsPaid = newGroupIsPaid,
+                    onNewGroupStatusChange = { newGroupIsPaid = it },
                     onActiveGroupChange = onActiveGroupChange,
                     onAddGroup = {
                         // Кнопка "+" — начинает новую группу
@@ -209,8 +255,16 @@ fun ContractCalendar(
                         pendingStartMs = null
                     },
                     onRemoveGroup = { gid ->
-                        val updated = groups.filterNot { it.id == gid }
-                        onGroupsChange(updated)
+                        // Для editable=true: удаляем из локального state.
+                        // Для editable=false (onRemoveGroup != null): родитель
+                        // удалит контракт из БД.
+                        val groupToRemove = groups.firstOrNull { it.id == gid }
+                        if (onRemoveGroup != null && groupToRemove != null) {
+                            onRemoveGroup.invoke(groupToRemove)
+                        } else {
+                            val updated = groups.filterNot { it.id == gid }
+                            onGroupsChange(updated)
+                        }
                         if (activeGroupId == gid) onActiveGroupChange(null)
                     }
                 )
@@ -245,7 +299,7 @@ fun ContractCalendar(
                             DayCell(
                                 dayMs = dayMs,
                                 viewMonth = viewMonth,
-                                editable = editable,
+                                editable = editable || onAddGroup != null,
                                 groups = groups,
                                 activeGroupId = activeGroupId,
                                 pendingStartMs = pendingStartMs,
@@ -258,9 +312,34 @@ fun ContractCalendar(
                                             setPendingStart = { pendingStartMs = it },
                                             activeGroupId = activeGroupId,
                                             groups = groups,
+                                            newGroupIsPaid = newGroupIsPaid,
                                             onGroupsChange = onGroupsChange,
                                             onActiveGroupChange = onActiveGroupChange
                                         )
+                                    } else if (onAddGroup != null) {
+                                        // Режим просмотра с возможностью добавления —
+                                        // логика та же, но новая группа передаётся в
+                                        // onAddGroup (для создания контрактов в БД).
+                                        // ОДНАКО: если включён onEditDayContract и тап
+                                        // пришёлся на день, который уже входит в
+                                        // существующий контракт — открываем диалог
+                                        // редактирования контракта вместо выбора
+                                        // нового диапазона.
+                                        val inExisting = groups.firstOrNull { g ->
+                                            ms >= g.startMs && ms <= g.endMs
+                                        }
+                                        if (inExisting != null && onEditDayContract != null) {
+                                            onEditDayContract.invoke(ms)
+                                        } else {
+                                            handleDayClickWithAddCallback(
+                                                ms = ms,
+                                                pendingStartMs = pendingStartMs,
+                                                setPendingStart = { pendingStartMs = it },
+                                                activeGroupId = activeGroupId,
+                                                newGroupIsPaid = newGroupIsPaid,
+                                                onAddGroup = onAddGroup
+                                            )
+                                        }
                                     } else {
                                         onDayClick(ms)
                                     }
@@ -271,8 +350,8 @@ fun ContractCalendar(
                 }
             }
 
-            // ── Легенда (только в режиме просмотра) ────────────────────
-            if (!editable) {
+            // ── Легенда (только в режиме просмотра без onAddGroup) ──────
+            if (!editable && onAddGroup == null) {
                 Spacer(Modifier.height(8.dp))
                 Row(
                     modifier = Modifier.fillMaxWidth(),
@@ -287,8 +366,15 @@ fun ContractCalendar(
                 Spacer(Modifier.height(8.dp))
                 val hint = when {
                     activeGroupId != null -> "Guruh ${groups.indexOfFirst { it.id == activeGroupId } + 1} tanlandi (ko'rish)"
-                    pendingStartMs == null -> "«+» tugmasi bilan yangi guruh boshlang — birinchi sanani tanlang"
-                    else -> "Ikkinchi sanani tanlang — davr yopiladi"
+                    pendingStartMs == null -> {
+                        // Разный текст для режима формы и режима деталей
+                        if (!editable && onAddGroup != null) {
+                            "«+» bilan yangi kontrakt boshlang — yoki mavjud sanani bosib tahrirlang"
+                        } else {
+                            "«+» tugmasi bilan yangi guruh boshlang — birinchi sanani tanlang"
+                        }
+                    }
+                    else -> "Ikkinchi sanani tanling — davr yopiladi (yoki shu sanani qayt tanlang — 1 kunlik)"
                 }
                 Text(
                     text = hint,
@@ -302,18 +388,18 @@ fun ContractCalendar(
     }
 }
 
-/* ── Логика тапа по дню в режиме редактирования ─────────────────────────── */
+/* ── Логика тапа по дню в режиме редактирования (editable=true) ──────── */
 private fun handleDayClick(
     ms: Long,
     pendingStartMs: Long?,
     setPendingStart: (Long?) -> Unit,
     activeGroupId: Int?,
     groups: List<ContractGroup>,
+    newGroupIsPaid: Boolean,
     onGroupsChange: (List<ContractGroup>) -> Unit,
     onActiveGroupChange: (Int?) -> Unit
 ) {
     // Если открыта существующая группа — ничего не делаем (только просмотр).
-    // Чтобы изменить группу, её нужно удалить (x) и создать заново.
     if (activeGroupId != null) return
 
     if (pendingStartMs == null) {
@@ -323,14 +409,42 @@ private fun handleDayClick(
         // Второй тап — закрываем диапазон
         val start = minOf(pendingStartMs, ms)
         val end = maxOf(pendingStartMs, ms)
-        if (end - start >= 0L) {
-            // Минимум 1 день диапазона. end сдвигаем до конца дня (end + 1 день - 1).
-            val realEnd = end + 24L * 60 * 60 * 1000 - 1
-            val newId = (groups.maxOfOrNull { it.id } ?: 0) + 1
-            val updated = groups + ContractGroup(id = newId, startMs = start, endMs = realEnd)
-            onGroupsChange(updated)
-            onActiveGroupChange(newId)
-        }
+        // end сдвигаем до конца дня (end + 1 день - 1) — период включает весь день.
+        val realEnd = end + 24L * 60 * 60 * 1000 - 1
+        val newId = (groups.maxOfOrNull { it.id } ?: 0) + 1
+        val newGroup = ContractGroup(
+            id = newId, startMs = start, endMs = realEnd, isPaid = newGroupIsPaid
+        )
+        onGroupsChange(groups + newGroup)
+        onActiveGroupChange(newId)
+        setPendingStart(null)
+    }
+}
+
+/* ── Логика тапа для режима просмотра с onAddGroup callback ──────────── */
+private fun handleDayClickWithAddCallback(
+    ms: Long,
+    pendingStartMs: Long?,
+    setPendingStart: (Long?) -> Unit,
+    activeGroupId: Int?,
+    newGroupIsPaid: Boolean,
+    onAddGroup: (ContractGroup) -> Unit
+) {
+    if (activeGroupId != null) return
+
+    if (pendingStartMs == null) {
+        setPendingStart(ms)
+    } else {
+        val start = minOf(pendingStartMs, ms)
+        val end = maxOf(pendingStartMs, ms)
+        val realEnd = end + 24L * 60 * 60 * 1000 - 1
+        // Используем отрицательный id как временный — реальный id
+        // присвоит БД при создании контракта. Колбэк onAddGroup должен
+        // проигнорировать это поле и использовать startMs/endMs/isPaid.
+        val newGroup = ContractGroup(
+            id = -1, startMs = start, endMs = realEnd, isPaid = newGroupIsPaid
+        )
+        onAddGroup(newGroup)
         setPendingStart(null)
     }
 }
@@ -368,11 +482,16 @@ private fun RowScope.DayCell(
 
         when {
             inActiveGroup != null -> {
-                bgColor = GroupColors[inActiveGroup.colorIndex].copy(alpha = 0.45f)
+                // Активная группа: цвет по isPaid (зелёный/красный),
+                // альфа 0.45 для явной видимости.
+                val base = if (inActiveGroup.isPaid) StatusOk else StatusOverdue
+                bgColor = base.copy(alpha = 0.45f)
                 fgColor = ClaudeText
             }
             inAnyGroup != null -> {
-                bgColor = GroupColors[inAnyGroup.colorIndex].copy(alpha = 0.20f)
+                // Неактивная группа: цвет по isPaid, альфа 0.20.
+                val base = if (inAnyGroup.isPaid) StatusOk else StatusOverdue
+                bgColor = base.copy(alpha = 0.20f)
                 fgColor = ClaudeText
             }
             inPending -> {
@@ -420,86 +539,162 @@ private fun RowScope.DayCell(
     }
 }
 
-/* ── Панель групп: «+» и вкладки (1, 2, 3...) с «x» ────────────────────── */
+/* ── Панель групп: «+», кнопки статуса и вкладки (1, 2, 3...) с «x» ──── */
 @Composable
 private fun GroupsPanel(
     groups: List<ContractGroup>,
     activeGroupId: Int?,
+    newGroupIsPaid: Boolean,
+    onNewGroupStatusChange: (Boolean) -> Unit,
     onActiveGroupChange: (Int?) -> Unit,
     onAddGroup: () -> Unit,
     onRemoveGroup: (Int) -> Unit
 ) {
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .wrapContentHeight(),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(6.dp)
-    ) {
-        // Кнопка «+» — начать новую группу
-        Box(
+    Column(modifier = Modifier.fillMaxWidth()) {
+        // ── Ряд 1: «+» и кнопки статуса ────────────────────────────────
+        Row(
             modifier = Modifier
-                .size(28.dp)
-                .clip(CircleShape)
-                .background(if (activeGroupId == null) ClaudeAccent else ClaudeAccentBg)
-                .border(1.dp, ClaudeAccent, CircleShape)
-                .clickable { onAddGroup() },
-            contentAlignment = Alignment.Center
+                .fillMaxWidth()
+                .wrapContentHeight(),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(6.dp)
         ) {
-            Icon(
-                Icons.Default.Add,
-                contentDescription = "Yangi guruh",
-                tint = if (activeGroupId == null) ClaudeCard else ClaudeAccent,
-                modifier = Modifier.size(18.dp)
+            // Кнопка «+» — начать новую группу
+            Box(
+                modifier = Modifier
+                    .size(28.dp)
+                    .clip(CircleShape)
+                    .background(if (activeGroupId == null) ClaudeAccent else ClaudeAccentBg)
+                    .border(1.dp, ClaudeAccent, CircleShape)
+                    .clickable { onAddGroup() },
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(
+                    Icons.Default.Add,
+                    contentDescription = "Yangi guruh",
+                    tint = if (activeGroupId == null) ClaudeCard else ClaudeAccent,
+                    modifier = Modifier.size(18.dp)
+                )
+            }
+
+            Spacer(Modifier.width(4.dp))
+
+            // Кнопка статуса «To'langan» (оплаченный)
+            StatusToggleChip(
+                label = "To'langan",
+                selected = newGroupIsPaid,
+                bg = StatusOk,
+                bgAlpha = 0.35f,
+                onClick = { onNewGroupStatusChange(true) }
+            )
+
+            // Кнопка статуса «To'lanmagan» (неоплаченный)
+            StatusToggleChip(
+                label = "To'lanmagan",
+                selected = !newGroupIsPaid,
+                bg = StatusOverdue,
+                bgAlpha = 0.35f,
+                onClick = { onNewGroupStatusChange(false) }
             )
         }
 
-        Spacer(Modifier.width(4.dp))
+        Spacer(Modifier.height(6.dp))
 
-        // Вкладки существующих групп
-        groups.forEachIndexed { idx, g ->
-            val color = GroupColors[g.colorIndex]
-            val isActive = g.id == activeGroupId
-            Row(
-                modifier = Modifier
-                    .height(28.dp)
-                    .clip(RoundedCornerShape(14.dp))
-                    .background(if (isActive) color.copy(alpha = 0.35f) else ClaudeAccentBg)
-                    .border(1.dp, color, RoundedCornerShape(14.dp))
-                    .clickable { onActiveGroupChange(if (isActive) null else g.id) }
-                    .padding(horizontal = 8.dp),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(4.dp)
-            ) {
-                Box(
+        // ── Ряд 2: вкладки существующих групп ──────────────────────────
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .wrapContentHeight(),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(6.dp)
+        ) {
+            groups.forEachIndexed { idx, g ->
+                val color = if (g.isPaid) StatusOk else StatusOverdue
+                val isActive = g.id == activeGroupId
+                Row(
                     modifier = Modifier
-                        .size(10.dp)
-                        .clip(CircleShape)
-                        .background(color)
-                )
+                        .height(28.dp)
+                        .clip(RoundedCornerShape(14.dp))
+                        .background(if (isActive) color.copy(alpha = 0.35f) else ClaudeAccentBg)
+                        .border(1.dp, color, RoundedCornerShape(14.dp))
+                        .clickable { onActiveGroupChange(if (isActive) null else g.id) }
+                        .padding(horizontal = 8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(4.dp)
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .size(10.dp)
+                            .clip(CircleShape)
+                            .background(color)
+                    )
+                    Text(
+                        text = "${idx + 1}",
+                        fontSize = 12.sp,
+                        color = ClaudeText,
+                        fontWeight = FontWeight.SemiBold
+                    )
+                    Icon(
+                        Icons.Default.Close,
+                        contentDescription = "Guruhni o'chirish",
+                        tint = ClaudeTextSecondary,
+                        modifier = Modifier
+                            .size(14.dp)
+                            .clickable { onRemoveGroup(g.id) }
+                    )
+                }
+            }
+
+            if (groups.isEmpty()) {
                 Text(
-                    text = "${idx + 1}",
-                    fontSize = 12.sp,
-                    color = ClaudeText,
-                    fontWeight = FontWeight.SemiBold
-                )
-                Icon(
-                    Icons.Default.Close,
-                    contentDescription = "Guruhni o'chirish",
-                    tint = ClaudeTextSecondary,
-                    modifier = Modifier
-                        .size(14.dp)
-                        .clickable { onRemoveGroup(g.id) }
+                    text = "Hali guruh yo'q — «+» bilan boshlang",
+                    fontSize = 11.sp,
+                    color = ClaudeTextSecondary,
+                    modifier = Modifier.padding(start = 4.dp)
                 )
             }
         }
+    }
+}
 
-        if (groups.isEmpty()) {
-            Text(
-                text = "Hali guruh yo'q — «+» bilan boshlang",
-                fontSize = 11.sp,
-                color = ClaudeTextSecondary,
-                modifier = Modifier.padding(start = 4.dp)
+/* ── Чип статуса для новой группы ────────────────────────────────────── */
+@Composable
+private fun StatusToggleChip(
+    label: String,
+    selected: Boolean,
+    bg: Color,
+    bgAlpha: Float,
+    onClick: () -> Unit
+) {
+    Row(
+        modifier = Modifier
+            .height(28.dp)
+            .clip(RoundedCornerShape(14.dp))
+            .background(if (selected) bg.copy(alpha = bgAlpha) else ClaudeAccentBg)
+            .border(1.dp, bg, RoundedCornerShape(14.dp))
+            .clickable { onClick() }
+            .padding(horizontal = 10.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(4.dp)
+    ) {
+        Box(
+            modifier = Modifier
+                .size(10.dp)
+                .clip(CircleShape)
+                .background(bg)
+        )
+        Text(
+            text = label,
+            fontSize = 11.sp,
+            color = if (selected) ClaudeText else ClaudeTextSecondary,
+            fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal
+        )
+        if (selected) {
+            Icon(
+                Icons.Default.Check,
+                contentDescription = null,
+                tint = bg,
+                modifier = Modifier.size(12.dp)
             )
         }
     }

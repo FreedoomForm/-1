@@ -123,8 +123,8 @@ class RenterViewModel(application: Application) : AndroidViewModel(application) 
         // ── Группы контрактов (из календаря формы) ────────────────────────
         // Если список не пуст — он имеет приоритет над автогенерацией по
         // выбранной дате. Каждая группа = один контракт с weekStart/weekEnd
-        // из группы. Список групп — это List<Pair<startMs, endMs>>.
-        contractGroups: List<Pair<Long, Long>> = emptyList()
+        // и isPaid из группы. Список — это List<Triple<startMs, endMs, isPaid>>.
+        contractGroups: List<Triple<Long, Long, Boolean>> = emptyList()
     ) {
         viewModelScope.launch {
             val now = System.currentTimeMillis()
@@ -158,12 +158,9 @@ class RenterViewModel(application: Application) : AndroidViewModel(application) 
 
             val specs: List<ContractSpec> = when (scenario) {
                 4 -> {
-                    // Сценарий групп: для каждой группы определяем isPaid по
-                    // тому же правилу: если группа закончилась > недели назад →
-                    // долг (минус), иначе → предоплата (плюс).
-                    contractGroups.map { (gs, ge) ->
-                        val endDiff = now - ge
-                        val isPaid = endDiff <= weekMs
+                    // Сценарий групп: для каждой группы используем isPaid,
+                    // который выбрал пользователь в календаре (кнопки статуса).
+                    contractGroups.map { (gs, ge, isPaid) ->
                         ContractSpec(gs, ge, isPaid)
                     }
                 }

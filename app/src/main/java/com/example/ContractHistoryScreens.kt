@@ -230,212 +230,270 @@ fun RenterContractHistoryScreen(
             )
         }
     ) { innerPadding ->
-        Column(
-            modifier = Modifier
-                .padding(innerPadding)
-                .fillMaxSize()
-        ) {
-            // ── Сводка по арендатору ────────────────────────────────────
-            Card(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 16.dp, vertical = 8.dp),
-                shape = RoundedCornerShape(12.dp),
-                colors = CardDefaults.cardColors(containerColor = ClaudeAccentBg),
-                border = BorderStroke(1.dp, ClaudeAccentMuted)
-            ) {
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(16.dp),
-                    horizontalArrangement = Arrangement.SpaceBetween
-                ) {
-                    SummaryColumn("Skuter", renter.scooterName ?: "—")
-                    SummaryColumn("Muddat", "${renter.rentDurationDays} kun")
-                    SummaryColumn(
-                        "Boshlanish",
-                        dateFmt.format(Date(renter.rentStartDateTimestamp))
+        // ── Единый прокручиваемый контейнер (Issue 3) ─────────────────────
+        // Раньше экран был разбит на две части: верхняя (сводка + календарь +
+        // табы + поиск) со своим verticalScroll, и нижняя (LazyColumn .weight(1f))
+        // со списком контрактов. Из-за этого календарь не прокручивался вместе
+        // со списком — пользователь жаловался, что страница "не scrollable".
+        //
+        // Теперь для вкладки «Контракты» весь контент (включая календарь и
+        // список контрактов) находится в одном LazyColumn, который прокручивается
+        // как единое целое. Для вкладки «Транзакции» оставлена старая схема
+        // (верхний verticalScroll + RenterTransactionListSection), т.к. эта
+        // секция имеет собственный внутренний LazyColumn и не может быть
+        // встроена в родительский LazyColumn.
+        //
+        // Issue 2 & 3: теперь календарь в странице деталей имеет ВСЕ функции
+        // нового календаря:
+        //   • Кнопки статуса (To'langan / To'lanmagan) рядом с «+»
+        //   • Кнопка «+» — начать выбор нового периода
+        //   • Тап по первой дате → тап по второй → создаётся контракт
+        //     с выбранным статусом (paid → контракт + Transaction + зачисление
+        //     на карту; unpaid → только контракт-долг).
+        //   • Тап по той же дате дважды → однодневный контракт.
+        //   • Существующие контракты показываются как вкладки (1, 2, 3...).
+        //   • «x» на вкладке → удаляет контракт из БД.
+        //   • Тап по дню с существующим контрактом → открывает диалог
+        //     редактирования этого контракта.
+        val contractsList = contracts
+        // Существующие контракты как группы (для отображения вкладок и
+        // для определения, какой контракт редактировать при тапе на день).
+        val existingGroups = remember(contractsList) {
+            contractsList
+                .filter { it.type == ContractHistoryEntry.TYPE_CREATED ||
+                          it.type == ContractHistoryEntry.TYPE_AUTO_RENEW }
+                .filter { it.weekStart != null && it.weekEnd != null }
+                .sortedBy { it.weekStart }
+                .map { c ->
+                    ContractGroup(
+                        id = c.id,  // реальный ID контракта в БД
+                        startMs = c.weekStart!!,
+                        endMs = c.weekEnd!!,
+                        isPaid = c.isPaid
                     )
-                    SummaryColumn(
-                        "Balans",
-                        "${renter.balance.toLong()} UZS",
-                        valueColor = when {
-                            renter.balance < 0 -> StatusOverdue
-                            renter.balance > 0 -> StatusOk
-                            else -> ClaudeText
+                }
+        }
+
+        if (selectedTab == 0) {
+            // ── ВКЛАДКА «КОНТРАКТЫ» — единый LazyColumn ─────────────────
+            LazyColumn(
+                modifier = Modifier
+                    .padding(innerPadding)
+                    .fillMaxSize()
+            ) {
+                // ── Сводка по арендатору ────────────────────────────────
+                item {
+                    Card(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 16.dp, vertical = 8.dp),
+                        shape = RoundedCornerShape(12.dp),
+                        colors = CardDefaults.cardColors(containerColor = ClaudeAccentBg),
+                        border = BorderStroke(1.dp, ClaudeAccentMuted)
+                    ) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(16.dp),
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            SummaryColumn("Skuter", renter.scooterName ?: "—")
+                            SummaryColumn("Muddat", "${renter.rentDurationDays} kun")
+                            SummaryColumn(
+                                "Boshlanish",
+                                dateFmt.format(Date(renter.rentStartDateTimestamp))
+                            )
+                            SummaryColumn(
+                                "Balans",
+                                "${renter.balance.toLong()} UZS",
+                                valueColor = when {
+                                    renter.balance < 0 -> StatusOverdue
+                                    renter.balance > 0 -> StatusOk
+                                    else -> ClaudeText
+                                }
+                            )
+                        }
+                    }
+                }
+
+                // ── Календарь с раскраской + полным набором функций ─────
+                item {
+                    ContractCalendar(
+                        editable = false,
+                        groups = existingGroups,
+                        dayStatusFor = { dayMs ->
+                            // Сначала проверяем TERMINATED — у него высший приоритет
+                            val suspended = contractsList.any { c ->
+                                c.type == ContractHistoryEntry.TYPE_TERMINATED &&
+                                c.weekStart != null && c.weekEnd != null &&
+                                dayMs >= c.weekStart && dayMs < c.weekEnd
+                            }
+                            if (suspended) return@ContractCalendar DayStatus.SUSPENDED
+
+                            // Затем контракты CREATED + AUTO_RENEW
+                            val contract = contractsList.firstOrNull { c ->
+                                (c.type == ContractHistoryEntry.TYPE_CREATED ||
+                                 c.type == ContractHistoryEntry.TYPE_AUTO_RENEW) &&
+                                c.weekStart != null && c.weekEnd != null &&
+                                dayMs >= c.weekStart && dayMs < c.weekEnd
+                            }
+                            when {
+                                contract == null -> DayStatus.EMPTY
+                                contract.isPaid -> DayStatus.PAID
+                                else -> DayStatus.UNPAID
+                            }
+                        },
+                        onAddGroup = { group ->
+                            // Пользователь выбрал период и статус в календаре —
+                            // создаём контракт с полной обработкой (Transaction +
+                            // зачисление на карту для оплаченного).
+                            val amount = SettingsRepository(context).weeklyPrice
+                                .let { if (it > 0) it else SettingsRepository.DEFAULT_WEEKLY_PRICE }
+                            contractHistoryViewModel.createContractFromCalendar(
+                                renter = renter,
+                                weekStart = group.startMs,
+                                weekEnd = group.endMs,
+                                amount = amount,
+                                isPaid = group.isPaid
+                            )
+                            Toast.makeText(
+                                context,
+                                if (group.isPaid) "To'langan kontrakt qo'shildi"
+                                else "To'lanmagan kontrakt qo'shildi",
+                                Toast.LENGTH_SHORT
+                            ).show()
+                        },
+                        onRemoveGroup = { group ->
+                            // «x» на вкладке существующего контракта → удаляем из БД
+                            contractHistoryViewModel.deleteContract(group.id)
+                            Toast.makeText(
+                                context,
+                                "Kontrakt #${group.id} o'chirildi",
+                                Toast.LENGTH_SHORT
+                            ).show()
+                        },
+                        onEditDayContract = { dayMs ->
+                            // Тап по дню с существующим контрактом → открываем диалог
+                            val match = contractsList.firstOrNull { c ->
+                                (c.type == ContractHistoryEntry.TYPE_CREATED ||
+                                 c.type == ContractHistoryEntry.TYPE_AUTO_RENEW) &&
+                                c.weekStart != null && c.weekEnd != null &&
+                                dayMs >= c.weekStart && dayMs < c.weekEnd
+                            }
+                            if (match != null) {
+                                editingContract = match
+                            }
                         }
                     )
                 }
-            }
 
-            // ── Календарь с раскраской дней ─────────────────────────────
-            // Показывает каждый день в виде ячейки:
-            //   • зелёный фон — день оплачен арендатором (контракт isPaid=true)
-            //   • красный фон — день не оплачен (контракт isPaid=false)
-            //   • серый фон — контракт приостановлен в этот день (TERMINATED)
-            //   • белый фон — все остальные дни
-            //
-            // Логика определения статуса дня:
-            //   1. Идём по всем контрактам арендатора (CREATED + AUTO_RENEW).
-            //      Если день попадает в [weekStart, weekEnd) контракта — статус
-            //      PAID или UNPAID в зависимости от isPaid.
-            //   2. Идём по записям TERMINATED в истории контрактов — если день
-            //      попадает в [weekStart, weekEnd) приостановленной записи,
-            //      статус SUSPENDED (приоритет выше, чем у неоплаченных).
-            //   3. Иначе — EMPTY (белый фон).
-            val contractsList = contracts
-            ContractCalendar(
-                editable = false,
-                dayStatusFor = { dayMs ->
-                    // Сначала проверяем TERMINATED — у него высший приоритет
-                    val suspended = contractsList.any { c ->
-                        c.type == ContractHistoryEntry.TYPE_TERMINATED &&
-                        c.weekStart != null && c.weekEnd != null &&
-                        dayMs >= c.weekStart && dayMs < c.weekEnd
-                    }
-                    if (suspended) return@ContractCalendar DayStatus.SUSPENDED
-
-                    // Затем контракты CREATED + AUTO_RENEW
-                    val contract = contractsList.firstOrNull { c ->
-                        (c.type == ContractHistoryEntry.TYPE_CREATED ||
-                         c.type == ContractHistoryEntry.TYPE_AUTO_RENEW) &&
-                        c.weekStart != null && c.weekEnd != null &&
-                        dayMs >= c.weekStart && dayMs < c.weekEnd
-                    }
-                    when {
-                        contract == null -> DayStatus.EMPTY
-                        contract.isPaid -> DayStatus.PAID
-                        else -> DayStatus.UNPAID
+                // ── Переключатель «Контракты» / «Транзакции» ────────────
+                item {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 16.dp, vertical = 4.dp),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        ToggleTabButton(
+                            label = "Kontraktlar",
+                            icon = Icons.Default.Description,
+                            isSelected = selectedTab == 0,
+                            onClick = { selectedTab = 0 }
+                        )
+                        ToggleTabButton(
+                            label = "Tranzaksiyalar",
+                            icon = Icons.Default.Payments,
+                            isSelected = selectedTab == 1,
+                            onClick = { selectedTab = 1 }
+                        )
                     }
                 }
-            )
 
-            // ── Переключатель «Контракты» / «Транзакции» ────────────────
-            // Две кнопки над таблицей. Активная — залита акцентным цветом.
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 16.dp, vertical = 4.dp),
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                ToggleTabButton(
-                    label = "Kontraktlar",
-                    icon = Icons.Default.Description,
-                    isSelected = selectedTab == 0,
-                    onClick = { selectedTab = 0 }
-                )
-                ToggleTabButton(
-                    label = "Tranzaksiyalar",
-                    icon = Icons.Default.Payments,
-                    isSelected = selectedTab == 1,
-                    onClick = { selectedTab = 1 }
-                )
-            }
-
-            // ── Unified search ───────────────────────────────────────
-            UnifiedSearchBar(
-                query = searchQuery,
-                onQueryChange = { searchQuery = it },
-                placeholder = if (selectedTab == 0) "Kontrakt qidirish..."
-                               else "Tranzaksiya qidirish...",
-                onCalendarClick = { showDateRangePicker = true },
-                calendarActive = dateRangePickerState.selectedStartDateMillis != null,
-                onFilterClick = { showFilterPanel = true },
-                filterActive = filterValues.any { it.value.isNotBlank() }
-            )
-
-            // ── Боковая панель фильтров ──────────────────────────────────
-            FilterSidePanel(
-                columns = renterHistoryFilterColumns,
-                filterValues = filterValues,
-                onFilterChange = { colId, value ->
-                    filterValues = filterValues.toMutableMap().apply { put(colId, value) }
-                },
-                onSearch = { /* фильтры применяются реактивно */ },
-                onReset = { filterValues = emptyMap() },
-                onDismiss = { showFilterPanel = false },
-                visible = showFilterPanel
-            )
-
-            if (selectedTab == 0) {
-                // ── ВКЛАДКА «КОНТРАКТЫ» ─────────────────────────────────────
-                // ── Панель действий — ВСЕГДА ВИДНА (Task 3) ────────────────────
-                // Кнопки Yaratish / Tahrirlash / O'chir всегда присутствуют.
-                // Yaratish всегда активна. Tahrirlash активна только когда выбран
-                // ровно 1 контракт. O'chir активна когда выбрано ≥1. Текст
-                // "X ta tanlandi" убран по просьбе пользователя.
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 16.dp, vertical = 6.dp),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                PrimaryButton(
-                    label = "Yaratish",
-                    icon = Icons.Default.Add,
-                    onClick = { showCreateDialog = true }
-                )
-                SecondaryButton(
-                    label = "Tahrirlash",
-                    icon = Icons.Default.Edit,
-                    enabled = selectedContracts.size == 1,
-                    onClick = {
-                        // Находим выбранный контракт и открываем диалог редактирования
-                        val id = selectedContracts.first()
-                        editingContract = contracts.firstOrNull { it.id == id }
-                    }
-                )
-                DangerButton(
-                    label = "O'chir",
-                    icon = Icons.Default.Delete,
-                    enabled = selectedContracts.isNotEmpty(),
-                    onClick = { showDeleteConfirm = true }
-                )
-                Spacer(Modifier.weight(1f))
-            }
-
-            // ── Заголовок таблицы — только иконки ──────────────────────
-            // Колонка «Amal» (PDF-кнопка) удалена — PDF-договор теперь
-            // формируется одной кнопкой в TopAppBar экрана (cheksiz muddatli).
-            Surface(
-                color = ClaudeCard,
-                modifier = Modifier.fillMaxWidth(),
-                shape = RoundedCornerShape(topStart = 12.dp, topEnd = 12.dp)
-            ) {
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 12.dp, vertical = 4.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    NonSortableHeaderCell(Icons.Default.Numbers,   0.4f, "#")
-                    NonSortableHeaderCell(Icons.Default.DateRange, 1.8f, "Muddat (hafta)")
-                    NonSortableHeaderCell(Icons.Default.Payments,  1.0f, "Summa")
-                }
-            }
-            HorizontalDivider(color = ClaudeDivider)
-
-            // ── Список контрактов ──────────────────────────────────────
-            // Каждый контракт обведён цветной рамкой:
-            //   зелёной  — оплачен (isPaid = true)
-            //   красной  — долг (isPaid = false)
-            // Так же, как цветная линия статуса у арендатора в таблице.
-            if (filteredContracts.isEmpty()) {
-                Box(
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .padding(32.dp),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Text(
-                        "Kontraktlar yo'q",
-                        color = ClaudeTextSecondary,
-                        style = MaterialTheme.typography.bodyMedium
+                // ── Unified search ─────────────────────────────────────
+                item {
+                    UnifiedSearchBar(
+                        query = searchQuery,
+                        onQueryChange = { searchQuery = it },
+                        placeholder = "Kontrakt qidirish...",
+                        onCalendarClick = { showDateRangePicker = true },
+                        calendarActive = dateRangePickerState.selectedStartDateMillis != null,
+                        onFilterClick = { showFilterPanel = true },
+                        filterActive = filterValues.any { it.value.isNotBlank() }
                     )
                 }
-            } else {
-                LazyColumn(modifier = Modifier.fillMaxSize()) {
+
+                // ── Панель действий — ВСЕГДА ВИДНА ──────────────────────
+                item {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 16.dp, vertical = 6.dp),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        PrimaryButton(
+                            label = "Yaratish",
+                            icon = Icons.Default.Add,
+                            onClick = { showCreateDialog = true }
+                        )
+                        SecondaryButton(
+                            label = "Tahrirlash",
+                            icon = Icons.Default.Edit,
+                            enabled = selectedContracts.size == 1,
+                            onClick = {
+                                val id = selectedContracts.first()
+                                editingContract = contracts.firstOrNull { it.id == id }
+                            }
+                        )
+                        DangerButton(
+                            label = "O'chir",
+                            icon = Icons.Default.Delete,
+                            enabled = selectedContracts.isNotEmpty(),
+                            onClick = { showDeleteConfirm = true }
+                        )
+                        Spacer(Modifier.weight(1f))
+                    }
+                }
+
+                // ── Заголовок таблицы ──────────────────────────────────
+                item {
+                    Surface(
+                        color = ClaudeCard,
+                        modifier = Modifier.fillMaxWidth(),
+                        shape = RoundedCornerShape(topStart = 12.dp, topEnd = 12.dp)
+                    ) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 12.dp, vertical = 4.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            NonSortableHeaderCell(Icons.Default.Numbers,   0.4f, "#")
+                            NonSortableHeaderCell(Icons.Default.DateRange, 1.8f, "Muddat (hafta)")
+                            NonSortableHeaderCell(Icons.Default.Payments,  1.0f, "Summa")
+                        }
+                    }
+                    HorizontalDivider(color = ClaudeDivider)
+                }
+
+                // ── Список контрактов ──────────────────────────────────
+                if (filteredContracts.isEmpty()) {
+                    item {
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(32.dp),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Text(
+                                "Kontraktlar yo'q",
+                                color = ClaudeTextSecondary,
+                                style = MaterialTheme.typography.bodyMedium
+                            )
+                        }
+                    }
+                } else {
                     items(filteredContracts, key = { it.id }) { entry ->
                         val isSelected = entry.id in selectedContracts
                         val statusColor = if (entry.isPaid) StatusOk else StatusOverdue
@@ -468,7 +526,6 @@ fun RenterContractHistoryScreen(
                                 .padding(horizontal = 8.dp, vertical = 10.dp),
                             verticalAlignment = Alignment.CenterVertically
                         ) {
-                            // #
                             Text(
                                 "#${entry.id}",
                                 modifier = Modifier.weight(0.4f),
@@ -476,7 +533,6 @@ fun RenterContractHistoryScreen(
                                 color = ClaudeTextSecondary,
                                 maxLines = 1
                             )
-                            // Muddat (weekStart → weekEnd) + статус-метка
                             Column(modifier = Modifier.weight(1.8f)) {
                                 Text(
                                     text = buildString {
@@ -515,7 +571,6 @@ fun RenterContractHistoryScreen(
                                     }
                                 }
                             }
-                            // Summa
                             Text(
                                 "${entry.amount.toLong()}",
                                 modifier = Modifier.weight(1.0f),
@@ -525,23 +580,178 @@ fun RenterContractHistoryScreen(
                                 textAlign = TextAlign.End,
                                 maxLines = 1
                             )
-                            // PDF-кнопка строки удалена — теперь PDF-договор
-                            // формируется одной кнопкой в TopAppBar (cheksiz
-                            // muddatli — на неограниченный срок).
                         }
                     }
                 }
             }
-            } else {
-                // ── ВКЛАДКА «ТРАНЗАКЦИИ» ─────────────────────────────────────
-                RenterTransactionListSection(
-                    renter = renter,
-                    allScooters = allScooters,
-                    transactionViewModel = transactionViewModel,
-                    contractHistoryViewModel = contractHistoryViewModel
-                )
+        } else {
+            // ── ВКЛАДКА «ТРАНЗАКЦИИ» — старая схема ─────────────────────
+            // RenterTransactionListSection имеет собственный внутренний
+            // LazyColumn, поэтому его нельзя встроить в родительский LazyColumn.
+            // Используем отдельный Column с верхним verticalScroll (для сводки,
+            // календаря, табов, поиска) и нижним блоком для транзакций.
+            Column(
+                modifier = Modifier
+                    .padding(innerPadding)
+                    .fillMaxSize()
+            ) {
+                val topScrollState = rememberScrollState()
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .verticalScroll(topScrollState)
+                ) {
+                    // Сводка
+                    Card(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 16.dp, vertical = 8.dp),
+                        shape = RoundedCornerShape(12.dp),
+                        colors = CardDefaults.cardColors(containerColor = ClaudeAccentBg),
+                        border = BorderStroke(1.dp, ClaudeAccentMuted)
+                    ) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(16.dp),
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            SummaryColumn("Skuter", renter.scooterName ?: "—")
+                            SummaryColumn("Muddat", "${renter.rentDurationDays} kun")
+                            SummaryColumn(
+                                "Boshlanish",
+                                dateFmt.format(Date(renter.rentStartDateTimestamp))
+                            )
+                            SummaryColumn(
+                                "Balans",
+                                "${renter.balance.toLong()} UZS",
+                                valueColor = when {
+                                    renter.balance < 0 -> StatusOverdue
+                                    renter.balance > 0 -> StatusOk
+                                    else -> ClaudeText
+                                }
+                            )
+                        }
+                    }
+
+                    // Календарь (те же колбэки, что и во вкладке контрактов)
+                    ContractCalendar(
+                        editable = false,
+                        groups = existingGroups,
+                        dayStatusFor = { dayMs ->
+                            val suspended = contractsList.any { c ->
+                                c.type == ContractHistoryEntry.TYPE_TERMINATED &&
+                                c.weekStart != null && c.weekEnd != null &&
+                                dayMs >= c.weekStart && dayMs < c.weekEnd
+                            }
+                            if (suspended) return@ContractCalendar DayStatus.SUSPENDED
+                            val contract = contractsList.firstOrNull { c ->
+                                (c.type == ContractHistoryEntry.TYPE_CREATED ||
+                                 c.type == ContractHistoryEntry.TYPE_AUTO_RENEW) &&
+                                c.weekStart != null && c.weekEnd != null &&
+                                dayMs >= c.weekStart && dayMs < c.weekEnd
+                            }
+                            when {
+                                contract == null -> DayStatus.EMPTY
+                                contract.isPaid -> DayStatus.PAID
+                                else -> DayStatus.UNPAID
+                            }
+                        },
+                        onAddGroup = { group ->
+                            val amount = SettingsRepository(context).weeklyPrice
+                                .let { if (it > 0) it else SettingsRepository.DEFAULT_WEEKLY_PRICE }
+                            contractHistoryViewModel.createContractFromCalendar(
+                                renter = renter,
+                                weekStart = group.startMs,
+                                weekEnd = group.endMs,
+                                amount = amount,
+                                isPaid = group.isPaid
+                            )
+                            Toast.makeText(
+                                context,
+                                if (group.isPaid) "To'langan kontrakt qo'shildi"
+                                else "To'lanmagan kontrakt qo'shildi",
+                                Toast.LENGTH_SHORT
+                            ).show()
+                        },
+                        onRemoveGroup = { group ->
+                            contractHistoryViewModel.deleteContract(group.id)
+                            Toast.makeText(
+                                context,
+                                "Kontrakt #${group.id} o'chirildi",
+                                Toast.LENGTH_SHORT
+                            ).show()
+                        },
+                        onEditDayContract = { dayMs ->
+                            val match = contractsList.firstOrNull { c ->
+                                (c.type == ContractHistoryEntry.TYPE_CREATED ||
+                                 c.type == ContractHistoryEntry.TYPE_AUTO_RENEW) &&
+                                c.weekStart != null && c.weekEnd != null &&
+                                dayMs >= c.weekStart && dayMs < c.weekEnd
+                            }
+                            if (match != null) {
+                                editingContract = match
+                            }
+                        }
+                    )
+
+                    // Табы
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 16.dp, vertical = 4.dp),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        ToggleTabButton(
+                            label = "Kontraktlar",
+                            icon = Icons.Default.Description,
+                            isSelected = selectedTab == 0,
+                            onClick = { selectedTab = 0 }
+                        )
+                        ToggleTabButton(
+                            label = "Tranzaksiyalar",
+                            icon = Icons.Default.Payments,
+                            isSelected = selectedTab == 1,
+                            onClick = { selectedTab = 1 }
+                        )
+                    }
+
+                    // Поиск
+                    UnifiedSearchBar(
+                        query = searchQuery,
+                        onQueryChange = { searchQuery = it },
+                        placeholder = "Tranzaksiya qidirish...",
+                        onCalendarClick = { showDateRangePicker = true },
+                        calendarActive = dateRangePickerState.selectedStartDateMillis != null,
+                        onFilterClick = { showFilterPanel = true },
+                        filterActive = filterValues.any { it.value.isNotBlank() }
+                    )
+                }
+
+                // Список транзакций (с собственным LazyColumn внутри)
+                Box(modifier = Modifier.weight(1f)) {
+                    RenterTransactionListSection(
+                        renter = renter,
+                        allScooters = allScooters,
+                        transactionViewModel = transactionViewModel,
+                        contractHistoryViewModel = contractHistoryViewModel
+                    )
+                }
             }
         }
+
+        // ── Боковая панель фильтров ──────────────────────────────────
+        FilterSidePanel(
+            columns = renterHistoryFilterColumns,
+            filterValues = filterValues,
+            onFilterChange = { colId, value ->
+                filterValues = filterValues.toMutableMap().apply { put(colId, value) }
+            },
+            onSearch = { /* фильтры применяются реактивно */ },
+            onReset = { filterValues = emptyMap() },
+            onDismiss = { showFilterPanel = false },
+            visible = showFilterPanel
+        )
     }
 
     // ── Диалог редактирования контракта ─────────────────────────────────

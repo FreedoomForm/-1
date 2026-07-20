@@ -275,15 +275,21 @@ class CommandExecutor(private val context: Context) {
     // Это обеспечивает корректный каскадный реверс при удалении контракта.
     private suspend fun createRenter(cmd: JSONObject, batch: BatchContext): CommandResult {
         try {
-            // ── Поля формы (те же, что и RenterFormDialog передаёт в addRenter) ──
+            // ── Anti-hallucination rule (Issue 1) ────────────────────────────
+            // Раньше при отсутствии имени мы АВТО-ГЕНЕРИРОВАЛИ placeholder
+            // "Noma'lum ijarachi #N" — пользователь воспринимает это как
+            // "выдуманную информацию". Теперь: если фото не показало имя,
+            // просто СКИПАЕМ команду (ничего не создаём), как того требует
+            // новое правило SYSTEM_PROMPT — "NEVER invent plausible-looking
+            // values; if a required identifier is missing → SKIP".
             val rawName = cmd.optString("name", "").trim()
-            val name = if (rawName.isEmpty()) {
-                val all = db.renterDao().getAllRentersOnce()
-                val nextN = (all.mapNotNull {
-                    it.name.removePrefix("Noma'lum ijarachi #").toIntOrNull()
-                }.maxOrNull() ?: 0) + 1
-                "Noma'lum ijarachi #$nextN"
-            } else rawName
+            if (rawName.isEmpty()) {
+                Log.w(TAG, "createRenter: SKIP — name is empty (no auto-generated placeholder)")
+                return CommandResult(false,
+                    "CREATE_RENTER o'tkazib yuborildi: foto'da ism ko'rinmadi. " +
+                    "Ismni qo'lbola kiritib qayta skanerlang.")
+            }
+            val name = rawName
             val phone = normalizePhone(cmd.optString("phoneNumber", ""))
             val debt = cmd.optDouble("debt", 0.0)
             val prepayment = cmd.optDouble("prepayment", 0.0)
@@ -518,16 +524,18 @@ class CommandExecutor(private val context: Context) {
     // ── Команда: CREATE_SCOOTER ─────────────────────────────────────────────
     private suspend fun createScooter(cmd: JSONObject): CommandResult {
         try {
-            // name — OPTIONAL. Если фото не показало имя, auto-генерируем
-            // "Skillmax-NNN" (следующий свободный номер после существующих).
+            // ── Anti-hallucination rule (Issue 1) ────────────────────────────
+            // Раньше при отсутствии имени мы АВТО-ГЕНЕРИРОВАЛИ "Skillmax-NNN"
+            // — пользователь воспринимает это как "выдуманную информацию".
+            // Теперь: если фото не показало имя скутера, СКИПАЕМ команду.
             val rawName = cmd.optString("name", "").trim()
-            val name = if (rawName.isEmpty()) {
-                val all = db.scooterDao().getAllScootersOnce()
-                val nextN = (all.mapNotNull {
-                    it.name.removePrefix("Skillmax-").trimStart('0').toIntOrNull()
-                }.maxOrNull() ?: 0) + 1
-                "Skillmax-" + nextN.toString().padStart(3, '0')
-            } else rawName
+            if (rawName.isEmpty()) {
+                Log.w(TAG, "createScooter: SKIP — name is empty (no auto-generated placeholder)")
+                return CommandResult(false,
+                    "CREATE_SCOOTER o'tkazib yuborildi: foto'da skuter nomi/raqami ko'rinmadi. " +
+                    "Skuter nomini qo'lbola kiritib qayta skanerling.")
+            }
+            val name = rawName
             val documentedNumber = cmd.optString("documentedNumber", "").trim().ifEmpty { null }
             val scooter = Scooter(
                 name = name,
@@ -550,20 +558,22 @@ class CommandExecutor(private val context: Context) {
     // ── Команда: CREATE_TRANSACTION ─────────────────────────────────────────
     private suspend fun createTransaction(cmd: JSONObject, batch: BatchContext): CommandResult {
         try {
-            // renterName — OPTIONAL. Если фото не показало имя арендатора,
-            // привязываем транзакцию к ПОСЛЕДНЕМУ созданному арендатору в БД
-            // (это соответствует правилу «значение от предыдущего»). Если в БД
-            // вообще нет арендаторов — пропускаем команду.
+            // ── Anti-hallucination rule (Issue 1) ────────────────────────────
+            // Раньше при отсутствии renterName мы привязывали транзакцию к
+            // ПОСЛЕДНЕМУ арендатору в БД — это "выдуманная" привязка, потому
+            // что ИИ не знает, к кому реально относится платёж. Теперь: если
+            // фото не показало имя арендатора, СКИПАЕМ команду.
             val renterName = cmd.optString("renterName", "").trim()
-            val renter = if (renterName.isEmpty()) {
-                db.renterDao().getAllRentersOnce().maxByOrNull { it.id }
-            } else {
-                findRenterByName(renterName)
+            if (renterName.isEmpty()) {
+                Log.w(TAG, "createTransaction: SKIP — renterName is empty (no auto-bind to last renter)")
+                return CommandResult(false,
+                    "CREATE_TRANSACTION o'tkazib yuborildi: foto'da ijarachi ismi ko'rinmadi. " +
+                    "Ijarachi ismini qo'lbola kiritib qayta skanerling.")
             }
+            val renter = findRenterByName(renterName)
             if (renter == null) {
                 return CommandResult(false,
-                    "CREATE_TRANSACTION: ijarachi topilmadi " +
-                    "(renterName='$renterName' va bazada ijarachilar yo'q). " +
+                    "CREATE_TRANSACTION: ijarachi topilmadi (renterName='$renterName'). " +
                     "Avval ijarachini skaner orqali yarating.")
             }
             val amount = cmd.optDouble("amount", 0.0)
@@ -669,16 +679,22 @@ class CommandExecutor(private val context: Context) {
     // (payWeeklyForRenters). ИИ не должен самостоятельно менять баланс.
     private suspend fun createContract(cmd: JSONObject, batch: BatchContext): CommandResult {
         try {
+            // ── Anti-hallucination rule (Issue 1) ────────────────────────────
+            // Раньше при отсутствии renterName мы привязывали контракт к
+            // ПОСЛЕДНЕМУ арендатору в БД — это "выдуманная" привязка. Теперь:
+            // если фото не показало имя арендатора, СКИПАЕМ команду.
             val renterName = cmd.optString("renterName", "").trim()
-            val renter = if (renterName.isEmpty()) {
-                db.renterDao().getAllRentersOnce().maxByOrNull { it.id }
-            } else {
-                findRenterByName(renterName)
+            if (renterName.isEmpty()) {
+                Log.w(TAG, "createContract: SKIP — renterName is empty (no auto-bind to last renter)")
+                return CommandResult(false,
+                    "CREATE_CONTRACT o'tkazib yuborildi: foto'da ijarachi ismi ko'rinmadi. " +
+                    "Ijarachi ismini qo'lbola kiritib qayta skanerling.")
             }
+            val renter = findRenterByName(renterName)
             if (renter == null) {
                 return CommandResult(false,
-                    "CREATE_CONTRACT: ijarachi topilmadi " +
-                    "(renterName='$renterName' va bazada ijarachilar yo'q).")
+                    "CREATE_CONTRACT: ijarachi topilmadi (renterName='$renterName'). " +
+                    "Avval ijarachini skaner orqali yarating.")
             }
             val amount = cmd.optDouble("amount", 0.0)
             val weekStart = parseDate(cmd.optString("weekStart", "")) ?: System.currentTimeMillis()
@@ -790,16 +806,18 @@ class CommandExecutor(private val context: Context) {
     // ── Команда: CREATE_VIRTUAL_CARD ────────────────────────────────────────
     private suspend fun createVirtualCard(cmd: JSONObject): CommandResult {
         try {
-            // name — OPTIONAL. Если фото не показало имя, auto-генерируем
-            // "Yangi karta #N" (следующий свободный номер).
+            // ── Anti-hallucination rule (Issue 1) ────────────────────────────
+            // Раньше при отсутствии имени мы АВТО-ГЕНЕРИРОВАЛИ "Yangi karta #N"
+            // — пользователь воспринимает это как "выдуманную информацию".
+            // Теперь: если фото не показало имя карты, СКИПАЕМ команду.
             val rawName = cmd.optString("name", "").trim()
-            val name = if (rawName.isEmpty()) {
-                val all = db.virtualCardDao().getAllCardsOnce()
-                val nextN = (all.mapNotNull {
-                    it.name.removePrefix("Yangi karta #").toIntOrNull()
-                }.maxOrNull() ?: 0) + 1
-                "Yangi karta #$nextN"
-            } else rawName
+            if (rawName.isEmpty()) {
+                Log.w(TAG, "createVirtualCard: SKIP — name is empty (no auto-generated placeholder)")
+                return CommandResult(false,
+                    "CREATE_VIRTUAL_CARD o'tkazib yuborildi: foto'da karta nomi ko'rinmadi. " +
+                    "Karta nomini qo'lbola kiritib qayta skanerling.")
+            }
+            val name = rawName
             val balance = cmd.optDouble("balance", 0.0)
             val colorHex = cmd.optString("colorHex", "#FF1565C0").trim().ifEmpty { "#FF1565C0" }
             val info = cmd.optString("info", "").trim().ifEmpty { null }

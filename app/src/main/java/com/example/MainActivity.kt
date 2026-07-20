@@ -2347,10 +2347,6 @@ fun RenterFormDialog(
     var startTimestamp by remember {
         mutableStateOf(initialRenter?.rentStartDateTimestamp ?: System.currentTimeMillis())
     }
-    var showStartDatePicker by remember { mutableStateOf(false) }
-    val startDatePickerState = rememberDatePickerState(
-        initialSelectedDateMillis = startTimestamp
-    )
 
     // ── Группы контрактов (новый календарь) ───────────────────────────
     // Список групп, выбранных пользователем в календаре. Если список не пуст,
@@ -2498,46 +2494,19 @@ fun RenterFormDialog(
                 HorizontalDivider(color = ClaudeDivider, thickness = 1.dp)
                 SectionLabel("Ижара шартлари")
 
-                // Кнопка выбора даты начала аренды
-                OutlinedCard(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clickable { showStartDatePicker = true },
-                    shape = RoundedCornerShape(8.dp),
-                    border = BorderStroke(1.dp, ClaudeDivider)
-                ) {
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(horizontal = 16.dp, vertical = 14.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Icon(Icons.Default.DateRange, contentDescription = null, tint = ClaudeAccent)
-                        Spacer(modifier = Modifier.width(12.dp))
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text(
-                                "Ijara boshlash sanasi",
-                                style = MaterialTheme.typography.labelSmall,
-                                color = ClaudeTextSecondary
-                            )
-                            Text(
-                                SimpleDateFormat("dd.MM.yyyy", Locale.getDefault())
-                                    .format(Date(startTimestamp)),
-                                style = MaterialTheme.typography.bodyMedium,
-                                color = ClaudeText
-                            )
-                        }
-                    }
-                }
-
-                // ── Новый календарь с группами контрактов ───────────────────
-                // Пользователь может выбрать один или несколько периодов
-                // (групп контрактов). Кнопка «+» в правом верхнем углу календаря
-                // запускает выбор новой группы: тап по первой дате, тап по второй.
-                // Созданные группы отображаются вкладками (1, 2, 3...) с кнопкой
-                // «x» для удаления. При сохранении формы группы передаются в
-                // RenterFormResult.contractGroups и используются в addRenter.
-                Spacer(modifier = Modifier.height(8.dp))
+                // ── Календарь с группами контрактов ───────────────────────────
+                // Полностью заменяет старую кнопку выбора даты. Пользователь:
+                //   • Нажимает «+» в правом верхнем углу календаря.
+                //   • Выбирает статус (To'langan / To'lanmagan) кнопками.
+                //   • Тап по первой дате → тап по второй → создаётся группа.
+                //   • Можно выбрать ту же дату дважды — система создаст
+                //     однодневный период (как старый календарь одной даты).
+                //   • Можно создать несколько групп (вкладки 1, 2, 3...).
+                //   • У каждой вкладки есть «x» для удаления группы.
+                // При сохранении формы группы передаются в RenterFormResult
+                // и используются в addRenter. Если группы пусты — startTimestamp
+                // остаётся как сегодня (default) и работает автоматическая
+                // логика по дате.
                 ContractCalendar(
                     editable = true,
                     groups = contractGroups,
@@ -2765,55 +2734,18 @@ fun RenterFormDialog(
                         modifier = Modifier.fillMaxWidth(),
                         shape = RoundedCornerShape(8.dp)
                     )
-
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        PrimaryButton(
-                            label = "Skuterni saqlash",
-                            icon = Icons.Default.Check,
-                            enabled = true,
-                            onClick = {
-                                val nameToSave = newScooterName.trim()
-                                    .ifBlank {
-                                        // Если имя пустое — генерируем авто-имя,
-                                        // иначе скутер сохранится безымянным.
-                                        val nextN = (scooters
-                                            .mapNotNull {
-                                                it.name.removePrefix("Skillmax-")
-                                                    .trimStart('0').toIntOrNull()
-                                            }
-                                            .maxOrNull() ?: 0) + 1
-                                        "Skillmax-" + nextN.toString().padStart(3, '0')
-                                    }
-                                onCreateScooterInline(
-                                    nameToSave,
-                                    newScooterDocNum.trim().ifBlank { null },
-                                    newScooterVin.trim(),
-                                    newScooterEngine.trim(),
-                                    newScooterSerial.trim(),
-                                    newScooterBatt1.trim(),
-                                    newScooterBatt2.trim(),
-                                    newScooterInfo.trim()
-                                )
-                                // Запоминаем имя — LaunchedEffect(scooters)
-                                // подхватит свежесозданный скутер и установит
-                                // selectedScooterId автоматически.
-                                pendingScooterName = nameToSave
-                                // Скрываем inline-форму.
-                                showCreateScooterInline = false
-                            }
-                        )
-                        TextActionButton(
-                            label = "Bekor",
-                            icon = Icons.Default.Close,
-                            onClick = {
-                                showCreateScooterInline = false
-                            }
-                        )
-                    }
+                    // ── Подсказка: скутер сохранится вместе с арендатором ────
+                    // Дублирующие кнопки «Skuterni saqlash» / «Bekor» убраны —
+                    // они копируют функционал основных кнопок «Saqla» / «Bekor»
+                    // внизу диалога. Теперь при нажатии основной «Saqla»
+                    // сначала создаётся скутер (если поля заполнены и
+                    // showCreateScooterInline = true), затем арендатор.
+                    Text(
+                        text = "«Saqla» tugmasi bilan skuter ham saqlanadi",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = ClaudeTextSecondary,
+                        modifier = Modifier.padding(vertical = 4.dp)
+                    )
                 }
             }
         },
@@ -2826,10 +2758,41 @@ fun RenterFormDialog(
                 // по требованию пользователя: ничего не должно блокировать сохранение.
                 enabled = true,
                 onClick = {
+                    // ── Если раскрыта inline-секция создания скутера — сначала ──
+                    // сохраняем скутер. LaunchedEffect(scooters) ниже подхватит
+                    // его и установит selectedScooterId, но это произойдёт
+                    // асинхронно. Чтобы арендатор сразу привязался к новому
+                    // скутеру, мы устанавливаем pendingScooterName, а реальный
+                    // selectedScooterId подставится при следующей композиции.
+                    if (showCreateScooterInline) {
+                        val nameToSave = newScooterName.trim()
+                            .ifBlank {
+                                val nextN = (scooters
+                                    .mapNotNull {
+                                        it.name.removePrefix("Skillmax-")
+                                            .trimStart('0').toIntOrNull()
+                                    }
+                                    .maxOrNull() ?: 0) + 1
+                                "Skillmax-" + nextN.toString().padStart(3, '0')
+                            }
+                        onCreateScooterInline(
+                            nameToSave,
+                            newScooterDocNum.trim().ifBlank { null },
+                            newScooterVin.trim(),
+                            newScooterEngine.trim(),
+                            newScooterSerial.trim(),
+                            newScooterBatt1.trim(),
+                            newScooterBatt2.trim(),
+                            newScooterInfo.trim()
+                        )
+                        pendingScooterName = nameToSave
+                        showCreateScooterInline = false
+                    }
                     val debtValue = debt.toDoubleOrNull() ?: 0.0
                     val durationValue = duration.toIntOrNull() ?: 7
                     val phoneToSave = if (phone.isBlank()) "" else "+998$phone"
                     val scooterName = scooters.find { it.id == selectedScooterId }?.name
+                        ?: pendingScooterName
                     onSave(
                         RenterFormResult(
                             name = name,
@@ -2837,13 +2800,18 @@ fun RenterFormDialog(
                             debt = debtValue,
                             duration = durationValue,
                             startTimestamp = startTimestamp,
+                            // Если только что создали скутер, selectedScooterId
+                            // ещё null (LaunchedEffect не успел сработать) —
+                            // арендатор сохранится с scooterId=null, но
+                            // scooterName = pendingScooterName позволит
+                            // пользователю привязать скутер позже.
                             scooterId = selectedScooterId,
                             scooterName = scooterName,
                             isActive = isActive,
                             passportData = passportData.trim(),
                             address = address.trim(),
                             pinfl = pinfl.trim(),
-                            contractGroups = contractGroups.map { it.startMs to it.endMs }
+                            contractGroups = contractGroups.map { Triple(it.startMs, it.endMs, it.isPaid) }
                         )
                     )
                 }
@@ -2857,31 +2825,6 @@ fun RenterFormDialog(
             )
         }
     )
-
-    if (showStartDatePicker) {
-        DatePickerDialog(
-            onDismissRequest = { showStartDatePicker = false },
-            confirmButton = {
-                TextActionButton(
-                    label = "Tanlash",
-                    icon = Icons.Default.Check,
-                    onClick = {
-                        startDatePickerState.selectedDateMillis?.let { startTimestamp = it }
-                        showStartDatePicker = false
-                    }
-                )
-            },
-            dismissButton = {
-                TextActionButton(
-                    label = "Bekor",
-                    icon = Icons.Default.Close,
-                    onClick = { showStartDatePicker = false }
-                )
-            }
-        ) {
-            DatePicker(state = startDatePickerState)
-        }
-    }
 }
 
 @Composable
@@ -2907,8 +2850,9 @@ data class RenterFormResult(
     val address: String,
     val pinfl: String,
     // Группы контрактов, выбранные в календаре (если пусто — используется
-    // автоматическая логика по выбранной дате).
-    val contractGroups: List<Pair<Long, Long>> = emptyList()
+    // автоматическая логика по выбранной дате). Каждая группа =
+    // Triple<startMs, endMs, isPaid>.
+    val contractGroups: List<Triple<Long, Long, Boolean>> = emptyList()
 )
 
 @OptIn(ExperimentalMaterial3Api::class)
