@@ -268,6 +268,48 @@ fun RenterContractHistoryScreen(
                 }
             }
 
+            // ── Календарь с раскраской дней ─────────────────────────────
+            // Показывает каждый день в виде ячейки:
+            //   • зелёный фон — день оплачен арендатором (контракт isPaid=true)
+            //   • красный фон — день не оплачен (контракт isPaid=false)
+            //   • серый фон — контракт приостановлен в этот день (TERMINATED)
+            //   • белый фон — все остальные дни
+            //
+            // Логика определения статуса дня:
+            //   1. Идём по всем контрактам арендатора (CREATED + AUTO_RENEW).
+            //      Если день попадает в [weekStart, weekEnd) контракта — статус
+            //      PAID или UNPAID в зависимости от isPaid.
+            //   2. Идём по записям TERMINATED в истории контрактов — если день
+            //      попадает в [weekStart, weekEnd) приостановленной записи,
+            //      статус SUSPENDED (приоритет выше, чем у неоплаченных).
+            //   3. Иначе — EMPTY (белый фон).
+            val contractsList = contracts
+            ContractCalendar(
+                editable = false,
+                dayStatusFor = { dayMs ->
+                    // Сначала проверяем TERMINATED — у него высший приоритет
+                    val suspended = contractsList.any { c ->
+                        c.type == ContractHistoryEntry.TYPE_TERMINATED &&
+                        c.weekStart != null && c.weekEnd != null &&
+                        dayMs >= c.weekStart && dayMs < c.weekEnd
+                    }
+                    if (suspended) return@ContractCalendar DayStatus.SUSPENDED
+
+                    // Затем контракты CREATED + AUTO_RENEW
+                    val contract = contractsList.firstOrNull { c ->
+                        (c.type == ContractHistoryEntry.TYPE_CREATED ||
+                         c.type == ContractHistoryEntry.TYPE_AUTO_RENEW) &&
+                        c.weekStart != null && c.weekEnd != null &&
+                        dayMs >= c.weekStart && dayMs < c.weekEnd
+                    }
+                    when {
+                        contract == null -> DayStatus.EMPTY
+                        contract.isPaid -> DayStatus.PAID
+                        else -> DayStatus.UNPAID
+                    }
+                }
+            )
+
             // ── Переключатель «Контракты» / «Транзакции» ────────────────
             // Две кнопки над таблицей. Активная — залита акцентным цветом.
             Row(

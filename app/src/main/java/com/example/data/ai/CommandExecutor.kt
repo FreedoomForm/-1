@@ -250,18 +250,34 @@ class CommandExecutor(private val context: Context) {
     }
 
     // ── Команда: CREATE_RENTER ──────────────────────────────────────────────
+    //
+    // ИИ вызывает эту команду ровно с теми же параметрами, что и пользователь
+    // через форму RenterFormDialog. ВСЯ логика создания контрактов, транзакций
+    // и зачислений на карту делается ТОЙ ЖЕ последовательностью операций, что
+    // и в RenterViewModel.addRenter — ИИ не имеет собственной версии этой
+    // логики. Это гарантирует, что поведение приложения одинаково независимо
+    // от того, кто создаёт арендатора — пользователь или ИИ.
+    //
+    // Параметры, которые передаёт ИИ, — это РОВНО те параметры, что и форма:
+    //   name, phone, debt, duration, startTimestamp, scooterId, scooterName,
+    //   weeklyPrice, passportData, address, pinfl, contractGroups (опц.)
+    //
+    // Логика по дате (идентична RenterViewModel.addRenter):
+    //   • Если (now - startTimestamp) > 7 дней → один контракт с минусом (долг)
+    //   • Если 0 < (now - startTimestamp) ≤ 7 дней → один контракт с плюсом
+    //   • Если startTimestamp ≥ now → несколько контрактов с плюсом
+    //     (по одному на каждую неделю от min(today, start) до start)
+    //   • contractGroups (если переданы) имеют приоритет над автогенерацией
+    //
+    // Для каждого оплаченного контракта (isPaid=true):
+    //   • создаётся Transaction(TYPE_PAYMENT, contractId)
+    //   • depositContractIncome на главную карту с contractId
+    // Это обеспечивает корректный каскадный реверс при удалении контракта.
     private suspend fun createRenter(cmd: JSONObject, batch: BatchContext): CommandResult {
         try {
-            // ── Все поля OPTIONAL ────────────────────────────────────────────
-            // Если имя/телефон отсутствуют на фото — НЕ отказываемся от создания,
-            // а подставляем auto-сгенерированное имя ("Noma'lum ijarachi #N") и
-            // пустой телефон. Пользователь потом доредактирует вручную.
-            // Это соответствует правилу: «агент не обязан заполнять ни одно поле;
-            // если поля нет — ставится значение от предыдущего, а если предыдущего
-            // нет — дефолт (0 / пустая строка / auto-сгенерированное имя)».
+            // ── Поля формы (те же, что и RenterFormDialog передаёт в addRenter) ──
             val rawName = cmd.optString("name", "").trim()
             val name = if (rawName.isEmpty()) {
-                // Берём следующий свободный номер после "Noma'lum ijarachi #N"
                 val all = db.renterDao().getAllRentersOnce()
                 val nextN = (all.mapNotNull {
                     it.name.removePrefix("Noma'lum ijarachi #").toIntOrNull()
@@ -270,33 +286,12 @@ class CommandExecutor(private val context: Context) {
             } else rawName
             val phone = normalizePhone(cmd.optString("phoneNumber", ""))
             val debt = cmd.optDouble("debt", 0.0)
-            // prepayment — положительный аванс (если фото показывает "oldindan to'lov"
-            // или положительный баланс). В отличие от debt, prepayment увеличивает
-            // баланс арендатора в плюс (credit). debt и prepayment взаимно исключают
-            // друг друга; если указаны оба — приоритет у debt.
-            // ВАЖНО: если фото НЕ показывает ни debt, ни prepayment — оба остаются 0,
-            // и контракт создаётся неоплаченным с balance=0. Никаких выдуманных
-            // авто-предоплат (раньше тут был auto-default на weeklyPrice).
             val prepayment = cmd.optDouble("prepayment", 0.0)
-            // duration — если фото не указывает, ставим 7 (стандартная неделя).
-            // Раньше тут было 0, но это ломало PaymentCheckWorker: expiryTime
-            // = rentStartTs + 0 = rentStartTs, и worker сразу же считал арендатора
-            // просроченным при первом же запуске, создавая AUTO_RENEW контракт со
-            // смещённой датой. 7 дней — это безопасное значение по умолчанию,
-            // совпадающее с DEFAULT_WEEKLY_PRICE (недельная аренда).
-            // coerceAtLeast(1) защищает от Mistral, который прислал бы 0 или
-            // отрицательное число.
             val duration = cmd.optInt("rentDurationDays", 7).coerceAtLeast(1)
             val scooterName = cmd.optString("scooterName", "").trim().ifEmpty { null }
-            // weeklyPrice — строго из фото. Если фото не указывает цену → 0.
-            // Раньше был fallback на settings.weeklyPrice (420000) — это
-            // выдуманное значение, убрано.
+            // weeklyPrice — из фото или 0 (как в форме, никаких выдуманных значений)
             val weeklyPrice = cmd.optDouble("weeklyPrice", 0.0)
 
-            // ── Паспортные данные ─────────────────────────────────────────
-            // passportData — серия+номер (например "AB 1234567").
-            // passportIssuedBy — кем выдан. Если указано, добавляем в passportData
-            // в формате "AB 1234567, berilgan: Toshkent sh. IIB".
             val rawPassport = cmd.optString("passportData", "").trim()
             val issuedBy = cmd.optString("passportIssuedBy", "").trim()
             val passportData = when {
@@ -308,67 +303,117 @@ class CommandExecutor(private val context: Context) {
             val pinfl = cmd.optString("pinfl", "").trim()
             val isReturned = cmd.optBoolean("isReturned", false)
 
-            // ── Дата аренды ────────────────────────────────────────────────
-            // Mistral извлекает дату из фото и кладёт её в "rentStartDate"
-            // в формате ISO "YYYY-MM-DD". Если поле отсутствует или не
-            // парсится — fallback на сегодня.
-            //
-            // ВАЖНО: эта дата используется для:
-            //   • rentStartDateTimestamp арендатора
-            //   • timestamp контракта (для истории)
-            //   • weekStart контракта
-            //   • weekEnd = weekStart + rentDurationDays
-            //   • timestamp транзакции (если предоплата)
-            //
-            // Раньше здесь всегда стояло System.currentTimeMillis() — из-за
-            // этого все арендаторы создавались "сегодня", даже если на фото
-            // была дата недели/месяца назад.
             val rentStartTs = parseDate(cmd.optString("rentStartDate", "").trim())
                 ?: System.currentTimeMillis()
 
-            // Находим скутер по имени (если указан)
+            // Находим скутер по имени (как делает форма через выпадающий список)
             val scooter = scooterName?.let { findScooterByName(it) }
             val scooterId = scooter?.id
             val scooterNameResolved = scooter?.name ?: scooterName
 
-            // ── Логика баланса ────────────────────────────────────────────────
-            // Модель (соответствует applyWeeklyPayment в RenterViewModel):
-            //   • Transaction PAYMENT → balance += amount (всегда добавляет)
-            //   • Contract isPaid=true  → balance НЕ меняется (просто флаг «оплачено»)
-            //   • Contract isPaid=false → balance -= weeklyPrice (долг за неделю)
-            //
-            // Сценарии:
-            //   debt > 0       → balance = -debt, контракт НЕ оплачен, Transaction
-            //                    НЕ создаётся, на карту ничего не зачисляется.
-            //   prepayment > 0 → Transaction PAYMENT prepayment, balance += prepayment,
-            //                    зачисление на карту. Контракт isPaid=true если
-            //                    prepayment >= weeklyPrice, иначе isPaid=false и
-            //                    balance -= weeklyPrice (долг за неделю).
-            //                    Для prepayment=weeklyPrice: balance=+weeklyPrice, isPaid=true.
-            //   оба 0          → предоплата по умолчанию: Transaction PAYMENT weeklyPrice,
-            //                    balance += weeklyPrice, контракт isPaid=true.
-            //                    Итог: balance = +weeklyPrice (аванс).
-            //   оба указаны    → приоритет у debt.
-            //
-            // ВАЖНО: раньше balance вычитал weeklyPrice при оплате контракта —
-            // из-за этого при prepayment=weeklyPrice баланс становился 0 вместо
-            // +weeklyPrice. Теперь оплаченный контракт НЕ вычитает из баланса.
+            // ── contractGroups (опционально, как в форме) ─────────────────
+            // Если ИИ передал "contractGroups" — массив объектов {start, end} в ISO,
+            // они имеют приоритет над автогенерацией по дате. Это соответствует
+            // поведению формы: если пользователь выбрал группы в календаре, они
+            // используются; иначе работает автоматическая логика по дате.
+            val contractGroups: List<Pair<Long, Long>> = run {
+                val arr = cmd.optJSONArray("contractGroups") ?: return@run emptyList()
+                buildList {
+                    for (i in 0 until arr.length()) {
+                        val g = arr.optJSONObject(i) ?: continue
+                        val s = parseDate(g.optString("start", "")) ?: continue
+                        val e = parseDate(g.optString("end", "")) ?: continue
+                        add(s to e)
+                    }
+                }
+            }
 
+            // ── ТЕ ЖЕ КОНСТАНТЫ, что и в RenterViewModel.addRenter ──────────
+            val now = System.currentTimeMillis()
             val dayMs = 24L * 60 * 60 * 1000
-            val durationMs = duration.toLong() * dayMs
+            val weekMs = 7L * dayMs
+            val effectiveWeeklyPrice = if (weeklyPrice > 0) weeklyPrice
+                                       else SettingsRepository.DEFAULT_WEEKLY_PRICE
 
-            // Шаг 1: создаём арендатора с нейтральным балансом (0).
+            // ── ТЕ ЖЕ СЦЕНАРИИ, что и в RenterViewModel.addRenter ───────────
+            val diffMs = now - rentStartTs
+            val scenario = when {
+                contractGroups.isNotEmpty() -> 4
+                diffMs > weekMs -> 1
+                diffMs > 0L -> 2
+                else -> 3
+            }
+
+            // ── ТЕ ЖЕ SPECS, что и в RenterViewModel.addRenter ──────────────
+            data class ContractSpec(val weekStart: Long, val weekEnd: Long, val isPaid: Boolean)
+            val specs: List<ContractSpec> = when (scenario) {
+                4 -> contractGroups.map { (gs, ge) ->
+                    val isPaid = (now - ge) <= weekMs
+                    ContractSpec(gs, ge, isPaid)
+                }
+                1 -> listOf(ContractSpec(rentStartTs, rentStartTs + weekMs, isPaid = false))
+                2 -> listOf(ContractSpec(rentStartTs, rentStartTs + weekMs, isPaid = true))
+                3 -> {
+                    val specsList = mutableListOf<ContractSpec>()
+                    var cursor = rentStartTs
+                    val today = now
+                    if (cursor > today) cursor = today
+                    while (cursor < rentStartTs + dayMs) {
+                        specsList.add(ContractSpec(cursor, cursor + weekMs, isPaid = true))
+                        cursor += weekMs
+                        if (specsList.size > 52) break
+                    }
+                    specsList
+                }
+                else -> listOf(ContractSpec(rentStartTs, rentStartTs + weekMs, isPaid = true))
+            }
+
+            // ── Если фото показало предоплату (prepayment > 0),korrektiruem ──
+            // спецификацию: делаем первый контракт isPaid=true (предоплата закрывает
+            // первую неделю), а если prepayment < weeklyPrice — остальные как долг.
+            // Это соответствует поведению applyWeeklyPayment при ручной оплате.
+            //
+            // Однако наша новая логика уже автоматически ставит isPaid по дате.
+            // Если фото показало prepayment > 0 — это значит, что пользователь
+            // заплатил, поэтому даже для просроченной даты предоплата должна
+            // закрыть контракт. Поэтому корректируем:
+            //   • prepayment > 0  →  первый контракт становится isPaid=true
+            //   • debt > 0        →  первый контракт остаётся isPaid=false
+            val effectiveSpecs = if (specs.isNotEmpty()) {
+                val first = specs.first()
+                val correctedFirst = when {
+                    debt > 0 -> first.copy(isPaid = false)
+                    prepayment > 0 -> first.copy(isPaid = true)
+                    else -> first
+                }
+                listOf(correctedFirst) + specs.drop(1)
+            } else specs
+
+            // ── Тот же расчёт начального баланса ────────────────────────────
+            val contractsBalance = effectiveSpecs.fold(0.0) { acc, s ->
+                acc + if (s.isPaid) effectiveWeeklyPrice else -effectiveWeeklyPrice
+            }
+            val initialBalance = when {
+                debt > 0 -> -debt + contractsBalance
+                prepayment > 0 -> prepayment - effectiveWeeklyPrice + specs.drop(1).fold(0.0) { acc, s ->
+                    acc + if (s.isPaid) effectiveWeeklyPrice else -effectiveWeeklyPrice
+                }
+                else -> contractsBalance
+            }
+            val finalDebt = if (initialBalance < 0) -initialBalance else 0.0
+
+            // ── Создаём арендатора (как RenterViewModel: provisional + insert) ──
             val renter = Renter(
                 name = name,
                 phoneNumber = phone,
-                debtAmount = 0.0,
+                debtAmount = finalDebt,
                 rentDurationDays = duration,
                 rentStartDateTimestamp = rentStartTs,
                 isReturned = isReturned,
                 isOverdueSmsSent = false,
                 scooterId = scooterId,
                 scooterName = scooterNameResolved,
-                balance = 0.0,
+                balance = initialBalance,
                 passportData = passportData,
                 address = address,
                 pinfl = pinfl
@@ -376,219 +421,87 @@ class CommandExecutor(private val context: Context) {
             val newId = db.renterDao().insertRenter(renter).toInt()
             val savedRenter = renter.copy(id = newId)
 
-            // Шаг 2: создаём начальный контракт (CREATED) — пока НЕ оплачен.
-            // isPaid проставим ниже после анализа prepayment.
-            //
-            // contract.amount / weeklyPrice — если фото показало weeklyPrice,
-            // используем его. Иначе fallback на autoPaymentAmount (settings или
-            // DEFAULT_WEEKLY_PRICE), чтобы контракт имел осмысленную сумму, а
-            // не 0. Это совпадает с тем, как RenterViewModel создаёт контракты.
-            val contractWeeklyPrice = if (weeklyPrice > 0) weeklyPrice else autoPaymentAmount
-            val contract = ContractHistoryEntry(
-                renterId = newId,
-                timestamp = rentStartTs,
-                type = ContractHistoryEntry.TYPE_CREATED,
-                amount = contractWeeklyPrice,
-                notes = when {
-                    debt > 0 -> "Skaner orqali yaratildi (qarz bilan)"
-                    prepayment > 0 -> "Skaner orqali yaratildi (oldindan to'lov: ${formatMoney(prepayment)})"
-                    else -> "Skaner orqali yaratildi (oldindan to'langan)"
-                },
-                renterName = name,
-                renterPhone = phone,
-                scooterName = scooterNameResolved,
-                weekStart = rentStartTs,
-                weekEnd = rentStartTs + durationMs,
-                weeklyPrice = contractWeeklyPrice,
-                passportData = passportData,
-                address = address,
-                pinfl = pinfl,
-                vinNumber = scooter?.vinNumber ?: "",
-                engineNumber = scooter?.engineNumber ?: "",
-                scooterSerialNumber = scooter?.scooterSerialNumber ?: "",
-                batteryId1 = scooter?.batteryId1 ?: "",
-                batteryId2 = scooter?.batteryId2 ?: "",
-                additionalInfo = scooter?.additionalInfo ?: "",
-                isPaid = false  // временно; обновим ниже
-            )
-            val contractId = db.contractHistoryDao().insert(contract).toInt()
-
-            // Шаг 3: применяем платежи / долг к балансу арендатора.
-            //
-            // Случай A — долг (debt > 0):
-            //   balance = -debt, debtAmount = debt, контракт НЕ оплачен.
-            //   Transaction НЕ создаём (деньги ещё не поступали).
-            //   На карту ничего не зачисляем.
-            //
-            // Случай B — предоплата (prepayment > 0):
-            //   • Создаём Transaction PAYMENT с amount=prepayment
-            //   • balance += prepayment
-            //   • Зачисляем prepayment на главную карту (depositContractIncome)
-            //   • Если balance >= weeklyPrice:
-            //       - контракт isPaid = true
-            //       - balance -= weeklyPrice (списываем стоимость недели)
-            //   • debtAmount = max(0, -balance)
-            //   • lastPaymentTimestamp = rentStartTs
-            //
-            // Случай C — ничего не указано (prepayment = 0, debt = 0):
-            //   Считаем первую неделю предоплаченной (как в RenterViewModel):
-            //   • Создаём Transaction PAYMENT с amount=autoPaymentAmount
-            //   • balance += autoPaymentAmount, затем -= weeklyPrice (за неделю)
-            //   • Зачисляем autoPaymentAmount на главную карту
-            //   • контракт isPaid = true
-            //   • Итог: balance = 0, контракт оплачен.
-            //
-            // autoPaymentAmount — это системный авто-платёж за первую неделю,
-            // НЕ выдуманное значение поля. Если фото показывает weeklyPrice —
-            // используем его; иначе берём settings.weeklyPrice; иначе
-            // DEFAULT_WEEKLY_PRICE (420 000 UZS). Это совпадает с поведением
-            // applyWeeklyPayment в RenterViewModel — пользователь ожидает, что
-            // при создании арендатора первая неделя сразу закрыта как оплаченная.
-            val autoPaymentAmount = when {
-                weeklyPrice > 0 -> weeklyPrice
-                settings.weeklyPrice > 0 -> settings.weeklyPrice
-                else -> SettingsRepository.DEFAULT_WEEKLY_PRICE
-            }
-
-            var currentBalance = 0.0
-            var currentDebtAmount = 0.0
-            var contractPaid = false
-            var lastPaymentTs: Long? = null
-
-            when {
-                debt > 0 -> {
-                    // Случай A: долг
-                    currentBalance = -debt
-                    currentDebtAmount = debt
-                    contractPaid = false
+            // ── Создаём контракты по specs (как RenterViewModel) ────────────
+            val dateFmt = SimpleDateFormat("dd.MM.yyyy", Locale.US)
+            effectiveSpecs.forEachIndexed { idx, spec ->
+                val contractType = if (idx == 0) ContractHistoryEntry.TYPE_CREATED
+                                   else ContractHistoryEntry.TYPE_AUTO_RENEW
+                val notes = when {
+                    spec.isPaid && effectiveSpecs.size > 1 -> "${idx + 1}-hafta oldindan to'lov (skaner)"
+                    spec.isPaid -> "Skaner orqali yaratildi (oldindan to'langan)"
+                    else -> "Skaner orqali yaratildi (qarz bilan)"
                 }
-                prepayment > 0 -> {
-                    // Случай B: предоплата
-                    val paymentAmount = prepayment
 
-                    val tx = Transaction(
-                        contractId = contractId,
-                        renterId = newId,
-                        scooterId = scooterId,
-                        timestamp = rentStartTs,
-                        type = Transaction.TYPE_PAYMENT,
-                        amount = paymentAmount,
-                        notes = "Skaner orqali oldindan to'lov",
-                        renterName = name,
-                        renterPhone = phone,
-                        scooterName = scooterNameResolved ?: "",
-                        contractLabel = "#$contractId"
-                    )
-                    db.transactionDao().insert(tx)
+                val contractId = db.contractHistoryDao().insert(ContractHistoryEntry(
+                    renterId = newId,
+                    timestamp = now,
+                    type = contractType,
+                    amount = effectiveWeeklyPrice,
+                    notes = notes,
+                    renterName = name,
+                    renterPhone = phone,
+                    scooterName = scooterNameResolved,
+                    weekStart = spec.weekStart,
+                    weekEnd = spec.weekEnd,
+                    weeklyPrice = effectiveWeeklyPrice,
+                    passportData = passportData,
+                    address = address,
+                    pinfl = pinfl,
+                    vinNumber = scooter?.vinNumber ?: "",
+                    engineNumber = scooter?.engineNumber ?: "",
+                    scooterSerialNumber = scooter?.scooterSerialNumber ?: "",
+                    batteryId1 = scooter?.batteryId1 ?: "",
+                    batteryId2 = scooter?.batteryId2 ?: "",
+                    additionalInfo = scooter?.additionalInfo ?: "",
+                    isPaid = spec.isPaid
+                )).toInt()
 
-                    // Зачисляем на главную карту
+                // ── Для оплаченного контракта: Transaction + depositContractIncome ──
+                // Это ТОТ ЖЕ код, что и в RenterViewModel.addRenter.
+                if (spec.isPaid && contractId > 0) {
+                    try {
+                        val wsStr = dateFmt.format(Date(spec.weekStart))
+                        val weStr = dateFmt.format(Date(spec.weekEnd))
+                        val contractLabel = "#$contractId  $wsStr → $weStr"
+                        db.transactionDao().insert(Transaction(
+                            contractId = contractId,
+                            renterId = newId,
+                            scooterId = scooterId,
+                            timestamp = now,
+                            type = Transaction.TYPE_PAYMENT,
+                            amount = effectiveWeeklyPrice,
+                            notes = notes,
+                            renterName = name,
+                            renterPhone = phone,
+                            scooterName = scooterNameResolved ?: "",
+                            contractLabel = contractLabel
+                        ))
+                    } catch (e: Exception) {
+                        Log.w(TAG, "Failed to insert prepaid Transaction for contract #$contractId: ${e.message}")
+                    }
+
                     try {
                         val cardRepo = VirtualCardRepository(
                             db.virtualCardDao(), db.cardTransactionDao()
                         )
                         cardRepo.depositContractIncome(
-                            amount = paymentAmount,
-                            note = "Skaner: $name (oldindan to'lov) — #$contractId",
+                            amount = effectiveWeeklyPrice,
+                            note = "Skaner: $name — #$contractId",
                             contractId = contractId
                         )
                     } catch (e: Exception) {
-                        Log.w(TAG, "depositContractIncome failed for scanned renter: ${e.message}")
+                        Log.w(TAG, "depositContractIncome failed for new contract #$contractId: ${e.message}")
                     }
-
-                    // balance += prepayment (Transaction добавляет к балансу)
-                    currentBalance = savedRenter.balance + paymentAmount
-
-                    // Определяем, покрыт ли контракт
-                    if (prepayment >= weeklyPrice) {
-                        // Контракт оплачен — НЕ вычитаем weeklyPrice из баланса
-                        contractPaid = true
-                    } else {
-                        // Контракт НЕ оплачен — вычитаем weeklyPrice (долг за неделю)
-                        contractPaid = false
-                        currentBalance -= weeklyPrice
-                    }
-                    currentDebtAmount = maxOf(0.0, -currentBalance)
-                    lastPaymentTs = rentStartTs
                 }
-                else -> {
-                    // Случай C: авто-предоплата за первую неделю (как в RenterViewModel).
-                    // Фото не показало ни prepayment, ни debt — считаем, что
-                    // арендатор заплатил за первую неделю сразу при создании.
-                    val paymentAmount = autoPaymentAmount
 
-                    val tx = Transaction(
-                        contractId = contractId,
-                        renterId = newId,
-                        scooterId = scooterId,
-                        timestamp = rentStartTs,
-                        type = Transaction.TYPE_PAYMENT,
-                        amount = paymentAmount,
-                        notes = "Skaner orqali yaratildi (oldindan to'langan)",
-                        renterName = name,
-                        renterPhone = phone,
-                        scooterName = scooterNameResolved ?: "",
-                        contractLabel = "#$contractId"
-                    )
-                    db.transactionDao().insert(tx)
-
-                    // Зачисляем на главную карту
-                    try {
-                        val cardRepo = VirtualCardRepository(
-                            db.virtualCardDao(), db.cardTransactionDao()
-                        )
-                        cardRepo.depositContractIncome(
-                            amount = paymentAmount,
-                            note = "Skaner: $name (oldindan to'langan) — #$contractId",
-                            contractId = contractId
-                        )
-                    } catch (e: Exception) {
-                        Log.w(TAG, "depositContractIncome failed for scanned renter (Case C): ${e.message}")
-                    }
-
-                    // balance += autoPaymentAmount, затем -= weeklyPrice (за неделю).
-                    // Если weeklyPrice=0 (фото не показало цену) — используем
-                    // autoPaymentAmount и для списания, чтобы баланс стал 0.
-                    val chargeForWeek = if (weeklyPrice > 0) weeklyPrice else autoPaymentAmount
-                    currentBalance = savedRenter.balance + paymentAmount - chargeForWeek
-                    currentDebtAmount = maxOf(0.0, -currentBalance)
-                    contractPaid = true
-                    lastPaymentTs = rentStartTs
+                // Регистрируем в batch-контексте (для дедупликации)
+                batch.recordContract(name, spec.weekStart)
+                if (spec.isPaid) {
+                    batch.recordPayment(name, effectiveWeeklyPrice, now)
                 }
             }
 
-            // Шаг 4: сохраняем итоговое состояние арендатора (баланс + долг)
-            db.renterDao().updateRenter(savedRenter.copy(
-                balance = currentBalance,
-                debtAmount = currentDebtAmount,
-                lastPaymentTimestamp = lastPaymentTs
-            ))
-
-            // Шаг 5: помечаем контракт как оплаченный, если применимо
-            if (contractPaid && contractId > 0) {
-                val unpaid = db.contractHistoryDao().getById(contractId)
-                if (unpaid != null && !unpaid.isPaid) {
-                    db.contractHistoryDao().update(unpaid.copy(isPaid = true))
-                }
-            }
-
-            // Шаг 6: регистрируем в batch-контексте, что для этого арендатора
-            // уже создан контракт с weekStart = rentStartTs и (возможно) PAYMENT
-            // транзакция на сумму prepayment (или weeklyPrice, если prepayment=0
-            // и debt=0). Это нужно, чтобы createContract/createTransaction ниже
-            // по батчу могли пропустить дублирующие команды.
-            val paymentForBatch = when {
-                debt > 0 -> 0.0
-                prepayment > 0 -> prepayment
-                else -> weeklyPrice
-            }
-            batch.recordRenter(
-                name = name,
-                weekStartMs = rentStartTs,
-                paymentAmount = paymentForBatch,
-                paymentTs = rentStartTs
-            )
-
-            val dateStr = SimpleDateFormat("dd.MM.yyyy", Locale.US).format(Date(rentStartTs))
+            val dateStr = dateFmt.format(Date(rentStartTs))
             val balanceNote = when {
                 debt > 0 -> ", qarz: ${formatMoney(debt)}"
                 prepayment > 0 -> ", oldindan: ${formatMoney(prepayment)}"
@@ -741,11 +654,21 @@ class CommandExecutor(private val context: Context) {
     }
 
     // ── Команда: CREATE_CONTRACT ────────────────────────────────────────────
+    //
+    // ИИ вызывает эту команду ровно с теми же параметрами, что и пользователь
+    // через диалог "Yangi kontrakt" на странице контрактов арендатора
+    // (ContractHistoryViewModel.createManualContract). Логика создания
+    // контракта и зачисления на карту идентична пользовательскому пути:
+    //   • создаём ContractHistoryEntry (TYPE_AUTO_RENEW)
+    //   • если isPaid=true → создаём Transaction(TYPE_PAYMENT, contractId)
+    //     и depositContractIncome на главную карту с contractId
+    //   • если isPaid=false → только создаём контракт (долг)
+    //
+    // Баланс арендатора НЕ корректируем здесь вручную — это делается через
+    // applyWeeklyPayment, который пользователь вызывает кнопкой "To'lash"
+    // (payWeeklyForRenters). ИИ не должен самостоятельно менять баланс.
     private suspend fun createContract(cmd: JSONObject, batch: BatchContext): CommandResult {
         try {
-            // renterName — OPTIONAL. Если фото не показало имя арендатора,
-            // привязываем контракт к ПОСЛЕДНЕМУ созданному арендатору в БД.
-            // Если в БД вообще нет арендаторов — пропускаем команду.
             val renterName = cmd.optString("renterName", "").trim()
             val renter = if (renterName.isEmpty()) {
                 db.renterDao().getAllRentersOnce().maxByOrNull { it.id }
@@ -757,9 +680,6 @@ class CommandExecutor(private val context: Context) {
                     "CREATE_CONTRACT: ijarachi topilmadi " +
                     "(renterName='$renterName' va bazada ijarachilar yo'q).")
             }
-            // amount — строго из фото. Если не указано → 0.
-            // Раньше был fallback на settings.weeklyPrice (420000) — это
-            // выдуманное значение, убрано.
             val amount = cmd.optDouble("amount", 0.0)
             val weekStart = parseDate(cmd.optString("weekStart", "")) ?: System.currentTimeMillis()
             val weekEnd = parseDate(cmd.optString("weekEnd", ""))
@@ -770,12 +690,6 @@ class CommandExecutor(private val context: Context) {
             val scooter = scooterName?.let { findScooterByName(it) } ?: renter.scooterId?.let { findScooterById(it) }
 
             // ── Batch-level дедупликация ──────────────────────────────────
-            // Если в этом же батче CREATE_RENTER уже создал начальный контракт
-            // для того же арендатора с weekStart в диапазоне ±1 день — это дубль.
-            // Mistral иногда присылает CREATE_CONTRACT после CREATE_RENTER для
-            // той же недели, потому что не видит контракт, созданный внутри
-            // CREATE_RENTER (его не было в snapshot). Пропускаем, иначе у
-            // арендатора появятся два контракта на одну и ту же неделю.
             if (batch.hasContract(renterName, weekStart)) {
                 Log.i(TAG, "createContract: SKIP duplicate contract for '$renterName' " +
                     "(weekStart=$weekStart) — already created in this batch by CREATE_RENTER")
@@ -785,10 +699,11 @@ class CommandExecutor(private val context: Context) {
             }
 
             val now = System.currentTimeMillis()
-            val contract = ContractHistoryEntry(
+            // ── Создаём контракт (как createManualContract) ──────────────────
+            val contractId = db.contractHistoryDao().insert(ContractHistoryEntry(
                 renterId = renter.id,
                 timestamp = now,
-                type = ContractHistoryEntry.TYPE_AUTO_RENEW,  // дополнительный контракт
+                type = ContractHistoryEntry.TYPE_AUTO_RENEW,
                 amount = amount,
                 notes = notes,
                 renterName = renter.name,
@@ -807,22 +722,61 @@ class CommandExecutor(private val context: Context) {
                 batteryId2 = scooter?.batteryId2 ?: "",
                 additionalInfo = scooter?.additionalInfo ?: "",
                 isPaid = isPaid
-            )
-            db.contractHistoryDao().insert(contract)
+            )).toInt()
 
-            // Регистрируем в batch-контексте, чтобы следующие CREATE_CONTRACT
-            // для того же арендатора могли проверить дубли.
-            batch.recordContract(renter.name, weekStart)
+            // ── Для оплаченного контракта: Transaction + depositContractIncome ──
+            // Это ТОТ ЖЕ код, что и в applyWeeklyPayment (RenterViewModel) при
+            // предоплате. ИИ не делает ничего, чего не делал бы пользователь
+            // кнопкой "To'lash".
+            if (isPaid && contractId > 0) {
+                try {
+                    val dateFmt = SimpleDateFormat("dd.MM.yyyy", Locale.US)
+                    val wsStr = dateFmt.format(Date(weekStart))
+                    val weStr = dateFmt.format(Date(weekEnd))
+                    val contractLabel = "#$contractId  $wsStr → $weStr"
+                    db.transactionDao().insert(Transaction(
+                        contractId = contractId,
+                        renterId = renter.id,
+                        scooterId = renter.scooterId,
+                        timestamp = now,
+                        type = Transaction.TYPE_PAYMENT,
+                        amount = amount,
+                        notes = notes,
+                        renterName = renter.name,
+                        renterPhone = renter.phoneNumber,
+                        scooterName = renter.scooterName ?: "",
+                        contractLabel = contractLabel
+                    ))
+                } catch (e: Exception) {
+                    Log.w(TAG, "Failed to insert Transaction for contract #$contractId: ${e.message}")
+                }
 
-            // Корректируем баланс арендатора
-            val delta = if (isPaid) 0.0 else -amount
-            if (delta != 0.0) {
-                val newBalance = renter.balance + delta
+                try {
+                    val cardRepo = VirtualCardRepository(
+                        db.virtualCardDao(), db.cardTransactionDao()
+                    )
+                    cardRepo.depositContractIncome(
+                        amount = amount,
+                        note = "Skaner: ${renter.name} to'lovi — #$contractId",
+                        contractId = contractId
+                    )
+                } catch (e: Exception) {
+                    Log.w(TAG, "depositContractIncome failed for contract #$contractId: ${e.message}")
+                }
+
+                // Обновляем баланс арендатора: +amount (как applyWeeklyPayment)
+                val newBalance = renter.balance + amount
                 db.renterDao().updateRenter(renter.copy(
                     balance = newBalance,
-                    debtAmount = maxOf(0.0, -newBalance)
+                    debtAmount = maxOf(0.0, -newBalance),
+                    lastPaymentTimestamp = now,
+                    isOverdueSmsSent = false
                 ))
+
+                batch.recordPayment(renter.name, amount, now)
             }
+
+            batch.recordContract(renter.name, weekStart)
 
             return CommandResult(true,
                 "✓ Kontrakt: ${renter.name} — ${formatMoney(amount)}" +

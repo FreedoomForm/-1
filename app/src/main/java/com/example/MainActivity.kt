@@ -1833,7 +1833,8 @@ fun MainScreen(
                             weeklyPrice = weekly,
                             passportData = result.passportData,
                             address = result.address,
-                            pinfl = result.pinfl
+                            pinfl = result.pinfl,
+                            contractGroups = result.contractGroups
                         )
                     }
                     showAddDialog = false
@@ -2351,6 +2352,12 @@ fun RenterFormDialog(
         initialSelectedDateMillis = startTimestamp
     )
 
+    // ── Группы контрактов (новый календарь) ───────────────────────────
+    // Список групп, выбранных пользователем в календаре. Если список не пуст,
+    // он имеет приоритет над автоматической логикой по выбранной дате.
+    var contractGroups by remember { mutableStateOf<List<ContractGroup>>(emptyList()) }
+    var activeGroupId by remember { mutableStateOf<Int?>(null) }
+
     // ── PDF-реквизиты арендатора ────────────────────────────────────────
     var passportData by remember { mutableStateOf(initialRenter?.passportData ?: "") }
     var address by remember { mutableStateOf(initialRenter?.address ?: "") }
@@ -2522,6 +2529,22 @@ fun RenterFormDialog(
                         }
                     }
                 }
+
+                // ── Новый календарь с группами контрактов ───────────────────
+                // Пользователь может выбрать один или несколько периодов
+                // (групп контрактов). Кнопка «+» в правом верхнем углу календаря
+                // запускает выбор новой группы: тап по первой дате, тап по второй.
+                // Созданные группы отображаются вкладками (1, 2, 3...) с кнопкой
+                // «x» для удаления. При сохранении формы группы передаются в
+                // RenterFormResult.contractGroups и используются в addRenter.
+                Spacer(modifier = Modifier.height(8.dp))
+                ContractCalendar(
+                    editable = true,
+                    groups = contractGroups,
+                    activeGroupId = activeGroupId,
+                    onGroupsChange = { contractGroups = it },
+                    onActiveGroupChange = { activeGroupId = it }
+                )
 
                 if (isEdit) {
                     Text(
@@ -2819,7 +2842,8 @@ fun RenterFormDialog(
                             isActive = isActive,
                             passportData = passportData.trim(),
                             address = address.trim(),
-                            pinfl = pinfl.trim()
+                            pinfl = pinfl.trim(),
+                            contractGroups = contractGroups.map { it.startMs to it.endMs }
                         )
                     )
                 }
@@ -2881,7 +2905,10 @@ data class RenterFormResult(
     val isActive: Boolean,
     val passportData: String,
     val address: String,
-    val pinfl: String
+    val pinfl: String,
+    // Группы контрактов, выбранные в календаре (если пусто — используется
+    // автоматическая логика по выбранной дате).
+    val contractGroups: List<Pair<Long, Long>> = emptyList()
 )
 
 @OptIn(ExperimentalMaterial3Api::class)

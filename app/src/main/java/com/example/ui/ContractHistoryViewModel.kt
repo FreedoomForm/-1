@@ -13,6 +13,7 @@ import com.example.data.Renter
 import com.example.data.RenterRepository
 import com.example.data.Scooter
 import com.example.data.TransactionRepository
+import com.example.data.VirtualCard
 import com.example.data.VirtualCardRepository
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -509,9 +510,64 @@ class ContractHistoryViewModel(application: Application) : AndroidViewModel(appl
                     -amountForStatus
                 }
 
+                // ── Удаляем старую Transaction(и) этого контракта ──────────
+                // По требованию пользователя: при смене статуса контракта
+                // (paid → unpaid или unpaid → paid) старая "плюсовая" (или
+                // "минусовая") Transaction оплаты этого контракта УДАЛЯЕТСЯ,
+                // и добавляется НОВАЯ Transaction с противоположным знаком.
+                // Иначе в таблице транзакций накапливались бы дубликаты
+                // (+amount от первичной оплаты, -amount от отмены, +amount от
+                // повторной оплаты, ...), и баланс/Ledger рассинхронизировался
+                // бы с фактическим состоянием контракта.
+                //
+                // Удаляем ВСЕ Transaction с этим contractId — это может быть
+                // исходная положительная оплата (TYPE_PAYMENT, +amount) или
+                // предыдущая отрицательная отмена (TYPE_PAYMENT, -amount).
+                // Транзакции TYPE_TERMINATED/RETURNED для контрактов не
+                // создаются (они создаются только в RenterActionUseCase), так
+                // что удаление безопасно.
+                try {
+                    transactionRepo.deleteForContract(entry.id)
+                    Log.d("ContractHistoryVM",
+                        "Status change: deleted old transactions for contract #${entry.id}")
+                } catch (e: Exception) {
+                    Log.w("ContractHistoryVM",
+                        "Failed to delete old transactions for contract #${entry.id}: ${e.message}")
+                }
+
+                // ── Удаляем старые CardTransaction(и) этого контракта ───────
+                // Аналогичная логика для главной карты: при смене статуса
+                // старая +amount CardTransaction (TYPE_CONTRACT_INCOME)
+                // удаляется, а её влияние на баланс карты реверсится.
+                // Затем ниже добавляется новая CardTransaction с
+                // соответствующим знаком (через depositContractIncome).
+                // Иначе на главной карте накапливались бы записи +amount и
+                // -amount, и фильтр по contractId показывал бы несколько
+                // строк вместо одной.
+                //
+                // Все CardTransaction для контракта — это TYPE_CONTRACT_INCOME
+                // с toCardId = MAIN_CARD_ID. Поэтому реверс — это всегда
+                // adjustBalance(MAIN, -ct.amount), независимо от знака ct.amount.
+                try {
+                    val oldCardTxs = virtualCardRepo.getCardTxForContract(entry.id)
+                    if (oldCardTxs.isNotEmpty()) {
+                        oldCardTxs.forEach { ct ->
+                            virtualCardRepo.adjustCardBalance(
+                                VirtualCard.MAIN_CARD_ID, -ct.amount
+                            )
+                        }
+                        virtualCardRepo.deleteCardTxForContract(entry.id)
+                        Log.d("ContractHistoryVM",
+                            "Status change: deleted ${oldCardTxs.size} old card txs for contract #${entry.id}")
+                    }
+                } catch (e: Exception) {
+                    Log.w("ContractHistoryVM",
+                        "Failed to delete old card txs for contract #${entry.id}: ${e.message}")
+                }
+
                 // ── Создаём Transaction для вкладки «Tranzaksiya» ───────
-                // Чтобы оплата/отмена отображалась в общем списке транзакций,
-                // а не только в истории контрактов.
+                // Единственная запись, соответствующая ТЕКУЩЕМУ состоянию
+                // контракта: +amount если isPaid, -amount если не isPaid.
                 val now = System.currentTimeMillis()
                 val dateFmt = SimpleDateFormat("dd.MM.yyyy", Locale.getDefault())
                 val wsStr = entry.weekStart?.let { dateFmt.format(Date(it)) } ?: ""
@@ -573,26 +629,30 @@ class ContractHistoryViewModel(application: Application) : AndroidViewModel(appl
                     Log.w("ContractHistoryVM", "Failed to insert audit PAYMENT entry: ${e.message}")
                 }
 
-                // ── Зачисление / списание на «Glavnaya» карту ───────────
-                // При оплате контракта (false → true) сумма падает на главную
-                // карту как входящий поток (depositContractIncome).
-                // При отмене оплаты (true → false) — наоборот, списываем,
-                // используя depositContractIncome с отрицательной суммой
-                // (adjustBalance в DAO корректно обрабатывает минус).
-                try {
-                    val signedAmount = if (entry.isPaid) amountForStatus else -amountForStatus
-                    val noteText = if (entry.isPaid) {
-                        "To'lov: ${renter.name} (status o'zgartirildi) — #${entry.id}"
-                    } else {
-                        "Bekor qilindi: ${renter.name} (status o'zgartirildi) — #${entry.id}"
+                // ── Зачисление на «Glavnaya» карту ────────────────────────
+                // Старые CardTransaction для этого контракта уже удалены
+                // выше, а баланс карты реверснут. Теперь:
+                //   • Если контракт стал ОПЛАЧЕН (entry.isPaid=true) →
+                //     создаём новую +amount CardTransaction (входящий поток).
+                //   • Если контракт стал НЕ ОПЛАЧЕН (entry.isPaid=false) →
+                //     НЕ создаём ничего. Карта должна быть в состоянии "никаких
+                //     денег от этого контракта не поступало" (баланс = 0 от
+                //     этого контракта). Раньше тут вызывался
+                //     depositContractIncome(-amount), что приводило к
+                //     отрицательной записи на карте (как будто деньги ушли
+                //     из приложения), что некорректно — оплата просто не
+                //     состоялась, никаких движений по карте быть не должно.
+                if (entry.isPaid) {
+                    try {
+                        val noteText = "To'lov: ${renter.name} (status o'zgartirildi) — #${entry.id}"
+                        virtualCardRepo.depositContractIncome(
+                            amount = amountForStatus,
+                            note = noteText,
+                            contractId = entry.id
+                        )
+                    } catch (e: Exception) {
+                        Log.w("ContractHistoryVM", "depositContractIncome failed: ${e.message}")
                     }
-                    virtualCardRepo.depositContractIncome(
-                        amount = signedAmount,
-                        note = noteText,
-                        contractId = entry.id
-                    )
-                } catch (e: Exception) {
-                    Log.w("ContractHistoryVM", "depositContractIncome failed: ${e.message}")
                 }
             }
 

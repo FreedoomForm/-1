@@ -446,19 +446,31 @@ Every renter is bound to a scooter via "scooterName". Behavior:
      snapshot.scooters. If snapshot.scooters is empty → the renter is created WITHOUT
      a scooter (scooterId = null) — this is allowed.
 
-⚠️ CRITICAL — WHAT CREATE_RENTER ALREADY DOES AUTOMATICALLY:
-When you emit CREATE_RENTER, the app AUTOMATICALLY also:
-  (a) Creates an initial ContractHistoryEntry for the week [rentStartDate → rentStartDate + rentDurationDays]
-      with weeklyPrice. If prepayment >= weeklyPrice → contract.isPaid = true. If prepayment > 0 but
-      < weeklyPrice → contract.isPaid = false and renter.balance += prepayment. If debt > 0 →
-      contract.isPaid = false and renter.balance = -debt.
-  (b) If prepayment > 0 → creates a Transaction PAYMENT with amount = prepayment, date = rentStartDate,
-      and deposits prepayment to the main virtual card.
-  (c) If prepayment = 0 AND debt = 0 → the app AUTO-PAYS the first week: creates a Transaction PAYMENT
-      with amount = weeklyPrice (or settings.weeklyPrice, or DEFAULT_WEEKLY_PRICE = 420 000 UZS if
-      neither is set), marks contract.isPaid = true, and deposits the amount to the main virtual card.
-      renter.balance ends up at 0 (paid in, then charged for the week). This matches the behavior of
-      the manual renter creation form (RenterViewModel) — the first week is always closed as paid.
+⚠️ CRITICAL — WHAT CREATE_RENTER ALREADY DOES AUTOMATICALLY (same logic as the manual renter creation form):
+When you emit CREATE_RENTER, the app AUTOMATICALLY creates contracts based on the chosen rentStartDate,
+using the SAME logic the user gets when filling the form. The app (not you) decides how many contracts
+to create and whether each is paid or unpaid, based on rentStartDate:
+
+  • If rentStartDate was MORE THAN 1 WEEK AGO (now - rentStartDate > 7 days):
+    → the app creates ONE unpaid contract (debt, balance = -weeklyPrice).
+  • If rentStartDate was LESS THAN 1 WEEK AGO (0 < now - rentStartDate ≤ 7 days):
+    → the app creates ONE paid contract (prepayment, balance = 0). The app also creates
+      a Transaction PAYMENT and deposits weeklyPrice to the main virtual card.
+  • If rentStartDate is TODAY or in the FUTURE (rentStartDate ≥ now):
+    → the app creates MULTIPLE paid contracts, one per week from min(today, rentStartDate)
+      up to rentStartDate. For each paid contract, a Transaction PAYMENT is created and
+      weeklyPrice is deposited to the main virtual card.
+  • If you pass contractGroups (array of {start, end}) — they have PRIORITY over the
+    automatic date-based logic. For each group, the app creates one contract; isPaid is
+    decided by the same rule (group ended > 1 week ago → unpaid, otherwise paid).
+
+ALSO: if you pass `debt > 0` → the first contract is forced unpaid (balance = -debt).
+      if you pass `prepayment > 0` → the first contract is forced paid (Transaction + card deposit).
+
+You (the AI) do NOT decide contract counts, isPaid, balance, Transaction creation, or card deposits.
+The app does ALL of that using the same code path as the manual form. You only pass the same fields
+the user would pass to the form (name, phone, debt/prepayment, rentStartDate, rentDurationDays,
+scooterName, weeklyPrice, passportData, address, pinfl, contractGroups).
 
 Therefore:
   ✗ DO NOT emit CREATE_CONTRACT for the same renter + same week (rentStartDate) right after CREATE_RENTER —
