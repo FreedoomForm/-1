@@ -24,6 +24,8 @@ import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.ChevronLeft
 import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.KeyboardArrowDown
+import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Icon
@@ -121,6 +123,12 @@ fun ContractCalendar(
     /** Режим редактирования: true = выбор периодов (форма), false = просмотр (детали). */
     editable: Boolean = false,
     /**
+     * Начальное состояние календаря: true = развёрнут (полная сетка дней),
+     * false = свёрнут в одну строку (месяц + статус + стрелка).
+     * Пользователь может переключать состояние стрелкой в шапке.
+     */
+    initiallyExpanded: Boolean = true,
+    /**
      * Текущие группы.
      * - Для editable=true (форма): локальный список, который пользователь собирает.
      *   «x» на вкладке удаляет группу из локального state через onGroupsChange.
@@ -164,6 +172,12 @@ fun ContractCalendar(
     val cal = remember { Calendar.getInstance() }
     var viewYear by remember { mutableStateOf(cal.get(Calendar.YEAR)) }
     var viewMonth by remember { mutableStateOf(cal.get(Calendar.MONTH)) }
+
+    // ── Состояние развёрнутости календаря ──────────────────────────────
+    // true  = видна полная сетка дней и панель управления.
+    // false = видна только строка-сводка (месяц + статус-пилюли + стрелка).
+    // Пользователь переключает состояние стрелкой в шапке календаря.
+    var expanded by remember { mutableStateOf(initiallyExpanded) }
 
     // ── Состояние выбора для новой группы ──────────────────────────────
     // В режиме editable: при тапе на день в "новой группе" (activeGroupId == null)
@@ -211,38 +225,77 @@ fun ContractCalendar(
                 .fillMaxWidth()
                 .padding(12.dp)
         ) {
-            // ── Шапка: месяц/год + навигация ────────────────────────────
+            // ── Шапка: месяц/год + навигация + статус + стрелка свернуть/развернуть ──
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.SpaceBetween
             ) {
-                IconButton(onClick = {
-                    if (viewMonth == 0) { viewMonth = 11; viewYear-- } else viewMonth--
-                }) {
-                    Icon(Icons.Default.ChevronLeft, contentDescription = "Oldingi oy")
+                // Левая часть: навигация ← месяц/год →
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    IconButton(onClick = {
+                        if (viewMonth == 0) { viewMonth = 11; viewYear-- } else viewMonth--
+                    }) {
+                        Icon(Icons.Default.ChevronLeft, contentDescription = "Oldingi oy")
+                    }
+                    Text(
+                        text = monthTitle,
+                        style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.SemiBold),
+                        color = ClaudeText
+                    )
+                    IconButton(onClick = {
+                        if (viewMonth == 11) { viewMonth = 0; viewYear++ } else viewMonth++
+                    }) {
+                        Icon(Icons.Default.ChevronRight, contentDescription = "Keyingi oy")
+                    }
                 }
-                Text(
-                    text = monthTitle,
-                    style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.SemiBold),
-                    color = ClaudeText
-                )
-                IconButton(onClick = {
-                    if (viewMonth == 11) { viewMonth = 0; viewYear++ } else viewMonth++
-                }) {
-                    Icon(Icons.Default.ChevronRight, contentDescription = "Keyingi oy")
+
+                // Правая часть: статус-пилюли + стрелка свернуть/развернуть
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(4.dp)
+                ) {
+                    // Сводка по группам: число оплаченных и неоплаченных
+                    val paidCount = groups.count { it.isPaid }
+                    val unpaidCount = groups.count { !it.isPaid }
+                    if (paidCount > 0) {
+                        StatusPill(count = paidCount, color = StatusOk)
+                    }
+                    if (unpaidCount > 0) {
+                        StatusPill(count = unpaidCount, color = StatusOverdue)
+                    }
+
+                    // Стрелка свернуть/развернуть календарь
+                    Box(
+                        modifier = Modifier
+                            .size(28.dp)
+                            .clip(CircleShape)
+                            .background(ClaudeAccentBg)
+                            .clickable { expanded = !expanded },
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Icon(
+                            imageVector = if (expanded) Icons.Default.KeyboardArrowUp
+                                          else Icons.Default.KeyboardArrowDown,
+                            contentDescription = if (expanded) "Yig'ish" else "Yoyish",
+                            tint = ClaudeAccent,
+                            modifier = Modifier.size(20.dp)
+                        )
+                    }
                 }
             }
 
-            Spacer(Modifier.height(4.dp))
+            // ── Тело календаря — только когда развёрнут ────────────────────
+            if (expanded) {
+                Spacer(Modifier.height(4.dp))
 
-            // ── Панель управления (только в editable-режиме или при наличии onAddGroup) ──
-            // Содержит:
-            //   • Кнопку "+" для начала новой группы
-            //   • Кнопки статуса "To'langan" / "To'lanmagan" — выбирают статус
-            //     для следующей группы
-            //   • Вкладки существующих групп (1, 2, 3...) с кнопкой "x"
-            if (editable || onAddGroup != null) {
+                // ── Панель управления (только в editable-режиме или при наличии onAddGroup) ──
+                // Содержит:
+                //   • Кнопку "+" для начала новой группы
+                //   • Кнопки статуса "To'langan" / "To'lanmagan" — выбирают статус
+                //     для следующей группы
+                //   • Вкладки существующих групп (1, 2, 3...) с кнопкой "x"
+                if (editable || onAddGroup != null) {
                 GroupsPanel(
                     groups = groups,
                     activeGroupId = activeGroupId,
@@ -384,6 +437,7 @@ fun ContractCalendar(
                     textAlign = TextAlign.Center
                 )
             }
+            } // end of if (expanded)
         }
     }
 }
@@ -716,6 +770,38 @@ private fun LegendItem(label: String, bg: Color, fg: Color) {
             text = label,
             fontSize = 10.sp,
             color = ClaudeTextSecondary
+        )
+    }
+}
+
+/* ── Пилюля статуса для свёрнутой шапки календаря ──────────────────────── */
+/* Показывает число групп с данным статусом (оплачено / не оплачено).       */
+/* Используется в шапке календаря (видна и в свёрнутом, и в развёрнутом     */
+/* состоянии), чтобы пользователь сразу видел, сколько у него контрактов    */
+/* каждого типа — без необходимости разворачивать календарь.                */
+@Composable
+private fun StatusPill(count: Int, color: Color) {
+    Row(
+        modifier = Modifier
+            .height(20.dp)
+            .clip(RoundedCornerShape(10.dp))
+            .background(color.copy(alpha = 0.15f))
+            .border(1.dp, color.copy(alpha = 0.4f), RoundedCornerShape(10.dp))
+            .padding(horizontal = 6.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(3.dp)
+    ) {
+        Box(
+            modifier = Modifier
+                .size(8.dp)
+                .clip(CircleShape)
+                .background(color)
+        )
+        Text(
+            text = count.toString(),
+            fontSize = 10.sp,
+            color = color,
+            fontWeight = FontWeight.SemiBold
         )
     }
 }

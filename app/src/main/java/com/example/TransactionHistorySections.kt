@@ -69,7 +69,15 @@ fun RenterTransactionListSection(
     renter: Renter,
     allScooters: List<Scooter>,
     transactionViewModel: TransactionViewModel = viewModel(),
-    contractHistoryViewModel: ContractHistoryViewModel = viewModel()
+    contractHistoryViewModel: ContractHistoryViewModel = viewModel(),
+    /**
+     * Внешний поисковый запрос — когда не null, используется вместо
+     * внутреннего state. Это позволяет родительский `UnifiedSearchBar`
+     * реально фильтровать транзакции (раньше поисковая строка на странице
+     * деталей арендатора была чисто декоративной — фильтрация шла только
+     * по внутреннему searchQuery, который никто не обновлял).
+     */
+    externalSearchQuery: String? = null
 ) {
     val context = LocalContext.current
     val transactions by transactionViewModel.transactionsForRenter(renter.id)
@@ -88,7 +96,12 @@ fun RenterTransactionListSection(
     }
 
     var selectedTxs by remember { mutableStateOf(setOf<Int>()) }
-    var searchQuery by remember { mutableStateOf("") }
+    // Внутренний searchQuery используется только когда externalSearchQuery == null.
+    // Когда родитель передаёт externalSearchQuery (как на странице деталей
+    // арендатора), фильтрация идёт по нему — это исправляет баг, при котором
+    // родительский UnifiedSearchBar не фильтровал транзакции.
+    var internalSearchQuery by remember { mutableStateOf("") }
+    val searchQuery = externalSearchQuery ?: internalSearchQuery
     var editingTx by remember { mutableStateOf<Transaction?>(null) }
     var showDeleteConfirm by remember { mutableStateOf(false) }
     var showCreateDialog by remember { mutableStateOf(false) }
@@ -702,7 +715,7 @@ fun ScooterTransactionListSection(
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun CreateTransactionForRenterDialog(
+internal fun CreateTransactionForRenterDialog(
     renter: Renter,
     renterContracts: List<ContractHistoryEntry>,
     allScooters: List<Scooter>,
@@ -1007,7 +1020,7 @@ private fun CreateTransactionForRenterDialog(
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun EditTransactionForRenterDialog(
+internal fun EditTransactionForRenterDialog(
     tx: Transaction,
     renterContracts: List<ContractHistoryEntry>,
     allScooters: List<Scooter>,

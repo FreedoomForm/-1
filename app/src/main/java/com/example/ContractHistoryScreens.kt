@@ -585,11 +585,31 @@ fun RenterContractHistoryScreen(
                 }
             }
         } else {
-            // ── ВКЛАДКА «ТРАНЗАКЦИИ» — старая схема ─────────────────────
+            // ── ВКЛАДКА «ТРАНЗАКЦИИ» ─────────────────────────────────────
             // RenterTransactionListSection имеет собственный внутренний
             // LazyColumn, поэтому его нельзя встроить в родительский LazyColumn.
             // Используем отдельный Column с верхним verticalScroll (для сводки,
             // календаря, табов, поиска) и нижним блоком для транзакций.
+            //
+            // ВАЖНО (Issue: «скролл транзакций не работает»):
+            // Раньше верхний Column без ограничений по высоте забирал всё
+            // место (календарь в развёрнутом виде занимает ~400dp), и
+            // нижнему блоку `Box.weight(1f)` ничего не оставалось — внутренний
+            // LazyColumn транзакций получал 0 высоты и не прокручивался.
+            //
+            // Текущее решение:
+            //   1. `heightIn(max = 320.dp)` на верхнем Column — даже если
+            //      пользователь разворачивает календарь, верхняя секция не
+            //      может занять больше 320dp; её содержимое прокручивается
+            //      внутренним verticalScroll.
+            //   2. `initiallyExpanded = false` на календаре — по умолчанию
+            //      календарь свёрнут в одну строку (~50dp), что оставляет
+            //      максимум места под список транзакций. Пользователь может
+            //      развернуть его стрелкой в шапке календаря.
+            //   3. `externalSearchQuery = searchQuery` — родительский
+            //      UnifiedSearchBar теперь реально фильтрует транзакции
+            //      (раньше фильтрация шла по внутреннему state, который
+            //      никто не обновлял — поиск был чисто декоративным).
             Column(
                 modifier = Modifier
                     .padding(innerPadding)
@@ -599,6 +619,7 @@ fun RenterContractHistoryScreen(
                 Column(
                     modifier = Modifier
                         .fillMaxWidth()
+                        .heightIn(max = 320.dp)
                         .verticalScroll(topScrollState)
                 ) {
                     // Сводка
@@ -634,9 +655,12 @@ fun RenterContractHistoryScreen(
                         }
                     }
 
-                    // Календарь (те же колбэки, что и во вкладке контрактов)
+                    // Календарь (по умолчанию свёрнут — экономит место для
+                    // списка транзакций; пользователь может развернуть стрелкой).
+                    // Те же колбэки, что и во вкладке контрактов.
                     ContractCalendar(
                         editable = false,
+                        initiallyExpanded = false,
                         groups = existingGroups,
                         dayStatusFor = { dayMs ->
                             val suspended = contractsList.any { c ->
@@ -728,13 +752,16 @@ fun RenterContractHistoryScreen(
                     )
                 }
 
-                // Список транзакций (с собственным LazyColumn внутри)
+                // Список транзакций (с собственным LazyColumn внутри).
+                // Благодаря heightIn(max=320.dp) на верхнем Column, этот
+                // Box.weight(1f) всегда получает достаточно места для скролла.
                 Box(modifier = Modifier.weight(1f)) {
                     RenterTransactionListSection(
                         renter = renter,
                         allScooters = allScooters,
                         transactionViewModel = transactionViewModel,
-                        contractHistoryViewModel = contractHistoryViewModel
+                        contractHistoryViewModel = contractHistoryViewModel,
+                        externalSearchQuery = searchQuery
                     )
                 }
             }
