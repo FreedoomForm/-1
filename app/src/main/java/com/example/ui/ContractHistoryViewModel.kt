@@ -425,33 +425,54 @@ class ContractHistoryViewModel(application: Application) : AndroidViewModel(appl
                 if (isContractType) {
                     // ── Логика корректировки баланса при удалении контракта ──
                     //
-                    // isPaid = false (долг):
-                    //   При создании контракта баланс был уменьшен на -amount
-                    //   (арендатор должен). Удаление контракта списывает долг:
-                    //   balanceDelta = +amount.
+                    // Существует ДВЕ модели создания контракта, и они требуют
+                    // РАЗНОЙ логики удаления:
                     //
-                    // isPaid = true (оплачен):
-                    //   Контракт «закрыт» — арендатор заплатил amount, контракт
-                    //   помечен оплаченным. Баланс УЖЕ отражает эту оплату
-                    //   (либо 0 при предоплате, либо 0 после погашения долга).
-                    //   Удаление контракта НЕ должно менять баланс:
-                    //   balanceDelta = 0.
+                    // МОДЕЛЬ A — календарь (form-calendar и detail-calendar):
+                    //   Контракт создаётся через createContractFromCalendar
+                    //   (детали арендатора) ИЛИ через addRenter с contractGroups
+                    //   (форма арендатора). Баланс в обоих случаях меняется
+                    //   на ±amount при создании:
+                    //     • isPaid=true  → balance += amount (предоплата)
+                    //     • isPaid=false → balance -= amount (долг)
+                    //   Удаление должно ПОЛНОСТЬЮ реверсировать это:
+                    //     • isPaid=true  → balanceDelta = -amount (предоплата возвращена)
+                    //     • isPaid=false → balanceDelta = +amount (долг списан)
+                    //   Это симметричное поведение, запрошенное пользователем:
+                    //   «при удалении оплаченных периодов с календаря минусовать
+                    //    деньги из основной карты и баланса арендатора».
                     //
-                    //   ⚠ Предыдущая версия делала balanceDelta = -amount для
-                    //   isPaid=true — это был БАГ: после удаления оплаченного
-                    //   контракта баланс уходил в минус (например 0 → -amount),
-                    //   хотя арендатор ничего не должен. Платёж уже поступил
-                    //   (CardTransaction на главной карте), и откатывается он
-                    //   на шаге 5 (reverse CardTransaction). Баланс арендатора
-                    //   при этом трогать НЕ нужно.
+                    //   Маркер календаря: contract.notes содержит подстроку
+                    //   "Kalendar orqali yaratildi" (устанавливается в
+                    //   createContractFromCalendar и в addRenter при непустом
+                    //   contractGroups).
                     //
-                    //   Сценарии, которые работали неправильно:
-                    //   1) Создание арендатора с предоплатой (balance=0,
-                    //      contract.isPaid=true) → удаление → balance=-amount ❌
-                    //   2) Просрочка + оплата (balance=-amount → 0 после оплаты,
-                    //      contract.isPaid=true) → удаление → balance=-amount ❌
-                    //   Теперь оба сценария оставляют баланс = 0. ✓
-                    balanceDelta = if (contract.isPaid) 0.0 else +contract.amount
+                    // МОДЕЛЬ B — applyWeeklyPayment (кнопка «To'lash»):
+                    //   Контракт был создан ранее как isPaid=false (balance -=
+                    //   amount), затем applyWeeklyPayment перевернул его в
+                    //   isPaid=true и добавил balance += amount. Суммарный
+                    //   эффект на баланс = 0. Удаление контракта не должно
+                    //   менять баланс: balanceDelta = 0.
+                    //   Если же применить -amount, возникнет «фантомный долг»
+                    //   (balance уйдёт в минус, хотя контракта больше нет).
+                    //
+                    // МОДЕЛЬ C — createManualContract (ручной ввод):
+                    //   Контракт создаётся без изменения баланса. Удаление
+                    //   тоже не должно менять баланс: balanceDelta = 0.
+                    //
+                    // isPaid=false (долг, любая модель):
+                    //   Баланс был уменьшен на -amount при создании. Удаление
+                    //   списывает долг: balanceDelta = +amount.
+                    val isCalendarCreated = contract.notes
+                        ?.contains("Kalendar orqali yaratildi") == true
+                    balanceDelta = when {
+                        // Модель A — календарь: симметричный реверс
+                        isCalendarCreated && contract.isPaid  -> -contract.amount
+                        isCalendarCreated && !contract.isPaid -> +contract.amount
+                        // Модель B/C — не календарь: старая логика
+                        contract.isPaid -> 0.0
+                        else            -> +contract.amount
+                    }
                 }
                 // Для TYPE_PAYMENT / TYPE_TERMINATED / TYPE_RETURNED баланс арендатора
                 // не меняется — это аудиторские записи; фактическое изменение баланса

@@ -238,10 +238,23 @@ class RenterViewModel(application: Application) : AndroidViewModel(application) 
                         val isFirst = idx == 0
                         val contractType = if (isFirst) ContractHistoryEntry.TYPE_CREATED
                                            else ContractHistoryEntry.TYPE_AUTO_RENEW
+                        // ── Маркер календаря ─────────────────────────────────
+                        // Если контракт создаётся через форму с contractGroups
+                        // (т.е. пользователь выбрал периоды в календаре формы),
+                        // добавляем подстроку "Kalendar orqali yaratildi" в notes.
+                        // Это позволяет deleteContractWithCascade отличить
+                        // календарные контракты от созданных через «To'lash»
+                        // (applyWeeklyPayment) и применять к ним симметричную
+                        // логику удаления (реверс баланса на ±amount).
+                        val calendarMarker =
+                            if (scenario == 4) "Kalendar orqali yaratildi — " else ""
                         val notes = when {
-                            spec.isPaid && specs.size > 1 -> "${idx + 1}-hafta oldindan to'lov"
-                            spec.isPaid -> "Yaratildi (oldindan to'langan)"
-                            else -> "Kechikkan holda yaratildi (qarz)"
+                            spec.isPaid && specs.size > 1 ->
+                                "${calendarMarker}${idx + 1}-hafta oldindan to'lov"
+                            spec.isPaid ->
+                                "${calendarMarker}Yaratildi (oldindan to'langan)"
+                            else ->
+                                "${calendarMarker}Kechikkan holda yaratildi (qarz)"
                         }
 
                         val contractId = historyRepository.insert(ContractHistoryEntry(

@@ -230,49 +230,19 @@ fun RenterContractHistoryScreen(
             )
         }
     ) { innerPadding ->
-        // ── Единый прокручиваемый контейнер (Issue 3) ─────────────────────
-        // Раньше экран был разбит на две части: верхняя (сводка + календарь +
-        // табы + поиск) со своим verticalScroll, и нижняя (LazyColumn .weight(1f))
-        // со списком контрактов. Из-за этого календарь не прокручивался вместе
-        // со списком — пользователь жаловался, что страница "не scrollable".
+        // ── Единый прокручиваемый контейнер ─────────────────────────────
+        // Для вкладки «Контракты» весь контент (сводка + табы + поиск +
+        // список контрактов) находится в одном LazyColumn. Для вкладки
+        // «Транзакции» — Column с верхним verticalScroll и нижним блоком
+        // RenterTransactionListSection, т.к. секция транзакций имеет
+        // собственный внутренний LazyColumn и не может быть встроена в
+        // родительский.
         //
-        // Теперь для вкладки «Контракты» весь контент (включая календарь и
-        // список контрактов) находится в одном LazyColumn, который прокручивается
-        // как единое целое. Для вкладки «Транзакции» оставлена старая схема
-        // (верхний verticalScroll + RenterTransactionListSection), т.к. эта
-        // секция имеет собственный внутренний LazyColumn и не может быть
-        // встроена в родительский LazyColumn.
-        //
-        // Issue 2 & 3: теперь календарь в странице деталей имеет ВСЕ функции
-        // нового календаря:
-        //   • Кнопки статуса (To'langan / To'lanmagan) рядом с «+»
-        //   • Кнопка «+» — начать выбор нового периода
-        //   • Тап по первой дате → тап по второй → создаётся контракт
-        //     с выбранным статусом (paid → контракт + Transaction + зачисление
-        //     на карту; unpaid → только контракт-долг).
-        //   • Тап по той же дате дважды → однодневный контракт.
-        //   • Существующие контракты показываются как вкладки (1, 2, 3...).
-        //   • «x» на вкладке → удаляет контракт из БД.
-        //   • Тап по дню с существующим контрактом → открывает диалог
-        //     редактирования этого контракта.
+        // Календарь со страницы деталей арендатора УДАЛЁН по явной просьбе
+        // пользователя. Создание/редактирование/удаление контрактов
+        // выполняется через кнопки «Yaratish» / «Tahrirlash» / «O'chir»
+        // и диалоги CreateContractDialog / EditContractDialog.
         val contractsList = contracts
-        // Существующие контракты как группы (для отображения вкладок и
-        // для определения, какой контракт редактировать при тапе на день).
-        val existingGroups = remember(contractsList) {
-            contractsList
-                .filter { it.type == ContractHistoryEntry.TYPE_CREATED ||
-                          it.type == ContractHistoryEntry.TYPE_AUTO_RENEW }
-                .filter { it.weekStart != null && it.weekEnd != null }
-                .sortedBy { it.weekStart }
-                .map { c ->
-                    ContractGroup(
-                        id = c.id,  // реальный ID контракта в БД
-                        startMs = c.weekStart!!,
-                        endMs = c.weekEnd!!,
-                        isPaid = c.isPaid
-                    )
-                }
-        }
 
         if (selectedTab == 0) {
             // ── ВКЛАДКА «КОНТРАКТЫ» — единый LazyColumn ─────────────────
@@ -316,76 +286,11 @@ fun RenterContractHistoryScreen(
                     }
                 }
 
-                // ── Календарь с раскраской + полным набором функций ─────
-                item {
-                    ContractCalendar(
-                        editable = false,
-                        groups = existingGroups,
-                        dayStatusFor = { dayMs ->
-                            // Сначала проверяем TERMINATED — у него высший приоритет
-                            val suspended = contractsList.any { c ->
-                                c.type == ContractHistoryEntry.TYPE_TERMINATED &&
-                                c.weekStart != null && c.weekEnd != null &&
-                                dayMs >= c.weekStart && dayMs < c.weekEnd
-                            }
-                            if (suspended) return@ContractCalendar DayStatus.SUSPENDED
-
-                            // Затем контракты CREATED + AUTO_RENEW
-                            val contract = contractsList.firstOrNull { c ->
-                                (c.type == ContractHistoryEntry.TYPE_CREATED ||
-                                 c.type == ContractHistoryEntry.TYPE_AUTO_RENEW) &&
-                                c.weekStart != null && c.weekEnd != null &&
-                                dayMs >= c.weekStart && dayMs < c.weekEnd
-                            }
-                            when {
-                                contract == null -> DayStatus.EMPTY
-                                contract.isPaid -> DayStatus.PAID
-                                else -> DayStatus.UNPAID
-                            }
-                        },
-                        onAddGroup = { group ->
-                            // Пользователь выбрал период и статус в календаре —
-                            // создаём контракт с полной обработкой (Transaction +
-                            // зачисление на карту для оплаченного).
-                            val amount = SettingsRepository(context).weeklyPrice
-                                .let { if (it > 0) it else SettingsRepository.DEFAULT_WEEKLY_PRICE }
-                            contractHistoryViewModel.createContractFromCalendar(
-                                renter = renter,
-                                weekStart = group.startMs,
-                                weekEnd = group.endMs,
-                                amount = amount,
-                                isPaid = group.isPaid
-                            )
-                            Toast.makeText(
-                                context,
-                                if (group.isPaid) "To'langan kontrakt qo'shildi"
-                                else "To'lanmagan kontrakt qo'shildi",
-                                Toast.LENGTH_SHORT
-                            ).show()
-                        },
-                        onRemoveGroup = { group ->
-                            // «x» на вкладке существующего контракта → удаляем из БД
-                            contractHistoryViewModel.deleteContract(group.id)
-                            Toast.makeText(
-                                context,
-                                "Kontrakt #${group.id} o'chirildi",
-                                Toast.LENGTH_SHORT
-                            ).show()
-                        },
-                        onEditDayContract = { dayMs ->
-                            // Тап по дню с существующим контрактом → открываем диалог
-                            val match = contractsList.firstOrNull { c ->
-                                (c.type == ContractHistoryEntry.TYPE_CREATED ||
-                                 c.type == ContractHistoryEntry.TYPE_AUTO_RENEW) &&
-                                c.weekStart != null && c.weekEnd != null &&
-                                dayMs >= c.weekStart && dayMs < c.weekEnd
-                            }
-                            if (match != null) {
-                                editingContract = match
-                            }
-                        }
-                    )
-                }
+                // ── Календарь УДАЛЁН со страницы деталей арендатора ───────
+                // Пользователь явно попросил убрать календарь со страницы
+                // «Подробно об арендаторе». Все операции создания/удаления
+                // контрактов доступны через кнопки «Yaratish» / «O'chir» ниже
+                // (диалоги CreateContractDialog и EditContractDialog).
 
                 // ── Переключатель «Контракты» / «Транзакции» ────────────
                 item {
@@ -655,69 +560,10 @@ fun RenterContractHistoryScreen(
                         }
                     }
 
-                    // Календарь (по умолчанию свёрнут — экономит место для
-                    // списка транзакций; пользователь может развернуть стрелкой).
-                    // Те же колбэки, что и во вкладке контрактов.
-                    ContractCalendar(
-                        editable = false,
-                        initiallyExpanded = false,
-                        groups = existingGroups,
-                        dayStatusFor = { dayMs ->
-                            val suspended = contractsList.any { c ->
-                                c.type == ContractHistoryEntry.TYPE_TERMINATED &&
-                                c.weekStart != null && c.weekEnd != null &&
-                                dayMs >= c.weekStart && dayMs < c.weekEnd
-                            }
-                            if (suspended) return@ContractCalendar DayStatus.SUSPENDED
-                            val contract = contractsList.firstOrNull { c ->
-                                (c.type == ContractHistoryEntry.TYPE_CREATED ||
-                                 c.type == ContractHistoryEntry.TYPE_AUTO_RENEW) &&
-                                c.weekStart != null && c.weekEnd != null &&
-                                dayMs >= c.weekStart && dayMs < c.weekEnd
-                            }
-                            when {
-                                contract == null -> DayStatus.EMPTY
-                                contract.isPaid -> DayStatus.PAID
-                                else -> DayStatus.UNPAID
-                            }
-                        },
-                        onAddGroup = { group ->
-                            val amount = SettingsRepository(context).weeklyPrice
-                                .let { if (it > 0) it else SettingsRepository.DEFAULT_WEEKLY_PRICE }
-                            contractHistoryViewModel.createContractFromCalendar(
-                                renter = renter,
-                                weekStart = group.startMs,
-                                weekEnd = group.endMs,
-                                amount = amount,
-                                isPaid = group.isPaid
-                            )
-                            Toast.makeText(
-                                context,
-                                if (group.isPaid) "To'langan kontrakt qo'shildi"
-                                else "To'lanmagan kontrakt qo'shildi",
-                                Toast.LENGTH_SHORT
-                            ).show()
-                        },
-                        onRemoveGroup = { group ->
-                            contractHistoryViewModel.deleteContract(group.id)
-                            Toast.makeText(
-                                context,
-                                "Kontrakt #${group.id} o'chirildi",
-                                Toast.LENGTH_SHORT
-                            ).show()
-                        },
-                        onEditDayContract = { dayMs ->
-                            val match = contractsList.firstOrNull { c ->
-                                (c.type == ContractHistoryEntry.TYPE_CREATED ||
-                                 c.type == ContractHistoryEntry.TYPE_AUTO_RENEW) &&
-                                c.weekStart != null && c.weekEnd != null &&
-                                dayMs >= c.weekStart && dayMs < c.weekEnd
-                            }
-                            if (match != null) {
-                                editingContract = match
-                            }
-                        }
-                    )
+                    // Календарь УДАЛЁН со страницы деталей арендатора
+                    // (по явной просьбе пользователя). На вкладке транзакций
+                    // также не показываем — остаётся только сводка + табы +
+                    // поиск + список транзакций.
 
                     // Табы
                     Row(

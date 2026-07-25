@@ -427,7 +427,7 @@ fun ContractCalendar(
                             "«+» tugmasi bilan yangi guruh boshlang — birinchi sanani tanlang"
                         }
                     }
-                    else -> "Ikkinchi sanani tanling — davr yopiladi (yoki shu sanani qayt tanlang — 1 kunlik)"
+                    else -> "Ikkinchi sanani tanling — davr yopiladi (yoki shu sanani qayt tanlang — 1 haftalik kontrakt)"
                 }
                 Text(
                     text = hint,
@@ -456,22 +456,55 @@ private fun handleDayClick(
     // Если открыта существующая группа — ничего не делаем (только просмотр).
     if (activeGroupId != null) return
 
+    val dayMs = 24L * 60 * 60 * 1000
+    val weekMs = 7L * dayMs
+
     if (pendingStartMs == null) {
         // Первый тап — сохраняем старт
         setPendingStart(ms)
     } else {
-        // Второй тап — закрываем диапазон
-        val start = minOf(pendingStartMs, ms)
-        val end = maxOf(pendingStartMs, ms)
-        // end сдвигаем до конца дня (end + 1 день - 1) — период включает весь день.
-        val realEnd = end + 24L * 60 * 60 * 1000 - 1
-        val newId = (groups.maxOfOrNull { it.id } ?: 0) + 1
-        val newGroup = ContractGroup(
-            id = newId, startMs = start, endMs = realEnd, isPaid = newGroupIsPaid
-        )
-        onGroupsChange(groups + newGroup)
-        onActiveGroupChange(newId)
-        setPendingStart(null)
+        // ── Старая логика однодневного выбора (legacy) ──────────────────
+        // В старом календаре (DatePickerDialog в форме создания арендатора)
+        // пользователь выбирал ОДНУ дату. Система АВТОМАТИЧЕСКИ определяла
+        // статус контракта по этой дате:
+        //   • Если дата была БОЛЕЕ НЕДЕЛИ назад (now - date > 7 дней) →
+        //     неоплаченный контракт (долг), isPaid = false.
+        //   • Если дата менее недели назад или сегодня/в будущем →
+        //     оплаченный контракт (предоплата), isPaid = true.
+        // Период всегда был [date, date + 7 дней] (одна неделя).
+        //
+        // При двойном клике на одну и ту же дату в новом календаре мы
+        // применяем ЭТУ ЖЕ логику — автоопределение статуса по дате,
+        // игнорируя пользовательский toggle (To'langan/To'lanmagan).
+        // Toggle используется только при выборе диапазона из двух РАЗНЫХ
+        // дат (это новая возможность, которой в старом календаре не было).
+        val isSameDayTap = isSameDay(pendingStartMs, ms)
+        if (isSameDayTap) {
+            // ── Двойной клик на одну дату → недельный контракт с авто-статусом ──
+            val now = System.currentTimeMillis()
+            val isOverdue = (now - ms) > weekMs
+            val autoIsPaid = !isOverdue
+            val start = ms
+            val realEnd = ms + weekMs - 1
+            val newId = (groups.maxOfOrNull { it.id } ?: 0) + 1
+            val newGroup = ContractGroup(
+                id = newId, startMs = start, endMs = realEnd, isPaid = autoIsPaid
+            )
+            onGroupsChange(groups + newGroup)
+            onActiveGroupChange(newId)
+            setPendingStart(null)
+        } else {
+            // ── Два разных дня → диапазон с пользовательским статусом ──
+            val start = minOf(pendingStartMs, ms)
+            val realEnd = maxOf(pendingStartMs, ms) + dayMs - 1
+            val newId = (groups.maxOfOrNull { it.id } ?: 0) + 1
+            val newGroup = ContractGroup(
+                id = newId, startMs = start, endMs = realEnd, isPaid = newGroupIsPaid
+            )
+            onGroupsChange(groups + newGroup)
+            onActiveGroupChange(newId)
+            setPendingStart(null)
+        }
     }
 }
 
@@ -486,20 +519,38 @@ private fun handleDayClickWithAddCallback(
 ) {
     if (activeGroupId != null) return
 
+    val dayMs = 24L * 60 * 60 * 1000
+    val weekMs = 7L * dayMs
+
     if (pendingStartMs == null) {
         setPendingStart(ms)
     } else {
-        val start = minOf(pendingStartMs, ms)
-        val end = maxOf(pendingStartMs, ms)
-        val realEnd = end + 24L * 60 * 60 * 1000 - 1
-        // Используем отрицательный id как временный — реальный id
-        // присвоит БД при создании контракта. Колбэк onAddGroup должен
-        // проигнорировать это поле и использовать startMs/endMs/isPaid.
-        val newGroup = ContractGroup(
-            id = -1, startMs = start, endMs = realEnd, isPaid = newGroupIsPaid
-        )
-        onAddGroup(newGroup)
-        setPendingStart(null)
+        // ── Та же legacy-логика автоопределения статуса по дате ──────
+        val isSameDayTap = isSameDay(pendingStartMs, ms)
+        if (isSameDayTap) {
+            val now = System.currentTimeMillis()
+            val isOverdue = (now - ms) > weekMs
+            val autoIsPaid = !isOverdue
+            val start = ms
+            val realEnd = ms + weekMs - 1
+            // Используем отрицательный id как временный — реальный id
+            // присвоит БД при создании контракта. Колбэк onAddGroup должен
+            // проигнорировать это поле и использовать startMs/endMs/isPaid.
+            val newGroup = ContractGroup(
+                id = -1, startMs = start, endMs = realEnd, isPaid = autoIsPaid
+            )
+            onAddGroup(newGroup)
+            setPendingStart(null)
+        } else {
+            // Два разных дня → диапазон с пользовательским статусом
+            val start = minOf(pendingStartMs, ms)
+            val realEnd = maxOf(pendingStartMs, ms) + dayMs - 1
+            val newGroup = ContractGroup(
+                id = -1, startMs = start, endMs = realEnd, isPaid = newGroupIsPaid
+            )
+            onAddGroup(newGroup)
+            setPendingStart(null)
+        }
     }
 }
 
