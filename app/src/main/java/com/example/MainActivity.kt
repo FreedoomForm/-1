@@ -23,6 +23,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.ArrowDropDown
@@ -1967,28 +1968,23 @@ fun RenterTable(
     val showPinfl    = isColVisible("col_pinfl")
 
     // ── Компоновка ──────────────────────────────────────────────────────
-    // Если видны только 6 базовых колонок (без extras) — используем
-    // weight-based Row без скролла. Если видна хотя бы одна extra-колонка —
-    // fixed widths + горизонтальный скролл.
+    // ВСЕГДА используем fixed widths + горизонтальный скролл. Раньше при
+    // скрытых extra-колонках применялся weight-based layout без скролла,
+    // из-за чего колонка «Mijoz» сжималась до ~85dp и имя «Akmal Karimov»
+    // обрезалось до «Akmal…» (maxLines=1). Теперь каждая колонка имеет
+    // фиксированную ширину, достаточную для полного отображения данных,
+    // а пользователь скроллит таблицу по горизонтали если колонок много.
     val hasAnyExtraVisible = showPassport || showAddress || showPinfl
 
-    val wName     = 110.dp
-    val wPhone    = 100.dp
-    val wScoot    = 80.dp
-    val wStart    = 85.dp
-    val wEnd      = 85.dp
-    val wDebt     = 70.dp
-    val wPassport = 110.dp
-    val wAddress  = 140.dp
-    val wPinfl    = 95.dp
-
-    // Weight-based widths для базовых колонок (когда нет extras).
-    val fName  = 1.4f
-    val fPhone = 1.0f
-    val fScoot = 0.8f
-    val fStart = 1.0f
-    val fEnd   = 1.1f
-    val fDebt  = 0.9f
+    val wName     = 160.dp   // увеличено с 110 — вмещает «Имя Фамилия»
+    val wPhone    = 115.dp
+    val wScoot    = 90.dp
+    val wStart    = 90.dp
+    val wEnd      = 90.dp
+    val wDebt     = 80.dp
+    val wPassport = 115.dp
+    val wAddress  = 150.dp
+    val wPinfl    = 110.dp
 
     val dateFmt = remember { SimpleDateFormat("dd.MM.yyyy", Locale.getDefault()) }
     val hScrollState = rememberScrollState()
@@ -1998,28 +1994,19 @@ fun RenterTable(
         Surface(color = ClaudeCard, modifier = Modifier.fillMaxWidth()) {
             Row(
                 modifier = Modifier
-                    .then(if (hasAnyExtraVisible) Modifier.horizontalScroll(hScrollState) else Modifier)
+                    .horizontalScroll(hScrollState)
                     .padding(horizontal = 8.dp, vertical = 4.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                if (hasAnyExtraVisible) {
-                    if (showName)     SortableHeaderCellFixed(Icons.Default.Person,               wName,     "col_name",     sortState) { onSortClick("col_name") }
-                    if (showPhone)    SortableHeaderCellFixed(Icons.Default.Phone,                wPhone,    "col_phone",    sortState) { onSortClick("col_phone") }
-                    if (showScooter)  SortableHeaderCellFixed(Icons.Default.DirectionsBike,       wScoot,    "col_scooter",  sortState) { onSortClick("col_scooter") }
-                    if (showStart)    SortableHeaderCellFixed(Icons.Default.CalendarToday,        wStart,    "col_start",    sortState) { onSortClick("col_start") }
-                    if (showEnd)      SortableHeaderCellFixed(Icons.Default.Event,                wEnd,      "col_end",      sortState) { onSortClick("col_end") }
-                    if (showBalance)  SortableHeaderCellFixed(Icons.Default.AccountBalanceWallet, wDebt,     "col_balance",  sortState) { onSortClick("col_balance") }
-                    if (showPassport) SortableHeaderCellFixed(Icons.Default.CreditCard,           wPassport, "col_passport", sortState) { onSortClick("col_passport") }
-                    if (showAddress)  SortableHeaderCellFixed(Icons.Default.Home,                 wAddress,  "col_address",  sortState) { onSortClick("col_address") }
-                    if (showPinfl)    SortableHeaderCellFixed(Icons.Default.Fingerprint,          wPinfl,    "col_pinfl",    sortState) { onSortClick("col_pinfl") }
-                } else {
-                    if (showName)     SortableHeaderCell(Icons.Default.Person,               fName,  "col_name",     sortState) { onSortClick("col_name") }
-                    if (showPhone)    SortableHeaderCell(Icons.Default.Phone,                fPhone, "col_phone",    sortState) { onSortClick("col_phone") }
-                    if (showScooter)  SortableHeaderCell(Icons.Default.DirectionsBike,       fScoot, "col_scooter",  sortState) { onSortClick("col_scooter") }
-                    if (showStart)    SortableHeaderCell(Icons.Default.CalendarToday,        fStart, "col_start",    sortState) { onSortClick("col_start") }
-                    if (showEnd)      SortableHeaderCell(Icons.Default.Event,                fEnd,   "col_end",      sortState) { onSortClick("col_end") }
-                    if (showBalance)  SortableHeaderCell(Icons.Default.AccountBalanceWallet, fDebt,  "col_balance",  sortState) { onSortClick("col_balance") }
-                }
+                if (showName)     SortableHeaderCellFixed(Icons.Default.Person,               wName,     "col_name",     sortState) { onSortClick("col_name") }
+                if (showPhone)    SortableHeaderCellFixed(Icons.Default.Phone,                wPhone,    "col_phone",    sortState) { onSortClick("col_phone") }
+                if (showScooter)  SortableHeaderCellFixed(Icons.Default.DirectionsBike,       wScoot,    "col_scooter",  sortState) { onSortClick("col_scooter") }
+                if (showStart)    SortableHeaderCellFixed(Icons.Default.CalendarToday,        wStart,    "col_start",    sortState) { onSortClick("col_start") }
+                if (showEnd)      SortableHeaderCellFixed(Icons.Default.Event,                wEnd,      "col_end",      sortState) { onSortClick("col_end") }
+                if (showBalance)  SortableHeaderCellFixed(Icons.Default.AccountBalanceWallet, wDebt,     "col_balance",  sortState) { onSortClick("col_balance") }
+                if (showPassport) SortableHeaderCellFixed(Icons.Default.CreditCard,           wPassport, "col_passport", sortState) { onSortClick("col_passport") }
+                if (showAddress)  SortableHeaderCellFixed(Icons.Default.Home,                 wAddress,  "col_address",  sortState) { onSortClick("col_address") }
+                if (showPinfl)    SortableHeaderCellFixed(Icons.Default.Fingerprint,          wPinfl,    "col_pinfl",    sortState) { onSortClick("col_pinfl") }
             }
         }
         HorizontalDivider(color = ClaudeDivider)
@@ -2053,7 +2040,7 @@ fun RenterTable(
                 ) {
                     Row(
                         modifier = Modifier
-                            .then(if (hasAnyExtraVisible) Modifier.horizontalScroll(hScrollState) else Modifier.fillMaxWidth())
+                            .horizontalScroll(hScrollState)
                             .border(
                                 width = if (isSelected) 2.dp else 1.5.dp,
                                 color = sColor,
@@ -2069,17 +2056,20 @@ fun RenterTable(
                             .padding(horizontal = 8.dp, vertical = 10.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        // Mijoz
+                        // Mijoz — имя + фамилия. maxLines=2 чтобы «Akmal Karimov»
+                        // переносилось на вторую строку вместо обрезки «Akmal…».
                         if (showName) {
                             Text(
                                 renter.name,
                                 modifier = Modifier
-                                    .then(if (hasAnyExtraVisible) Modifier.width(wName) else Modifier.weight(fName))
+                                    .width(wName)
                                     .padding(horizontal = 4.dp),
                                 style = MaterialTheme.typography.bodyMedium,
                                 color = ClaudeText,
                                 fontWeight = FontWeight.SemiBold,
-                                maxLines = 1
+                                maxLines = 2,
+                                softWrap = true,
+                                overflow = TextOverflow.Visible
                             )
                         }
                         // Tel
@@ -2087,11 +2077,13 @@ fun RenterTable(
                             Text(
                                 renter.phoneNumber,
                                 modifier = Modifier
-                                    .then(if (hasAnyExtraVisible) Modifier.width(wPhone) else Modifier.weight(fPhone))
+                                    .width(wPhone)
                                     .padding(horizontal = 4.dp),
                                 style = MaterialTheme.typography.bodySmall,
                                 color = ClaudeTextSecondary,
-                                maxLines = 1
+                                maxLines = 2,
+                                softWrap = true,
+                                overflow = TextOverflow.Visible
                             )
                         }
                         // Skuter
@@ -2099,11 +2091,13 @@ fun RenterTable(
                             Text(
                                 renter.scooterName ?: "—",
                                 modifier = Modifier
-                                    .then(if (hasAnyExtraVisible) Modifier.width(wScoot) else Modifier.weight(fScoot))
+                                    .width(wScoot)
                                     .padding(horizontal = 4.dp),
                                 style = MaterialTheme.typography.bodySmall,
                                 color = ClaudeText,
-                                maxLines = 1
+                                maxLines = 2,
+                                softWrap = true,
+                                overflow = TextOverflow.Visible
                             )
                         }
                         // Boshlanish (дата начала ПОСЛЕДНЕГО контракта)
@@ -2113,18 +2107,16 @@ fun RenterTable(
                             Text(
                                 dateFmt.format(Date(startTs)),
                                 modifier = Modifier
-                                    .then(if (hasAnyExtraVisible) Modifier.width(wStart) else Modifier.weight(fStart))
+                                    .width(wStart)
                                     .padding(horizontal = 4.dp),
                                 style = MaterialTheme.typography.bodySmall,
                                 color = ClaudeText,
-                                maxLines = 1
+                                maxLines = 2,
+                                softWrap = true,
+                                overflow = TextOverflow.Visible
                             )
                         }
                         // Tugash (дата окончания ПОСЛЕДНЕГО контракта)
-                        // Берётся weekEnd самой свежей записи (CREATED/AUTO_RENEW).
-                        // Раньше показывался конец ПЕРВОГО контракта
-                        // (rentStartDateTimestamp + rentDurationDays × dayMs),
-                        // что не соответствовало реальной текущей дате контракта.
                         if (showEnd) {
                             val latest = latestContractByRenter[renter.id]
                             val endTs = latest?.weekEnd
@@ -2133,11 +2125,13 @@ fun RenterTable(
                             Text(
                                 dateFmt.format(Date(endTs)),
                                 modifier = Modifier
-                                    .then(if (hasAnyExtraVisible) Modifier.width(wEnd) else Modifier.weight(fEnd))
+                                    .width(wEnd)
                                     .padding(horizontal = 4.dp),
                                 style = MaterialTheme.typography.bodySmall,
                                 color = ClaudeText,
-                                maxLines = 1
+                                maxLines = 2,
+                                softWrap = true,
+                                overflow = TextOverflow.Visible
                             )
                         }
                         // Balans
@@ -2150,13 +2144,15 @@ fun RenterTable(
                             Text(
                                 renter.balance.toLong().toString(),
                                 modifier = Modifier
-                                    .then(if (hasAnyExtraVisible) Modifier.width(wDebt) else Modifier.weight(fDebt))
+                                    .width(wDebt)
                                     .padding(horizontal = 4.dp),
                                 style = MaterialTheme.typography.bodyMedium,
                                 color = balanceColor,
                                 fontWeight = FontWeight.Bold,
                                 textAlign = TextAlign.End,
-                                maxLines = 1
+                                maxLines = 2,
+                                softWrap = true,
+                                overflow = TextOverflow.Visible
                             )
                         }
                         // ── Опциональные колонки (показываются если включены) ─
@@ -2166,7 +2162,9 @@ fun RenterTable(
                                 modifier = Modifier.width(wPassport).padding(horizontal = 4.dp),
                                 style = MaterialTheme.typography.bodySmall,
                                 color = ClaudeText,
-                                maxLines = 1
+                                maxLines = 2,
+                                softWrap = true,
+                                overflow = TextOverflow.Visible
                             )
                         }
                         if (showAddress) {
@@ -2175,7 +2173,9 @@ fun RenterTable(
                                 modifier = Modifier.width(wAddress).padding(horizontal = 4.dp),
                                 style = MaterialTheme.typography.bodySmall,
                                 color = ClaudeText,
-                                maxLines = 1
+                                maxLines = 2,
+                                softWrap = true,
+                                overflow = TextOverflow.Visible
                             )
                         }
                         if (showPinfl) {
@@ -2184,7 +2184,9 @@ fun RenterTable(
                                 modifier = Modifier.width(wPinfl).padding(horizontal = 4.dp),
                                 style = MaterialTheme.typography.bodySmall,
                                 color = ClaudeText,
-                                maxLines = 1
+                                maxLines = 2,
+                                softWrap = true,
+                                overflow = TextOverflow.Visible
                             )
                         }
                     }
@@ -3594,49 +3596,41 @@ fun ScooterTable(
     val showExtra  = isColVisible("col_extra")
     val showStatus = isColVisible("col_status")
 
-    // Ширины для fixed-width версии (со скроллом). По умолчанию таблица
-    // использует weight-based компоновку для Name+Status; если включены
-    // доп. колонки — переключаемся на horizontalScroll + fixed widths.
-    val wName   = 110.dp
-    val wDoc    = 110.dp
-    val wVin    = 130.dp
-    val wEngine = 110.dp
-    val wSerial = 90.dp
-    val wBatt1  = 100.dp
-    val wBatt2  = 100.dp
-    val wExtra  = 140.dp
-    val wStat   = 90.dp
-
-    val fName = 2.0f
-    val fStat = 1.0f
+    // ВСЕГДА используем fixed widths + горизонтальный скролл — даже когда
+    // скрыты все extra-колонки. Это гарантирует что имя скутера не будет
+    // обрезано (maxLines=2 + softWrap позволяют переносу на 2 строки).
+    val wName   = 140.dp   // увеличено с 110 — вмещает «Skillmax-001» с запасом
+    val wDoc    = 115.dp
+    val wVin    = 140.dp
+    val wEngine = 115.dp
+    val wSerial = 95.dp
+    val wBatt1  = 105.dp
+    val wBatt2  = 105.dp
+    val wExtra  = 150.dp
+    val wStat   = 95.dp
 
     val hasAnyDetailVisible = showDoc || showVin || showEngine || showSerial ||
         showBatt1 || showBatt2 || showExtra
     val hScrollState = rememberScrollState()
 
     Column(modifier = Modifier.fillMaxSize()) {
-        // Заголовок
+        // Заголовок — всегда horizontalScroll
         Surface(color = ClaudeCard, modifier = Modifier.fillMaxWidth()) {
             Row(
                 modifier = Modifier
-                    .then(if (hasAnyDetailVisible) Modifier.horizontalScroll(hScrollState) else Modifier)
+                    .horizontalScroll(hScrollState)
                     .padding(horizontal = 8.dp, vertical = 4.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                if (hasAnyDetailVisible) {
-                    if (showName)   SortableHeaderCellFixed(Icons.Default.Label,         wName,   "col_name",  sortState) { onSortClick("col_name") }
-                    if (showDoc)    NonSortableHeaderCellFixed(Icons.Default.CreditCard,   wDoc,    "Hujjat raqami")
-                    if (showVin)    NonSortableHeaderCellFixed(Icons.Default.Numbers,      wVin,    "VIN")
-                    if (showEngine) NonSortableHeaderCellFixed(Icons.Default.Build,         wEngine, "Dvigatel")
-                    if (showSerial) NonSortableHeaderCellFixed(Icons.Default.Tag,           wSerial, "ID raqami")
-                    if (showBatt1)  NonSortableHeaderCellFixed(Icons.Default.Bolt,          wBatt1,  "Akkumulyator 1")
-                    if (showBatt2)  NonSortableHeaderCellFixed(Icons.Default.Bolt,          wBatt2,  "Akkumulyator 2")
-                    if (showExtra)  NonSortableHeaderCellFixed(Icons.Default.Info,          wExtra,  "Qo'shimcha")
-                    if (showStatus) NonSortableHeaderCellFixed(Icons.Default.Info,          wStat,   "Holat")
-                } else {
-                    if (showName)   SortableHeaderCell(Icons.Default.Label, fName, "col_name", sortState) { onSortClick("col_name") }
-                    if (showStatus) NonSortableHeaderCell(Icons.Default.Info, fStat, "Holat")
-                }
+                if (showName)   SortableHeaderCellFixed(Icons.Default.Label,         wName,   "col_name",  sortState) { onSortClick("col_name") }
+                if (showDoc)    NonSortableHeaderCellFixed(Icons.Default.CreditCard,   wDoc,    "Hujjat raqami")
+                if (showVin)    NonSortableHeaderCellFixed(Icons.Default.Numbers,      wVin,    "VIN")
+                if (showEngine) NonSortableHeaderCellFixed(Icons.Default.Build,         wEngine, "Dvigatel")
+                if (showSerial) NonSortableHeaderCellFixed(Icons.Default.Tag,           wSerial, "ID raqami")
+                if (showBatt1)  NonSortableHeaderCellFixed(Icons.Default.Bolt,          wBatt1,  "Akkumulyator 1")
+                if (showBatt2)  NonSortableHeaderCellFixed(Icons.Default.Bolt,          wBatt2,  "Akkumulyator 2")
+                if (showExtra)  NonSortableHeaderCellFixed(Icons.Default.Info,          wExtra,  "Qo'shimcha")
+                if (showStatus) NonSortableHeaderCellFixed(Icons.Default.Info,          wStat,   "Holat")
             }
         }
         HorizontalDivider(color = ClaudeDivider)
@@ -3670,7 +3664,7 @@ fun ScooterTable(
                 ) {
                     Row(
                         modifier = Modifier
-                            .then(if (hasAnyDetailVisible) Modifier.horizontalScroll(hScrollState) else Modifier.fillMaxWidth())
+                            .horizontalScroll(hScrollState)
                             .border(
                                 width = if (isSelected) 2.dp else 1.5.dp,
                                 color = sColor,
@@ -3688,12 +3682,14 @@ fun ScooterTable(
                             Text(
                                 scooter.name,
                                 modifier = Modifier
-                                    .then(if (hasAnyDetailVisible) Modifier.width(wName) else Modifier.weight(fName))
+                                    .width(wName)
                                     .padding(horizontal = 4.dp),
                                 style = MaterialTheme.typography.bodyMedium,
                                 color = ClaudeText,
                                 fontWeight = FontWeight.SemiBold,
-                                maxLines = 1
+                                maxLines = 2,
+                                softWrap = true,
+                                overflow = TextOverflow.Visible
                             )
                         }
                         if (showDoc) {
@@ -3702,7 +3698,9 @@ fun ScooterTable(
                                 modifier = Modifier.width(wDoc).padding(horizontal = 4.dp),
                                 style = MaterialTheme.typography.bodySmall,
                                 color = ClaudeText,
-                                maxLines = 1
+                                maxLines = 2,
+                                softWrap = true,
+                                overflow = TextOverflow.Visible
                             )
                         }
                         if (showVin) {
@@ -3711,7 +3709,9 @@ fun ScooterTable(
                                 modifier = Modifier.width(wVin).padding(horizontal = 4.dp),
                                 style = MaterialTheme.typography.bodySmall,
                                 color = ClaudeText,
-                                maxLines = 1
+                                maxLines = 2,
+                                softWrap = true,
+                                overflow = TextOverflow.Visible
                             )
                         }
                         if (showEngine) {
@@ -3720,7 +3720,9 @@ fun ScooterTable(
                                 modifier = Modifier.width(wEngine).padding(horizontal = 4.dp),
                                 style = MaterialTheme.typography.bodySmall,
                                 color = ClaudeText,
-                                maxLines = 1
+                                maxLines = 2,
+                                softWrap = true,
+                                overflow = TextOverflow.Visible
                             )
                         }
                         if (showSerial) {
@@ -3729,7 +3731,9 @@ fun ScooterTable(
                                 modifier = Modifier.width(wSerial).padding(horizontal = 4.dp),
                                 style = MaterialTheme.typography.bodySmall,
                                 color = ClaudeText,
-                                maxLines = 1
+                                maxLines = 2,
+                                softWrap = true,
+                                overflow = TextOverflow.Visible
                             )
                         }
                         if (showBatt1) {
@@ -3738,7 +3742,9 @@ fun ScooterTable(
                                 modifier = Modifier.width(wBatt1).padding(horizontal = 4.dp),
                                 style = MaterialTheme.typography.bodySmall,
                                 color = ClaudeText,
-                                maxLines = 1
+                                maxLines = 2,
+                                softWrap = true,
+                                overflow = TextOverflow.Visible
                             )
                         }
                         if (showBatt2) {
@@ -3747,7 +3753,9 @@ fun ScooterTable(
                                 modifier = Modifier.width(wBatt2).padding(horizontal = 4.dp),
                                 style = MaterialTheme.typography.bodySmall,
                                 color = ClaudeText,
-                                maxLines = 1
+                                maxLines = 2,
+                                softWrap = true,
+                                overflow = TextOverflow.Visible
                             )
                         }
                         if (showExtra) {
@@ -3756,13 +3764,15 @@ fun ScooterTable(
                                 modifier = Modifier.width(wExtra).padding(horizontal = 4.dp),
                                 style = MaterialTheme.typography.bodySmall,
                                 color = ClaudeText,
-                                maxLines = 1
+                                maxLines = 2,
+                                softWrap = true,
+                                overflow = TextOverflow.Visible
                             )
                         }
                         if (showStatus) {
                             Row(
                                 modifier = Modifier
-                                    .then(if (hasAnyDetailVisible) Modifier.width(wStat) else Modifier.weight(fStat))
+                                    .width(wStat)
                                     .padding(horizontal = 4.dp),
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
@@ -3777,7 +3787,9 @@ fun ScooterTable(
                                     style = MaterialTheme.typography.labelSmall,
                                     color = sColor,
                                     fontWeight = FontWeight.Bold,
-                                    maxLines = 1
+                                    maxLines = 2,
+                                    softWrap = true,
+                                    overflow = TextOverflow.Visible
                                 )
                             }
                         }

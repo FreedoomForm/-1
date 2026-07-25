@@ -25,6 +25,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
@@ -258,18 +259,20 @@ fun ContractListScreen(
     val hasAnyExtra = showPassport || showAddress || showPinfl  // kept for future use
     val hScrollState = rememberScrollState()
 
-    // Ширины fixed-колонок (когда есть extra или слишком много колонок)
-    val wId       = 50.dp
-    val wRenter   = 110.dp
-    val wPhone    = 95.dp
-    val wScooter  = 80.dp
-    val wStart    = 80.dp
-    val wEnd      = 80.dp
-    val wAmount   = 75.dp
-    val wStatus   = 90.dp
-    val wPassport = 105.dp
-    val wAddress  = 130.dp
-    val wPinfl    = 90.dp
+    // Ширины fixed-колонок. Увеличены чтобы вмещать полное содержимое —
+    // maxLines=2 + softWrap разрешают перенос на вторую строку вместо
+    // обрезки «Akmal…».
+    val wId       = 55.dp
+    val wRenter   = 150.dp   // увеличено с 110 — вмещает «Имя Фамилия»
+    val wPhone    = 110.dp
+    val wScooter  = 95.dp
+    val wStart    = 90.dp
+    val wEnd      = 90.dp
+    val wAmount   = 85.dp
+    val wStatus   = 100.dp
+    val wPassport = 115.dp
+    val wAddress  = 145.dp
+    val wPinfl    = 105.dp
 
     // ── Содержимое страницы (без собственного Scaffold — вкладка живёт
     // внутри единого Scaffold в MainActivity, чтобы поисковая строка всех
@@ -414,7 +417,9 @@ fun ContractListScreen(
                                         modifier = Modifier.width(wId).padding(horizontal = 4.dp),
                                         style = MaterialTheme.typography.labelSmall,
                                         color = ClaudeTextSecondary,
-                                        maxLines = 1
+                                        maxLines = 2,
+                                        softWrap = true,
+                                        overflow = TextOverflow.Visible
                                     )
                                 }
                                 if (showRenter) {
@@ -424,7 +429,9 @@ fun ContractListScreen(
                                         style = MaterialTheme.typography.bodyMedium,
                                         color = ClaudeText,
                                         fontWeight = FontWeight.SemiBold,
-                                        maxLines = 1
+                                        maxLines = 2,
+                                        softWrap = true,
+                                        overflow = TextOverflow.Visible
                                     )
                                 }
                                 if (showPhone) {
@@ -433,7 +440,9 @@ fun ContractListScreen(
                                         modifier = Modifier.width(wPhone).padding(horizontal = 4.dp),
                                         style = MaterialTheme.typography.bodySmall,
                                         color = ClaudeTextSecondary,
-                                        maxLines = 1
+                                        maxLines = 2,
+                                        softWrap = true,
+                                        overflow = TextOverflow.Visible
                                     )
                                 }
                                 if (showScooter) {
@@ -442,7 +451,9 @@ fun ContractListScreen(
                                         modifier = Modifier.width(wScooter).padding(horizontal = 4.dp),
                                         style = MaterialTheme.typography.bodySmall,
                                         color = ClaudeText,
-                                        maxLines = 1
+                                        maxLines = 2,
+                                        softWrap = true,
+                                        overflow = TextOverflow.Visible
                                     )
                                 }
                                 if (showStart) {
@@ -451,7 +462,9 @@ fun ContractListScreen(
                                         modifier = Modifier.width(wStart).padding(horizontal = 4.dp),
                                         style = MaterialTheme.typography.bodySmall,
                                         color = ClaudeText,
-                                        maxLines = 1
+                                        maxLines = 2,
+                                        softWrap = true,
+                                        overflow = TextOverflow.Visible
                                     )
                                 }
                                 if (showEnd) {
@@ -460,7 +473,9 @@ fun ContractListScreen(
                                         modifier = Modifier.width(wEnd).padding(horizontal = 4.dp),
                                         style = MaterialTheme.typography.bodySmall,
                                         color = ClaudeText,
-                                        maxLines = 1
+                                        maxLines = 2,
+                                        softWrap = true,
+                                        overflow = TextOverflow.Visible
                                     )
                                 }
                                 if (showAmount) {
@@ -471,7 +486,9 @@ fun ContractListScreen(
                                         color = if (entry.isPaid) StatusOk else StatusOverdue,
                                         fontWeight = FontWeight.Bold,
                                         textAlign = TextAlign.End,
-                                        maxLines = 1
+                                        maxLines = 2,
+                                        softWrap = true,
+                                        overflow = TextOverflow.Visible
                                     )
                                 }
                                 if (showStatus) {
@@ -490,7 +507,9 @@ fun ContractListScreen(
                                             style = MaterialTheme.typography.labelSmall,
                                             color = statusColor,
                                             fontWeight = FontWeight.SemiBold,
-                                            maxLines = 1
+                                            maxLines = 2,
+                                            softWrap = true,
+                                            overflow = TextOverflow.Visible
                                         )
                                     }
                                 }
@@ -500,7 +519,9 @@ fun ContractListScreen(
                                         modifier = Modifier.width(wPassport).padding(horizontal = 4.dp),
                                         style = MaterialTheme.typography.bodySmall,
                                         color = ClaudeText,
-                                        maxLines = 1
+                                        maxLines = 2,
+                                        softWrap = true,
+                                        overflow = TextOverflow.Visible
                                     )
                                 }
                                 if (showAddress) {
@@ -509,7 +530,9 @@ fun ContractListScreen(
                                         modifier = Modifier.width(wAddress).padding(horizontal = 4.dp),
                                         style = MaterialTheme.typography.bodySmall,
                                         color = ClaudeText,
-                                        maxLines = 1
+                                        maxLines = 2,
+                                        softWrap = true,
+                                        overflow = TextOverflow.Visible
                                     )
                                 }
                                 if (showPinfl) {
@@ -518,7 +541,9 @@ fun ContractListScreen(
                                         modifier = Modifier.width(wPinfl).padding(horizontal = 4.dp),
                                         style = MaterialTheme.typography.bodySmall,
                                         color = ClaudeText,
-                                        maxLines = 1
+                                        maxLines = 2,
+                                        softWrap = true,
+                                        overflow = TextOverflow.Visible
                                     )
                                 }
                                 // PDF-кнопка строки удалена — PDF-договор теперь
