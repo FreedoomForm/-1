@@ -59,4 +59,16 @@ class HistoryViewModel(application: Application) : AndroidViewModel(application)
             ))
         }
     }
+
+    /** History is immutable: edit creates a linked correction, never rewrites evidence. */
+    fun correctSelected(sourceId: String, note: String) {
+        viewModelScope.launch {
+            db.auditEventDao().insert(AuditEvent(
+                action = "HISTORY_CORRECTION_CREATED",
+                entityType = "HISTORY_ITEM",
+                entityId = sourceId,
+                reason = note.ifBlank { "History correction" }
+            ))
+        }
+    }
 }

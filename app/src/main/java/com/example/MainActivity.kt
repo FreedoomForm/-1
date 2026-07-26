@@ -376,8 +376,11 @@ fun MainScreen(
     var selectedContracts by remember { mutableStateOf(setOf<Int>()) }
     var selectedTxs by remember { mutableStateOf(setOf<Int>()) }
     var selectedTrashItems by remember { mutableStateOf(setOf<Long>()) }
+    var selectedHistorySourceId by remember { mutableStateOf<String?>(null) }
     var historyCreateTrigger by remember { mutableStateOf(0) }
+    var historyEditTrigger by remember { mutableStateOf(0) }
     var trashRestoreTrigger by remember { mutableStateOf(0) }
+    var trashEditTrigger by remember { mutableStateOf(0) }
     var trashPurgeTrigger by remember { mutableStateOf(0) }
     var contractEditTrigger by remember { mutableStateOf(0) }
     var contractDeleteTrigger by remember { mutableStateOf(0) }
@@ -966,7 +969,8 @@ fun MainScreen(
                             2 -> selectedContracts.size == 1
                             3 -> selectedTxs.size == 1
                             5 -> selectedCardIds.size == 1
-                            8 -> false // recycle bin has restore/purge, not editing
+                            7 -> selectedHistorySourceId != null
+                            8 -> selectedTrashItems.size == 1
                             else -> false
                         }
                         IconButton(
@@ -985,6 +989,8 @@ fun MainScreen(
                                     2 -> contractEditTrigger++
                                     3 -> transactionEditTrigger++
                                     5 -> cardEditTrigger++
+                                    7 -> historyEditTrigger++
+                                    8 -> trashEditTrigger++
                                 }
                             },
                             enabled = editEnabled,
@@ -1808,10 +1814,16 @@ fun MainScreen(
                     showTopBar = false
                 )
             } else if (currentTab == 7) {
-                HistoryScreen(createTrigger = historyCreateTrigger)
+                HistoryScreen(
+                    createTrigger = historyCreateTrigger,
+                    editTrigger = historyEditTrigger,
+                    selectedSourceId = selectedHistorySourceId,
+                    onSelectedSourceChange = { selectedHistorySourceId = it }
+                )
             } else if (currentTab == 8) {
                 TrashScreen(
                     restoreTrigger = trashRestoreTrigger,
+                    editTrigger = trashEditTrigger,
                     purgeTrigger = trashPurgeTrigger,
                     selected = selectedTrashItems,
                     onSelectedChange = { selectedTrashItems = it }

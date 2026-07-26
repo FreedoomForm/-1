@@ -20,6 +20,10 @@ class TrashViewModel(application: Application) : AndroidViewModel(application) {
 
     fun restore(itemId: Long) = viewModelScope.launch { service.restore(itemId) }
 
+    fun updateReason(itemId: Long, reason: String) = viewModelScope.launch {
+        db.deletedItemDao().updateReason(itemId, reason.ifBlank { null })
+    }
+
     /** Permanent purge does not remove the immutable financial audit. */
     fun purge(itemId: Long) = viewModelScope.launch { db.deletedItemDao().purge(itemId) }
 }

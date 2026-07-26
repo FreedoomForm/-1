@@ -40,16 +40,37 @@ import java.util.Locale
 @Composable
 fun HistoryScreen(
     createTrigger: Int = 0,
+    editTrigger: Int = 0,
+    selectedSourceId: String? = null,
+    onSelectedSourceChange: (String?) -> Unit = {},
     viewModel: HistoryViewModel = viewModel()
 ) {
     val items = viewModel.items.collectAsStateWithLifecycle().value
     var selectedTimestamp by remember { mutableStateOf<Long?>(null) }
     var showCreateDialog by remember { mutableStateOf(false) }
     var branchNote by remember { mutableStateOf("") }
+    var showEditDialog by remember { mutableStateOf(false) }
+    var correctionNote by remember { mutableStateOf("") }
     LaunchedEffect(createTrigger) {
         if (createTrigger > 0) showCreateDialog = true
     }
+    LaunchedEffect(editTrigger) {
+        if (editTrigger > 0 && selectedSourceId != null) showEditDialog = true
+    }
     val formatter = SimpleDateFormat("dd.MM.yyyy HH:mm", Locale.getDefault())
+    if (showEditDialog) {
+        AlertDialog(
+            onDismissRequest = { showEditDialog = false },
+            title = { Text("Tarixga tuzatish") },
+            text = { OutlinedTextField(correctionNote, { correctionNote = it }, label = { Text("Tuzatish izohi") }) },
+            confirmButton = { TextButton(onClick = {
+                selectedSourceId?.let { viewModel.correctSelected(it, correctionNote) }
+                correctionNote = ""; showEditDialog = false
+            }) { Text("Tuzatish kiritish") } },
+            dismissButton = { TextButton(onClick = { showEditDialog = false }) { Text("Bekor qilish") } }
+        )
+    }
+
     if (showCreateDialog) {
         AlertDialog(
             onDismissRequest = { showCreateDialog = false },
@@ -81,10 +102,13 @@ fun HistoryScreen(
         verticalArrangement = Arrangement.spacedBy(8.dp)
     ) {
         items(items, key = { "${it.kind}-${it.sourceId}" }) { item ->
-            Card(Modifier.fillMaxWidth().clickable { selectedTimestamp = item.timestamp }) {
+            Card(Modifier.fillMaxWidth().clickable {
+                selectedTimestamp = item.timestamp
+                onSelectedSourceChange(if (selectedSourceId == item.sourceId) null else item.sourceId)
+            }) {
                 Row(Modifier.fillMaxWidth().padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
                     Column(Modifier.weight(1f)) {
-                        Text(item.title, fontWeight = FontWeight.SemiBold, style = MaterialTheme.typography.bodyMedium)
+                        Text(if (selectedSourceId == item.sourceId) "✓ ${item.title}" else item.title, fontWeight = FontWeight.SemiBold, style = MaterialTheme.typography.bodyMedium)
                         Text(item.subtitle, style = MaterialTheme.typography.bodySmall, maxLines = 2)
                         Text(formatter.format(Date(item.timestamp)), style = MaterialTheme.typography.labelSmall)
                     }

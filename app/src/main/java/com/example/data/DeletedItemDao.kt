@@ -16,6 +16,9 @@ interface DeletedItemDao {
     @Insert
     suspend fun insert(item: DeletedItem): Long
 
+    @Query("UPDATE deleted_items SET reason = :reason WHERE id = :id")
+    suspend fun updateReason(id: Long, reason: String?)
+
     @Query("DELETE FROM deleted_items WHERE id = :id")
     suspend fun purge(id: Long)
 }
