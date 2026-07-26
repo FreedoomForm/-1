@@ -42,6 +42,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -51,6 +52,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.example.data.TimelineEvent
 import com.example.ui.HistoryViewModel
+import kotlinx.coroutines.launch
 import com.example.ui.theme.ClaudeAccent
 import com.example.ui.theme.ClaudeAccentBg
 import com.example.ui.theme.ClaudeCard
@@ -95,6 +97,8 @@ fun HistoryScreen(
     var showDetail by remember { mutableStateOf(false) }
     var showFilters by remember { mutableStateOf(false) }
     var showPeriodPicker by remember { mutableStateOf(false) }
+    var showRestoreDialog by remember { mutableStateOf(false) }
+    var restoreReason by remember { mutableStateOf("") }
     var branchName by remember { mutableStateOf("") }
     var correctionNote by remember { mutableStateOf("") }
     var timelinePosition by remember { mutableStateOf(0f) }
@@ -211,6 +215,63 @@ fun HistoryScreen(
                         showDetail = false
                     }) { Text("Arxivlash") }
                     TextButton(onClick = { showDetail = false }) { Text("Yopish") }
+                }
+            }
+        )
+    }
+
+    // ── Restore dialog (§9.0: safe restore with reason) ──────────────────────
+    if (showRestoreDialog && selected != null) {
+        val coroutineScope = rememberCoroutineScope()
+        AlertDialog(
+            onDismissRequest = { showRestoreDialog = false; restoreReason = "" },
+            title = { Text("Holatni qaytarish") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(
+                        "Tanlangan: ${selected.title}",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = ClaudeText
+                    )
+                    Text(
+                        "Vaqt: ${formatter.format(Date(selected.timestamp))}",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = ClaudeTextSecondary
+                    )
+                    Spacer(Modifier.height(4.dp))
+                    Text(
+                        "Diqqat: moliyaviy faktlar o'chirilmaydi. Qaytarish auditable " +
+                        "RESTORE voqeasi sifatida yoziladi. Moliyaviy holatni " +
+                        "ko'rib chiqish va kerak bo'lsa storno yaratish kerak.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = ClaudeTextSecondary
+                    )
+                    OutlinedTextField(
+                        value = restoreReason,
+                        onValueChange = { restoreReason = it },
+                        label = { Text("Qaytarish sababi (majburiy)") },
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                }
+            },
+            confirmButton = {
+                TextButton(
+                    enabled = restoreReason.isNotBlank(),
+                    onClick = {
+                        coroutineScope.launch {
+                            val id = viewModel.restoreToSnapshot(selected.timestamp, restoreReason)
+                            if (id != null) {
+                                onSelectedEventChange(id)
+                            }
+                        }
+                        restoreReason = ""
+                        showRestoreDialog = false
+                    }
+                ) { Text("Qaytarish", color = ClaudeAccent, fontWeight = FontWeight.Bold) }
+            },
+            dismissButton = {
+                TextButton(onClick = { showRestoreDialog = false; restoreReason = "" }) {
+                    Text("Bekor qilish")
                 }
             }
         )
@@ -347,9 +408,9 @@ fun HistoryScreen(
             TextButton(
                 enabled = selected != null,
                 onClick = {
-                    // State restoration is represented by selection now; the
-                    // event/snapshot engine supplies the render frame below.
-                    selected?.let { onSelectedEventChange(it.id) }
+                    // §9.0: open restore dialog — never erases financial facts,
+                    // records an auditable RESTORE event instead.
+                    if (selected != null) showRestoreDialog = true
                 }
             ) { Text("Qaytish") }
             Spacer(Modifier.width(4.dp))

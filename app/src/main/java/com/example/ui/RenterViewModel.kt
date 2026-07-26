@@ -472,6 +472,22 @@ class RenterViewModel(application: Application) : AndroidViewModel(application) 
             }
             // Обновляем нативные виджеты Android после создания арендатора
             try { com.example.widget.WidgetUpdater.updateAll(getApplication()) } catch (_: Exception) {}
+
+            // ── Timeline critical action (§9.0) ────────────────────────────
+            // Record the renter creation as a major timeline event so it shows
+            // up in History with an auto-snapshot. Non-blocking — never fails
+            // the renter creation if timeline write fails.
+            try {
+                val db = com.example.data.AppDatabase.getDatabase(getApplication())
+                com.example.data.TimelineService(db).recordCriticalAction(
+                    actionType = "RENTER_CREATE",
+                    screen = "RENTERS",
+                    title = "Yangi arendator: ${savedRenter.name}",
+                    entityType = "RENTER",
+                    entityId = savedRenter.id.toString(),
+                    payloadJson = "{\"name\":\"${savedRenter.name.replace("\"","\\\"")}\",\"phone\":\"${savedRenter.phoneNumber}\"}"
+                )
+            } catch (_: Exception) {}
         }
     }
 
@@ -916,6 +932,21 @@ class RenterViewModel(application: Application) : AndroidViewModel(application) 
             // Обновляем нативные виджеты Android
             try {
                 com.example.widget.WidgetUpdater.updateAll(getApplication())
+            } catch (_: Exception) {}
+
+            // ── Timeline critical action (§9.0) ────────────────────────────
+            // Record renter deletion (with cascade count) for history tree.
+            try {
+                val db = com.example.data.AppDatabase.getDatabase(getApplication())
+                com.example.data.TimelineService(db).recordCriticalAction(
+                    actionType = "RENTER_DELETE",
+                    screen = "RENTERS",
+                    title = "Arendator o'chirildi: #$id",
+                    entityType = "RENTER",
+                    entityId = id.toString(),
+                    payloadJson = "{\"cascadeContracts\":${contracts.size}}",
+                    major = true
+                )
             } catch (_: Exception) {}
         }
     }

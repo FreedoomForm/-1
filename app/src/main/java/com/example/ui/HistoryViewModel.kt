@@ -59,6 +59,17 @@ class HistoryViewModel(application: Application) : AndroidViewModel(application)
         }
     }
 
+    /**
+     * Safe restore: never erases financial facts. Records a RESTORE event
+     * referencing the nearest snapshot before/at [timestamp]. The snapshot's
+     * stateJson can be read by the UI to render a historical frame.
+     *
+     * Per PLAN_UNIVERSAL_ACCOUNTING §9.0.
+     * Returns the RESTORE event id, or null if no snapshot found.
+     */
+    suspend fun restoreToSnapshot(timestamp: Long, reason: String): Long? =
+        service.restoreToSnapshot(_activeBranchId.value, timestamp, reason)
+
     suspend fun nearestSnapshot(timestamp: Long) =
         service.nearestRenderableState(_activeBranchId.value, timestamp)
 }
