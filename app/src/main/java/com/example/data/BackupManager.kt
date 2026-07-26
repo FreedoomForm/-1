@@ -80,6 +80,8 @@ object BackupManager {
     private const val SHEET_PAYMENT_ALLOCATIONS = "PaymentAllocations"
     private const val SHEET_AUDIT_EVENTS = "AuditEvents"
     private const val SHEET_APP_USERS = "AppUsers"
+    private const val SHEET_METADATA = "Metadata"
+    private const val BACKUP_SCHEMA_VERSION = 2
 
     /* =========================================================================
        ЭКСПОРТ
@@ -143,6 +145,10 @@ object BackupManager {
                 val buf = java.io.BufferedOutputStream(fos, 8192)
                 try {
                     val wb = Workbook(buf, "ScooterRent", "1.0")
+                    writeBackupMetadata(
+                        wb, renters.size, scooters.size, contracts.size, transactions.size,
+                        cards.size, cardTx.size, businessOperations.size, rentPeriods.size, paymentAllocations.size
+                    )
                     writeRenters(wb, renters)
                     writeScooters(wb, scooters)
                     writeContracts(wb, contracts)
@@ -200,6 +206,22 @@ object BackupManager {
             Log.e(TAG, "Export failed", e)
             "Xato: ${e.message ?: e.javaClass.simpleName}"
         }
+    }
+
+    /** First worksheet: enables safe forward-compatibility checks on import. */
+    private fun writeBackupMetadata(
+        wb: Workbook, renters: Int, scooters: Int, contracts: Int, transactions: Int,
+        cards: Int, cardTransactions: Int, operations: Int, periods: Int, allocations: Int
+    ) {
+        val ws = wb.newWorksheet(SHEET_METADATA)
+        val headers = listOf(
+            "schemaVersion", "exportedAt", "appDatabaseVersion", "renters", "scooters",
+            "contracts", "transactions", "cards", "cardTransactions", "operations", "periods", "allocations"
+        )
+        headers.forEachIndexed { i, value -> ws.value(0, i, value) }
+        val values = listOf(BACKUP_SCHEMA_VERSION.toLong(), System.currentTimeMillis(), 21L, renters.toLong(), scooters.toLong(),
+            contracts.toLong(), transactions.toLong(), cards.toLong(), cardTransactions.toLong(), operations.toLong(), periods.toLong(), allocations.toLong())
+        values.forEachIndexed { i, value -> ws.value(1, i, value) }
     }
 
     private fun writeRenters(wb: Workbook, items: List<Renter>) {
@@ -446,6 +468,14 @@ object BackupManager {
                     // Считываем все листы один раз и кладём в Map по имени.
                     val sheetMap = mutableMapOf<String, Sheet>()
                     wb.sheets.forEach { sh -> sheetMap[sh.name] = sh }
+                    val backupMetadata = sheetMap[SHEET_METADATA]?.let { metadata ->
+                        val values = readBackupMetadata(metadata)
+                        val version = values["schemaVersion"]?.toInt() ?: 1
+                        require(version <= BACKUP_SCHEMA_VERSION) {
+                            "Backup schema v$version is newer than this app supports (v$BACKUP_SCHEMA_VERSION)"
+                        }
+                        values
+                    } ?: emptyMap()
 
                     // ── Порядок импорта: сначала независимые таблицы ──────
                     // (Scooters, VirtualCards, Renters), потом зависимые
@@ -541,6 +571,20 @@ object BackupManager {
                     if (db.appUserDao().first() == null) {
                         db.appUserDao().insert(AppUser(id = 1, displayName = "Owner", role = AppUser.ROLE_OWNER))
                     }
+                    // A versioned backup must restore exactly the rows it says
+                    // it contains; mismatches are surfaced instead of silently
+                    // accepting a truncated export.
+                    fun verifyCount(key: String, actual: Int) {
+                        backupMetadata[key]?.let { expected ->
+                            require(expected.toInt() == actual) { "Backup integrity mismatch for $key: expected $expected, restored $actual" }
+                        }
+                    }
+                    verifyCount("renters", rentersCount)
+                    verifyCount("scooters", scootersCount)
+                    verifyCount("contracts", contractsCount)
+                    verifyCount("transactions", transactionsCount)
+                    verifyCount("cards", cardsCount)
+                    verifyCount("cardTransactions", cardTxCount)
                 }
             }
 
@@ -554,6 +598,15 @@ object BackupManager {
     }
 
     /* ── Парсеры листов ─────────────────────────────────────────────────── */
+
+    private fun readBackupMetadata(sheet: Sheet): Map<String, Long> {
+        val rows = sheet.read()
+        val headers = rows.getOrNull(0) ?: return emptyMap()
+        val values = rows.getOrNull(1) ?: return emptyMap()
+        return headers.mapIndexedNotNull { index, cell ->
+            cell.asString()?.let { key -> values.getCell(index)?.asNumber()?.toLong()?.let { key to it } }
+        }.toMap()
+    }
 
     private fun readRenters(sheet: Sheet): List<Renter> {
         val rows = sheet.read()

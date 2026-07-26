@@ -186,7 +186,7 @@ class VirtualCardRepository(
         // rollback above is the compensating accounting movement.
         database?.let { db ->
             db.businessOperationDao().getByCardTransactionId(id)?.let { original ->
-                db.businessOperationDao().markReversed(original.id)
+                BusinessOperationRepository(db).reverse(original.id, note)
             }
             db.auditEventDao().insert(AuditEvent(
                 action = AuditEvent.ACTION_CARD_TRANSACTION_REVERSED,

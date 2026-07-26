@@ -14,22 +14,40 @@ class BusinessOperationRepository(private val db: AppDatabase) {
     }
 
     /**
-     * Cancels an operation without destroying audit history. The caller must
-     * create the real-world compensating movement separately when required.
+     * Creates a true compensating journal entry. The original is retained and
+     * remains visible; together, the two active entries net to zero in cash,
+     * profit and ledger projections. No financial history is silently erased.
      */
     suspend fun reverse(id: Long, note: String): Long = db.withTransaction {
+        require(note.isNotBlank()) { "Reversal reason is required" }
         val original = dao.getById(id) ?: error("Operation #$id not found")
-        check(original.status == BusinessOperation.STATUS_ACTIVE) { "Operation is already reversed" }
-        dao.markReversed(id)
-        dao.insert(original.copy(
-            id = 0,
+        check(original.status == BusinessOperation.STATUS_ACTIVE) { "Operation is not active" }
+        val (direction, fromCard, toCard) = when (original.direction) {
+            BusinessOperation.DIRECTION_INCOME -> Triple(
+                BusinessOperation.DIRECTION_EXPENSE, original.toCardId, CardTransaction.EXTERNAL_SOURCE_ID
+            )
+            BusinessOperation.DIRECTION_EXPENSE -> Triple(
+                BusinessOperation.DIRECTION_INCOME, CardTransaction.EXTERNAL_SOURCE_ID, original.fromCardId
+            )
+            BusinessOperation.DIRECTION_TRANSFER -> Triple(
+                BusinessOperation.DIRECTION_TRANSFER, original.toCardId, original.fromCardId
+            )
+            // Liability reversal is recorded as an adjustment and is excluded
+            // from cash/profit while remaining fully auditable.
+            else -> Triple(BusinessOperation.DIRECTION_LIABILITY, original.toCardId, original.fromCardId)
+        }
+        dao.insert(BusinessOperation(
             occurredAt = System.currentTimeMillis(),
+            type = BusinessOperation.TYPE_REVERSAL,
+            direction = direction,
+            amountMinor = original.amountMinor,
+            renterId = original.renterId,
+            scooterId = original.scooterId,
+            contractId = original.contractId,
+            fromCardId = fromCard,
+            toCardId = toCard,
             note = note,
-            // Reversal audit rows never affect reports. A real refund/expense
-            // is recorded separately as its own operation.
-            status = BusinessOperation.STATUS_REVERSED,
-            reversesOperationId = id,
-            createdAt = System.currentTimeMillis()
+            reversesOperationId = original.id
         ))
     }
 }

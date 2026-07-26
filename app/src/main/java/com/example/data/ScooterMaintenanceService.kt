@@ -45,7 +45,7 @@ class ScooterMaintenanceService(private val db: AppDatabase) {
             amount = amount, note = note, type = CardTransaction.TYPE_EXPENSE
         ))
         val operationId = db.businessOperationDao().insert(BusinessOperation(
-            occurredAt = occurredAt, type = BusinessOperation.TYPE_EXPENSE,
+            occurredAt = occurredAt, type = BusinessOperation.TYPE_REPAIR,
             direction = BusinessOperation.DIRECTION_EXPENSE, amountMinor = amountMinor,
             scooterId = scooterId, fromCardId = fromCardId, toCardId = VirtualCard.EXTERNAL_OUT_CARD_ID,
             cardTransactionId = cardTxId.toInt(), note = note
