@@ -36,7 +36,9 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.example.data.ContractHistoryEntry
 import com.example.data.Renter
+import com.example.data.RepairOrder
 import com.example.data.Scooter
+import com.example.data.ScooterMetricsService
 import com.example.data.SettingsRepository
 import com.example.ui.ContractHistoryViewModel
 import com.example.ui.ScooterViewModel
@@ -1813,6 +1815,13 @@ fun ScooterContractHistoryScreen(
                     isSelected = selectedTab == 1,
                     onClick = { selectedTab = 1 }
                 )
+                // §8: Repair tab — shows work orders + repair metrics
+                ToggleTabButton(
+                    label = "Ta'mir",
+                    icon = Icons.Default.Build,
+                    isSelected = selectedTab == 2,
+                    onClick = { selectedTab = 2 }
+                )
             }
 
             // ── Unified search bar ────────────────────────────────────
@@ -1958,6 +1967,14 @@ fun ScooterContractHistoryScreen(
                     contractHistoryViewModel = contractHistoryViewModel
                 )
             }
+
+            // ── §8: ВКЛАДКА «TA'MIR» — work order detail + repair metrics ────
+            if (selectedTab == 2) {
+                ScooterRepairDetailSection(
+                    scooter = scooter,
+                    contractHistoryViewModel = contractHistoryViewModel
+                )
+            }
         }
     }
 
@@ -2039,4 +2056,269 @@ internal fun contractTypeColor(t: String): Color = when (t) {
     ContractHistoryEntry.TYPE_TERMINATED -> StatusOverdue
     ContractHistoryEntry.TYPE_RETURNED   -> StatusArchived    // grey — returned/archived per unified color language
     else -> ClaudeTextSecondary
+}
+
+/**
+ * §8: Scooter repair detail section — work order list + repair metrics.
+ *
+ * Shows:
+ *  - Repair metrics card: total cost, average downtime, repeat failures (90d),
+ *    total repair count.
+ *  - List of all repair orders for this scooter (open + completed + cancelled),
+ *    sorted by openedAt descending. Each card shows scenario, status, dates,
+ *    diagnosis, performer, parts used, estimated vs actual cost.
+ *
+ * Per PLAN_UNIVERSAL_ACCOUNTING §8: 'Add repair metrics: cost, average
+ * downtime and repeat failures within 90 days. Output these metrics in the
+ * scooter card and combine with scooter profitability after repairs.'
+ * + §8: 'Add work order detail screen.'
+ */
+@Composable
+fun ScooterRepairDetailSection(
+    scooter: Scooter,
+    contractHistoryViewModel: ContractHistoryViewModel
+) {
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    val dateTimeFmt = remember { SimpleDateFormat("dd.MM.yyyy HH:mm", Locale.getDefault()) }
+
+    // ── Load repair orders + metrics ───────────────────────────────────────
+    var repairOrders by remember { mutableStateOf<List<RepairOrder>>(emptyList()) }
+    var metrics by remember { mutableStateOf<ScooterMetricsService.RepairMetrics?>(null) }
+
+    LaunchedEffect(scooter.id) {
+        val db = com.example.data.AppDatabase.getDatabase(context)
+        repairOrders = db.repairOrderDao().forScooterSince(
+            scooter.id, 0L  // all history
+        ).sortedByDescending { it.openedAt }
+        metrics = ScooterMetricsService(db).repairMetrics(scooter.id)
+    }
+
+    Column(modifier = Modifier.fillMaxSize().padding(16.dp)) {
+        // ── Metrics card ──────────────────────────────────────────────────
+        metrics?.let { m ->
+            Card(
+                modifier = Modifier.fillMaxWidth().padding(bottom = 12.dp),
+                shape = RoundedCornerShape(12.dp),
+                colors = CardDefaults.cardColors(containerColor = ClaudeAccentBg)
+            ) {
+                Column(modifier = Modifier.padding(16.dp)) {
+                    Text(
+                        "Ta'mir metrikalari",
+                        style = MaterialTheme.typography.titleSmall,
+                        color = ClaudeText,
+                        fontWeight = FontWeight.Bold
+                    )
+                    Spacer(Modifier.height(8.dp))
+                    Row(modifier = Modifier.fillMaxWidth()) {
+                        MetricColumn(
+                            label = "Umumiy xarajat",
+                            value = "${com.example.data.BusinessOperation.fromMinor(m.totalRepairCostMinor).toLong()} so'm",
+                            color = StatusOverdue,
+                            modifier = Modifier.weight(1f)
+                        )
+                        MetricColumn(
+                            label = "O'rtachaSimple",
+                            value = formatDurationMs(m.averageDowntimeMs),
+                            color = StatusReserved,
+                            modifier = Modifier.weight(1f)
+                        )
+                    }
+                    Spacer(Modifier.height(8.dp))
+                    Row(modifier = Modifier.fillMaxWidth()) {
+                        MetricColumn(
+                            label = "Takroriy (90k)",
+                            value = "${m.repeatFailures90d} ta",
+                            color = if (m.repeatFailures90d > 0) StatusOverdue else StatusOk,
+                            modifier = Modifier.weight(1f)
+                        )
+                        MetricColumn(
+                            label = "Jami ta'mirlar",
+                            value = "${m.totalRepairCount} ta",
+                            color = ClaudeText,
+                            modifier = Modifier.weight(1f)
+                        )
+                    }
+                }
+            }
+        }
+
+        // ── Work orders list ──────────────────────────────────────────────
+        Text(
+            "Ta'mir buyruqlari (${repairOrders.size})",
+            style = MaterialTheme.typography.titleSmall,
+            color = ClaudeText,
+            fontWeight = FontWeight.Bold,
+            modifier = Modifier.padding(vertical = 8.dp)
+        )
+
+        if (repairOrders.isEmpty()) {
+            Box(
+                modifier = Modifier.fillMaxSize().padding(32.dp),
+                contentAlignment = Alignment.Center
+            ) {
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    Icon(
+                        Icons.Default.Build,
+                        contentDescription = null,
+                        tint = StatusArchived,
+                        modifier = Modifier.size(48.dp)
+                    )
+                    Spacer(Modifier.height(8.dp))
+                    Text(
+                        "Ta'mir tarixi yo'q",
+                        style = MaterialTheme.typography.titleMedium,
+                        color = ClaudeText
+                    )
+                    Text(
+                        "Bu skuter hali ta'mirlanmagan.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = ClaudeTextSecondary
+                    )
+                }
+            }
+        } else {
+            LazyColumn(
+                modifier = Modifier.fillMaxSize(),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                items(repairOrders, key = { it.id }) { order ->
+                    val statusColor = when (order.status) {
+                        RepairOrder.STATUS_OPEN -> StatusOverdue
+                        RepairOrder.STATUS_COMPLETED -> StatusOk
+                        RepairOrder.STATUS_CANCELLED -> StatusArchived
+                        else -> ClaudeTextSecondary
+                    }
+                    Card(
+                        modifier = Modifier.fillMaxWidth(),
+                        shape = RoundedCornerShape(10.dp),
+                        colors = CardDefaults.cardColors(containerColor = ClaudeCard),
+                        border = androidx.compose.foundation.BorderStroke(1.dp, ClaudeDivider)
+                    ) {
+                        Column(modifier = Modifier.padding(12.dp)) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Box(
+                                    modifier = Modifier.size(8.dp).background(statusColor, CircleShape)
+                                )
+                                Spacer(Modifier.width(8.dp))
+                                Text(
+                                    scenarioLabel(order.scenario),
+                                    style = MaterialTheme.typography.titleSmall,
+                                    color = ClaudeText,
+                                    fontWeight = FontWeight.SemiBold,
+                                    modifier = Modifier.weight(1f)
+                                )
+                                Text(
+                                    order.status,
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = statusColor,
+                                    fontWeight = FontWeight.Bold
+                                )
+                            }
+                            Spacer(Modifier.height(4.dp))
+                            Text(
+                                "Ochildi: ${dateTimeFmt.format(Date(order.openedAt))}",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = ClaudeTextSecondary
+                            )
+                            order.closedAt?.let {
+                                Text(
+                                    "Yopildi: ${dateTimeFmt.format(Date(it))}",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = ClaudeTextSecondary
+                                )
+                            }
+                            Spacer(Modifier.height(6.dp))
+                            Text(
+                                "Diagnoz: ${order.diagnosis}",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = ClaudeText
+                            )
+                            order.performer?.let {
+                                Text(
+                                    "Ijrochi: $it",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = ClaudeTextSecondary
+                                )
+                            }
+                            order.partsUsed?.let {
+                                Text(
+                                    "Ehtiyot qismlar: $it",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = ClaudeTextSecondary
+                                )
+                            }
+                            if (order.estimatedMinor > 0 || order.actualMinor > 0) {
+                                Spacer(Modifier.height(4.dp))
+                                Row(modifier = Modifier.fillMaxWidth()) {
+                                    Text(
+                                        "Reja: ${com.example.data.BusinessOperation.fromMinor(order.estimatedMinor).toLong()}",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = ClaudeTextSecondary,
+                                        modifier = Modifier.weight(1f)
+                                    )
+                                    Text(
+                                        "Haqiqat: ${com.example.data.BusinessOperation.fromMinor(order.actualMinor).toLong()}",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = if (order.actualMinor > order.estimatedMinor) StatusOverdue else StatusOk,
+                                        fontWeight = FontWeight.Bold
+                                    )
+                                }
+                            }
+                            order.documentNote?.let {
+                                Spacer(Modifier.height(4.dp))
+                                Text(
+                                    "Izoh: $it",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = ClaudeTextSecondary
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun MetricColumn(
+    label: String,
+    value: String,
+    color: Color,
+    modifier: Modifier = Modifier
+) {
+    Column(modifier = modifier) {
+        Text(
+            label,
+            style = MaterialTheme.typography.labelSmall,
+            color = ClaudeTextSecondary
+        )
+        Text(
+            value,
+            style = MaterialTheme.typography.titleMedium,
+            color = color,
+            fontWeight = FontWeight.Bold
+        )
+    }
+}
+
+private fun scenarioLabel(scenario: String): String = when (scenario) {
+    RepairOrder.SCENARIO_RENTER_REPAIR -> "Arendachi ta'mirladi"
+    RepairOrder.SCENARIO_OWNER_REPAIR -> "Egasi ta'mirladi"
+    RepairOrder.SCENARIO_REPLACEMENT -> "Almashtirish"
+    RepairOrder.SCENARIO_RETIREMENT -> "Ro'yxatdan o'chirish"
+    else -> scenario
+}
+
+private fun formatDurationMs(ms: Long): String {
+    if (ms <= 0) return "—"
+    val days = ms / (24L * 60 * 60 * 1000)
+    val hours = (ms % (24L * 60 * 60 * 1000)) / (60 * 60 * 1000)
+    return if (days > 0) "$days k $hs"
+           else if (hours > 0) "$hs"
+           else "<1s"
 }
