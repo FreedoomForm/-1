@@ -350,6 +350,9 @@ fun MainScreen(
     var scooterToEdit by remember { mutableStateOf<Scooter?>(null) }
     var contractToEdit by remember { mutableStateOf<com.example.data.ContractHistoryEntry?>(null) }
     var selectedRenters by remember { mutableStateOf(setOf<Int>()) }
+    var showVariablePaymentDialog by remember { mutableStateOf(false) }
+    var variablePaymentAmount by remember { mutableStateOf("") }
+    var variablePaymentNote by remember { mutableStateOf("") }
     var selectedScooters by remember { mutableStateOf(setOf<Int>()) }
     var searchQuery by remember { mutableStateOf("") }
     var showDateRangePicker by remember { mutableStateOf(false) }
@@ -1338,9 +1341,11 @@ fun MainScreen(
                         icon = Icons.Default.Payments,
                         enabled = hasSelection,
                         onClick = {
-                            viewModel.payWeeklyForRenters(selectedRenters)
-                            Toast.makeText(localContext, "To'lov qabul qilindi", Toast.LENGTH_SHORT).show()
-                            selectedRenters = emptySet()
+                            val weekly = com.example.data.SettingsRepository(localContext).weeklyPrice
+                                .let { if (it > 0) it else com.example.data.SettingsRepository.DEFAULT_WEEKLY_PRICE }
+                            variablePaymentAmount = weekly.toLong().toString()
+                            variablePaymentNote = "Bitta to'lov"
+                            showVariablePaymentDialog = true
                         },
                         modifier = Modifier.weight(1.4f)
                     )
@@ -1900,6 +1905,47 @@ fun MainScreen(
                     showAddScooterDialog = false
                     scooterToEdit = null
                 }
+            )
+        }
+
+        if (showVariablePaymentDialog) {
+            AlertDialog(
+                onDismissRequest = { showVariablePaymentDialog = false },
+                title = { Text("To'lovni qabul qilish") },
+                text = {
+                    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                        Text("${selectedRenters.size} mijoz uchun. Kiritilgan summa har bir mijozga alohida qo'llanadi.")
+                        OutlinedTextField(
+                            value = variablePaymentAmount,
+                            onValueChange = { variablePaymentAmount = it.filter { c -> c.isDigit() } },
+                            label = { Text("Summa (UZS)") },
+                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                            singleLine = true
+                        )
+                        OutlinedTextField(
+                            value = variablePaymentNote,
+                            onValueChange = { variablePaymentNote = it },
+                            label = { Text("Izoh") },
+                            singleLine = true
+                        )
+                    }
+                },
+                confirmButton = {
+                    TextButton(onClick = {
+                        val amount = variablePaymentAmount.toDoubleOrNull()
+                        if (amount != null && amount > 0) {
+                            selectedRenters.forEach { renterId ->
+                                viewModel.acceptVariablePayment(renterId, amount, variablePaymentNote)
+                            }
+                            Toast.makeText(localContext, "To'lov qabul qilindi", Toast.LENGTH_SHORT).show()
+                            selectedRenters = emptySet()
+                            showVariablePaymentDialog = false
+                        } else {
+                            Toast.makeText(localContext, "Musbat summa kiriting", Toast.LENGTH_SHORT).show()
+                        }
+                    }) { Text("Qabul qilish") }
+                },
+                dismissButton = { TextButton(onClick = { showVariablePaymentDialog = false }) { Text("Bekor qilish") } }
             )
         }
 
