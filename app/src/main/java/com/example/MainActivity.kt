@@ -152,6 +152,7 @@ import com.example.worker.NotificationHelper
 import android.util.Log
 import com.example.worker.PaymentCheckWorker
 import com.example.worker.SmsWorker
+import com.example.worker.ServiceCheckWorker
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -208,6 +209,14 @@ class MainActivity : ComponentActivity() {
             "PaymentCheckWork",
             ExistingPeriodicWorkPolicy.KEEP,
             paymentCheckRequest
+        )
+
+        // Daily service due reminders are independent from rental payment checks.
+        val serviceCheckRequest = PeriodicWorkRequestBuilder<ServiceCheckWorker>(24, TimeUnit.HOURS).build()
+        WorkManager.getInstance(applicationContext).enqueueUniquePeriodicWork(
+            "ServiceCheckWork",
+            ExistingPeriodicWorkPolicy.KEEP,
+            serviceCheckRequest
         )
 
         // ── Принудительное обновление нативных виджетов при старте приложения ──
