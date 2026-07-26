@@ -135,6 +135,9 @@ class RenterViewModel(application: Application) : AndroidViewModel(application) 
             val expiryTime = startTimestamp + duration * dayMs
 
             val effectiveWeeklyPrice = if (weeklyPrice > 0) weeklyPrice else SettingsRepository.DEFAULT_WEEKLY_PRICE
+            val settingsForPricing = SettingsRepository(getApplication())
+            val effectiveMonthlyPrice = settingsForPricing.monthlyPrice
+                .let { if (it > 0) it else SettingsRepository.DEFAULT_MONTHLY_PRICE }
 
             // ── Определяем сценарий создания ──────────────────────────────
             //   SCENARIO_OVERDUE   — выбранная дата была более недели назад
@@ -238,7 +241,10 @@ class RenterViewModel(application: Application) : AndroidViewModel(application) 
             // to the renter balance. Only an unpaid active/historical period
             // is a liability; planned periods are not charged yet.
             val contractsBalance = specs.fold(0.0) { acc, s ->
-                val periodPrice = effectiveWeeklyPrice * (s.weekEnd - s.weekStart).toDouble() / weekMs.toDouble()
+                val periodDays = ((s.weekEnd - s.weekStart) / dayMs).toInt().coerceAtLeast(1)
+                val periodPrice = settingsForPricing.priceForRentalDays(
+                    periodDays, effectiveWeeklyPrice, effectiveMonthlyPrice
+                )
                 acc + if (s.isScheduled || s.isPaid) 0.0 else -periodPrice
             }
             val initialBalance = when {
@@ -318,10 +324,12 @@ class RenterViewModel(application: Application) : AndroidViewModel(application) 
                                 "${calendarMarker}Kechikkan holda yaratildi (qarz)"
                         }
 
-                        // Every final partial week is billed pro-rata by its
-                        // calendar duration; full periods retain weekly price.
-                        val periodAmount = effectiveWeeklyPrice *
-                            (spec.weekEnd - spec.weekStart).toDouble() / weekMs.toDouble()
+                        // The owner selects how a final partial period is
+                        // charged: pro-rata, round-up, or monthly equivalent.
+                        val periodDays = ((spec.weekEnd - spec.weekStart) / dayMs).toInt().coerceAtLeast(1)
+                        val periodAmount = settingsForPricing.priceForRentalDays(
+                            periodDays, effectiveWeeklyPrice, effectiveMonthlyPrice
+                        )
                         val contractId = historyRepository.insert(ContractHistoryEntry(
                             renterId = savedRenter.id,
                             timestamp = now,

@@ -33,6 +33,20 @@ class SettingsRepository(context: Context) {
         get() = prefs.getFloat("usd_to_uzs_rate", DEFAULT_USD_TO_UZS_RATE.toFloat()).toDouble()
         set(value) = prefs.edit().putFloat("usd_to_uzs_rate", value.toFloat()).apply()
 
+    /** Billing rule for a final partial rental period. */
+    var partialPeriodPricingMode: String
+        get() = prefs.getString("partial_period_pricing_mode", PARTIAL_PERIOD_PRO_RATA) ?: PARTIAL_PERIOD_PRO_RATA
+        set(value) = prefs.edit().putString("partial_period_pricing_mode", value).apply()
+
+    fun priceForRentalDays(days: Int, weekly: Double, monthly: Double): Double {
+        require(days > 0) { "days must be positive" }
+        return when (partialPeriodPricingMode) {
+            PARTIAL_PERIOD_ROUND_UP -> weekly * kotlin.math.ceil(days / 7.0)
+            PARTIAL_PERIOD_MONTHLY -> monthly * days / 30.0
+            else -> weekly * days / 7.0
+        }
+    }
+
     /** Payme-ссылка для подстановки в SMS (по умолчанию — тестовая ссылка). */
     var paymeLink: String
         get() = prefs.getString("payme_link", DEFAULT_PAYME_LINK) ?: DEFAULT_PAYME_LINK
@@ -91,6 +105,9 @@ class SettingsRepository(context: Context) {
     companion object {
         const val DEFAULT_WEEKLY_PRICE = 420_000.0
         const val DEFAULT_MONTHLY_PRICE = 1_680_000.0
+        const val PARTIAL_PERIOD_PRO_RATA = "PRO_RATA"
+        const val PARTIAL_PERIOD_ROUND_UP = "ROUND_UP"
+        const val PARTIAL_PERIOD_MONTHLY = "MONTHLY"
         const val DEFAULT_SCOOTER_PRICE_USD = 660.0
         const val DEFAULT_USD_TO_UZS_RATE = 12_600.0
 

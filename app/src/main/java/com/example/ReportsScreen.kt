@@ -108,6 +108,7 @@ fun ReportsScreen(
     val virtualCards by finansiViewModel.cards.collectAsStateWithLifecycle()
     val cardTransactions by finansiViewModel.transactions.collectAsStateWithLifecycle()
     val businessOperations by businessOperationViewModel.operations.collectAsStateWithLifecycle()
+    val rentPeriods by businessOperationViewModel.rentPeriods.collectAsStateWithLifecycle()
 
     val settings = remember { SettingsRepository(context) }
     val weeklyPrice = settings.weeklyPrice.let { if (it > 0) it else SettingsRepository.DEFAULT_WEEKLY_PRICE }
@@ -277,9 +278,26 @@ fun ReportsScreen(
         (netProfit / periodMonths) / totalInvestmentUzs else 0.0
     val roiPercentPerMonth = roiMultiplePerMonth * 100
 
-    // ── Ожидаемые доходы в следующем месяце ───────────────────────────
-    // Используем точное число недель в месяце (4.348), а не округление 4.
-    val expectedNextMonth = activeRenters * weeklyPrice * (365.25 / 7.0 / 12.0)
+    // ── Contracted revenue in the next 30 days ─────────────────────────
+    // Forecast is derived from actual billable periods and their own prices,
+    // not from a global rate multiplied by current renter count.
+    val nextMonthEnd = now + monthMs
+    val expectedNextMonth = remember(rentPeriods, now) {
+        rentPeriods
+            .filter { it.status in setOf(
+                com.example.data.RentPeriod.STATUS_SCHEDULED,
+                com.example.data.RentPeriod.STATUS_ACTIVE,
+                com.example.data.RentPeriod.STATUS_PARTIALLY_PAID,
+                com.example.data.RentPeriod.STATUS_PAID
+            ) }
+            .sumOf { period ->
+                val overlapStart = maxOf(now, period.startsAt)
+                val overlapEnd = minOf(nextMonthEnd, period.endsAt)
+                if (overlapEnd <= overlapStart || period.endsAt <= period.startsAt) 0.0
+                else com.example.data.BusinessOperation.fromMinor(period.chargeMinor) *
+                    (overlapEnd - overlapStart).toDouble() / (period.endsAt - period.startsAt).toDouble()
+            }
+    }
 
     // ── Новые метрики для бизнес-отчётности ───────────────────────────
     // ARPU = средний доход на одного активного арендатора (за период)
@@ -307,12 +325,11 @@ fun ReportsScreen(
         }
     }
     val ltv = arpu * avgWeeksPerRenter
-    // MRR = активные арендаторы × недельная ставка × (среднее число недель в месяце)
-    // В месяце в среднем 365.25 / 7 / 12 = 4.348 недель. Раньше было * 4,
-    // что занижало MRR на ~8%.
-    val weeksPerMonth = 365.25 / 7.0 / 12.0  // ≈ 4.348
-    val mrr = activeRenters * weeklyPrice * weeksPerMonth
-    // Целевой MRR = (всего скутеров × weeklyPrice × недель в месяце) — если бы все были в аренде
+    // MRR is the contracted 30-day revenue. It honours individual prices,
+    // future reservations and partial final periods.
+    val weeksPerMonth = 365.25 / 7.0 / 12.0
+    val mrr = expectedNextMonth
+    // Capacity target remains a scenario, clearly separated from the real MRR.
     val targetMrr = scooters.size * weeklyPrice * weeksPerMonth
     // OverdueRate (доля должников среди активных). Раньше называлось churnRate,
     // что неправильно: churn = доля ПОКИНУВШИХ систему, а не доля должников.
