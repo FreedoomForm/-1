@@ -2982,6 +2982,7 @@ fun SettingsScreen(
     val settingsRepo = remember { com.example.data.SettingsRepository(settingsContext) }
     var paymeLink by remember { mutableStateOf(settingsRepo.paymeLink) }
     var callCenter by remember { mutableStateOf(settingsRepo.callCenter) }
+    var partialPeriodMode by remember { mutableStateOf(settingsRepo.partialPeriodPricingMode) }
     // ── Поля для страницы Отчёты: стоимость скутера и курс USD ──────────
     var scooterPriceUsd by remember {
         mutableStateOf(settingsRepo.scooterPriceUsd.let {
@@ -2996,7 +2997,7 @@ fun SettingsScreen(
 
     // ── Автосохранение — поля сохраняются автоматически при изменении,
     // отдельные кнопки «Saqla» больше не нужны (форма живая).
-    LaunchedEffect(template, weekly, monthly, paymeLink, callCenter, scooterPriceUsd, usdToUzsRate) {
+    LaunchedEffect(template, weekly, monthly, paymeLink, callCenter, scooterPriceUsd, usdToUzsRate, partialPeriodMode) {
         val wPrice = weekly.toDoubleOrNull() ?: 0.0
         val mPrice = monthly.toDoubleOrNull() ?: 0.0
         settingsRepo.paymeLink = paymeLink.trim().ifBlank {
@@ -3010,6 +3011,7 @@ fun SettingsScreen(
             ?: com.example.data.SettingsRepository.DEFAULT_SCOOTER_PRICE_USD
         settingsRepo.usdToUzsRate = usdToUzsRate.toDoubleOrNull()
             ?: com.example.data.SettingsRepository.DEFAULT_USD_TO_UZS_RATE
+        settingsRepo.partialPeriodPricingMode = partialPeriodMode
         onSave(template, wPrice, mPrice, paymeLink, callCenter)
     }
 
@@ -3088,6 +3090,21 @@ fun SettingsScreen(
                         modifier = Modifier.fillMaxWidth(),
                         shape = RoundedCornerShape(8.dp)
                     )
+                    Spacer(modifier = Modifier.height(12.dp))
+                    Text("To'liq bo'lmagan davr narxi", style = MaterialTheme.typography.labelMedium, color = ClaudeText)
+                    listOf(
+                        com.example.data.SettingsRepository.PARTIAL_PERIOD_PRO_RATA to "Kunlar bo'yicha proporsional",
+                        com.example.data.SettingsRepository.PARTIAL_PERIOD_ROUND_UP to "Haftagacha yaxlitlash",
+                        com.example.data.SettingsRepository.PARTIAL_PERIOD_MONTHLY to "Oylik tarif bo'yicha"
+                    ).forEach { (mode, label) ->
+                        Row(
+                            modifier = Modifier.fillMaxWidth().clickable { partialPeriodMode = mode },
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            RadioButton(selected = partialPeriodMode == mode, onClick = { partialPeriodMode = mode })
+                            Text(label, style = MaterialTheme.typography.bodyMedium)
+                        }
+                    }
                     Spacer(modifier = Modifier.height(8.dp))
                     OutlinedTextField(
                         value = scooterPriceUsd,
