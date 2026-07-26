@@ -36,7 +36,8 @@ class ScooterViewModel(application: Application) : AndroidViewModel(application)
         scooterSerialNumber: String = "",
         batteryId1: String = "",
         batteryId2: String = "",
-        additionalInfo: String = ""
+        additionalInfo: String = "",
+        nextServiceAt: Long? = null
     ) {
         viewModelScope.launch {
             if (scooterDao.duplicateIdentifierCount(vinNumber.trim(), engineNumber.trim(), scooterSerialNumber.trim(), 0) > 0) {
@@ -51,7 +52,8 @@ class ScooterViewModel(application: Application) : AndroidViewModel(application)
                 scooterSerialNumber = scooterSerialNumber,
                 batteryId1 = batteryId1,
                 batteryId2 = batteryId2,
-                additionalInfo = additionalInfo
+                additionalInfo = additionalInfo,
+                nextServiceAt = nextServiceAt
             )
             repository.insert(scooter)
         }

@@ -675,7 +675,7 @@ fun MainScreen(
                     initialScooter = scooterToEdit,
                     existingScooters = scooters,
                     onDismiss = { scooterToEdit = null },
-                    onSave = { name, docNum, vin, engine, serial, batt1, batt2, extra ->
+                    onSave = { name, docNum, vin, engine, serial, batt1, batt2, extra, nextService ->
                         scooterToEdit?.let {
                             scooterViewModel.updateScooter(
                                 it.copy(
@@ -686,7 +686,8 @@ fun MainScreen(
                                     scooterSerialNumber = serial,
                                     batteryId1 = batt1,
                                     batteryId2 = batt2,
-                                    additionalInfo = extra
+                                    additionalInfo = extra,
+                                    nextServiceAt = nextService
                                 )
                             )
                         }
@@ -1958,7 +1959,7 @@ fun MainScreen(
                     showAddScooterDialog = false
                     scooterToEdit = null
                 },
-                onSave = { name, docNum, vin, engine, serial, batt1, batt2, extra ->
+                onSave = { name, docNum, vin, engine, serial, batt1, batt2, extra, nextService ->
                     if (isEditScooter) {
                         scooterToEdit?.let {
                             scooterViewModel.updateScooter(
@@ -1970,7 +1971,8 @@ fun MainScreen(
                                     scooterSerialNumber = serial,
                                     batteryId1 = batt1,
                                     batteryId2 = batt2,
-                                    additionalInfo = extra
+                                    additionalInfo = extra,
+                                    nextServiceAt = nextService
                                 )
                             )
                         }
@@ -1983,7 +1985,8 @@ fun MainScreen(
                             scooterSerialNumber = serial,
                             batteryId1 = batt1,
                             batteryId2 = batt2,
-                            additionalInfo = extra
+                            additionalInfo = extra,
+                            nextServiceAt = nextService
                         )
                     }
                     showAddScooterDialog = false
@@ -4022,7 +4025,8 @@ fun ScooterFormDialog(
         scooterSerialNumber: String,
         batteryId1: String,
         batteryId2: String,
-        additionalInfo: String
+        additionalInfo: String,
+        nextServiceAt: Long?
     ) -> Unit
 ) {
     val initialName = remember(initialScooter, existingScooters) {
@@ -4050,6 +4054,10 @@ fun ScooterFormDialog(
     var batteryId1 by remember { mutableStateOf(initialScooter?.batteryId1 ?: "") }
     var batteryId2 by remember { mutableStateOf(initialScooter?.batteryId2 ?: "") }
     var additionalInfo by remember { mutableStateOf(initialScooter?.additionalInfo ?: "") }
+    val serviceDateFormat = remember { SimpleDateFormat("yyyy-MM-dd", Locale.getDefault()) }
+    var nextServiceDate by remember {
+        mutableStateOf(initialScooter?.nextServiceAt?.let { serviceDateFormat.format(Date(it)) } ?: "")
+    }
 
     // Все доп. поля теперь ВСЕГДА видны и обязательны — пользователь явно
     // попросил убрать кнопку «More»/«Yashirish» из диалогов создания и
@@ -4150,6 +4158,15 @@ fun ScooterFormDialog(
                     modifier = Modifier.fillMaxWidth(),
                     shape = RoundedCornerShape(8.dp)
                 )
+                OutlinedTextField(
+                    value = nextServiceDate,
+                    onValueChange = { nextServiceDate = it },
+                    label = { Text("Keyingi servis sanasi (yyyy-MM-dd)") },
+                    placeholder = { Text("2026-08-01") },
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(8.dp),
+                    singleLine = true
+                )
             }
         },
         confirmButton = {
@@ -4168,7 +4185,8 @@ fun ScooterFormDialog(
                         scooterSerialNumber.trim(),
                         batteryId1.trim(),
                         batteryId2.trim(),
-                        additionalInfo.trim()
+                        additionalInfo.trim(),
+                        try { nextServiceDate.trim().takeIf { it.isNotEmpty() }?.let { serviceDateFormat.parse(it)?.time } } catch (_: Exception) { null }
                     )
                 }
             )
