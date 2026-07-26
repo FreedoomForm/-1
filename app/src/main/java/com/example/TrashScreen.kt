@@ -1,5 +1,6 @@
 package com.example
 
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
@@ -16,6 +17,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
@@ -29,8 +31,22 @@ import java.util.Locale
 
 /** Recycle bin. Restore is the primary action; permanent purge is explicit. */
 @Composable
-fun TrashScreen(viewModel: TrashViewModel = viewModel()) {
+fun TrashScreen(
+    restoreTrigger: Int = 0,
+    purgeTrigger: Int = 0,
+    selected: Set<Long> = emptySet(),
+    onSelectedChange: (Set<Long>) -> Unit = {},
+    viewModel: TrashViewModel = viewModel()
+) {
     val items = viewModel.items.collectAsStateWithLifecycle().value
+    LaunchedEffect(restoreTrigger) {
+        if (restoreTrigger > 0) selected.forEach { viewModel.restore(it) }
+        if (restoreTrigger > 0) onSelectedChange(emptySet())
+    }
+    LaunchedEffect(purgeTrigger) {
+        if (purgeTrigger > 0) selected.forEach { viewModel.purge(it) }
+        if (purgeTrigger > 0) onSelectedChange(emptySet())
+    }
     val formatter = SimpleDateFormat("dd.MM.yyyy HH:mm", Locale.getDefault())
     if (items.isEmpty()) {
         Column(Modifier.fillMaxSize(), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center) {
@@ -41,9 +57,11 @@ fun TrashScreen(viewModel: TrashViewModel = viewModel()) {
     }
     LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
         items(items, key = { it.id }) { item ->
-            Card(Modifier.fillMaxWidth()) {
+            Card(Modifier.fillMaxWidth().clickable {
+                onSelectedChange(if (item.id in selected) selected - item.id else selected + item.id)
+            }) {
                 Column(Modifier.padding(12.dp)) {
-                    Text(item.title, fontWeight = FontWeight.SemiBold)
+                    Text(if (item.id in selected) "✓ ${item.title}" else item.title, fontWeight = FontWeight.SemiBold)
                     Text("${item.sourceType} • ${formatter.format(Date(item.deletedAt))}", style = MaterialTheme.typography.labelSmall)
                     item.reason?.let { Text(it, style = MaterialTheme.typography.bodySmall) }
                     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {

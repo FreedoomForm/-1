@@ -375,6 +375,10 @@ fun MainScreen(
     // вкладках одинаково, а неуниверсальные кнопки-дубликаты удалены.
     var selectedContracts by remember { mutableStateOf(setOf<Int>()) }
     var selectedTxs by remember { mutableStateOf(setOf<Int>()) }
+    var selectedTrashItems by remember { mutableStateOf(setOf<Long>()) }
+    var historyCreateTrigger by remember { mutableStateOf(0) }
+    var trashRestoreTrigger by remember { mutableStateOf(0) }
+    var trashPurgeTrigger by remember { mutableStateOf(0) }
     var contractEditTrigger by remember { mutableStateOf(0) }
     var contractDeleteTrigger by remember { mutableStateOf(0) }
     var transactionEditTrigger by remember { mutableStateOf(0) }
@@ -927,7 +931,7 @@ fun MainScreen(
                     // сущностей для создания (только виджеты). Edit/delete там тоже
                     // не показываются — нет строк для выбора.
                     // ── Кнопка «+» — скрыта на «Отчётах» (4) и «Sozlamalar» (6) ─
-                    if (currentTab !in setOf(4, 6, 7, 8)) {
+                    if (currentTab !in setOf(4, 6)) {
                         IconButton(
                             onClick = {
                                 when (currentTab) {
@@ -936,6 +940,8 @@ fun MainScreen(
                                     2 -> contractCreateTrigger++
                                     3 -> transactionCreateTrigger++
                                     5 -> cardCreateTrigger++
+                                    7 -> historyCreateTrigger++
+                                    8 -> trashRestoreTrigger++
                                 }
                             },
                             modifier = Modifier
@@ -953,13 +959,14 @@ fun MainScreen(
                     }
 
                     // ── Кнопка «✎ Tahrirlash» — скрыта на «Отчётах» (4) и «Sozlamalar» (6)
-                    if (currentTab !in setOf(4, 6, 7, 8)) {
+                    if (currentTab !in setOf(4, 6, 7)) {
                         val editEnabled = when (currentTab) {
                             0 -> selectedRenters.size == 1
                             1 -> selectedScooters.size == 1
                             2 -> selectedContracts.size == 1
                             3 -> selectedTxs.size == 1
                             5 -> selectedCardIds.size == 1
+                            8 -> false // recycle bin has restore/purge, not editing
                             else -> false
                         }
                         IconButton(
@@ -1005,6 +1012,7 @@ fun MainScreen(
                             2 -> selectedContracts.isNotEmpty()
                             3 -> selectedTxs.isNotEmpty()
                             5 -> selectedCardIds.isNotEmpty()
+                            8 -> selectedTrashItems.isNotEmpty()
                             else -> false
                         }
                         IconButton(
@@ -1023,6 +1031,7 @@ fun MainScreen(
                                     2 -> contractDeleteTrigger++
                                     3 -> transactionDeleteTrigger++
                                     5 -> cardDeleteTrigger++
+                                    8 -> trashPurgeTrigger++
                                 }
                             },
                             enabled = deleteEnabled,
@@ -1799,9 +1808,14 @@ fun MainScreen(
                     showTopBar = false
                 )
             } else if (currentTab == 7) {
-                HistoryScreen()
+                HistoryScreen(createTrigger = historyCreateTrigger)
             } else if (currentTab == 8) {
-                TrashScreen()
+                TrashScreen(
+                    restoreTrigger = trashRestoreTrigger,
+                    purgeTrigger = trashPurgeTrigger,
+                    selected = selectedTrashItems,
+                    onSelectedChange = { selectedTrashItems = it }
+                )
             }
         }
 
