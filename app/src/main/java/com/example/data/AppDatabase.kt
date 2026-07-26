@@ -20,9 +20,10 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         RentPeriod::class,
         PaymentAllocationEntity::class,
         AuditEvent::class,
-        AppUser::class
+        AppUser::class,
+        DeletedItem::class
     ],
-    version = 21,
+    version = 22,
     exportSchema = false
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -38,6 +39,7 @@ abstract class AppDatabase : RoomDatabase() {
     abstract fun paymentAllocationDao(): PaymentAllocationDao
     abstract fun auditEventDao(): AuditEventDao
     abstract fun appUserDao(): AppUserDao
+    abstract fun deletedItemDao(): DeletedItemDao
 
     companion object {
         @Volatile
@@ -355,6 +357,26 @@ abstract class AppDatabase : RoomDatabase() {
             }
         }
 
+        /** Migration 21 → 22: persistent recycle bin for recoverable deletions. */
+        private val MIGRATION_21_22 = object : Migration(21, 22) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("""
+                    CREATE TABLE IF NOT EXISTS `deleted_items` (
+                        `id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                        `sourceType` TEXT NOT NULL,
+                        `sourceId` TEXT NOT NULL,
+                        `title` TEXT NOT NULL,
+                        `snapshotJson` TEXT NOT NULL,
+                        `deletedAt` INTEGER NOT NULL,
+                        `deletedBy` TEXT NOT NULL,
+                        `reason` TEXT
+                    )
+                """.trimIndent())
+                db.execSQL("CREATE INDEX IF NOT EXISTS `index_deleted_items_sourceType` ON `deleted_items` (`sourceType`)")
+                db.execSQL("CREATE INDEX IF NOT EXISTS `index_deleted_items_deletedAt` ON `deleted_items` (`deletedAt`)")
+            }
+        }
+
         fun getDatabase(context: Context): AppDatabase {
             return INSTANCE ?: synchronized(this) {
                 val instance = Room.databaseBuilder(
@@ -362,7 +384,7 @@ abstract class AppDatabase : RoomDatabase() {
                     AppDatabase::class.java,
                     "scooter_rent_db"
                 )
-                    .addMigrations(MIGRATION_11_12, MIGRATION_12_13, MIGRATION_13_14, MIGRATION_14_15, MIGRATION_15_16, MIGRATION_16_17, MIGRATION_17_18, MIGRATION_18_19, MIGRATION_19_20, MIGRATION_20_21)
+                    .addMigrations(MIGRATION_11_12, MIGRATION_12_13, MIGRATION_13_14, MIGRATION_14_15, MIGRATION_15_16, MIGRATION_16_17, MIGRATION_17_18, MIGRATION_18_19, MIGRATION_19_20, MIGRATION_20_21, MIGRATION_21_22)
                     // Production data must never be silently erased on an unknown migration.
                     // Room will fail visibly and the user can restore a backup instead.
                     .addCallback(object : RoomDatabase.Callback() {
