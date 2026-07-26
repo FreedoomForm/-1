@@ -21,9 +21,10 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         PaymentAllocationEntity::class,
         AuditEvent::class,
         AppUser::class,
-        DeletedItem::class
+        DeletedItem::class,
+        LegacyMoneyAmount::class
     ],
-    version = 22,
+    version = 23,
     exportSchema = false
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -40,6 +41,7 @@ abstract class AppDatabase : RoomDatabase() {
     abstract fun auditEventDao(): AuditEventDao
     abstract fun appUserDao(): AppUserDao
     abstract fun deletedItemDao(): DeletedItemDao
+    abstract fun legacyMoneyAmountDao(): LegacyMoneyAmountDao
 
     companion object {
         @Volatile
@@ -377,14 +379,42 @@ abstract class AppDatabase : RoomDatabase() {
             }
         }
 
+        /**
+         * Copies the raw Room database before the first open after an app
+         * schema upgrade. This runs before Room can migrate anything, so a
+         * recoverable snapshot exists even if a device loses power mid-update.
+         */
+        private fun backupBeforeMigration(context: Context) {
+            val appContext = context.applicationContext
+            val prefs = appContext.getSharedPreferences("migration_backups", Context.MODE_PRIVATE)
+            val key = "backup_for_schema_23"
+            if (prefs.getBoolean(key, false)) return
+            val source = appContext.getDatabasePath("scooter_rent_db")
+            if (!source.exists() || source.length() == 0L) return
+            try {
+                val directory = java.io.File(appContext.filesDir, "pre_migration_backups").apply { mkdirs() }
+                val stamp = System.currentTimeMillis()
+                source.copyTo(java.io.File(directory, "scooter_rent_db_before_v23_$stamp.db"), overwrite = true)
+                listOf("-wal", "-shm").forEach { suffix ->
+                    val sidecar = java.io.File(source.path + suffix)
+                    if (sidecar.exists()) sidecar.copyTo(java.io.File(directory, "scooter_rent_db_before_v23_$stamp$suffix"), overwrite = true)
+                }
+                prefs.edit().putBoolean(key, true).apply()
+            } catch (_: Exception) {
+                // Never block startup on a best-effort safety copy. Room will
+                // still refuse unsafe unknown migrations instead of erasing data.
+            }
+        }
+
         fun getDatabase(context: Context): AppDatabase {
             return INSTANCE ?: synchronized(this) {
+                backupBeforeMigration(context)
                 val instance = Room.databaseBuilder(
                     context.applicationContext,
                     AppDatabase::class.java,
                     "scooter_rent_db"
                 )
-                    .addMigrations(MIGRATION_11_12, MIGRATION_12_13, MIGRATION_13_14, MIGRATION_14_15, MIGRATION_15_16, MIGRATION_16_17, MIGRATION_17_18, MIGRATION_18_19, MIGRATION_19_20, MIGRATION_20_21, MIGRATION_21_22)
+                    .addMigrations(MIGRATION_11_12, MIGRATION_12_13, MIGRATION_13_14, MIGRATION_14_15, MIGRATION_15_16, MIGRATION_16_17, MIGRATION_17_18, MIGRATION_18_19, MIGRATION_19_20, MIGRATION_20_21, MIGRATION_21_22, MIGRATION_22_23)
                     // Production data must never be silently erased on an unknown migration.
                     // Room will fail visibly and the user can restore a backup instead.
                     .addCallback(object : RoomDatabase.Callback() {
