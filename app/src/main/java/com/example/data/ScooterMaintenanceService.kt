@@ -15,7 +15,8 @@ class ScooterMaintenanceService(private val db: AppDatabase) {
         if (status == Scooter.STATUS_REPAIR) {
             // Repair during an active rental pauses billing instead of forcing
             // the renter to pay for days without a usable scooter.
-            db.rentPeriodDao().billableForScooter(scooterId).forEach { period ->
+            val billablePeriods = db.rentPeriodDao().billableForScooter(scooterId)
+            billablePeriods.forEach { period ->
                 db.rentPeriodDao().update(period.copy(
                     status = RentPeriod.STATUS_SUSPENDED_REPAIR,
                     suspendedAt = now,
@@ -23,6 +24,13 @@ class ScooterMaintenanceService(private val db: AppDatabase) {
                     updatedAt = now
                 ))
             }
+            db.repairOrderDao().insert(RepairOrder(
+                scooterId = scooterId,
+                renterId = billablePeriods.firstOrNull()?.renterId,
+                scenario = RepairOrder.SCENARIO_RENTER_REPAIR,
+                diagnosis = reason,
+                documentNote = "Rental billing paused automatically"
+            ))
         } else if (status in setOf(Scooter.STATUS_SERVICE, Scooter.STATUS_RETIRED)) {
             val conflicts = db.rentPeriodDao().conflictsForScooter(scooterId, Long.MIN_VALUE / 2, Long.MAX_VALUE / 2)
             check(conflicts.none { it.status in setOf(RentPeriod.STATUS_ACTIVE, RentPeriod.STATUS_PARTIALLY_PAID, RentPeriod.STATUS_OVERDUE) }) {
@@ -67,6 +75,13 @@ class ScooterMaintenanceService(private val db: AppDatabase) {
             scooterId,
             if (paused.isNotEmpty()) Scooter.STATUS_RENTED else Scooter.STATUS_AVAILABLE
         )
+        db.repairOrderDao().openForScooter(scooterId).forEach { order ->
+            db.repairOrderDao().update(order.copy(
+                status = RepairOrder.STATUS_COMPLETED,
+                closedAt = now,
+                documentNote = listOfNotNull(order.documentNote, reason).joinToString(" • ")
+            ))
+        }
         db.auditEventDao().insert(AuditEvent(
             occurredAt = now, action = "SCOOTER_REPAIR_RESUMED", entityType = "SCOOTER", entityId = scooterId.toString(),
             reason = reason,
