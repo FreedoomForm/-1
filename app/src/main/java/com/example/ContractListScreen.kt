@@ -31,6 +31,8 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.example.data.ContractHistoryEntry
 import com.example.data.Renter
+import com.example.data.maskAddress
+import com.example.data.maskIdentifier
 import com.example.data.Scooter
 import com.example.data.SettingsRepository
 import com.example.ui.ContractHistoryViewModel
@@ -515,7 +517,7 @@ fun ContractListScreen(
                                 }
                                 if (showPassport) {
                                     Text(
-                                        entry.passportData.ifBlank { "—" },
+                                        maskIdentifier(entry.passportData),
                                         modifier = Modifier.width(wPassport).padding(horizontal = 4.dp),
                                         style = MaterialTheme.typography.bodySmall,
                                         color = ClaudeText,
@@ -526,7 +528,7 @@ fun ContractListScreen(
                                 }
                                 if (showAddress) {
                                     Text(
-                                        entry.address.ifBlank { "—" },
+                                        maskAddress(entry.address),
                                         modifier = Modifier.width(wAddress).padding(horizontal = 4.dp),
                                         style = MaterialTheme.typography.bodySmall,
                                         color = ClaudeText,
@@ -537,7 +539,7 @@ fun ContractListScreen(
                                 }
                                 if (showPinfl) {
                                     Text(
-                                        entry.pinfl.ifBlank { "—" },
+                                        maskIdentifier(entry.pinfl),
                                         modifier = Modifier.width(wPinfl).padding(horizontal = 4.dp),
                                         style = MaterialTheme.typography.bodySmall,
                                         color = ClaudeText,
