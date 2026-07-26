@@ -1730,6 +1730,16 @@ fun MainScreen(
                         navState = NavigationState.ScooterHistory(scooter)
                     }
                 )
+
+                // ── Upcoming maintenance banner (§8) ──────────────────────
+                // Shows scooters with nextServiceAt in the next 7 days or overdue.
+                // Tap a scooter → opens scooter history (where service can be set).
+                UpcomingMaintenanceBanner(
+                    scooters = scooters,
+                    onScooterClick = { scooter ->
+                        navState = NavigationState.ScooterHistory(scooter)
+                    }
+                )
             } else if (currentTab == 2) {
                 // ── Вкладка «Kontraktlar» — все контракты всех арендаторов ──
                 ContractListScreen(
@@ -4142,6 +4152,124 @@ fun ScooterTable(
                         }
                     }
                 }
+            }
+        }
+    }
+}
+
+/**
+ * Upcoming maintenance banner (§8: 'list of nearest maintenances').
+ *
+ * Shows scooters whose nextServiceAt is within the next 7 days OR overdue.
+ * Collapsible. Tap a scooter card → calls onScooterClick (typically opens
+ * scooter history screen where the service date can be edited).
+ *
+ * Color coding per §11 unified status language:
+ *   - red: overdue (nextServiceAt <= now)
+ *   - amber: due soon (nextServiceAt within 7 days)
+ *   - hidden: no scooters need service
+ */
+@Composable
+fun UpcomingMaintenanceBanner(
+    scooters: List<Scooter>,
+    onScooterClick: (Scooter) -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val now = System.currentTimeMillis()
+    val weekMs = 7L * 24 * 60 * 60 * 1000
+    val dueScooters = remember(scooters, now) {
+        scooters
+            .filter { it.nextServiceAt != null && it.lifecycleStatus != Scooter.STATUS_RETIRED }
+            .filter { it.nextServiceAt!! <= now + weekMs }
+            .sortedBy { it.nextServiceAt!! }
+    }
+    if (dueScooters.isEmpty()) return
+    var expanded by remember { mutableStateOf(true) }
+    val dateFmt = remember { SimpleDateFormat("dd.MM.yyyy", Locale.getDefault()) }
+
+    Surface(
+        color = StatusReservedBg,
+        shape = RoundedCornerShape(12.dp),
+        modifier = modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 6.dp),
+        border = androidx.compose.foundation.BorderStroke(1.dp, StatusReserved)
+    ) {
+        Column(modifier = Modifier.padding(12.dp)) {
+            Row(
+                modifier = Modifier.fillMaxWidth().clickable { expanded = !expanded },
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Icon(
+                    imageVector = Icons.Default.Build,
+                    contentDescription = null,
+                    tint = StatusReserved,
+                    modifier = Modifier.size(20.dp)
+                )
+                Spacer(Modifier.width(8.dp))
+                Text(
+                    "Tez orada servis: ${dueScooters.size} skuter",
+                    style = MaterialTheme.typography.titleSmall,
+                    color = StatusReserved,
+                    fontWeight = FontWeight.SemiBold,
+                    modifier = Modifier.weight(1f)
+                )
+                Text(
+                    if (expanded) "▲" else "▼",
+                    color = StatusReserved,
+                    style = MaterialTheme.typography.titleSmall
+                )
+            }
+            if (expanded) {
+                Spacer(Modifier.height(8.dp))
+                dueScooters.forEach { scooter ->
+                    val isOverdue = scooter.nextServiceAt!! <= now
+                    val color = if (isOverdue) StatusOverdue else StatusReserved
+                    val bgColor = if (isOverdue) StatusOverdueBg else Color.White
+                    Surface(
+                        color = bgColor,
+                        shape = RoundedCornerShape(8.dp),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(vertical = 4.dp)
+                            .clickable { onScooterClick(scooter) }
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(10.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Box(
+                                modifier = Modifier.size(10.dp).background(color, CircleShape)
+                            )
+                            Spacer(Modifier.width(8.dp))
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    scooter.name,
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    color = ClaudeText,
+                                    fontWeight = FontWeight.SemiBold
+                                )
+                                val label = if (isOverdue) "Kechikkan servis"
+                                            else "Servis: ${dateFmt.format(Date(scooter.nextServiceAt!!))}"
+                                Text(
+                                    label,
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = color
+                                )
+                            }
+                            Icon(
+                                imageVector = Icons.Default.KeyboardArrowRight,
+                                contentDescription = "Batafsil",
+                                tint = color,
+                                modifier = Modifier.size(20.dp)
+                            )
+                        }
+                    }
+                }
+                Spacer(Modifier.height(4.dp))
+                Text(
+                    "Skuterni bosib, servis sanasini tahrirlash mumkin.",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = ClaudeTextSecondary
+                )
             }
         }
     }

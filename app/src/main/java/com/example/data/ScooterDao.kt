@@ -24,6 +24,18 @@ interface ScooterDao {
     @Query("SELECT * FROM scooters WHERE nextServiceAt IS NOT NULL AND nextServiceAt <= :now AND lifecycleStatus NOT IN ('RETIRED') ORDER BY nextServiceAt ASC")
     suspend fun serviceDue(now: Long): List<Scooter>
 
+    /**
+     * Scooters with nextServiceAt within [now, now + withinMs] window.
+     * Used by the 'Upcoming maintenance' UI section (§8). Excludes RETIRED.
+     * Ordered by nextServiceAt ascending — most urgent first.
+     */
+    @Query("SELECT * FROM scooters WHERE nextServiceAt IS NOT NULL AND nextServiceAt <= :nowPlusWindow AND lifecycleStatus NOT IN ('RETIRED') ORDER BY nextServiceAt ASC")
+    suspend fun upcomingMaintenance(nowPlusWindow: Long): List<Scooter>
+
+    /** Flow version of upcomingMaintenance for reactive UI updates. */
+    @Query("SELECT * FROM scooters WHERE nextServiceAt IS NOT NULL AND nextServiceAt <= :nowPlusWindow AND lifecycleStatus NOT IN ('RETIRED') ORDER BY nextServiceAt ASC")
+    fun upcomingMaintenanceFlow(nowPlusWindow: Long): Flow<List<Scooter>>
+
     @Query("""
         SELECT COUNT(*) FROM scooters
         WHERE id != :excludeId AND (
