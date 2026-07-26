@@ -93,6 +93,22 @@ class SettingsRepository(context: Context) {
         get() = prefs.getBoolean("ai_personal_data_sharing_enabled", false)
         set(value) = prefs.edit().putBoolean("ai_personal_data_sharing_enabled", value).apply()
 
+    /** Daily automatic-SMS budget; protects customers from mass messaging. */
+    var maxDailyAutoSms: Int
+        get() = prefs.getInt("max_daily_auto_sms", 20).coerceIn(1, 100)
+        set(value) = prefs.edit().putInt("max_daily_auto_sms", value.coerceIn(1, 100)).apply()
+
+    fun canSendAutoSms(now: Long = System.currentTimeMillis()): Boolean {
+        val day = now / (24L * 60 * 60 * 1000)
+        return prefs.getLong("auto_sms_day", -1L) != day || prefs.getInt("auto_sms_count", 0) < maxDailyAutoSms
+    }
+
+    fun recordAutoSmsSent(now: Long = System.currentTimeMillis()) {
+        val day = now / (24L * 60 * 60 * 1000)
+        val current = if (prefs.getLong("auto_sms_day", -1L) == day) prefs.getInt("auto_sms_count", 0) else 0
+        prefs.edit().putLong("auto_sms_day", day).putInt("auto_sms_count", current + 1).apply()
+    }
+
     /**
      * Avto-zaxira nusxa (auto-backup to Downloads/ScooterRent/).
      * Yoqilgan bo'lsa, har bir ma'lumot o'zgarishidan so'ng ilova .xlsx

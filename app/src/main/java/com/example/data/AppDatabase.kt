@@ -22,9 +22,10 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         AuditEvent::class,
         AppUser::class,
         DeletedItem::class,
-        LegacyMoneyAmount::class
+        LegacyMoneyAmount::class,
+        SmsDelivery::class
     ],
-    version = 24,
+    version = 25,
     exportSchema = false
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -42,6 +43,7 @@ abstract class AppDatabase : RoomDatabase() {
     abstract fun appUserDao(): AppUserDao
     abstract fun deletedItemDao(): DeletedItemDao
     abstract fun legacyMoneyAmountDao(): LegacyMoneyAmountDao
+    abstract fun smsDeliveryDao(): SmsDeliveryDao
 
     companion object {
         @Volatile
@@ -465,6 +467,24 @@ abstract class AppDatabase : RoomDatabase() {
             }
         }
 
+        /** Migration 24 → 25: durable automated SMS delivery history. */
+        private val MIGRATION_24_25 = object : Migration(24, 25) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("""
+                    CREATE TABLE IF NOT EXISTS `sms_deliveries` (
+                        `id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                        `renterId` INTEGER NOT NULL,
+                        `timestamp` INTEGER NOT NULL,
+                        `status` TEXT NOT NULL,
+                        `messagePreview` TEXT NOT NULL,
+                        `error` TEXT
+                    )
+                """.trimIndent())
+                db.execSQL("CREATE INDEX IF NOT EXISTS `index_sms_deliveries_renterId_timestamp` ON `sms_deliveries` (`renterId`, `timestamp`)")
+                db.execSQL("CREATE INDEX IF NOT EXISTS `index_sms_deliveries_status` ON `sms_deliveries` (`status`)")
+            }
+        }
+
         /**
          * Copies the raw Room database before the first open after an app
          * schema upgrade. This runs before Room can migrate anything, so a
@@ -473,17 +493,17 @@ abstract class AppDatabase : RoomDatabase() {
         private fun backupBeforeMigration(context: Context) {
             val appContext = context.applicationContext
             val prefs = appContext.getSharedPreferences("migration_backups", Context.MODE_PRIVATE)
-            val key = "backup_for_schema_24"
+            val key = "backup_for_schema_25"
             if (prefs.getBoolean(key, false)) return
             val source = appContext.getDatabasePath("scooter_rent_db")
             if (!source.exists() || source.length() == 0L) return
             try {
                 val directory = java.io.File(appContext.filesDir, "pre_migration_backups").apply { mkdirs() }
                 val stamp = System.currentTimeMillis()
-                source.copyTo(java.io.File(directory, "scooter_rent_db_before_v24_$stamp.db"), overwrite = true)
+                source.copyTo(java.io.File(directory, "scooter_rent_db_before_v25_$stamp.db"), overwrite = true)
                 listOf("-wal", "-shm").forEach { suffix ->
                     val sidecar = java.io.File(source.path + suffix)
-                    if (sidecar.exists()) sidecar.copyTo(java.io.File(directory, "scooter_rent_db_before_v24_$stamp$suffix"), overwrite = true)
+                    if (sidecar.exists()) sidecar.copyTo(java.io.File(directory, "scooter_rent_db_before_v25_$stamp$suffix"), overwrite = true)
                 }
                 prefs.edit().putBoolean(key, true).apply()
             } catch (_: Exception) {
@@ -500,7 +520,7 @@ abstract class AppDatabase : RoomDatabase() {
                     AppDatabase::class.java,
                     "scooter_rent_db"
                 )
-                    .addMigrations(MIGRATION_11_12, MIGRATION_12_13, MIGRATION_13_14, MIGRATION_14_15, MIGRATION_15_16, MIGRATION_16_17, MIGRATION_17_18, MIGRATION_18_19, MIGRATION_19_20, MIGRATION_20_21, MIGRATION_21_22, MIGRATION_22_23, MIGRATION_23_24)
+                    .addMigrations(MIGRATION_11_12, MIGRATION_12_13, MIGRATION_13_14, MIGRATION_14_15, MIGRATION_15_16, MIGRATION_16_17, MIGRATION_17_18, MIGRATION_18_19, MIGRATION_19_20, MIGRATION_20_21, MIGRATION_21_22, MIGRATION_22_23, MIGRATION_23_24, MIGRATION_24_25)
                     // Production data must never be silently erased on an unknown migration.
                     // Room will fail visibly and the user can restore a backup instead.
                     .addCallback(object : RoomDatabase.Callback() {

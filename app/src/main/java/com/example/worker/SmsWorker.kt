@@ -51,10 +51,9 @@ class SmsWorker(
 
             var sentCount = 0
             var skippedCount = 0
-            val dailyLimit = 20 // safety cap: a corrupt import must not send hundreds of SMS
 
             activeRenters.forEach { renter ->
-                if (sentCount >= dailyLimit) return@forEach
+                if (!settingsRepo.canSendAutoSms(currentTime)) return@forEach
                 if (renter.isOverdueSmsSent || renter.balance >= 0.0) {
                     skippedCount++
                     return@forEach
@@ -79,9 +78,21 @@ class SmsWorker(
                 val ok = sendSms(renter.phoneNumber, message)
                 if (ok) {
                     repository.update(renter.copy(isOverdueSmsSent = true))
+                    settingsRepo.recordAutoSmsSent(currentTime)
+                    db.smsDeliveryDao().insert(com.example.data.SmsDelivery(
+                        renterId = renter.id, timestamp = currentTime,
+                        status = com.example.data.SmsDelivery.STATUS_SENT,
+                        messagePreview = message.take(160)
+                    ))
                     sentCount++
                     Log.d(TAG, "SMS sent for renter #${renter.id} (${renter.name}), $daysOverdue days overdue")
                 } else {
+                    db.smsDeliveryDao().insert(com.example.data.SmsDelivery(
+                        renterId = renter.id, timestamp = currentTime,
+                        status = com.example.data.SmsDelivery.STATUS_FAILED,
+                        messagePreview = message.take(160),
+                        error = "SmsManager send failed; worker will retry on next scheduled run"
+                    ))
                     Log.w(TAG, "SMS failed for renter #${renter.id} (${renter.name})")
                 }
             }
