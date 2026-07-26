@@ -222,7 +222,7 @@ object BackupManager {
             "contracts", "transactions", "cards", "cardTransactions", "operations", "periods", "allocations"
         )
         headers.forEachIndexed { i, value -> ws.value(0, i, value) }
-        val values = listOf(BACKUP_SCHEMA_VERSION.toLong(), System.currentTimeMillis(), 25L, renters.toLong(), scooters.toLong(),
+        val values = listOf(BACKUP_SCHEMA_VERSION.toLong(), System.currentTimeMillis(), 26L, renters.toLong(), scooters.toLong(),
             contracts.toLong(), transactions.toLong(), cards.toLong(), cardTransactions.toLong(), operations.toLong(), periods.toLong(), allocations.toLong())
         values.forEachIndexed { i, value -> ws.value(1, i, value) }
     }
@@ -411,11 +411,11 @@ object BackupManager {
 
     private fun writeRentPeriods(wb: Workbook, items: List<RentPeriod>) {
         val ws = wb.newWorksheet(SHEET_RENT_PERIODS)
-        val h = listOf("id","contractHistoryId","renterId","scooterId","startsAt","endsAt","chargeMinor","paidMinor","status","createdAt","updatedAt")
+        val h = listOf("id","contractHistoryId","renterId","scooterId","startsAt","endsAt","chargeMinor","paidMinor","status","suspendedAt","suspensionReason","createdAt","updatedAt")
         h.forEachIndexed { i,v -> ws.value(0,i,v) }
         items.forEachIndexed { index,p ->
             val r=index+1; ws.value(r,0,p.id); p.contractHistoryId?.let { ws.value(r,1,it) }; ws.value(r,2,p.renterId); p.scooterId?.let { ws.value(r,3,it) }
-            ws.value(r,4,p.startsAt); ws.value(r,5,p.endsAt); ws.value(r,6,p.chargeMinor); ws.value(r,7,p.paidMinor); ws.value(r,8,p.status); ws.value(r,9,p.createdAt); ws.value(r,10,p.updatedAt)
+            ws.value(r,4,p.startsAt); ws.value(r,5,p.endsAt); ws.value(r,6,p.chargeMinor); ws.value(r,7,p.paidMinor); ws.value(r,8,p.status); p.suspendedAt?.let { ws.value(r,9,it) }; p.suspensionReason?.let { ws.value(r,10,it) }; ws.value(r,11,p.createdAt); ws.value(r,12,p.updatedAt)
         }
     }
 
@@ -801,7 +801,8 @@ object BackupManager {
             id=row.getCell(0)?.asNumber()?.toLong() ?: 0, contractHistoryId=row.getCell(1)?.asNumber()?.toInt(), renterId=row.getCell(2)?.asNumber()?.toInt() ?: 0,
             scooterId=row.getCell(3)?.asNumber()?.toInt(), startsAt=row.getCell(4)?.asNumber()?.toLong() ?: 0, endsAt=row.getCell(5)?.asNumber()?.toLong() ?: 0,
             chargeMinor=row.getCell(6)?.asNumber()?.toLong() ?: 0, paidMinor=row.getCell(7)?.asNumber()?.toLong() ?: 0,
-            status=row.getCell(8)?.asString() ?: RentPeriod.STATUS_ACTIVE, createdAt=row.getCell(9)?.asNumber()?.toLong() ?: System.currentTimeMillis(), updatedAt=row.getCell(10)?.asNumber()?.toLong() ?: System.currentTimeMillis()
+            status=row.getCell(8)?.asString() ?: RentPeriod.STATUS_ACTIVE, suspendedAt=row.getCell(9)?.asNumber()?.toLong(), suspensionReason=row.getCell(10)?.asString(),
+            createdAt=row.getCell(11)?.asNumber()?.toLong() ?: row.getCell(9)?.asNumber()?.toLong() ?: System.currentTimeMillis(), updatedAt=row.getCell(12)?.asNumber()?.toLong() ?: row.getCell(10)?.asNumber()?.toLong() ?: System.currentTimeMillis()
         ) } catch (e: Exception) { Log.w(TAG,"Skip period row: ${e.message}"); null }
     }
 

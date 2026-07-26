@@ -58,6 +58,7 @@ import com.example.ui.theme.StatusOverdue
 import com.example.ui.theme.StatusOverdueBg
 import com.example.ui.theme.StatusReturned
 import com.example.ui.theme.StatusReturnedBg
+import com.example.data.RentPeriod
 import java.util.Calendar
 import java.util.Date
 import java.util.Locale
@@ -102,10 +103,24 @@ enum class DayStatus {
     PAID,
     /** Неоплаченный день (контракт есть, но isPaid=false) — красный фон. */
     UNPAID,
-    /** Приостановленный контракт (TERMINATED) — серый фон. */
+    /** Приостановленный/ремонтируемый скутер — серый фон, плата не начисляется. */
     SUSPENDED,
+    /** Запланированный будущий период — янтарный фон. */
+    SCHEDULED,
+    /** Частично оплаченный период — бирюзовый фон. */
+    PARTIAL,
     /** Обычный день — белый фон. */
     EMPTY
+}
+
+/** Single mapping used by calendar views backed by the universal RentPeriod model. */
+fun RentPeriod.toCalendarDayStatus(): DayStatus = when (status) {
+    RentPeriod.STATUS_PAID, RentPeriod.STATUS_CLOSED -> DayStatus.PAID
+    RentPeriod.STATUS_PARTIALLY_PAID -> DayStatus.PARTIAL
+    RentPeriod.STATUS_SCHEDULED -> DayStatus.SCHEDULED
+    RentPeriod.STATUS_SUSPENDED_REPAIR -> DayStatus.SUSPENDED
+    RentPeriod.STATUS_OVERDUE, RentPeriod.STATUS_CLOSED_WITH_DEBT -> DayStatus.UNPAID
+    else -> DayStatus.EMPTY
 }
 
 /** Палитра цветов для меток групп. */
@@ -579,6 +594,8 @@ private fun RowScope.DayCell(
         when (dayStatusFor(dayMs)) {
             DayStatus.PAID -> { bgColor = StatusOkBg; fgColor = StatusOk }
             DayStatus.UNPAID -> { bgColor = StatusOverdueBg; fgColor = StatusOverdue }
+            DayStatus.PARTIAL -> { bgColor = ClaudeAccentBg; fgColor = ClaudeAccent }
+            DayStatus.SCHEDULED -> { bgColor = Color(0xFFFFF3D6); fgColor = Color(0xFF9A6700) }
             DayStatus.SUSPENDED -> { bgColor = StatusReturnedBg; fgColor = StatusReturned }
             DayStatus.EMPTY -> {
                 bgColor = if (isCurrentMonth) ClaudeCard else ClaudeBackground

@@ -27,6 +27,9 @@ data class RentPeriod(
     val chargeMinor: Long,
     val paidMinor: Long = 0,
     val status: String = STATUS_SCHEDULED,
+    /** Non-null while scooter repair pauses this billable period. */
+    val suspendedAt: Long? = null,
+    val suspensionReason: String? = null,
     val createdAt: Long = System.currentTimeMillis(),
     val updatedAt: Long = System.currentTimeMillis()
 ) {
@@ -36,6 +39,8 @@ data class RentPeriod(
         const val STATUS_PARTIALLY_PAID = "PARTIALLY_PAID"
         const val STATUS_PAID = "PAID"
         const val STATUS_OVERDUE = "OVERDUE"
+        /** Scooter is being repaired; no rental charge accrues during pause. */
+        const val STATUS_SUSPENDED_REPAIR = "SUSPENDED_REPAIR"
         const val STATUS_CLOSED = "CLOSED"
         /** Rental is closed and scooter released, but receivable remains collectible. */
         const val STATUS_CLOSED_WITH_DEBT = "CLOSED_WITH_DEBT"

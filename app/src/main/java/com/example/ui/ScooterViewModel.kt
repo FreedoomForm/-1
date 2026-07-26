@@ -67,6 +67,22 @@ class ScooterViewModel(application: Application) : AndroidViewModel(application)
         }
     }
 
+    fun sendToRepair(scooterId: Int, reason: String) {
+        viewModelScope.launch {
+            try { com.example.data.ScooterMaintenanceService(AppDatabase.getDatabase(getApplication()))
+                .changeStatus(scooterId, Scooter.STATUS_REPAIR, reason) }
+            catch (e: Exception) { Log.e(TAG, "Failed to pause rental for repair", e) }
+        }
+    }
+
+    fun resumeAfterRepair(scooterId: Int, reason: String) {
+        viewModelScope.launch {
+            try { com.example.data.ScooterMaintenanceService(AppDatabase.getDatabase(getApplication()))
+                .resumeAfterRepair(scooterId, reason) }
+            catch (e: Exception) { Log.e(TAG, "Failed to resume rental after repair", e) }
+        }
+    }
+
     companion object { private const val TAG = "ScooterViewModel" }
 
     fun deleteScooter(scooter: Scooter) {

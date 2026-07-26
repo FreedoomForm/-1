@@ -356,6 +356,9 @@ fun MainScreen(
     var showTerminationDialog by remember { mutableStateOf(false) }
     var forgiveTerminationDebt by remember { mutableStateOf(false) }
     var selectedScooters by remember { mutableStateOf(setOf<Int>()) }
+    var showRepairDialog by remember { mutableStateOf(false) }
+    var showRepairResumeDialog by remember { mutableStateOf(false) }
+    var repairNote by remember { mutableStateOf("") }
     var searchQuery by remember { mutableStateOf("") }
     var showDateRangePicker by remember { mutableStateOf(false) }
     val dateRangePickerState = rememberDateRangePickerState()
@@ -1596,6 +1599,14 @@ fun MainScreen(
                         .padding(horizontal = 16.dp, vertical = 6.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
+                    val selectedScooter = scooters.firstOrNull { it.id in selectedScooters }
+                    if (selectedScooters.size == 1 && selectedScooter != null) {
+                        if (selectedScooter.lifecycleStatus == Scooter.STATUS_REPAIR) {
+                            TextButton(onClick = { repairNote = ""; showRepairResumeDialog = true }) { Text("Ta'mirdan qaytdi") }
+                        } else {
+                            TextButton(onClick = { repairNote = ""; showRepairDialog = true }) { Text("Ta'mirga") }
+                        }
+                    }
                     Spacer(Modifier.weight(1f))
                     Text(
                         "Jami: ${scooters.size}",
@@ -1630,7 +1641,7 @@ fun MainScreen(
                             "col_batt2"  -> scooter.batteryId2.contains(filterText, ignoreCase = true)
                             "col_extra"  -> scooter.additionalInfo.contains(filterText, ignoreCase = true)
                             "col_status" -> {
-                                val status = scooterStatusLabel(scooterStatusOf(scooter.id, renters))
+                                val status = scooterStatusLabel(scooterStatusOf(scooter, renters))
                                 status.contains(filterText, ignoreCase = true)
                             }
                             else -> true
@@ -1829,6 +1840,30 @@ fun MainScreen(
                     onSelectedChange = { selectedTrashItems = it }
                 )
             }
+        }
+
+        if (showRepairDialog || showRepairResumeDialog) {
+            val selectedId = selectedScooters.firstOrNull()
+            AlertDialog(
+                onDismissRequest = { showRepairDialog = false; showRepairResumeDialog = false },
+                title = { Text(if (showRepairDialog) "Skuterni ta'mirga yuborish" else "Ta'mirdan qaytarish") },
+                text = {
+                    Column {
+                        Text(if (showRepairDialog)
+                            "Ijara davri to'xtatiladi: ta'mir kunlari uchun to'lov hisoblanmaydi."
+                            else "Ijara davri ta'mir davomiyligiga uzaytiriladi; to'lov qayta boshlanadi.")
+                        OutlinedTextField(repairNote, { repairNote = it }, label = { Text("Izoh / sabab") })
+                    }
+                },
+                confirmButton = { TextButton(onClick = {
+                    if (selectedId != null && repairNote.isNotBlank()) {
+                        if (showRepairDialog) scooterViewModel.sendToRepair(selectedId, repairNote)
+                        else scooterViewModel.resumeAfterRepair(selectedId, repairNote)
+                        showRepairDialog = false; showRepairResumeDialog = false; repairNote = ""
+                    } else Toast.makeText(localContext, "Izoh kiriting", Toast.LENGTH_SHORT).show()
+                }) { Text("Tasdiqlash") } },
+                dismissButton = { TextButton(onClick = { showRepairDialog = false; showRepairResumeDialog = false }) { Text("Bekor qilish") } }
+            )
         }
 
         // ===== Диалог создания/редактирования арендатора =====
@@ -3109,6 +3144,18 @@ fun SettingsScreen(
                 .padding(horizontal = 16.dp),
             verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
+                Card(modifier = Modifier.fillMaxWidth(), colors = CardDefaults.cardColors(containerColor = ClaudeAccentBg)) {
+                    Column(Modifier.padding(12.dp)) {
+                        Text("Ilova versiyasi", style = MaterialTheme.typography.labelMedium, color = ClaudeText)
+                        Text("v${BuildConfig.VERSION_NAME}  •  build ${BuildConfig.VERSION_CODE}", style = MaterialTheme.typography.bodyMedium, color = ClaudeText)
+                        if (updateInfo != null) {
+                            Text("Yangi build: ${updateInfo.versionCode}. Pastdagi Yangila tugmasini bosing.", style = MaterialTheme.typography.bodySmall, color = ClaudeText)
+                        } else if (isUpToDate) {
+                            Text("Sizda so'nggi versiya o'rnatilgan.", style = MaterialTheme.typography.bodySmall, color = ClaudeText)
+                        }
+                    }
+                }
+
                 Column {
                     Text("Tariflar", style = MaterialTheme.typography.labelMedium, color = ClaudeText)
                     Spacer(modifier = Modifier.height(8.dp))
@@ -3687,21 +3734,35 @@ class UzPhoneVisualTransformation : VisualTransformation {
    ТАБЛИЦА СКУТЕРОВ (с колонкой состояния)
    ============================================================================ */
 
-private enum class ScooterStatus { RENTED, IN_BASE }
+private enum class ScooterStatus { AVAILABLE, RESERVED, RENTED, REPAIR, SERVICE, RETIRED }
 
-private fun scooterStatusOf(scooterId: Int, renters: List<Renter>): ScooterStatus {
-    val active = renters.any { it.scooterId == scooterId && !it.isReturned }
-    return if (active) ScooterStatus.RENTED else ScooterStatus.IN_BASE
+private fun scooterStatusOf(scooter: Scooter, renters: List<Renter>): ScooterStatus {
+    return when (scooter.lifecycleStatus) {
+        Scooter.STATUS_RESERVED -> ScooterStatus.RESERVED
+        Scooter.STATUS_REPAIR -> ScooterStatus.REPAIR
+        Scooter.STATUS_SERVICE -> ScooterStatus.SERVICE
+        Scooter.STATUS_RETIRED -> ScooterStatus.RETIRED
+        Scooter.STATUS_RENTED -> ScooterStatus.RENTED
+        else -> if (renters.any { it.scooterId == scooter.id && !it.isReturned }) ScooterStatus.RENTED else ScooterStatus.AVAILABLE
+    }
 }
 
 private fun scooterStatusColor(s: ScooterStatus): Color = when (s) {
-    ScooterStatus.RENTED  -> StatusOverdue
-    ScooterStatus.IN_BASE -> StatusOk
+    ScooterStatus.RENTED -> Color(0xFF2563EB)
+    ScooterStatus.RESERVED -> Color(0xFFF59E0B)
+    ScooterStatus.REPAIR -> StatusOverdue
+    ScooterStatus.SERVICE -> Color(0xFF7C3AED)
+    ScooterStatus.RETIRED -> StatusReturned
+    ScooterStatus.AVAILABLE -> StatusOk
 }
 
 private fun scooterStatusLabel(s: ScooterStatus): String = when (s) {
-    ScooterStatus.RENTED  -> "Ijarada"
-    ScooterStatus.IN_BASE -> "Bazada"
+    ScooterStatus.RENTED -> "Ijarada"
+    ScooterStatus.RESERVED -> "Rezervda"
+    ScooterStatus.REPAIR -> "Ta'mirda"
+    ScooterStatus.SERVICE -> "Servisda"
+    ScooterStatus.RETIRED -> "Hisobdan chiqarilgan"
+    ScooterStatus.AVAILABLE -> "Bo'sh"
 }
 
 @OptIn(ExperimentalFoundationApi::class)
@@ -3788,7 +3849,7 @@ fun ScooterTable(
         LazyColumn(modifier = Modifier.fillMaxSize()) {
             items(scooters, key = { it.id }) { scooter ->
                 val isSelected = selected.contains(scooter.id)
-                val status = scooterStatusOf(scooter.id, renters)
+                val status = scooterStatusOf(scooter, renters)
                 val sColor = scooterStatusColor(status)
 
                 Row(

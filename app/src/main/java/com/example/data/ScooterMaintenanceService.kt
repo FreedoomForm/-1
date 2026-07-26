@@ -11,17 +11,69 @@ class ScooterMaintenanceService(private val db: AppDatabase) {
         require(reason.isNotBlank()) { "Status change reason is required" }
         val scooter = db.scooterDao().getScooterById(scooterId)
             ?: throw IllegalArgumentException("Scooter #$scooterId does not exist")
-        if (status in setOf(Scooter.STATUS_SERVICE, Scooter.STATUS_REPAIR, Scooter.STATUS_RETIRED)) {
+        val now = System.currentTimeMillis()
+        if (status == Scooter.STATUS_REPAIR) {
+            // Repair during an active rental pauses billing instead of forcing
+            // the renter to pay for days without a usable scooter.
+            db.rentPeriodDao().billableForScooter(scooterId).forEach { period ->
+                db.rentPeriodDao().update(period.copy(
+                    status = RentPeriod.STATUS_SUSPENDED_REPAIR,
+                    suspendedAt = now,
+                    suspensionReason = reason,
+                    updatedAt = now
+                ))
+            }
+        } else if (status in setOf(Scooter.STATUS_SERVICE, Scooter.STATUS_RETIRED)) {
             val conflicts = db.rentPeriodDao().conflictsForScooter(scooterId, Long.MIN_VALUE / 2, Long.MAX_VALUE / 2)
             check(conflicts.none { it.status in setOf(RentPeriod.STATUS_ACTIVE, RentPeriod.STATUS_PARTIALLY_PAID, RentPeriod.STATUS_OVERDUE) }) {
-                "Cannot move a scooter with an active rental into maintenance"
+                "Cannot move a scooter with an active rental into service/retirement"
             }
         }
         db.scooterDao().updateLifecycleStatus(scooterId, status)
         db.auditEventDao().insert(AuditEvent(
-            action = "SCOOTER_STATUS_CHANGED", entityType = "SCOOTER", entityId = scooterId.toString(), reason = reason,
+            occurredAt = now, action = "SCOOTER_STATUS_CHANGED", entityType = "SCOOTER", entityId = scooterId.toString(), reason = reason,
             beforeSnapshot = "status=${scooter.lifecycleStatus}", afterSnapshot = "status=$status"
         ))
+    }
+
+    /**
+     * Returns a repaired scooter to the renter. Every paused period is
+     * extended by the actual repair duration, so the paused days are free.
+     */
+    suspend fun resumeAfterRepair(scooterId: Int, reason: String): Int = db.withTransaction {
+        require(reason.isNotBlank()) { "Repair completion note is required" }
+        val scooter = db.scooterDao().getScooterById(scooterId)
+            ?: throw IllegalArgumentException("Scooter #$scooterId does not exist")
+        val now = System.currentTimeMillis()
+        val paused = db.rentPeriodDao().suspendedForScooter(scooterId)
+        paused.forEach { period ->
+            val pauseMs = (now - (period.suspendedAt ?: now)).coerceAtLeast(0L)
+            val newEnd = period.endsAt + pauseMs
+            val restoredStatus = when {
+                period.paidMinor >= period.chargeMinor -> RentPeriod.STATUS_PAID
+                period.paidMinor > 0 -> RentPeriod.STATUS_PARTIALLY_PAID
+                newEnd <= now -> RentPeriod.STATUS_OVERDUE
+                else -> RentPeriod.STATUS_ACTIVE
+            }
+            db.rentPeriodDao().update(period.copy(
+                endsAt = newEnd,
+                status = restoredStatus,
+                suspendedAt = null,
+                suspensionReason = null,
+                updatedAt = now
+            ))
+        }
+        db.scooterDao().updateLifecycleStatus(
+            scooterId,
+            if (paused.isNotEmpty()) Scooter.STATUS_RENTED else Scooter.STATUS_AVAILABLE
+        )
+        db.auditEventDao().insert(AuditEvent(
+            occurredAt = now, action = "SCOOTER_REPAIR_RESUMED", entityType = "SCOOTER", entityId = scooterId.toString(),
+            reason = reason,
+            beforeSnapshot = "status=${scooter.lifecycleStatus}; pausedPeriods=${paused.size}",
+            afterSnapshot = "status=${if (paused.isNotEmpty()) Scooter.STATUS_RENTED else Scooter.STATUS_AVAILABLE}"
+        ))
+        paused.size
     }
 
     suspend fun recordRepairExpense(

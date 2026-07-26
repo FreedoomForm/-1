@@ -17,7 +17,7 @@ interface RentPeriodDao {
     @Query("SELECT * FROM rent_periods ORDER BY id ASC")
     suspend fun getAllOnce(): List<RentPeriod>
 
-    @Query("SELECT * FROM rent_periods WHERE renterId = :renterId AND status NOT IN ('PAID','CLOSED','CANCELLED') ORDER BY endsAt ASC, id ASC")
+    @Query("SELECT * FROM rent_periods WHERE renterId = :renterId AND status NOT IN ('PAID','CLOSED','CANCELLED','SUSPENDED_REPAIR') ORDER BY endsAt ASC, id ASC")
     suspend fun openForRenter(renterId: Int): List<RentPeriod>
 
     @Query("SELECT * FROM rent_periods WHERE contractHistoryId = :contractHistoryId LIMIT 1")
@@ -28,6 +28,12 @@ interface RentPeriodDao {
 
     @Query("SELECT * FROM rent_periods WHERE scooterId = :scooterId AND status IN ('SCHEDULED','ACTIVE','PARTIALLY_PAID','OVERDUE') AND startsAt < :endsAt AND endsAt > :startsAt")
     suspend fun conflictsForScooter(scooterId: Int, startsAt: Long, endsAt: Long): List<RentPeriod>
+
+    @Query("SELECT * FROM rent_periods WHERE scooterId = :scooterId AND status IN ('ACTIVE','PARTIALLY_PAID','PAID','OVERDUE')")
+    suspend fun billableForScooter(scooterId: Int): List<RentPeriod>
+
+    @Query("SELECT * FROM rent_periods WHERE scooterId = :scooterId AND status = 'SUSPENDED_REPAIR'")
+    suspend fun suspendedForScooter(scooterId: Int): List<RentPeriod>
 
     @Insert
     suspend fun insert(period: RentPeriod): Long
