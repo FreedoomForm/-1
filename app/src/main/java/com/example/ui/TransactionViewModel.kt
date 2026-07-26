@@ -150,7 +150,7 @@ class TransactionViewModel(application: Application) : AndroidViewModel(applicat
             val (operationType, direction) = when (type) {
                 Transaction.TYPE_PAYMENT -> BusinessOperation.TYPE_RENT_PAYMENT to BusinessOperation.DIRECTION_INCOME
                 Transaction.TYPE_REPAIR -> BusinessOperation.TYPE_EXPENSE to BusinessOperation.DIRECTION_EXPENSE
-                Transaction.TYPE_PENALTY -> BusinessOperation.TYPE_PENALTY to BusinessOperation.DIRECTION_INCOME
+                Transaction.TYPE_PENALTY -> BusinessOperation.TYPE_PENALTY_PAYMENT to BusinessOperation.DIRECTION_INCOME
                 else -> BusinessOperation.TYPE_ADJUSTMENT to BusinessOperation.DIRECTION_LIABILITY
             }
             if (amount > 0.0 && amount.isFinite()) {
