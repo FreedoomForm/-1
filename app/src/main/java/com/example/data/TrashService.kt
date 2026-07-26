@@ -5,6 +5,21 @@ import org.json.JSONObject
 
 /** Snapshot-based recoverable deletion for user-owned legacy projections. */
 class TrashService(private val db: AppDatabase) {
+    suspend fun archiveTimelineEvent(event: TimelineEvent, reason: String? = null): Long = db.withTransaction {
+        val json = JSONObject().apply {
+            put("branchId", event.branchId); put("timestamp", event.timestamp); put("actionType", event.actionType)
+            put("screen", event.screen); put("entityType", event.entityType); put("entityId", event.entityId)
+            put("title", event.title); put("payloadJson", event.payloadJson); put("isMajor", event.isMajor)
+        }
+        val itemId = db.deletedItemDao().insert(DeletedItem(
+            sourceType = DeletedItem.TYPE_HISTORY_BRANCH,
+            sourceId = event.id.toString(), title = event.title, snapshotJson = json.toString(), reason = reason
+        ))
+        db.timelineDao().archiveEvent(event.id)
+        audit("TIMELINE_EVENT_ARCHIVED", DeletedItem.TYPE_HISTORY_BRANCH, itemId.toString(), reason)
+        itemId
+    }
+
     suspend fun snapshotTransaction(transaction: Transaction, reason: String? = null): Long {
         val itemId = db.deletedItemDao().insert(DeletedItem(
             sourceType = DeletedItem.TYPE_TRANSACTION,
@@ -73,6 +88,7 @@ class TrashService(private val db: AppDatabase) {
     suspend fun restore(itemId: Long): Long = db.withTransaction {
         val item = db.deletedItemDao().byId(itemId) ?: error("Trash item not found")
         val restoredId = when (item.sourceType) {
+            DeletedItem.TYPE_HISTORY_BRANCH -> db.timelineDao().insertEvent(item.snapshotJson.toTimelineEvent())
             DeletedItem.TYPE_CARD -> {
                 val originalId = item.sourceId.toIntOrNull()
                 val restored = originalId?.let { db.virtualCardDao().unarchiveCard(it) } ?: 0
@@ -116,6 +132,13 @@ class TrashService(private val db: AppDatabase) {
     private suspend fun audit(action: String, type: String, id: String, reason: String?) {
         db.auditEventDao().insert(AuditEvent(action = action, entityType = type, entityId = id, reason = reason))
     }
+
+    private fun String.toTimelineEvent(): TimelineEvent = JSONObject(this).let { o -> TimelineEvent(
+        branchId = o.optLong("branchId"), timestamp = o.optLong("timestamp"), actionType = o.optString("actionType"),
+        screen = o.optString("screen"), entityType = o.optString("entityType").takeIf { !o.isNull("entityType") },
+        entityId = o.optString("entityId").takeIf { !o.isNull("entityId") }, title = o.optString("title"),
+        payloadJson = o.optString("payloadJson", "{}"), isMajor = o.optBoolean("isMajor", true)
+    ) }
 
     private fun String.toCard(): VirtualCard = JSONObject(this).let { o -> VirtualCard(
         name = o.optString("name"), balance = o.optDouble("balance"), colorHex = o.optString("color", "#FF1565C0"),

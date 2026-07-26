@@ -19,7 +19,8 @@ data class TimelineEvent(
     val entityId: String? = null,
     val title: String,
     val payloadJson: String = "{}",
-    val isMajor: Boolean = true
+    val isMajor: Boolean = true,
+    val isArchived: Boolean = false
 )
 
 /** Compact deterministic state used to render a historical application frame. */

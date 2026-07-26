@@ -19,7 +19,7 @@ interface TimelineDao {
     @Insert
     suspend fun insertBranch(branch: TimelineBranch): Long
 
-    @Query("SELECT * FROM timeline_events WHERE branchId = :branchId ORDER BY timestamp ASC, id ASC")
+    @Query("SELECT * FROM timeline_events WHERE branchId = :branchId AND isArchived = 0 ORDER BY timestamp ASC, id ASC")
     fun events(branchId: Long): Flow<List<TimelineEvent>>
 
     @Query("SELECT * FROM timeline_events WHERE branchId = :branchId AND timestamp <= :timestamp ORDER BY timestamp DESC, id DESC LIMIT 1")
@@ -27,6 +27,12 @@ interface TimelineDao {
 
     @Insert
     suspend fun insertEvent(event: TimelineEvent): Long
+
+    @Query("SELECT * FROM timeline_events WHERE id = :id LIMIT 1")
+    suspend fun eventById(id: Long): TimelineEvent?
+
+    @Query("UPDATE timeline_events SET isArchived = 1 WHERE id = :id")
+    suspend fun archiveEvent(id: Long)
 
     @Query("SELECT * FROM timeline_snapshots WHERE branchId = :branchId AND timestamp <= :timestamp ORDER BY timestamp DESC LIMIT 1")
     suspend fun nearestSnapshot(branchId: Long, timestamp: Long): TimelineSnapshot?

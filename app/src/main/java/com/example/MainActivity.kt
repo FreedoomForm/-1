@@ -351,7 +351,8 @@ fun MainScreen(
     contractHistoryViewModel: ContractHistoryViewModel = viewModel(),
     transactionViewModel: TransactionViewModel = viewModel(),
     finansiViewModel: com.example.ui.FinansiViewModel = viewModel(),
-    trashViewModel: com.example.ui.TrashViewModel = viewModel()
+    trashViewModel: com.example.ui.TrashViewModel = viewModel(),
+    historyTimelineViewModel: com.example.ui.HistoryViewModel = viewModel()
 ) {
     var currentTab by remember { mutableStateOf(0) }
     var showAddDialog by remember { mutableStateOf(false) }
@@ -972,7 +973,7 @@ fun MainScreen(
                     }
 
                     // ── Кнопка «✎ Tahrirlash» — скрыта на «Отчётах» (4) и «Sozlamalar» (6)
-                    if (currentTab !in setOf(4, 6, 7)) {
+                    if (currentTab !in setOf(4, 6)) {
                         val editEnabled = when (currentTab) {
                             0 -> selectedRenters.size == 1
                             1 -> selectedScooters.size == 1
@@ -1028,6 +1029,7 @@ fun MainScreen(
                             2 -> selectedContracts.isNotEmpty()
                             3 -> selectedTxs.isNotEmpty()
                             5 -> selectedCardIds.isNotEmpty()
+                            7 -> selectedHistoryEventId != null
                             8 -> selectedTrashItems.isNotEmpty()
                             else -> false
                         }
@@ -1047,6 +1049,12 @@ fun MainScreen(
                                     2 -> contractDeleteTrigger++
                                     3 -> transactionDeleteTrigger++
                                     5 -> cardDeleteTrigger++
+                                    7 -> selectedHistoryEventId?.let { id ->
+                                        historyTimelineViewModel.events.value.firstOrNull { it.id == id }?.let {
+                                            historyTimelineViewModel.archiveSelected(it)
+                                        }
+                                        selectedHistoryEventId = null
+                                    }
                                     8 -> trashPurgeTrigger++
                                 }
                             },
@@ -1869,7 +1877,8 @@ fun MainScreen(
                     createTrigger = historyCreateTrigger,
                     editTrigger = historyEditTrigger,
                     selectedEventId = selectedHistoryEventId,
-                    onSelectedEventChange = { selectedHistoryEventId = it }
+                    onSelectedEventChange = { selectedHistoryEventId = it },
+                    viewModel = historyTimelineViewModel
                 )
             } else if (currentTab == 8) {
                 TrashScreen(

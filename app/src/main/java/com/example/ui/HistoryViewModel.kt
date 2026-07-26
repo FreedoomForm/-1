@@ -53,6 +53,12 @@ class HistoryViewModel(application: Application) : AndroidViewModel(application)
         }
     }
 
+    fun archiveSelected(event: TimelineEvent, reason: String = "Archived from history") {
+        viewModelScope.launch {
+            com.example.data.TrashService(db).archiveTimelineEvent(event, reason)
+        }
+    }
+
     suspend fun nearestSnapshot(timestamp: Long) =
         service.nearestRenderableState(_activeBranchId.value, timestamp)
 }
