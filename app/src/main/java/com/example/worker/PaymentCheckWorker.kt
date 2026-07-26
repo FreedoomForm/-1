@@ -2,6 +2,7 @@ package com.example.worker
 
 import android.content.Context
 import android.util.Log
+import androidx.room.withTransaction
 import androidx.work.CoroutineWorker
 import androidx.work.ExistingWorkPolicy
 import androidx.work.OneTimeWorkRequestBuilder
@@ -67,14 +68,19 @@ class PaymentCheckWorker(
                     var current = currentRenter
                     var renewedPeriods = 0
                     val maxCatchUpPeriods = 104 // two years; protects corrupt dates
-                    while (
-                        now >= current.rentStartDateTimestamp +
-                            current.rentDurationDays * 24L * 60 * 60 * 1000 &&
-                        renewedPeriods < maxCatchUpPeriods
-                    ) {
-                        autoRenew(db, settingsRepo, current, now)
-                        current = db.renterDao().getRenterById(current.id) ?: break
-                        renewedPeriods++
+                    // All periods for one renter are committed together. A
+                    // crash cannot leave balance updated for week N while the
+                    // matching period/history for week N is missing.
+                    db.withTransaction {
+                        while (
+                            now >= current.rentStartDateTimestamp +
+                                current.rentDurationDays * 24L * 60 * 60 * 1000 &&
+                            renewedPeriods < maxCatchUpPeriods
+                        ) {
+                            autoRenew(db, settingsRepo, current, now)
+                            current = db.renterDao().getRenterById(current.id) ?: break
+                            renewedPeriods++
+                        }
                     }
                     if (renewedPeriods == maxCatchUpPeriods) {
                         Log.e(TAG, "Auto-renew cap reached for renter #${renter.id}; manual reconciliation required")
@@ -235,9 +241,10 @@ class PaymentCheckWorker(
         renterId: Int
     ) {
         val renter = db.renterDao().getRenterById(renterId) ?: return
-        if (renter.isReturned) return
-        val lastPayment = renter.lastPaymentTimestamp ?: 0L
-        if (lastPayment < renter.rentStartDateTimestamp) {
+        if (renter.isReturned || renter.balance >= 0.0) return
+        val hasOverduePeriod = db.rentPeriodDao().openForRenter(renter.id)
+            .any { it.status == com.example.data.RentPeriod.STATUS_OVERDUE }
+        if (hasOverduePeriod) {
             NotificationHelper.postPaymentDueNotification(
                 applicationContext, renter.id, renter.name, renter.phoneNumber
             )

@@ -51,37 +51,38 @@ class SmsWorker(
 
             var sentCount = 0
             var skippedCount = 0
+            val dailyLimit = 20 // safety cap: a corrupt import must not send hundreds of SMS
 
             activeRenters.forEach { renter ->
-                val elapsedMillis = currentTime - renter.rentStartDateTimestamp
-                val elapsedDays = (elapsedMillis / (1000 * 60 * 60 * 24)).toInt()
-
-                if (renter.isOverdueSmsSent) {
+                if (sentCount >= dailyLimit) return@forEach
+                if (renter.isOverdueSmsSent || renter.balance >= 0.0) {
                     skippedCount++
                     return@forEach
                 }
+                // A reminder is tied to an actual overdue billable period,
+                // not to the original contract duration (which may be months old).
+                val overduePeriod = db.rentPeriodDao().openForRenter(renter.id)
+                    .firstOrNull { it.status == com.example.data.RentPeriod.STATUS_OVERDUE }
+                if (overduePeriod == null) {
+                    skippedCount++
+                    return@forEach
+                }
+                val daysOverdue = ((currentTime - overduePeriod.endsAt) / (24L * 60 * 60 * 1000)).toInt().coerceAtLeast(1)
+                val debt = maxOf(0.0, -renter.balance)
+                val message = settingsRepo.smsTemplate
+                    .replace("{name}", renter.name.trim().lowercase())
+                    .replace("{days}", daysOverdue.toString())
+                    .replace("{debt}", debt.toLong().toString())
+                    .replace("{payme}", settingsRepo.paymeLink)
+                    .replace("{call}", settingsRepo.callCenter)
 
-                if (elapsedDays > renter.rentDurationDays) {
-                    val daysOverdue = elapsedDays - renter.rentDurationDays
-                    // Долг = -balance (если balance < 0). debtAmount может рассинхронизироваться,
-                    // поэтому всегда вычисляем из balance — это источник истины.
-                    val debt = maxOf(0.0, -renter.balance)
-                    val message = settingsRepo.smsTemplate
-                        .replace("{name}", renter.name.trim().lowercase())
-                        .replace("{days}", maxOf(1, daysOverdue).toString())
-                        .replace("{debt}", debt.toLong().toString())
-                        .replace("{payme}", settingsRepo.paymeLink)
-                        .replace("{call}", settingsRepo.callCenter)
-
-                    val ok = sendSms(renter.phoneNumber, message)
-                    if (ok) {
-                        repository.update(renter.copy(isOverdueSmsSent = true))
-                        sentCount++
-                        Log.d(TAG, "SMS sent for renter #${renter.id} (${renter.name}), " +
-                            "$daysOverdue days overdue")
-                    } else {
-                        Log.w(TAG, "SMS failed for renter #${renter.id} (${renter.name})")
-                    }
+                val ok = sendSms(renter.phoneNumber, message)
+                if (ok) {
+                    repository.update(renter.copy(isOverdueSmsSent = true))
+                    sentCount++
+                    Log.d(TAG, "SMS sent for renter #${renter.id} (${renter.name}), $daysOverdue days overdue")
+                } else {
+                    Log.w(TAG, "SMS failed for renter #${renter.id} (${renter.name})")
                 }
             }
 
