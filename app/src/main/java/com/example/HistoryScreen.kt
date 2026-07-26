@@ -31,108 +31,146 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
-import com.example.data.BusinessOperation
+import com.example.data.TimelineEvent
 import com.example.ui.HistoryViewModel
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 
-/** Compact phone-first chronological history; details open from a selected row. */
+/** Branch-aware history: list and visual timeline are two views of same events. */
 @Composable
 fun HistoryScreen(
+    createTrigger: Int = 0,
     editTrigger: Int = 0,
-    selectedSourceId: String? = null,
-    onSelectedSourceChange: (String?) -> Unit = {},
+    selectedEventId: Long? = null,
+    onSelectedEventChange: (Long?) -> Unit = {},
     viewModel: HistoryViewModel = viewModel()
 ) {
-    val items = viewModel.items.collectAsStateWithLifecycle().value
-    var selectedTimestamp by remember { mutableStateOf<Long?>(null) }
-    var showEditDialog by remember { mutableStateOf(false) }
-    var timelineMode by remember { mutableStateOf(false) }
-    var timelinePosition by remember { mutableStateOf(0f) }
+    val events by viewModel.events.collectAsStateWithLifecycle()
+    val branches by viewModel.branches.collectAsStateWithLifecycle()
+    val activeBranchId by viewModel.activeBranchId.collectAsStateWithLifecycle()
+    val formatter = remember { SimpleDateFormat("dd.MM.yyyy HH:mm", Locale.getDefault()) }
+    var visualMode by remember { mutableStateOf(false) }
+    var showBranchPicker by remember { mutableStateOf(false) }
+    var showBranchCreate by remember { mutableStateOf(false) }
+    var showEdit by remember { mutableStateOf(false) }
+    var branchName by remember { mutableStateOf("") }
     var correctionNote by remember { mutableStateOf("") }
-    LaunchedEffect(editTrigger) {
-        if (editTrigger > 0 && selectedSourceId != null) showEditDialog = true
-    }
-    val formatter = SimpleDateFormat("dd.MM.yyyy HH:mm", Locale.getDefault())
-    if (showEditDialog) {
+    var timelinePosition by remember { mutableStateOf(0f) }
+
+    LaunchedEffect(createTrigger) { if (createTrigger > 0) showBranchCreate = true }
+    LaunchedEffect(editTrigger) { if (editTrigger > 0 && selectedEventId != null) showEdit = true }
+
+    val chronological = events.sortedBy { it.timestamp }
+    val selected = selectedEventId?.let { id -> events.firstOrNull { it.id == id } }
+
+    if (showBranchPicker) {
         AlertDialog(
-            onDismissRequest = { showEditDialog = false },
+            onDismissRequest = { showBranchPicker = false },
+            title = { Text("Tarix tarmog'i") },
+            text = {
+                Column {
+                    branches.forEach { branch ->
+                        TextButton(onClick = { viewModel.selectBranch(branch.id); onSelectedEventChange(null); showBranchPicker = false }) {
+                            Text(if (branch.id == activeBranchId) "✓ ${branch.name}" else branch.name)
+                        }
+                    }
+                }
+            },
+            confirmButton = { TextButton(onClick = { showBranchPicker = false }) { Text("Yopish") } }
+        )
+    }
+    if (showBranchCreate) {
+        AlertDialog(
+            onDismissRequest = { showBranchCreate = false },
+            title = { Text("Yangi tarix tarmog'i") },
+            text = {
+                Column {
+                    Text("Tarmoq tanlangan taymkoddan boshlanadi.")
+                    OutlinedTextField(branchName, { branchName = it }, label = { Text("Tarmoq nomi") })
+                }
+            },
+            confirmButton = { TextButton(onClick = {
+                val timestamp = selected?.timestamp ?: chronological.lastOrNull()?.timestamp ?: System.currentTimeMillis()
+                viewModel.createBranch(timestamp, branchName)
+                branchName = ""; showBranchCreate = false; onSelectedEventChange(null)
+            }) { Text("Yaratish") } },
+            dismissButton = { TextButton(onClick = { showBranchCreate = false }) { Text("Bekor qilish") } }
+        )
+    }
+    if (showEdit && selected != null) {
+        AlertDialog(
+            onDismissRequest = { showEdit = false },
             title = { Text("Tarixga tuzatish") },
             text = { OutlinedTextField(correctionNote, { correctionNote = it }, label = { Text("Tuzatish izohi") }) },
             confirmButton = { TextButton(onClick = {
-                selectedSourceId?.let { viewModel.correctSelected(it, correctionNote) }
-                correctionNote = ""; showEditDialog = false
+                viewModel.correctSelected(selected, correctionNote)
+                correctionNote = ""; showEdit = false
             }) { Text("Tuzatish kiritish") } },
-            dismissButton = { TextButton(onClick = { showEditDialog = false }) { Text("Bekor qilish") } }
+            dismissButton = { TextButton(onClick = { showEdit = false }) { Text("Bekor qilish") } }
         )
     }
 
-    if (items.isEmpty()) {
-        Column(Modifier.fillMaxSize(), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center) {
-            Text("Tarix hali bo'sh", style = MaterialTheme.typography.titleMedium)
-            Text("To'lovlar, o'zgarishlar va amallar shu yerda ko'rinadi.", style = MaterialTheme.typography.bodyMedium)
-        }
-        return
-    }
     Column(Modifier.fillMaxSize()) {
-        Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp), horizontalArrangement = Arrangement.End) {
-            TextButton(onClick = { timelineMode = !timelineMode }) {
-                Text(if (timelineMode) "Ro'yxat" else "Vaqt chizig'i")
+        // Dedicated History action row, analogous to renter quick actions.
+        Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+            TextButton(onClick = { visualMode = !visualMode }) { Text(if (visualMode) "Jadval" else "Ko'rinish") }
+            TextButton(onClick = { showBranchPicker = true }) {
+                Text(branches.firstOrNull { it.id == activeBranchId }?.name ?: "Main")
             }
+            TextButton(
+                enabled = selected != null,
+                onClick = {
+                    // State restoration is represented by selection now; the
+                    // event/snapshot engine supplies the render frame below.
+                    selected?.let { onSelectedEventChange(it.id) }
+                }
+            ) { Text("Qaytish") }
         }
-        if (timelineMode) {
-            val index = timelinePosition.toInt().coerceIn(0, items.lastIndex)
-            val item = items[index]
+
+        if (chronological.isEmpty()) {
+            Column(Modifier.fillMaxSize(), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center) {
+                Text("Bu tarmoqda hali harakat yo'q", style = MaterialTheme.typography.titleMedium)
+                Text("+ bilan tanlangan taymkoddan yangi tarmoq yarating.")
+            }
+        } else if (visualMode) {
+            val index = timelinePosition.toInt().coerceIn(0, chronological.lastIndex)
+            val event = chronological[index]
             Column(Modifier.fillMaxSize().padding(16.dp), verticalArrangement = Arrangement.SpaceBetween) {
-                Card(Modifier.fillMaxWidth().clickable {
-                    selectedTimestamp = item.timestamp
-                    onSelectedSourceChange(item.sourceId)
-                }) {
+                Card(Modifier.fillMaxWidth().clickable { onSelectedEventChange(event.id) }) {
                     Column(Modifier.padding(20.dp)) {
-                        Text(item.title, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
-                        Spacer(Modifier.width(1.dp))
-                        Text(item.subtitle, style = MaterialTheme.typography.bodyLarge)
-                        Text(formatter.format(Date(item.timestamp)), style = MaterialTheme.typography.labelMedium)
-                        item.amountMinor?.let { Text("${BusinessOperation.fromMinor(it).toLong()} UZS", fontWeight = FontWeight.Bold) }
+                        Text(event.title, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
+                        Text(event.screen, style = MaterialTheme.typography.labelMedium)
+                        Text(formatter.format(Date(event.timestamp)), style = MaterialTheme.typography.bodyMedium)
+                        event.entityType?.let { Text("$it #${event.entityId ?: "—"}") }
+                        Text("Render: ${event.payloadJson}", style = MaterialTheme.typography.bodySmall)
                     }
                 }
                 Column {
-                    Text("${index + 1} / ${items.size}", style = MaterialTheme.typography.labelSmall)
+                    Text("${index + 1} / ${chronological.size}", style = MaterialTheme.typography.labelSmall)
                     Slider(
                         value = timelinePosition,
                         onValueChange = { value ->
                             timelinePosition = value
-                            val chosen = items[value.toInt().coerceIn(0, items.lastIndex)]
-                            selectedTimestamp = chosen.timestamp
-                            onSelectedSourceChange(chosen.sourceId)
+                            onSelectedEventChange(chronological[value.toInt().coerceIn(0, chronological.lastIndex)].id)
                         },
-                        valueRange = 0f..items.lastIndex.toFloat(),
-                        steps = (items.size - 2).coerceAtLeast(0)
+                        valueRange = 0f..chronological.lastIndex.toFloat(),
+                        steps = (chronological.size - 2).coerceAtLeast(0)
                     )
                 }
             }
         } else {
-            LazyColumn(
-                modifier = Modifier.fillMaxSize(),
-                contentPadding = PaddingValues(12.dp),
-                verticalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                items(items, key = { "${it.kind}-${it.sourceId}" }) { item ->
-                    Card(Modifier.fillMaxWidth().clickable {
-                        selectedTimestamp = item.timestamp
-                        onSelectedSourceChange(if (selectedSourceId == item.sourceId) null else item.sourceId)
-                    }) {
+            LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                items(events.sortedByDescending { it.timestamp }, key = { it.id }) { event ->
+                    Card(Modifier.fillMaxWidth().clickable { onSelectedEventChange(if (selectedEventId == event.id) null else event.id) }) {
                         Row(Modifier.fillMaxWidth().padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
                             Column(Modifier.weight(1f)) {
-                                Text(if (selectedSourceId == item.sourceId) "✓ ${item.title}" else item.title, fontWeight = FontWeight.SemiBold, style = MaterialTheme.typography.bodyMedium)
-                                Text(item.subtitle, style = MaterialTheme.typography.bodySmall, maxLines = 2)
-                                Text(formatter.format(Date(item.timestamp)), style = MaterialTheme.typography.labelSmall)
+                                Text(if (selectedEventId == event.id) "✓ ${event.title}" else event.title, fontWeight = FontWeight.SemiBold)
+                                Text("${event.actionType} • ${event.screen}", style = MaterialTheme.typography.bodySmall)
+                                Text(formatter.format(Date(event.timestamp)), style = MaterialTheme.typography.labelSmall)
                             }
-                            item.amountMinor?.let {
-                                Spacer(Modifier.width(8.dp))
-                                Text("${BusinessOperation.fromMinor(it).toLong()} UZS", fontWeight = FontWeight.Bold)
-                            }
+                            Spacer(Modifier.width(8.dp))
+                            Text(if (event.isMajor) "●" else "·", style = MaterialTheme.typography.titleMedium)
                         }
                     }
                 }

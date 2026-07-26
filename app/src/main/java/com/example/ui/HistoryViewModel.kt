@@ -4,71 +4,55 @@ import android.app.Application
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.data.AppDatabase
-import com.example.data.AuditEvent
-import com.example.data.BusinessOperation
+import com.example.data.TimelineBranch
+import com.example.data.TimelineEvent
+import com.example.data.TimelineService
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
-import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 
-data class UnifiedHistoryItem(
-    val timestamp: Long,
-    val kind: String,
-    val title: String,
-    val subtitle: String,
-    val amountMinor: Long? = null,
-    val sourceId: String
-)
-
+/** Branch-aware controller for table and visual timeline history. */
+@OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
 class HistoryViewModel(application: Application) : AndroidViewModel(application) {
     private val db = AppDatabase.getDatabase(application)
-    val items: StateFlow<List<UnifiedHistoryItem>> = combine(
-        db.auditEventDao().all(),
-        db.businessOperationDao().getActive()
-    ) { audits: List<AuditEvent>, operations: List<BusinessOperation> ->
-        (audits.map { audit ->
-            UnifiedHistoryItem(
-                timestamp = audit.occurredAt,
-                kind = "AUDIT",
-                title = audit.action,
-                subtitle = "${audit.entityType} #${audit.entityId}${audit.reason?.let { ": $it" } ?: ""}",
-                sourceId = audit.id.toString()
-            )
-        } + operations.map { operation ->
-            UnifiedHistoryItem(
-                timestamp = operation.occurredAt,
-                kind = operation.type,
-                title = operation.type,
-                subtitle = operation.note ?: operation.direction,
-                amountMinor = operation.amountMinor,
-                sourceId = operation.id.toString()
-            )
-        }).sortedByDescending { it.timestamp }
-    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+    private val service = TimelineService(db)
+    private val _activeBranchId = MutableStateFlow(1L)
+    val activeBranchId: StateFlow<Long> = _activeBranchId
 
-    /** Adds a non-financial manual history branch at the operator-selected time. */
-    fun createBranch(timestamp: Long, note: String) {
+    val branches: StateFlow<List<TimelineBranch>> = db.timelineDao().branches().stateIn(
+        viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList()
+    )
+    val events: StateFlow<List<TimelineEvent>> = _activeBranchId
+        .flatMapLatest { db.timelineDao().events(it) }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+
+    fun selectBranch(branchId: Long) { _activeBranchId.value = branchId }
+
+    fun createBranch(atTimestamp: Long, name: String) {
         viewModelScope.launch {
-            db.auditEventDao().insert(AuditEvent(
-                occurredAt = timestamp,
-                action = "HISTORY_BRANCH_CREATED",
-                entityType = "HISTORY_BRANCH",
-                entityId = "manual-$timestamp",
-                reason = note.ifBlank { "Manual history branch" }
-            ))
+            val id = service.createBranch(_activeBranchId.value, atTimestamp, name)
+            _activeBranchId.value = id
         }
     }
 
-    /** History is immutable: edit creates a linked correction, never rewrites evidence. */
-    fun correctSelected(sourceId: String, note: String) {
+    /** Immutable timeline edit: append an explicit correction event. */
+    fun correctSelected(event: TimelineEvent, note: String) {
         viewModelScope.launch {
-            db.auditEventDao().insert(AuditEvent(
-                action = "HISTORY_CORRECTION_CREATED",
-                entityType = "HISTORY_ITEM",
-                entityId = sourceId,
-                reason = note.ifBlank { "History correction" }
-            ))
+            service.record(
+                branchId = _activeBranchId.value,
+                actionType = "HISTORY_CORRECTION",
+                screen = event.screen,
+                title = "Correction: ${event.title}",
+                entityType = event.entityType,
+                entityId = event.entityId,
+                payloadJson = "{\"sourceEventId\":${event.id},\"note\":\"${note.replace("\"", "\\\"")}\"}"
+            )
         }
     }
+
+    suspend fun nearestSnapshot(timestamp: Long) =
+        service.nearestRenderableState(_activeBranchId.value, timestamp)
 }

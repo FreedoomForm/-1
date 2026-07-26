@@ -391,7 +391,7 @@ fun MainScreen(
     var selectedContracts by remember { mutableStateOf(setOf<Int>()) }
     var selectedTxs by remember { mutableStateOf(setOf<Int>()) }
     var selectedTrashItems by remember { mutableStateOf(setOf<Long>()) }
-    var selectedHistorySourceId by remember { mutableStateOf<String?>(null) }
+    var selectedHistoryEventId by remember { mutableStateOf<Long?>(null) }
     var historyCreateTrigger by remember { mutableStateOf(0) }
     var historyEditTrigger by remember { mutableStateOf(0) }
     var trashRestoreTrigger by remember { mutableStateOf(0) }
@@ -950,7 +950,8 @@ fun MainScreen(
                                     2 -> contractCreateTrigger++
                                     3 -> transactionCreateTrigger++
                                     5 -> cardCreateTrigger++
-                                    7, 8 -> {
+                                    7 -> historyCreateTrigger++
+                                    8 -> {
                                         selectedTrashItems.forEach { trashViewModel.restore(it) }
                                         selectedTrashItems = emptySet()
                                     }
@@ -978,7 +979,7 @@ fun MainScreen(
                             2 -> selectedContracts.size == 1
                             3 -> selectedTxs.size == 1
                             5 -> selectedCardIds.size == 1
-                            7 -> selectedHistorySourceId != null
+                            7 -> selectedHistoryEventId != null
                             8 -> selectedTrashItems.size == 1
                             else -> false
                         }
@@ -1865,9 +1866,10 @@ fun MainScreen(
                 )
             } else if (currentTab == 7) {
                 HistoryScreen(
+                    createTrigger = historyCreateTrigger,
                     editTrigger = historyEditTrigger,
-                    selectedSourceId = selectedHistorySourceId,
-                    onSelectedSourceChange = { selectedHistorySourceId = it }
+                    selectedEventId = selectedHistoryEventId,
+                    onSelectedEventChange = { selectedHistoryEventId = it }
                 )
             } else if (currentTab == 8) {
                 TrashScreen(
