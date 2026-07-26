@@ -70,9 +70,8 @@ jobs:
           keytool -list -keystore debug.keystore -storepass android 2>&1 | head -5
 
       - name: Run unit tests
-        if: ${{ github.event_name == 'workflow_dispatch' && inputs.run_tests }}
+        # Financial and migration regressions must block every release build.
         run: ./gradlew testDebugUnitTest --no-daemon --stacktrace
-        continue-on-error: true
 
       # ── Внедрение номера сборки в versionCode/versionName ───────────────
       # ВАЖНО: этот шаг ДОЛЖЕН выполняться ДО assembleDebug, чтобы собранный
