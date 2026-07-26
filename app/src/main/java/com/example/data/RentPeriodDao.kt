@@ -35,6 +35,12 @@ interface RentPeriodDao {
     @Query("SELECT * FROM rent_periods WHERE scooterId = :scooterId AND status = 'SUSPENDED_REPAIR'")
     suspend fun suspendedForScooter(scooterId: Int): List<RentPeriod>
 
+    @Query("SELECT * FROM rent_periods WHERE scooterId = :scooterId AND status IN ('SCHEDULED','ACTIVE','PARTIALLY_PAID','OVERDUE','SUSPENDED_REPAIR')")
+    suspend fun currentForScooter(scooterId: Int): List<RentPeriod>
+
+    @Query("UPDATE rent_periods SET scooterId = :newScooterId, updatedAt = :timestamp WHERE scooterId = :oldScooterId AND status IN ('SCHEDULED','ACTIVE','PARTIALLY_PAID','OVERDUE','SUSPENDED_REPAIR')")
+    suspend fun reassignScooter(oldScooterId: Int, newScooterId: Int, timestamp: Long): Int
+
     @Insert
     suspend fun insert(period: RentPeriod): Long
 

@@ -81,6 +81,14 @@ class ScooterViewModel(application: Application) : AndroidViewModel(application)
         }
     }
 
+    fun replaceScooterForRental(oldScooterId: Int, newScooterId: Int, reason: String) {
+        viewModelScope.launch {
+            try { com.example.data.ScooterMaintenanceService(AppDatabase.getDatabase(getApplication()))
+                .replaceScooterForActiveRental(oldScooterId, newScooterId, reason) }
+            catch (e: Exception) { Log.e(TAG, "Failed to replace scooter for rental", e) }
+        }
+    }
+
     fun resumeAfterRepair(scooterId: Int, reason: String) {
         viewModelScope.launch {
             try { com.example.data.ScooterMaintenanceService(AppDatabase.getDatabase(getApplication()))

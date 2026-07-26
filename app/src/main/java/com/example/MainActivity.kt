@@ -369,6 +369,7 @@ fun MainScreen(
     var showRepairResumeDialog by remember { mutableStateOf(false) }
     var repairNote by remember { mutableStateOf("") }
     var repairScenario by remember { mutableStateOf(com.example.data.RepairOrder.SCENARIO_RENTER_REPAIR) }
+    var replacementScooterId by remember { mutableStateOf<Int?>(null) }
     var searchQuery by remember { mutableStateOf("") }
     var showDateRangePicker by remember { mutableStateOf(false) }
     val dateRangePickerState = rememberDateRangePickerState()
@@ -1618,6 +1619,7 @@ fun MainScreen(
                             TextButton(onClick = {
                                 repairNote = ""
                                 repairScenario = com.example.data.RepairOrder.SCENARIO_RENTER_REPAIR
+                                replacementScooterId = scooters.firstOrNull { it.id != selectedScooter.id && it.lifecycleStatus == Scooter.STATUS_AVAILABLE }?.id
                                 showRepairDialog = true
                             }) { Text("Ta'mirga") }
                         }
@@ -1878,16 +1880,31 @@ fun MainScreen(
                                     Text(label)
                                 }
                             }
+                            if (repairScenario == com.example.data.RepairOrder.SCENARIO_REPLACEMENT) {
+                                val available = scooters.filter { it.lifecycleStatus == Scooter.STATUS_AVAILABLE && it.id != selectedId }
+                                Text("Almashtiruvchi skuter", style = MaterialTheme.typography.labelSmall)
+                                available.forEach { candidate ->
+                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                        RadioButton(selected = replacementScooterId == candidate.id, onClick = { replacementScooterId = candidate.id })
+                                        Text(candidate.name)
+                                    }
+                                }
+                                if (available.isEmpty()) Text("Bo'sh skuter yo'q", style = MaterialTheme.typography.bodySmall, color = StatusOverdue)
+                            }
                         }
                         OutlinedTextField(repairNote, { repairNote = it }, label = { Text("Izoh / sabab") })
                     }
                 },
                 confirmButton = { TextButton(onClick = {
-                    if (selectedId != null && repairNote.isNotBlank()) {
-                        if (showRepairDialog) scooterViewModel.sendToRepair(selectedId, repairNote, repairScenario)
-                        else scooterViewModel.resumeAfterRepair(selectedId, repairNote)
+                    if (selectedId != null && repairNote.isNotBlank() &&
+                        (!showRepairDialog || repairScenario != com.example.data.RepairOrder.SCENARIO_REPLACEMENT || replacementScooterId != null)) {
+                        if (showRepairDialog) {
+                            if (repairScenario == com.example.data.RepairOrder.SCENARIO_REPLACEMENT) {
+                                replacementScooterId?.let { scooterViewModel.replaceScooterForRental(selectedId, it, repairNote) }
+                            } else scooterViewModel.sendToRepair(selectedId, repairNote, repairScenario)
+                        } else scooterViewModel.resumeAfterRepair(selectedId, repairNote)
                         showRepairDialog = false; showRepairResumeDialog = false; repairNote = ""
-                    } else Toast.makeText(localContext, "Izoh kiriting", Toast.LENGTH_SHORT).show()
+                    } else Toast.makeText(localContext, "Izoh va almashtiruvchi skuter tanlang", Toast.LENGTH_SHORT).show()
                 }) { Text("Tasdiqlash") } },
                 dismissButton = { TextButton(onClick = { showRepairDialog = false; showRepairResumeDialog = false }) { Text("Bekor qilish") } }
             )

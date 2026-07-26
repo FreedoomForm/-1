@@ -96,6 +96,58 @@ class ScooterMaintenanceService(private val db: AppDatabase) {
         paused.size
     }
 
+    /**
+     * Replaces a broken scooter without resetting the renter's periods, debt
+     * or paid coverage. The old unit is retired and all open periods continue
+     * on the replacement unit.
+     */
+    suspend fun replaceScooterForActiveRental(
+        oldScooterId: Int,
+        newScooterId: Int,
+        reason: String
+    ): Int = db.withTransaction {
+        require(oldScooterId != newScooterId) { "Replacement scooter must differ" }
+        require(reason.isNotBlank()) { "Replacement reason is required" }
+        val old = db.scooterDao().getScooterById(oldScooterId)
+            ?: throw IllegalArgumentException("Old scooter does not exist")
+        val replacement = db.scooterDao().getScooterById(newScooterId)
+            ?: throw IllegalArgumentException("Replacement scooter does not exist")
+        require(replacement.lifecycleStatus == Scooter.STATUS_AVAILABLE) { "Replacement scooter is not available" }
+        val currentPeriods = db.rentPeriodDao().currentForScooter(oldScooterId)
+        val renterId = currentPeriods.firstOrNull()?.renterId
+            ?: throw IllegalStateException("Old scooter has no active or paused rental")
+        val renter = db.renterDao().getRenterById(renterId)
+            ?: throw IllegalStateException("Active renter not found")
+        val now = System.currentTimeMillis()
+        db.rentPeriodDao().reassignScooter(oldScooterId, newScooterId, now)
+        db.repairOrderDao().insert(RepairOrder(
+            scooterId = oldScooterId,
+            renterId = renter.id,
+            scenario = RepairOrder.SCENARIO_REPLACEMENT,
+            status = RepairOrder.STATUS_COMPLETED,
+            openedAt = now,
+            closedAt = now,
+            diagnosis = reason,
+            documentNote = "Replaced by ${replacement.name}"
+        ))
+        db.renterDao().updateRenter(renter.copy(scooterId = newScooterId, scooterName = replacement.name))
+        db.scooterDao().updateLifecycleStatus(oldScooterId, Scooter.STATUS_RETIRED)
+        db.scooterDao().updateLifecycleStatus(newScooterId, if (renter.isReturned) Scooter.STATUS_AVAILABLE else Scooter.STATUS_RENTED)
+        db.repairOrderDao().openForScooter(oldScooterId).forEach { order ->
+            db.repairOrderDao().update(order.copy(
+                status = RepairOrder.STATUS_COMPLETED,
+                closedAt = now,
+                documentNote = listOfNotNull(order.documentNote, "Replaced by ${replacement.name}: $reason").joinToString(" • ")
+            ))
+        }
+        db.auditEventDao().insert(AuditEvent(
+            occurredAt = now, action = "SCOOTER_REPLACED", entityType = "SCOOTER", entityId = oldScooterId.toString(), reason = reason,
+            beforeSnapshot = "old=${old.name}; renter=${renter.name}",
+            afterSnapshot = "new=${replacement.name}; periods=${currentPeriods.size}"
+        ))
+        currentPeriods.size
+    }
+
     suspend fun recordRepairExpense(
         scooterId: Int,
         fromCardId: Int,
