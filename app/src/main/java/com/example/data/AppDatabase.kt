@@ -24,7 +24,7 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         DeletedItem::class,
         LegacyMoneyAmount::class
     ],
-    version = 23,
+    version = 24,
     exportSchema = false
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -414,6 +414,58 @@ abstract class AppDatabase : RoomDatabase() {
         }
 
         /**
+         * Migration 23 → 24: bring historical manual money rows into the
+         * universal journal. Rows already linked by legacyTransactionId or
+         * cardTransactionId are deliberately skipped, so updates are idempotent
+         * and contract payments never become double revenue.
+         */
+        private val MIGRATION_23_24 = object : Migration(23, 24) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("""
+                    INSERT INTO business_operations
+                    (occurredAt,type,direction,amountMinor,renterId,scooterId,contractId,legacyTransactionId,note,status,createdAt)
+                    SELECT t.timestamp,
+                           CASE t.type
+                             WHEN 'REPAIR' THEN 'REPAIR'
+                             WHEN 'PENALTY' THEN 'PENALTY_PAYMENT'
+                             WHEN 'PAYMENT' THEN 'RENT_PAYMENT'
+                             WHEN 'CUSTOM' THEN CASE WHEN t.amount < 0 THEN 'OTHER_EXPENSE' ELSE 'OTHER_INCOME' END
+                             ELSE 'ADJUSTMENT'
+                           END,
+                           CASE
+                             WHEN t.type = 'REPAIR' THEN 'EXPENSE'
+                             WHEN t.type = 'CUSTOM' AND t.amount < 0 THEN 'EXPENSE'
+                             WHEN t.type IN ('PAYMENT','PENALTY') THEN 'INCOME'
+                             WHEN t.type = 'CUSTOM' THEN 'INCOME'
+                             ELSE 'LIABILITY'
+                           END,
+                           CAST(ROUND(ABS(t.amount) * 100.0) AS INTEGER),
+                           CASE WHEN t.renterId > 0 THEN t.renterId ELSE NULL END,
+                           t.scooterId,t.contractId,t.id,t.notes,'ACTIVE',t.timestamp
+                    FROM transactions t
+                    WHERE t.amount <> 0
+                      AND t.type IN ('PAYMENT','PENALTY','REPAIR','CUSTOM')
+                      AND NOT EXISTS (SELECT 1 FROM business_operations b WHERE b.legacyTransactionId = t.id)
+                      AND (
+                        t.type <> 'PAYMENT' OR t.contractId IS NULL OR
+                        NOT EXISTS (SELECT 1 FROM card_transactions c WHERE c.contractId = t.contractId AND c.type = 'CONTRACT_INCOME')
+                      )
+                """.trimIndent())
+                // Old builds could create an EXPENSE card row without an
+                // accompanying universal operation. Import it exactly once.
+                db.execSQL("""
+                    INSERT INTO business_operations
+                    (occurredAt,type,direction,amountMinor,fromCardId,toCardId,cardTransactionId,note,status,createdAt)
+                    SELECT c.timestamp,'EXPENSE','EXPENSE',CAST(ROUND(ABS(c.amount) * 100.0) AS INTEGER),
+                           c.fromCardId,c.toCardId,c.id,c.note,'ACTIVE',c.timestamp
+                    FROM card_transactions c
+                    WHERE c.type = 'EXPENSE' AND c.amount <> 0
+                      AND NOT EXISTS (SELECT 1 FROM business_operations b WHERE b.cardTransactionId = c.id)
+                """.trimIndent())
+            }
+        }
+
+        /**
          * Copies the raw Room database before the first open after an app
          * schema upgrade. This runs before Room can migrate anything, so a
          * recoverable snapshot exists even if a device loses power mid-update.
@@ -421,17 +473,17 @@ abstract class AppDatabase : RoomDatabase() {
         private fun backupBeforeMigration(context: Context) {
             val appContext = context.applicationContext
             val prefs = appContext.getSharedPreferences("migration_backups", Context.MODE_PRIVATE)
-            val key = "backup_for_schema_23"
+            val key = "backup_for_schema_24"
             if (prefs.getBoolean(key, false)) return
             val source = appContext.getDatabasePath("scooter_rent_db")
             if (!source.exists() || source.length() == 0L) return
             try {
                 val directory = java.io.File(appContext.filesDir, "pre_migration_backups").apply { mkdirs() }
                 val stamp = System.currentTimeMillis()
-                source.copyTo(java.io.File(directory, "scooter_rent_db_before_v23_$stamp.db"), overwrite = true)
+                source.copyTo(java.io.File(directory, "scooter_rent_db_before_v24_$stamp.db"), overwrite = true)
                 listOf("-wal", "-shm").forEach { suffix ->
                     val sidecar = java.io.File(source.path + suffix)
-                    if (sidecar.exists()) sidecar.copyTo(java.io.File(directory, "scooter_rent_db_before_v23_$stamp$suffix"), overwrite = true)
+                    if (sidecar.exists()) sidecar.copyTo(java.io.File(directory, "scooter_rent_db_before_v24_$stamp$suffix"), overwrite = true)
                 }
                 prefs.edit().putBoolean(key, true).apply()
             } catch (_: Exception) {
@@ -448,7 +500,7 @@ abstract class AppDatabase : RoomDatabase() {
                     AppDatabase::class.java,
                     "scooter_rent_db"
                 )
-                    .addMigrations(MIGRATION_11_12, MIGRATION_12_13, MIGRATION_13_14, MIGRATION_14_15, MIGRATION_15_16, MIGRATION_16_17, MIGRATION_17_18, MIGRATION_18_19, MIGRATION_19_20, MIGRATION_20_21, MIGRATION_21_22, MIGRATION_22_23)
+                    .addMigrations(MIGRATION_11_12, MIGRATION_12_13, MIGRATION_13_14, MIGRATION_14_15, MIGRATION_15_16, MIGRATION_16_17, MIGRATION_17_18, MIGRATION_18_19, MIGRATION_19_20, MIGRATION_20_21, MIGRATION_21_22, MIGRATION_22_23, MIGRATION_23_24)
                     // Production data must never be silently erased on an unknown migration.
                     // Room will fail visibly and the user can restore a backup instead.
                     .addCallback(object : RoomDatabase.Callback() {

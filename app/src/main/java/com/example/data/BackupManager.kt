@@ -219,7 +219,7 @@ object BackupManager {
             "contracts", "transactions", "cards", "cardTransactions", "operations", "periods", "allocations"
         )
         headers.forEachIndexed { i, value -> ws.value(0, i, value) }
-        val values = listOf(BACKUP_SCHEMA_VERSION.toLong(), System.currentTimeMillis(), 21L, renters.toLong(), scooters.toLong(),
+        val values = listOf(BACKUP_SCHEMA_VERSION.toLong(), System.currentTimeMillis(), 24L, renters.toLong(), scooters.toLong(),
             contracts.toLong(), transactions.toLong(), cards.toLong(), cardTransactions.toLong(), operations.toLong(), periods.toLong(), allocations.toLong())
         values.forEachIndexed { i, value -> ws.value(1, i, value) }
     }

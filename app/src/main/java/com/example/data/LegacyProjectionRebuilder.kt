@@ -43,10 +43,16 @@ object LegacyProjectionRebuilder {
 
         db.cardTransactionDao().getRecentTransactions(Int.MAX_VALUE).forEach { tx ->
             if (tx.amount == 0.0) return@forEach
-            val type = if (tx.type == CardTransaction.TYPE_CONTRACT_INCOME)
-                BusinessOperation.TYPE_RENT_PAYMENT else BusinessOperation.TYPE_TRANSFER
-            val direction = if (tx.type == CardTransaction.TYPE_CONTRACT_INCOME)
-                BusinessOperation.DIRECTION_INCOME else BusinessOperation.DIRECTION_TRANSFER
+            val type = when (tx.type) {
+                CardTransaction.TYPE_CONTRACT_INCOME -> BusinessOperation.TYPE_RENT_PAYMENT
+                CardTransaction.TYPE_EXPENSE -> BusinessOperation.TYPE_EXPENSE
+                else -> BusinessOperation.TYPE_TRANSFER
+            }
+            val direction = when (tx.type) {
+                CardTransaction.TYPE_CONTRACT_INCOME -> BusinessOperation.DIRECTION_INCOME
+                CardTransaction.TYPE_EXPENSE -> BusinessOperation.DIRECTION_EXPENSE
+                else -> BusinessOperation.DIRECTION_TRANSFER
+            }
             db.businessOperationDao().insert(BusinessOperation(
                 occurredAt = tx.timestamp,
                 type = type,
@@ -57,6 +63,30 @@ object LegacyProjectionRebuilder {
                 toCardId = tx.toCardId,
                 cardTransactionId = tx.id,
                 note = tx.note,
+                createdAt = tx.timestamp
+            ))
+        }
+
+        // Legacy manual rows have no card projection. Import only payments
+        // that are not already represented by a contract card income.
+        val cardIncomeContractIds = db.cardTransactionDao().getRecentTransactions(Int.MAX_VALUE)
+            .filter { it.type == CardTransaction.TYPE_CONTRACT_INCOME }
+            .mapNotNull { it.contractId }.toSet()
+        db.transactionDao().getAllOnce().forEach { tx ->
+            if (tx.amount == 0.0 || (tx.type == Transaction.TYPE_PAYMENT && tx.contractId in cardIncomeContractIds)) return@forEach
+            val (type, direction) = when (tx.type) {
+                Transaction.TYPE_REPAIR -> BusinessOperation.TYPE_REPAIR to BusinessOperation.DIRECTION_EXPENSE
+                Transaction.TYPE_PENALTY -> BusinessOperation.TYPE_PENALTY_PAYMENT to BusinessOperation.DIRECTION_INCOME
+                Transaction.TYPE_PAYMENT -> BusinessOperation.TYPE_RENT_PAYMENT to BusinessOperation.DIRECTION_INCOME
+                Transaction.TYPE_CUSTOM -> if (tx.amount < 0) BusinessOperation.TYPE_OTHER_EXPENSE to BusinessOperation.DIRECTION_EXPENSE
+                    else BusinessOperation.TYPE_OTHER_INCOME to BusinessOperation.DIRECTION_INCOME
+                else -> BusinessOperation.TYPE_ADJUSTMENT to BusinessOperation.DIRECTION_LIABILITY
+            }
+            db.businessOperationDao().insert(BusinessOperation(
+                occurredAt = tx.timestamp, type = type, direction = direction,
+                amountMinor = BusinessOperation.toMinor(kotlin.math.abs(tx.amount)),
+                renterId = tx.renterId.takeIf { it > 0 }, scooterId = tx.scooterId,
+                contractId = tx.contractId, legacyTransactionId = tx.id, note = tx.notes,
                 createdAt = tx.timestamp
             ))
         }
