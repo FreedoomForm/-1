@@ -11,13 +11,25 @@ class SettingsRepository(context: Context) {
         get() = prefs.getString("sms_template", DEFAULT_TEMPLATE) ?: DEFAULT_TEMPLATE
         set(value) = prefs.edit().putString("sms_template", value).apply()
 
+    /** Exact UZS setting. Legacy float is read once only when the new key is absent. */
     var weeklyPrice: Double
-        get() = prefs.getFloat("weekly_price", 0f).toDouble()
-        set(value) = prefs.edit().putFloat("weekly_price", value.toFloat()).apply()
+        get() = prefs.getString("weekly_price_minor", null)?.toLongOrNull()?.let(BusinessOperation::fromMinor)
+            ?: prefs.getFloat("weekly_price", 0f).toDouble()
+        set(value) {
+            val minor = BusinessOperation.toMinor(value)
+            prefs.edit().putString("weekly_price_minor", minor.toString()).apply()
+        }
 
     var monthlyPrice: Double
-        get() = prefs.getFloat("monthly_price", 0f).toDouble()
-        set(value) = prefs.edit().putFloat("monthly_price", value.toFloat()).apply()
+        get() = prefs.getString("monthly_price_minor", null)?.toLongOrNull()?.let(BusinessOperation::fromMinor)
+            ?: prefs.getFloat("monthly_price", 0f).toDouble()
+        set(value) {
+            val minor = BusinessOperation.toMinor(value)
+            prefs.edit().putString("monthly_price_minor", minor.toString()).apply()
+        }
+
+    val weeklyPriceMinor: Long get() = BusinessOperation.toMinor(weeklyPrice)
+    val monthlyPriceMinor: Long get() = BusinessOperation.toMinor(monthlyPrice)
 
     /**
      * Стоимость одного скутера в долларах США. Используется на странице
