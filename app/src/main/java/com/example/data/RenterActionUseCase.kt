@@ -429,9 +429,11 @@ class RenterActionUseCase(
         // Release the scooter immediately and preserve completed/scheduled
         // period states; otherwise a returned renter would still block a new
         // booking through overlap validation.
-        val periodDao = AppDatabase.getDatabase(context).rentPeriodDao()
+        val currentDb = AppDatabase.getDatabase(context)
+        val periodDao = currentDb.rentPeriodDao()
         periodDao.closeOpenForRenter(renter.id, now)
         periodDao.cancelScheduledForRenter(renter.id, now)
+        renter.scooterId?.let { currentDb.scooterDao().updateLifecycleStatus(it, Scooter.STATUS_AVAILABLE) }
 
         // ── Шаг 3: создаём запись TERMINATED в истории контрактов ──────────
         val entry = ContractHistoryEntry(

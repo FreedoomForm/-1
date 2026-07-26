@@ -250,7 +250,15 @@ class RenterViewModel(application: Application) : AndroidViewModel(application) 
             // A scooter cannot be reserved or rented by two people for
             // overlapping periods. Validate before the renter itself is saved.
             if (scooterId != null) {
-                val periodDao = AppDatabase.getDatabase(getApplication()).rentPeriodDao()
+                val db = AppDatabase.getDatabase(getApplication())
+                val scooter = db.scooterDao().getScooterById(scooterId)
+                if (scooter == null || scooter.lifecycleStatus in setOf(
+                        Scooter.STATUS_SERVICE, Scooter.STATUS_REPAIR, Scooter.STATUS_RETIRED
+                    )) {
+                    Log.w(TAG, "Rental blocked: scooter #$scooterId is unavailable")
+                    return@launch
+                }
+                val periodDao = db.rentPeriodDao()
                 specs.forEach { spec ->
                     val conflicts = periodDao.conflictsForScooter(scooterId, spec.weekStart, spec.weekEnd)
                     if (conflicts.isNotEmpty()) {
@@ -407,6 +415,10 @@ class RenterViewModel(application: Application) : AndroidViewModel(application) 
                                 Log.w(TAG, "depositContractIncome failed for new contract #$contractId: ${e.message}")
                             }
                         }
+                    }
+                    savedRenter.scooterId?.let { id ->
+                        val lifecycle = if (startTimestamp > now) Scooter.STATUS_RESERVED else Scooter.STATUS_RENTED
+                        AppDatabase.getDatabase(getApplication()).scooterDao().updateLifecycleStatus(id, lifecycle)
                     }
                 } catch (e: Exception) { Log.w(TAG, "History save xato", e) }
             }

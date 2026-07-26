@@ -126,6 +126,7 @@ class PaymentCheckWorker(
             isOverdueSmsSent = false
         )
         db.renterDao().updateRenter(updated)
+        renter.scooterId?.let { db.scooterDao().updateLifecycleStatus(it, com.example.data.Scooter.STATUS_RENTED) }
         return updated
     }
 

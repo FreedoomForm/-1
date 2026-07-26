@@ -22,7 +22,7 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         AuditEvent::class,
         AppUser::class
     ],
-    version = 20,
+    version = 21,
     exportSchema = false
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -341,6 +341,20 @@ abstract class AppDatabase : RoomDatabase() {
             }
         }
 
+        /** Migration 20 → 21: explicit operational lifecycle and service dates for scooters. */
+        private val MIGRATION_20_21 = object : Migration(20, 21) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE `scooters` ADD COLUMN `lifecycleStatus` TEXT NOT NULL DEFAULT 'AVAILABLE'")
+                db.execSQL("ALTER TABLE `scooters` ADD COLUMN `lastServiceAt` INTEGER")
+                db.execSQL("ALTER TABLE `scooters` ADD COLUMN `nextServiceAt` INTEGER")
+                // Existing active rentals must not suddenly appear available.
+                db.execSQL("""
+                    UPDATE scooters SET lifecycleStatus = 'RENTED'
+                    WHERE id IN (SELECT scooterId FROM renters WHERE isReturned = 0 AND scooterId IS NOT NULL)
+                """.trimIndent())
+            }
+        }
+
         fun getDatabase(context: Context): AppDatabase {
             return INSTANCE ?: synchronized(this) {
                 val instance = Room.databaseBuilder(
@@ -348,7 +362,7 @@ abstract class AppDatabase : RoomDatabase() {
                     AppDatabase::class.java,
                     "scooter_rent_db"
                 )
-                    .addMigrations(MIGRATION_11_12, MIGRATION_12_13, MIGRATION_13_14, MIGRATION_14_15, MIGRATION_15_16, MIGRATION_16_17, MIGRATION_17_18, MIGRATION_18_19, MIGRATION_19_20)
+                    .addMigrations(MIGRATION_11_12, MIGRATION_12_13, MIGRATION_13_14, MIGRATION_14_15, MIGRATION_15_16, MIGRATION_16_17, MIGRATION_17_18, MIGRATION_18_19, MIGRATION_19_20, MIGRATION_20_21)
                     // Production data must never be silently erased on an unknown migration.
                     // Room will fail visibly and the user can restore a backup instead.
                     .addCallback(object : RoomDatabase.Callback() {

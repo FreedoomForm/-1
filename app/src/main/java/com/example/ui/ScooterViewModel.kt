@@ -1,6 +1,7 @@
 package com.example.ui
 
 import android.app.Application
+import android.util.Log
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.data.AppDatabase
@@ -13,11 +14,13 @@ import kotlinx.coroutines.launch
 
 class ScooterViewModel(application: Application) : AndroidViewModel(application) {
     private val repository: ScooterRepository
+    private val scooterDao: com.example.data.ScooterDao
     val scootersList: StateFlow<List<Scooter>>
 
     init {
         val database = AppDatabase.getDatabase(application)
-        repository = ScooterRepository(database.scooterDao())
+        scooterDao = database.scooterDao()
+        repository = ScooterRepository(scooterDao)
         scootersList = repository.allScooters.stateIn(
             scope = viewModelScope,
             started = SharingStarted.WhileSubscribed(5000),
@@ -36,6 +39,10 @@ class ScooterViewModel(application: Application) : AndroidViewModel(application)
         additionalInfo: String = ""
     ) {
         viewModelScope.launch {
+            if (scooterDao.duplicateIdentifierCount(vinNumber.trim(), engineNumber.trim(), scooterSerialNumber.trim(), 0) > 0) {
+                Log.w(TAG, "Scooter creation blocked: duplicate VIN/engine/serial")
+                return@launch
+            }
             val scooter = Scooter(
                 name = name,
                 documentedNumber = documentedNumber,
@@ -52,9 +59,15 @@ class ScooterViewModel(application: Application) : AndroidViewModel(application)
 
     fun updateScooter(scooter: Scooter) {
         viewModelScope.launch {
+            if (scooterDao.duplicateIdentifierCount(scooter.vinNumber.trim(), scooter.engineNumber.trim(), scooter.scooterSerialNumber.trim(), scooter.id) > 0) {
+                Log.w(TAG, "Scooter update blocked: duplicate VIN/engine/serial")
+                return@launch
+            }
             repository.update(scooter)
         }
     }
+
+    companion object { private const val TAG = "ScooterViewModel" }
 
     fun deleteScooter(scooter: Scooter) {
         viewModelScope.launch {
