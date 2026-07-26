@@ -38,14 +38,15 @@ class SettingsRepository(context: Context) {
         get() = prefs.getString("partial_period_pricing_mode", PARTIAL_PERIOD_PRO_RATA) ?: PARTIAL_PERIOD_PRO_RATA
         set(value) = prefs.edit().putString("partial_period_pricing_mode", value).apply()
 
-    fun priceForRentalDays(days: Int, weekly: Double, monthly: Double): Double {
-        require(days > 0) { "days must be positive" }
-        return when (partialPeriodPricingMode) {
-            PARTIAL_PERIOD_ROUND_UP -> weekly * kotlin.math.ceil(days / 7.0)
-            PARTIAL_PERIOD_MONTHLY -> monthly * days / 30.0
-            else -> weekly * days / 7.0
-        }
-    }
+    fun priceForRentalDays(days: Int, weekly: Double, monthly: Double): Double =
+        BusinessOperation.fromMinor(
+            PartialPeriodPricing.calculate(
+                days = days,
+                weeklyMinor = BusinessOperation.toMinor(weekly),
+                monthlyMinor = BusinessOperation.toMinor(monthly),
+                mode = partialPeriodPricingMode
+            )
+        )
 
     /** Payme-ссылка для подстановки в SMS (по умолчанию — тестовая ссылка). */
     var paymeLink: String
