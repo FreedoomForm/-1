@@ -32,7 +32,12 @@ interface RentPeriodDao {
     @Update
     suspend fun update(period: RentPeriod)
 
-    @Query("UPDATE rent_periods SET status = 'CLOSED', updatedAt = :timestamp WHERE renterId = :renterId AND status IN ('ACTIVE','PARTIALLY_PAID','OVERDUE')")
+    @Query("""
+        UPDATE rent_periods SET
+          status = CASE WHEN paidMinor >= chargeMinor THEN 'CLOSED' ELSE 'CLOSED_WITH_DEBT' END,
+          updatedAt = :timestamp
+        WHERE renterId = :renterId AND status IN ('ACTIVE','PARTIALLY_PAID','OVERDUE')
+    """)
     suspend fun closeOpenForRenter(renterId: Int, timestamp: Long): Int
 
     @Query("UPDATE rent_periods SET status = 'CANCELLED', updatedAt = :timestamp WHERE renterId = :renterId AND status = 'SCHEDULED'")

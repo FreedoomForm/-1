@@ -37,6 +37,8 @@ data class RentPeriod(
         const val STATUS_PAID = "PAID"
         const val STATUS_OVERDUE = "OVERDUE"
         const val STATUS_CLOSED = "CLOSED"
+        /** Rental is closed and scooter released, but receivable remains collectible. */
+        const val STATUS_CLOSED_WITH_DEBT = "CLOSED_WITH_DEBT"
         const val STATUS_CANCELLED = "CANCELLED"
     }
 

@@ -53,7 +53,10 @@ object AccountingReconciliation {
             }
         return periods.groupBy { it.renterId }.mapValues { (renterId, renterPeriods) ->
             val debt = renterPeriods
-                .filter { it.status in setOf(RentPeriod.STATUS_ACTIVE, RentPeriod.STATUS_PARTIALLY_PAID, RentPeriod.STATUS_OVERDUE) }
+                .filter { it.status in setOf(
+                    RentPeriod.STATUS_ACTIVE, RentPeriod.STATUS_PARTIALLY_PAID,
+                    RentPeriod.STATUS_OVERDUE, RentPeriod.STATUS_CLOSED_WITH_DEBT
+                ) }
                 .sumOf { it.outstandingMinor }
             (advanceByRenter[renterId] ?: 0L) - debt
         } + advanceByRenter.filterKeys { it !in periods.map { p -> p.renterId }.toSet() }

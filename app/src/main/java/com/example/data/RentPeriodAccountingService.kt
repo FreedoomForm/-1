@@ -19,12 +19,14 @@ class RentPeriodAccountingService(private val db: AppDatabase) {
         require(note.isNotBlank()) { "Payment note is required" }
         val renter = db.renterDao().getRenterById(renterId)
             ?: throw IllegalArgumentException("Renter #$renterId does not exist")
-        require(!renter.isReturned) { "A closed rental cannot receive a normal payment" }
         val card = db.virtualCardDao().getCardById(toCardId)
             ?: throw IllegalArgumentException("Card #$toCardId does not exist")
         require(!card.isArchived && !card.isExternal) { "Choose an active business cash account" }
 
         val open = db.rentPeriodDao().openForRenter(renterId)
+        require(open.isNotEmpty() || !renter.isReturned) {
+            "A returned renter has no outstanding receivable to pay"
+        }
         val allocation = PaymentAllocationPolicy.allocateOldestFirst(
             amountMinor,
             open.map { OpenObligation(it.id, it.endsAt, it.outstandingMinor) }
@@ -48,7 +50,12 @@ class RentPeriodAccountingService(private val db: AppDatabase) {
         allocation.allocations.forEach { applied ->
             val period = byId.getValue(applied.contractId)
             val paid = period.paidMinor + applied.appliedMinor
-            val status = if (paid >= period.chargeMinor) RentPeriod.STATUS_PAID else RentPeriod.STATUS_PARTIALLY_PAID
+            val status = when {
+                paid >= period.chargeMinor && renter.isReturned -> RentPeriod.STATUS_CLOSED
+                paid >= period.chargeMinor -> RentPeriod.STATUS_PAID
+                renter.isReturned -> RentPeriod.STATUS_CLOSED_WITH_DEBT
+                else -> RentPeriod.STATUS_PARTIALLY_PAID
+            }
             db.rentPeriodDao().update(period.copy(paidMinor = paid, status = status, updatedAt = occurredAt))
             db.paymentAllocationDao().insert(PaymentAllocationEntity(
                 operationId = operationId, rentPeriodId = period.id, amountMinor = applied.appliedMinor, createdAt = occurredAt

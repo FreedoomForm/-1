@@ -336,15 +336,12 @@ class RenterActionUseCase(
         val scooter: Scooter? = renter.scooterId?.let { fetchScooterById(it) }
 
         // ── Шаг 1: решение по балансу ────────────────────────────────────
-        val unpaid = if (renter.balance < 0) {
-            historyRepository.getEarliestUnpaidContract(renter.id)
-        } else null
-
-        val finalBalance = when {
-            unpaid != null -> renter.balance + effectivePrice
-            renter.balance < 0 -> 0.0  // рассинхрон — обнуляем
-            else -> renter.balance
-        }
+        // Ending a rental is not a payment. The previous implementation
+        // fabricated a weekly receipt, credited the cash card and erased part
+        // of the debt merely because the operator pressed "terminate".
+        // Outstanding receivables remain collectible as CLOSED_WITH_DEBT.
+        val unpaid: ContractHistoryEntry? = null
+        val finalBalance = renter.balance
 
         var paidContractId: Int? = null
         if (unpaid != null) {
