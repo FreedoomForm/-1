@@ -350,7 +350,8 @@ fun MainScreen(
     historyViewModel: NotificationHistoryViewModel = viewModel(),
     contractHistoryViewModel: ContractHistoryViewModel = viewModel(),
     transactionViewModel: TransactionViewModel = viewModel(),
-    finansiViewModel: com.example.ui.FinansiViewModel = viewModel()
+    finansiViewModel: com.example.ui.FinansiViewModel = viewModel(),
+    trashViewModel: com.example.ui.TrashViewModel = viewModel()
 ) {
     var currentTab by remember { mutableStateOf(0) }
     var showAddDialog by remember { mutableStateOf(false) }
@@ -930,15 +931,6 @@ fun MainScreen(
                         )
                     }
 
-                    // Fast access to the two operational pages. They are kept
-                    // outside the already crowded bottom navigation on phones.
-                    IconButton(onClick = { currentTab = 7 }) {
-                        Icon(Icons.Default.Receipt, contentDescription = "Tarix", tint = ClaudeText)
-                    }
-                    IconButton(onClick = { currentTab = 8 }) {
-                        Icon(Icons.Default.Delete, contentDescription = "Korzinka", tint = ClaudeText)
-                    }
-
                     // ── Универсальные кнопки верхнего бара ──────────────────────
                     // +  — добавление сущности для текущей вкладки (всегда активна)
                     // ✎  — редактирование выбранной строки (активна при выборе 1)
@@ -958,8 +950,10 @@ fun MainScreen(
                                     2 -> contractCreateTrigger++
                                     3 -> transactionCreateTrigger++
                                     5 -> cardCreateTrigger++
-                                    7 -> historyCreateTrigger++
-                                    8 -> trashRestoreTrigger++
+                                    7, 8 -> {
+                                        selectedTrashItems.forEach { trashViewModel.restore(it) }
+                                        selectedTrashItems = emptySet()
+                                    }
                                 }
                             },
                             modifier = Modifier
@@ -1081,6 +1075,7 @@ fun MainScreen(
             )
         },
         bottomBar = {
+            Column {
             NavigationBar(containerColor = ClaudeCard, contentColor = ClaudeText) {
                 NavigationBarItem(
                     selected = currentTab == 0,
@@ -1176,6 +1171,33 @@ fun MainScreen(
                         indicatorColor = ClaudeAccentBg
                     )
                 )
+            }
+            // Second navigation row keeps operational pages reachable without
+            // squeezing nine labels into one phone-width bar.
+            NavigationBar(containerColor = ClaudeCard, contentColor = ClaudeText) {
+                NavigationBarItem(
+                    selected = currentTab == 7,
+                    onClick = { currentTab = 7 },
+                    icon = { Icon(Icons.Default.Receipt, contentDescription = "Tarix") },
+                    label = { Text("Tarix") },
+                    colors = NavigationBarItemDefaults.colors(
+                        selectedIconColor = ClaudeAccent, unselectedIconColor = ClaudeTextSecondary,
+                        selectedTextColor = ClaudeAccent, unselectedTextColor = ClaudeTextSecondary,
+                        indicatorColor = ClaudeAccentBg
+                    )
+                )
+                NavigationBarItem(
+                    selected = currentTab == 8,
+                    onClick = { currentTab = 8 },
+                    icon = { Icon(Icons.Default.Delete, contentDescription = "Korzinka") },
+                    label = { Text("Korzinka") },
+                    colors = NavigationBarItemDefaults.colors(
+                        selectedIconColor = ClaudeAccent, unselectedIconColor = ClaudeTextSecondary,
+                        selectedTextColor = ClaudeAccent, unselectedTextColor = ClaudeTextSecondary,
+                        indicatorColor = ClaudeAccentBg
+                    )
+                )
+            }
             }
         }
     ) { innerPadding ->
@@ -1843,7 +1865,6 @@ fun MainScreen(
                 )
             } else if (currentTab == 7) {
                 HistoryScreen(
-                    createTrigger = historyCreateTrigger,
                     editTrigger = historyEditTrigger,
                     selectedSourceId = selectedHistorySourceId,
                     onSelectedSourceChange = { selectedHistorySourceId = it }
@@ -1854,7 +1875,8 @@ fun MainScreen(
                     editTrigger = trashEditTrigger,
                     purgeTrigger = trashPurgeTrigger,
                     selected = selectedTrashItems,
-                    onSelectedChange = { selectedTrashItems = it }
+                    onSelectedChange = { selectedTrashItems = it },
+                    viewModel = trashViewModel
                 )
             }
         }
