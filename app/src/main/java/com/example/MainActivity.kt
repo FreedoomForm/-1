@@ -353,6 +353,8 @@ fun MainScreen(
     var showVariablePaymentDialog by remember { mutableStateOf(false) }
     var variablePaymentAmount by remember { mutableStateOf("") }
     var variablePaymentNote by remember { mutableStateOf("") }
+    var showTerminationDialog by remember { mutableStateOf(false) }
+    var forgiveTerminationDebt by remember { mutableStateOf(false) }
     var selectedScooters by remember { mutableStateOf(setOf<Int>()) }
     var searchQuery by remember { mutableStateOf("") }
     var showDateRangePicker by remember { mutableStateOf(false) }
@@ -1354,9 +1356,8 @@ fun MainScreen(
                         icon = Icons.Default.PowerOff,
                         enabled = hasSelection,
                         onClick = {
-                            viewModel.terminateRenters(selectedRenters)
-                            Toast.makeText(localContext, "Kontrakt tugatildi", Toast.LENGTH_SHORT).show()
-                            selectedRenters = emptySet()
+                            forgiveTerminationDebt = false
+                            showTerminationDialog = true
                         },
                         modifier = Modifier.weight(1.2f)
                     )
@@ -1905,6 +1906,37 @@ fun MainScreen(
                     showAddScooterDialog = false
                     scooterToEdit = null
                 }
+            )
+        }
+
+        if (showTerminationDialog) {
+            AlertDialog(
+                onDismissRequest = { showTerminationDialog = false },
+                title = { Text("Kontraktni tugatish") },
+                text = {
+                    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                        Text("Skuter bo'shatiladi. Qarzni saqlash yoki kechirishni tanlang.")
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Checkbox(
+                                checked = forgiveTerminationDebt,
+                                onCheckedChange = { forgiveTerminationDebt = it }
+                            )
+                            Text("Qolgan qarzni kechirish")
+                        }
+                        if (!forgiveTerminationDebt) {
+                            Text("Qarz yopilmaydi: u keyinchalik alohida to'lov bilan qabul qilinadi.", style = MaterialTheme.typography.bodySmall)
+                        }
+                    }
+                },
+                confirmButton = {
+                    TextButton(onClick = {
+                        viewModel.terminateRenters(selectedRenters, forgiveTerminationDebt)
+                        Toast.makeText(localContext, "Kontrakt tugatildi", Toast.LENGTH_SHORT).show()
+                        selectedRenters = emptySet()
+                        showTerminationDialog = false
+                    }) { Text("Tugatish") }
+                },
+                dismissButton = { TextButton(onClick = { showTerminationDialog = false }) { Text("Bekor qilish") } }
             )
         }
 

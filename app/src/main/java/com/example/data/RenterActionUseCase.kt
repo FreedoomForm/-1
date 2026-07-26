@@ -330,7 +330,7 @@ class RenterActionUseCase(
      * @param renter снимок арендатора на момент вызова.
      * @param weeklyPrice недельная цена (берётся из settings).
      */
-    suspend fun terminate(renter: Renter, weeklyPrice: Double) {
+    suspend fun terminate(renter: Renter, weeklyPrice: Double, forgiveDebt: Boolean = false) {
         val effectivePrice = if (weeklyPrice > 0) weeklyPrice else SettingsRepository.DEFAULT_WEEKLY_PRICE
         val now = System.currentTimeMillis()
         val scooter: Scooter? = renter.scooterId?.let { fetchScooterById(it) }
@@ -341,7 +341,19 @@ class RenterActionUseCase(
         // of the debt merely because the operator pressed "terminate".
         // Outstanding receivables remain collectible as CLOSED_WITH_DEBT.
         val unpaid: ContractHistoryEntry? = null
-        val finalBalance = renter.balance
+        val periodDaoBeforeClose = AppDatabase.getDatabase(context).rentPeriodDao()
+        val closeableDebtPeriods = periodDaoBeforeClose.openForRenter(renter.id)
+        val forgivenMinor = if (forgiveDebt) closeableDebtPeriods.sumOf { it.outstandingMinor } else 0L
+        if (forgiveDebt) {
+            closeableDebtPeriods.forEach { period ->
+                periodDaoBeforeClose.update(period.copy(
+                    paidMinor = period.chargeMinor,
+                    status = RentPeriod.STATUS_CLOSED,
+                    updatedAt = now
+                ))
+            }
+        }
+        val finalBalance = if (forgiveDebt) renter.balance.coerceAtLeast(0.0) else renter.balance
 
         var paidContractId: Int? = null
         if (unpaid != null) {
@@ -423,6 +435,17 @@ class RenterActionUseCase(
             isOverdueSmsSent = false
         )
         renterRepository.update(updated)
+        if (forgivenMinor > 0) {
+            AppDatabase.getDatabase(context).businessOperationDao().insert(BusinessOperation(
+                occurredAt = now,
+                type = BusinessOperation.TYPE_DEBT_FORGIVEN,
+                direction = BusinessOperation.DIRECTION_LIABILITY,
+                amountMinor = forgivenMinor,
+                renterId = renter.id,
+                scooterId = renter.scooterId,
+                note = "Debt forgiven on rental termination"
+            ))
+        }
         // Release the scooter immediately and preserve completed/scheduled
         // period states; otherwise a returned renter would still block a new
         // booking through overlap validation.
@@ -436,8 +459,10 @@ class RenterActionUseCase(
         val entry = ContractHistoryEntry(
             renterId = renter.id, timestamp = now,
             type = ContractHistoryEntry.TYPE_TERMINATED, amount = effectivePrice,
-            notes = if (unpaid != null) "Kontrakt tugatildi (qarz yopildi)"
-                    else "Kontrakt tugatildi",
+            notes = when {
+                forgiveDebt && forgivenMinor > 0 -> "Kontrakt tugatildi (qarz kechirildi)"
+                else -> "Kontrakt tugatildi"
+            }, 
             renterName = renter.name, renterPhone = renter.phoneNumber,
             scooterName = renter.scooterName,
             weekStart = renter.rentStartDateTimestamp,
@@ -461,7 +486,7 @@ class RenterActionUseCase(
             entityId = renter.id.toString(),
             reason = entry.notes,
             beforeSnapshot = "balance=${renter.balance}; returned=${renter.isReturned}",
-            afterSnapshot = "balance=$finalBalance; returned=true"
+            afterSnapshot = "balance=$finalBalance; returned=true; forgivenMinor=$forgivenMinor"
         ))
 
         // ── Шаг 4: Transaction TERMINATED в таблице транзакций ─────────────

@@ -959,10 +959,10 @@ class RenterViewModel(application: Application) : AndroidViewModel(application) 
         }
     }
 
-    fun terminateRenters(renterIds: Set<Int>) {
+    fun terminateRenters(renterIds: Set<Int>, forgiveDebt: Boolean = false) {
         viewModelScope.launch {
             val weeklyPrice = SettingsRepository(getApplication()).weeklyPrice
-            renterIds.forEach { id -> repository.getById(id)?.let { applyTermination(it, weeklyPrice) } }
+            renterIds.forEach { id -> repository.getById(id)?.let { applyTermination(it, weeklyPrice, forgiveDebt) } }
         }
     }
 
@@ -980,8 +980,8 @@ class RenterViewModel(application: Application) : AndroidViewModel(application) 
      * единый источник истины, который также используется action-кнопкой
      * «Kontraktni uzish» системного уведомления.
      */
-    private suspend fun applyTermination(renter: Renter, weeklyPrice: Double) {
-        actionUseCase.terminate(renter, weeklyPrice)
+    private suspend fun applyTermination(renter: Renter, weeklyPrice: Double, forgiveDebt: Boolean = false) {
+        actionUseCase.terminate(renter, weeklyPrice, forgiveDebt)
     }
 
     companion object {
