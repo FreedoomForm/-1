@@ -47,6 +47,7 @@ fun TrashScreen(
 ) {
     val items = viewModel.items.collectAsStateWithLifecycle().value
     var showEditDialog by remember { mutableStateOf(false) }
+    var showPurgeConfirm by remember { mutableStateOf(false) }
     var editedReason by remember { mutableStateOf("") }
     LaunchedEffect(restoreTrigger) {
         if (restoreTrigger > 0) selected.forEach { viewModel.restore(it) }
@@ -59,9 +60,22 @@ fun TrashScreen(
         }
     }
     LaunchedEffect(purgeTrigger) {
-        if (purgeTrigger > 0) selected.forEach { viewModel.purge(it) }
-        if (purgeTrigger > 0) onSelectedChange(emptySet())
+        if (purgeTrigger > 0 && selected.isNotEmpty()) showPurgeConfirm = true
     }
+    if (showPurgeConfirm) {
+        AlertDialog(
+            onDismissRequest = { showPurgeConfirm = false },
+            title = { Text("Butunlay o'chirish?") },
+            text = { Text("Tanlangan ${selected.size} ta korzinka yozuvi qayta tiklanmaydi. Moliyaviy audit saqlanadi.") },
+            confirmButton = { TextButton(onClick = {
+                selected.forEach { viewModel.purge(it) }
+                onSelectedChange(emptySet())
+                showPurgeConfirm = false
+            }) { Text("Butunlay o'chirish") } },
+            dismissButton = { TextButton(onClick = { showPurgeConfirm = false }) { Text("Bekor qilish") } }
+        )
+    }
+
     if (showEditDialog) {
         AlertDialog(
             onDismissRequest = { showEditDialog = false },
@@ -95,7 +109,9 @@ fun TrashScreen(
                     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
                         TextButton(onClick = { viewModel.restore(item.id) }) { Text("Qaytarish") }
                         Spacer(Modifier.width(8.dp))
-                        TextButton(onClick = { viewModel.purge(item.id) }) { Text("Butunlay o'chirish") }
+                        TextButton(onClick = {
+                            onSelectedChange(setOf(item.id)); showPurgeConfirm = true
+                        }) { Text("Butunlay o'chirish") }
                     }
                 }
             }

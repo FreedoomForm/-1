@@ -76,7 +76,7 @@ class TrashService(private val db: AppDatabase) {
             DeletedItem.TYPE_CARD -> {
                 val originalId = item.sourceId.toIntOrNull()
                 val restored = originalId?.let { db.virtualCardDao().unarchiveCard(it) } ?: 0
-                if (restored > 0) originalId.toLong() else db.virtualCardDao().insertCard(item.snapshotJson.toCard())
+                if (restored > 0) requireNotNull(originalId).toLong() else db.virtualCardDao().insertCard(item.snapshotJson.toCard())
             }
             DeletedItem.TYPE_RENTER -> db.renterDao().insert(item.snapshotJson.toRenter())
             DeletedItem.TYPE_TRANSACTION -> db.transactionDao().insert(item.snapshotJson.toTransaction())
