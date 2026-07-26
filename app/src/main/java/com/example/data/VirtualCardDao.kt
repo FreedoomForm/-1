@@ -37,6 +37,9 @@ interface VirtualCardDao {
     @Query("UPDATE virtual_cards SET isArchived = 1 WHERE id = :id AND isDefault = 0 AND balance = 0")
     suspend fun archiveCard(id: Int): Int
 
+    @Query("UPDATE virtual_cards SET isArchived = 0 WHERE id = :id AND isDefault = 0")
+    suspend fun unarchiveCard(id: Int): Int
+
     @Query("SELECT COUNT(*) FROM virtual_cards")
     suspend fun count(): Int
 

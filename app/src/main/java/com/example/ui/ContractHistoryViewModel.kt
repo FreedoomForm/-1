@@ -401,11 +401,17 @@ class ContractHistoryViewModel(application: Application) : AndroidViewModel(appl
                 Log.w(TAG, "deleteContractWithCascade: contract #$contractId not found, nothing to do")
                 return
             }
+            // Preserve a restorable snapshot before the existing financial
+            // cascade reverses linked cash projections and removes the row.
+            com.example.data.TrashService(AppDatabase.getDatabase(getApplication()))
+                .snapshotContract(contract, "Contract deleted from list")
 
             // ── 2. Загружаем связанные Transaction-записи ─────────────────
             // Это записи TYPE_PAYMENT, созданные при оплате этого контракта
             // (applyWeeklyPayment / updateContract status-change).
             val relatedTx = transactionRepo.forContractOnce(contractId)
+            val trashService = com.example.data.TrashService(AppDatabase.getDatabase(getApplication()))
+            relatedTx.forEach { trashService.snapshotTransaction(it, "Removed with contract #$contractId") }
 
             // ── 3. Загружаем связанные CardTransaction-записи ─────────────
             // Это TYPE_CONTRACT_INCOME — деньги, упавшие на Glavnaya карту.

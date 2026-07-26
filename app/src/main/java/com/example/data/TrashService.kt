@@ -5,7 +5,7 @@ import org.json.JSONObject
 
 /** Snapshot-based recoverable deletion for user-owned legacy projections. */
 class TrashService(private val db: AppDatabase) {
-    suspend fun moveTransactionToTrash(transaction: Transaction, reason: String? = null): Long = db.withTransaction {
+    suspend fun snapshotTransaction(transaction: Transaction, reason: String? = null): Long {
         val itemId = db.deletedItemDao().insert(DeletedItem(
             sourceType = DeletedItem.TYPE_TRANSACTION,
             sourceId = transaction.id.toString(),
@@ -13,12 +13,45 @@ class TrashService(private val db: AppDatabase) {
             snapshotJson = transaction.toJson().toString(),
             reason = reason
         ))
-        db.transactionDao().deleteById(transaction.id)
         audit("TRASH_MOVED", DeletedItem.TYPE_TRANSACTION, itemId.toString(), reason)
+        return itemId
+    }
+
+    suspend fun snapshotCard(card: VirtualCard, reason: String? = null): Long {
+        val json = JSONObject().apply {
+            put("name", card.name); put("balance", card.balance); put("color", card.colorHex); put("info", card.info)
+            put("default", card.isDefault); put("kind", card.kind); put("created", card.createdAt)
+        }
+        val itemId = db.deletedItemDao().insert(DeletedItem(
+            sourceType = DeletedItem.TYPE_CARD, sourceId = card.id.toString(), title = card.name,
+            snapshotJson = json.toString(), reason = reason
+        ))
+        audit("TRASH_MOVED", DeletedItem.TYPE_CARD, itemId.toString(), reason)
+        return itemId
+    }
+
+    suspend fun snapshotRenter(renter: Renter, reason: String? = null): Long {
+        val json = JSONObject().apply {
+            put("name", renter.name); put("phone", renter.phoneNumber); put("debt", renter.debtAmount)
+            put("duration", renter.rentDurationDays); put("start", renter.rentStartDateTimestamp); put("scooterId", renter.scooterId); put("scooterName", renter.scooterName)
+            put("passport", renter.passportData); put("address", renter.address); put("pinfl", renter.pinfl)
+        }
+        val itemId = db.deletedItemDao().insert(DeletedItem(
+            sourceType = DeletedItem.TYPE_RENTER, sourceId = renter.id.toString(), title = renter.name,
+            snapshotJson = json.toString(), reason = reason
+        ))
+        audit("TRASH_MOVED", DeletedItem.TYPE_RENTER, itemId.toString(), reason)
+        return itemId
+    }
+
+    suspend fun moveTransactionToTrash(transaction: Transaction, reason: String? = null): Long = db.withTransaction {
+        val itemId = snapshotTransaction(transaction, reason)
+        db.transactionDao().deleteById(transaction.id)
         itemId
     }
 
-    suspend fun moveContractToTrash(contract: ContractHistoryEntry, reason: String? = null): Long = db.withTransaction {
+    /** Saves a contract snapshot before a business-specific cascade removes it. */
+    suspend fun snapshotContract(contract: ContractHistoryEntry, reason: String? = null): Long {
         val itemId = db.deletedItemDao().insert(DeletedItem(
             sourceType = DeletedItem.TYPE_CONTRACT,
             sourceId = contract.id.toString(),
@@ -26,15 +59,26 @@ class TrashService(private val db: AppDatabase) {
             snapshotJson = contract.toJson().toString(),
             reason = reason
         ))
+        audit("TRASH_MOVED", DeletedItem.TYPE_CONTRACT, itemId.toString(), reason)
+        return itemId
+    }
+
+    suspend fun moveContractToTrash(contract: ContractHistoryEntry, reason: String? = null): Long = db.withTransaction {
+        val itemId = snapshotContract(contract, reason)
         db.contractHistoryDao().deleteById(contract.id)
         db.rentPeriodDao().byContractHistoryId(contract.id)?.let { db.rentPeriodDao().update(it.copy(status = RentPeriod.STATUS_CANCELLED)) }
-        audit("TRASH_MOVED", DeletedItem.TYPE_CONTRACT, itemId.toString(), reason)
         itemId
     }
 
     suspend fun restore(itemId: Long): Long = db.withTransaction {
         val item = db.deletedItemDao().byId(itemId) ?: error("Trash item not found")
         val restoredId = when (item.sourceType) {
+            DeletedItem.TYPE_CARD -> {
+                val originalId = item.sourceId.toIntOrNull()
+                val restored = originalId?.let { db.virtualCardDao().unarchiveCard(it) } ?: 0
+                if (restored > 0) originalId.toLong() else db.virtualCardDao().insertCard(item.snapshotJson.toCard())
+            }
+            DeletedItem.TYPE_RENTER -> db.renterDao().insert(item.snapshotJson.toRenter())
             DeletedItem.TYPE_TRANSACTION -> db.transactionDao().insert(item.snapshotJson.toTransaction())
             DeletedItem.TYPE_CONTRACT -> {
                 val contract = item.snapshotJson.toContract()
@@ -72,6 +116,20 @@ class TrashService(private val db: AppDatabase) {
     private suspend fun audit(action: String, type: String, id: String, reason: String?) {
         db.auditEventDao().insert(AuditEvent(action = action, entityType = type, entityId = id, reason = reason))
     }
+
+    private fun String.toCard(): VirtualCard = JSONObject(this).let { o -> VirtualCard(
+        name = o.optString("name"), balance = o.optDouble("balance"), colorHex = o.optString("color", "#FF1565C0"),
+        info = o.optString("info").takeIf { !o.isNull("info") }, isDefault = false,
+        kind = o.optString("kind", VirtualCard.KIND_REGULAR), createdAt = o.optLong("created", System.currentTimeMillis())
+    ) }
+
+    private fun String.toRenter(): Renter = JSONObject(this).let { o -> Renter(
+        name = o.optString("name"), phoneNumber = o.optString("phone"), debtAmount = o.optDouble("debt"),
+        balance = -o.optDouble("debt"), rentDurationDays = o.optInt("duration", 7), rentStartDateTimestamp = o.optLong("start", System.currentTimeMillis()),
+        scooterId = o.optInt("scooterId").takeIf { !o.isNull("scooterId") },
+        scooterName = o.optString("scooterName").takeIf { !o.isNull("scooterName") },
+        passportData = o.optString("passport"), address = o.optString("address"), pinfl = o.optString("pinfl")
+    ) }
 
     private fun Transaction.toJson() = JSONObject().apply {
         put("id", id); put("contractId", contractId); put("renterId", renterId); put("scooterId", scooterId)

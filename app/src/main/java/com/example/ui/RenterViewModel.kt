@@ -862,7 +862,13 @@ class RenterViewModel(application: Application) : AndroidViewModel(application) 
             // Без шагов 2-3 деньги «зависнут» на главной карте, а в списке
             // транзакций останутся «осиротевшие» записи без арендатора.
             try {
+                val db = AppDatabase.getDatabase(getApplication())
+                repository.getById(id)?.let { renter ->
+                    com.example.data.TrashService(db).snapshotRenter(renter, "Renter deleted with related records")
+                }
                 val contracts = historyRepository.getForRenterOnce(id)
+                val trashService = com.example.data.TrashService(db)
+                contracts.forEach { trashService.snapshotContract(it, "Removed with renter #$id") }
                 for (contract in contracts) {
                     // Реверсим и удаляем CardTransaction для этого контракта
                     val cardTxList = virtualCardRepository.getCardTxForContract(contract.id)
@@ -885,6 +891,7 @@ class RenterViewModel(application: Application) : AndroidViewModel(application) 
 
                 // Удаляем все Transaction арендатора (PAYMENT, PENALTY, REPAIR и т.д.)
                 val renterTransactions = transactionRepository.forRenterOnce(id)
+                renterTransactions.forEach { trashService.snapshotTransaction(it, "Removed with renter #$id") }
                 if (renterTransactions.isNotEmpty()) {
                     transactionRepository.deleteByIds(renterTransactions.map { it.id })
                     Log.d(TAG, "deleteRenter: deleted ${renterTransactions.size} transactions for renter #$id")

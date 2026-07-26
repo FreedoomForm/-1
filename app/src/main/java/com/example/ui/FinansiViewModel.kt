@@ -93,9 +93,11 @@ class FinansiViewModel(application: Application) : AndroidViewModel(application)
             try {
                 val operator = com.example.data.OperatorSessionRepository(getApplication())
                     .requirePermission(AppDatabase.getDatabase(getApplication()), com.example.data.AccessPolicy.FINANCE_REVERSE)
-                // A financial account is closed by archiving it; this retains
-                // its history and prevents money from disappearing.
+                // A financial account is archived in-place and then receives
+                // a recycle-bin entry so the universal restore button can reopen it.
                 repository.archiveCard(card, operator.displayName)
+                com.example.data.TrashService(AppDatabase.getDatabase(getApplication()))
+                    .snapshotCard(card, "Card archived by ${operator.displayName}")
                 WidgetUpdater.updateAll(getApplication())
             } catch (e: Exception) {
                 Log.e(TAG, "Failed to delete card", e)
