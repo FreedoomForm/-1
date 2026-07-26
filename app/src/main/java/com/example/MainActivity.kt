@@ -243,6 +243,12 @@ class MainActivity : ComponentActivity() {
                     contract = ActivityResultContracts.RequestPermission()
                 ) { /* результат не важен — мы запрашиваем автоматически */ }
 
+                // ── §9A: Splash screen with loading animation ────────────────
+                // Shows logo + progress indicator while data prepares, then
+                // smoothly transitions to MainScreen. The launcher + drawer
+                // part of §9A is deferred (large UI work).
+                var showSplash by remember { mutableStateOf(true) }
+
                 // Авто-запрос SMS + POST_NOTIFICATIONS (Android 13+) + READ_PHONE_STATE при первом старте.
                 LaunchedEffect(Unit) {
                     permissionLauncher.launch(Manifest.permission.SEND_SMS)
@@ -253,7 +259,13 @@ class MainActivity : ComponentActivity() {
                     permissionLauncher.launch(Manifest.permission.READ_PHONE_STATE)
                 }
 
-                MainScreen()
+                if (showSplash) {
+                    SplashScreen(
+                        onFinished = { showSplash = false }
+                    )
+                } else {
+                    MainScreen()
+                }
             }
         }
     }
@@ -347,6 +359,98 @@ private fun statusLabel(s: RenterStatus): String = when (s) {
     RenterStatus.RETURNED -> "Qaytgan"
     RenterStatus.OVERDUE  -> "Qarzdor"
     RenterStatus.OK       -> "Faol"
+}
+
+/**
+ * §9A: Splash screen with logo + loading animation.
+ *
+ * Shows a centered scooter icon + app name + progress indicator while the
+ * app prepares data (DB migrations, initial flows, widget updates). After
+ * a minimum visible duration (1.2s for smooth UX), calls [onFinished] so
+ * the parent can switch to MainScreen.
+ *
+ * The launcher + drawer part of §9A (movable cubes, multi-level bottom
+ * navigation) is a larger UI feature deferred to a later iteration.
+ */
+@Composable
+fun SplashScreen(
+    onFinished: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    // Minimum splash duration for smooth UX — avoids flash on fast devices.
+    val minDurationMs = 1200L
+    var progress by remember { mutableStateOf(0f) }
+
+    LaunchedEffect(Unit) {
+        val startTime = System.currentTimeMillis()
+        // Smoothly animate progress to 1f over minDurationMs
+        val steps = 60
+        repeat(steps) { i ->
+            progress = (i + 1).toFloat() / steps
+            kotlinx.coroutines.delay(minDurationMs / steps)
+        }
+        // Ensure minimum duration has elapsed before finishing
+        val elapsed = System.currentTimeMillis() - startTime
+        if (elapsed < minDurationMs) {
+            kotlinx.coroutines.delay(minDurationMs - elapsed)
+        }
+        onFinished()
+    }
+
+    Surface(
+        modifier = modifier.fillMaxSize(),
+        color = ClaudeBackground
+    ) {
+        Column(
+            modifier = Modifier.fillMaxSize(),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.Center
+        ) {
+            // ── Logo: scooter icon in a circular accent background ────────
+            Box(
+                modifier = Modifier
+                    .size(120.dp)
+                    .background(ClaudeAccent, CircleShape),
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(
+                    imageVector = Icons.Default.DirectionsBike,
+                    contentDescription = null,
+                    tint = ClaudeCard,
+                    modifier = Modifier.size(64.dp)
+                )
+            }
+            Spacer(Modifier.height(24.dp))
+            // ── App name ──────────────────────────────────────────────────
+            Text(
+                "Scooter Rent",
+                style = MaterialTheme.typography.headlineMedium,
+                color = ClaudeText,
+                fontWeight = FontWeight.Bold
+            )
+            Spacer(Modifier.height(8.dp))
+            Text(
+                "Boshqaruv tizimi",
+                style = MaterialTheme.typography.bodyMedium,
+                color = ClaudeTextSecondary
+            )
+            Spacer(Modifier.height(48.dp))
+            // ── Progress indicator ────────────────────────────────────────
+            CircularProgressIndicator(
+                progress = { progress },
+                modifier = Modifier.size(48.dp),
+                color = ClaudeAccent,
+                strokeWidth = 4.dp,
+                trackColor = ClaudeDivider
+            )
+            Spacer(Modifier.height(16.dp))
+            Text(
+                "Ma'lumotlar tayyorlanmoqda…",
+                style = MaterialTheme.typography.labelSmall,
+                color = ClaudeTextSecondary
+            )
+        }
+    }
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
