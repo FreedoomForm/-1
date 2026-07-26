@@ -1,0 +1,36 @@
+package com.example.data
+
+import androidx.room.Dao
+import androidx.room.Insert
+import androidx.room.Query
+import kotlinx.coroutines.flow.Flow
+
+@Dao
+interface TimelineDao {
+    @Query("SELECT * FROM timeline_branches ORDER BY isMain DESC, createdAt ASC")
+    fun branches(): Flow<List<TimelineBranch>>
+
+    @Query("SELECT * FROM timeline_branches WHERE id = :id LIMIT 1")
+    suspend fun branchById(id: Long): TimelineBranch?
+
+    @Query("SELECT * FROM timeline_branches WHERE isMain = 1 LIMIT 1")
+    suspend fun mainBranch(): TimelineBranch?
+
+    @Insert
+    suspend fun insertBranch(branch: TimelineBranch): Long
+
+    @Query("SELECT * FROM timeline_events WHERE branchId = :branchId ORDER BY timestamp ASC, id ASC")
+    fun events(branchId: Long): Flow<List<TimelineEvent>>
+
+    @Query("SELECT * FROM timeline_events WHERE branchId = :branchId AND timestamp <= :timestamp ORDER BY timestamp DESC, id DESC LIMIT 1")
+    suspend fun nearestEvent(branchId: Long, timestamp: Long): TimelineEvent?
+
+    @Insert
+    suspend fun insertEvent(event: TimelineEvent): Long
+
+    @Query("SELECT * FROM timeline_snapshots WHERE branchId = :branchId AND timestamp <= :timestamp ORDER BY timestamp DESC LIMIT 1")
+    suspend fun nearestSnapshot(branchId: Long, timestamp: Long): TimelineSnapshot?
+
+    @Insert
+    suspend fun insertSnapshot(snapshot: TimelineSnapshot): Long
+}

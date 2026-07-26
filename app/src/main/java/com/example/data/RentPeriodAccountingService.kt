@@ -105,6 +105,17 @@ class RentPeriodAccountingService(private val db: AppDatabase) {
             beforeSnapshot = "balance=${renter.balance}; debt=${renter.debtAmount}",
             afterSnapshot = "balance=${BusinessOperation.fromMinor(newBalanceMinor)}; allocated=${amountMinor - allocation.unallocatedMinor}; advance=${allocation.unallocatedMinor}"
         ))
+        val main = TimelineService(db).ensureMainBranch()
+        TimelineService(db).record(
+            branchId = main.id,
+            actionType = "PAYMENT_ACCEPTED",
+            screen = "RENTERS",
+            title = "Payment: ${renter.name}",
+            entityType = "RENTER",
+            entityId = renter.id.toString(),
+            payloadJson = "{\"operationId\":$operationId,\"amountMinor\":$amountMinor}",
+            timestamp = occurredAt
+        )
         operationId
     }
 }

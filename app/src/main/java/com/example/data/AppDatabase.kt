@@ -24,9 +24,12 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         DeletedItem::class,
         LegacyMoneyAmount::class,
         SmsDelivery::class,
-        RepairOrder::class
+        RepairOrder::class,
+        TimelineBranch::class,
+        TimelineEvent::class,
+        TimelineSnapshot::class
     ],
-    version = 27,
+    version = 28,
     exportSchema = false
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -46,6 +49,7 @@ abstract class AppDatabase : RoomDatabase() {
     abstract fun legacyMoneyAmountDao(): LegacyMoneyAmountDao
     abstract fun smsDeliveryDao(): SmsDeliveryDao
     abstract fun repairOrderDao(): RepairOrderDao
+    abstract fun timelineDao(): TimelineDao
 
     companion object {
         @Volatile
@@ -520,6 +524,52 @@ abstract class AppDatabase : RoomDatabase() {
             }
         }
 
+        /** Migration 27 → 28: branchable event timeline with render snapshots. */
+        private val MIGRATION_27_28 = object : Migration(27, 28) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("""
+                    CREATE TABLE IF NOT EXISTS `timeline_branches` (
+                        `id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                        `name` TEXT NOT NULL,
+                        `parentBranchId` INTEGER,
+                        `forkEventId` INTEGER,
+                        `createdAt` INTEGER NOT NULL,
+                        `isMain` INTEGER NOT NULL
+                    )
+                """.trimIndent())
+                db.execSQL("CREATE INDEX IF NOT EXISTS `index_timeline_branches_parentBranchId` ON `timeline_branches` (`parentBranchId`)")
+                db.execSQL("CREATE INDEX IF NOT EXISTS `index_timeline_branches_createdAt` ON `timeline_branches` (`createdAt`)")
+                db.execSQL("""
+                    CREATE TABLE IF NOT EXISTS `timeline_events` (
+                        `id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                        `branchId` INTEGER NOT NULL,
+                        `timestamp` INTEGER NOT NULL,
+                        `actionType` TEXT NOT NULL,
+                        `screen` TEXT NOT NULL,
+                        `entityType` TEXT,
+                        `entityId` TEXT,
+                        `title` TEXT NOT NULL,
+                        `payloadJson` TEXT NOT NULL,
+                        `isMajor` INTEGER NOT NULL
+                    )
+                """.trimIndent())
+                db.execSQL("CREATE INDEX IF NOT EXISTS `index_timeline_events_branchId_timestamp` ON `timeline_events` (`branchId`, `timestamp`)")
+                db.execSQL("CREATE INDEX IF NOT EXISTS `index_timeline_events_entityType_entityId` ON `timeline_events` (`entityType`, `entityId`)")
+                db.execSQL("""
+                    CREATE TABLE IF NOT EXISTS `timeline_snapshots` (
+                        `id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                        `branchId` INTEGER NOT NULL,
+                        `eventId` INTEGER,
+                        `timestamp` INTEGER NOT NULL,
+                        `stateJson` TEXT NOT NULL
+                    )
+                """.trimIndent())
+                db.execSQL("CREATE INDEX IF NOT EXISTS `index_timeline_snapshots_branchId_timestamp` ON `timeline_snapshots` (`branchId`, `timestamp`)")
+                db.execSQL("CREATE INDEX IF NOT EXISTS `index_timeline_snapshots_eventId` ON `timeline_snapshots` (`eventId`)")
+                db.execSQL("INSERT INTO timeline_branches (id,name,parentBranchId,forkEventId,createdAt,isMain) VALUES (1,'Main',NULL,NULL,strftime('%s','now')*1000,1)")
+            }
+        }
+
         /**
          * Copies the raw Room database before the first open after an app
          * schema upgrade. This runs before Room can migrate anything, so a
@@ -528,17 +578,17 @@ abstract class AppDatabase : RoomDatabase() {
         private fun backupBeforeMigration(context: Context) {
             val appContext = context.applicationContext
             val prefs = appContext.getSharedPreferences("migration_backups", Context.MODE_PRIVATE)
-            val key = "backup_for_schema_27"
+            val key = "backup_for_schema_28"
             if (prefs.getBoolean(key, false)) return
             val source = appContext.getDatabasePath("scooter_rent_db")
             if (!source.exists() || source.length() == 0L) return
             try {
                 val directory = java.io.File(appContext.filesDir, "pre_migration_backups").apply { mkdirs() }
                 val stamp = System.currentTimeMillis()
-                source.copyTo(java.io.File(directory, "scooter_rent_db_before_v27_$stamp.db"), overwrite = true)
+                source.copyTo(java.io.File(directory, "scooter_rent_db_before_v28_$stamp.db"), overwrite = true)
                 listOf("-wal", "-shm").forEach { suffix ->
                     val sidecar = java.io.File(source.path + suffix)
-                    if (sidecar.exists()) sidecar.copyTo(java.io.File(directory, "scooter_rent_db_before_v27_$stamp$suffix"), overwrite = true)
+                    if (sidecar.exists()) sidecar.copyTo(java.io.File(directory, "scooter_rent_db_before_v28_$stamp$suffix"), overwrite = true)
                 }
                 prefs.edit().putBoolean(key, true).apply()
             } catch (_: Exception) {
@@ -555,7 +605,7 @@ abstract class AppDatabase : RoomDatabase() {
                     AppDatabase::class.java,
                     "scooter_rent_db"
                 )
-                    .addMigrations(MIGRATION_11_12, MIGRATION_12_13, MIGRATION_13_14, MIGRATION_14_15, MIGRATION_15_16, MIGRATION_16_17, MIGRATION_17_18, MIGRATION_18_19, MIGRATION_19_20, MIGRATION_20_21, MIGRATION_21_22, MIGRATION_22_23, MIGRATION_23_24, MIGRATION_24_25, MIGRATION_25_26, MIGRATION_26_27)
+                    .addMigrations(MIGRATION_11_12, MIGRATION_12_13, MIGRATION_13_14, MIGRATION_14_15, MIGRATION_15_16, MIGRATION_16_17, MIGRATION_17_18, MIGRATION_18_19, MIGRATION_19_20, MIGRATION_20_21, MIGRATION_21_22, MIGRATION_22_23, MIGRATION_23_24, MIGRATION_24_25, MIGRATION_25_26, MIGRATION_26_27, MIGRATION_27_28)
                     // Production data must never be silently erased on an unknown migration.
                     // Room will fail visibly and the user can restore a backup instead.
                     .addCallback(object : RoomDatabase.Callback() {
@@ -576,6 +626,7 @@ abstract class AppDatabase : RoomDatabase() {
                                     (4, 'Tashqiga',  0.0, '#FFC62828', 'Tashqiga chiqarilgan pul (yechib olish, to''lovlar)', 1, strftime('%s','now') * 1000, 'EXTERNAL_OUT')
                             """.trimIndent())
                             db.execSQL("INSERT OR IGNORE INTO app_users (id, displayName, role, isActive, createdAt) VALUES (1, 'Owner', 'OWNER', 1, strftime('%s','now') * 1000)")
+                            db.execSQL("INSERT OR IGNORE INTO timeline_branches (id, name, parentBranchId, forkEventId, createdAt, isMain) VALUES (1, 'Main', NULL, NULL, strftime('%s','now') * 1000, 1)")
                         }
                     })
                     .build()
