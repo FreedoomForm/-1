@@ -2037,6 +2037,6 @@ internal fun contractTypeColor(t: String): Color = when (t) {
     ContractHistoryEntry.TYPE_PAYMENT    -> StatusOk
     ContractHistoryEntry.TYPE_AUTO_RENEW -> ClaudeAccent
     ContractHistoryEntry.TYPE_TERMINATED -> StatusOverdue
-    ContractHistoryEntry.TYPE_RETURNED   -> StatusReturned
+    ContractHistoryEntry.TYPE_RETURNED   -> StatusArchived    // grey — returned/archived per unified color language
     else -> ClaudeTextSecondary
 }

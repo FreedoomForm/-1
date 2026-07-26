@@ -28,10 +28,13 @@ import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -58,6 +61,8 @@ import com.example.ui.theme.StatusOverdue
 import com.example.ui.theme.StatusOverdueBg
 import com.example.ui.theme.StatusReturned
 import com.example.ui.theme.StatusReturnedBg
+import com.example.ui.theme.StatusReserved
+import com.example.ui.theme.StatusReservedBg
 import com.example.data.RentPeriod
 import java.util.Calendar
 import java.util.Date
@@ -242,27 +247,92 @@ fun ContractCalendar(
                 .padding(12.dp)
         ) {
             // ── Шапка: месяц/год + навигация + статус + стрелка свернуть/развернуть ──
+            // «Сегодня» и выбор месяца/года (PLAN_UNIVERSAL_ACCOUNTING §4.1) —
+            // избавляют от многократного нажатия стрелок.
+            var showMonthPicker by remember { mutableStateOf(false) }
+            var showYearPicker by remember { mutableStateOf(false) }
+            val monthNames = remember {
+                listOf("Yanvar","Fevral","Mart","Aprel","May","Iyun",
+                       "Iyul","Avgust","Sentabr","Oktabr","Noyabr","Dekabr")
+            }
+            val currentYear = remember { java.util.Calendar.getInstance().get(java.util.Calendar.YEAR) }
+            val yearsList = remember { (currentYear - 5 .. currentYear + 5).toList() }
+
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.SpaceBetween
             ) {
-                // Левая часть: навигация ← месяц/год →
+                // Левая часть: навигация ← месяц/год (tappable) → + «Сегодня»
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     IconButton(onClick = {
                         if (viewMonth == 0) { viewMonth = 11; viewYear-- } else viewMonth--
                     }) {
                         Icon(Icons.Default.ChevronLeft, contentDescription = "Oldingi oy")
                     }
-                    Text(
-                        text = monthTitle,
-                        style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.SemiBold),
-                        color = ClaudeText
-                    )
+                    // Месяц — tappable, открывает picker
+                    Box {
+                        Text(
+                            text = monthTitle,
+                            style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.SemiBold),
+                            color = ClaudeAccent,
+                            modifier = Modifier
+                                .clickable { showMonthPicker = true }
+                                .padding(horizontal = 4.dp, vertical = 2.dp)
+                        )
+                        DropdownMenu(
+                            expanded = showMonthPicker,
+                            onDismissRequest = { showMonthPicker = false }
+                        ) {
+                            monthNames.forEachIndexed { idx, name ->
+                                DropdownMenuItem(
+                                    text = { Text(if (idx == viewMonth) "✓ $name" else name) },
+                                    onClick = { viewMonth = idx; showMonthPicker = false }
+                                )
+                            }
+                        }
+                    }
                     IconButton(onClick = {
                         if (viewMonth == 11) { viewMonth = 0; viewYear++ } else viewMonth++
                     }) {
                         Icon(Icons.Default.ChevronRight, contentDescription = "Keyingi oy")
+                    }
+                    // Год — tappable, открывает picker
+                    Box {
+                        Text(
+                            text = viewYear.toString(),
+                            style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.SemiBold),
+                            color = ClaudeAccent,
+                            modifier = Modifier
+                                .clickable { showYearPicker = true }
+                                .padding(horizontal = 4.dp, vertical = 2.dp)
+                        )
+                        DropdownMenu(
+                            expanded = showYearPicker,
+                            onDismissRequest = { showYearPicker = false }
+                        ) {
+                            yearsList.forEach { y ->
+                                DropdownMenuItem(
+                                    text = { Text(if (y == viewYear) "✓ $y" else y.toString()) },
+                                    onClick = { viewYear = y; showYearPicker = false }
+                                )
+                            }
+                        }
+                    }
+                    // Кнопка «Сегодня» — мгновенный переход к текущему месяцу/году
+                    TextButton(
+                        onClick = {
+                            val today = java.util.Calendar.getInstance()
+                            viewMonth = today.get(java.util.Calendar.MONTH)
+                            viewYear = today.get(java.util.Calendar.YEAR)
+                        },
+                        modifier = Modifier.padding(start = 4.dp)
+                    ) {
+                        Text(
+                            "Bugun",
+                            style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.SemiBold),
+                            color = ClaudeAccent
+                        )
                     }
                 }
 
@@ -443,7 +513,7 @@ fun ContractCalendar(
                 ) {
                     LegendItem("To'langan", StatusOkBg, StatusOk)
                     LegendItem("To'lanmagan", StatusOverdueBg, StatusOverdue)
-                    LegendItem("To'xtatilgan", StatusReturnedBg, StatusReturned)
+                    LegendItem("To'xtatilgan", StatusReservedBg, StatusReserved)
                     LegendItem("Bo'sh", ClaudeCard, ClaudeTextSecondary)
                 }
             } else {
@@ -596,7 +666,7 @@ private fun RowScope.DayCell(
             DayStatus.UNPAID -> { bgColor = StatusOverdueBg; fgColor = StatusOverdue }
             DayStatus.PARTIAL -> { bgColor = ClaudeAccentBg; fgColor = ClaudeAccent }
             DayStatus.SCHEDULED -> { bgColor = Color(0xFFFFF3D6); fgColor = Color(0xFF9A6700) }
-            DayStatus.SUSPENDED -> { bgColor = StatusReturnedBg; fgColor = StatusReturned }
+            DayStatus.SUSPENDED -> { bgColor = StatusReservedBg; fgColor = StatusReserved }
             DayStatus.EMPTY -> {
                 bgColor = if (isCurrentMonth) ClaudeCard else ClaudeBackground
                 fgColor = if (isCurrentMonth) ClaudeText else ClaudeTextSecondary

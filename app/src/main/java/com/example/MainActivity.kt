@@ -129,6 +129,10 @@ import com.example.ui.theme.StatusOverdue
 import com.example.ui.theme.StatusOverdueBg
 import com.example.ui.theme.StatusReturned
 import com.example.ui.theme.StatusReturnedBg
+import com.example.ui.theme.StatusArchived
+import com.example.ui.theme.StatusArchivedBg
+import com.example.ui.theme.StatusReserved
+import com.example.ui.theme.StatusReservedBg
 import com.example.ui.components.UnifiedSearchBar
 import com.example.ui.components.FilterSidePanel
 import com.example.ui.components.FilterColumn
@@ -330,7 +334,7 @@ private fun statusOf(renter: Renter): RenterStatus = when {
 }
 
 private fun statusColor(s: RenterStatus): Color = when (s) {
-    RenterStatus.RETURNED -> StatusReturned
+    RenterStatus.RETURNED -> StatusArchived    // grey — returned/archived per unified color language
     RenterStatus.OVERDUE  -> StatusOverdue
     RenterStatus.OK       -> StatusOk
 }
@@ -361,6 +365,12 @@ fun MainScreen(
     var scooterToEdit by remember { mutableStateOf<Scooter?>(null) }
     var contractToEdit by remember { mutableStateOf<com.example.data.ContractHistoryEntry?>(null) }
     var selectedRenters by remember { mutableStateOf(setOf<Int>()) }
+    // ── Universal dangerous-action confirmation (§10) ───────────────────────
+    // Single state drives one AlertDialog for all destructive universal-delete
+    // actions on renters/scooters/history. Contracts/transactions/cards have
+    // their own per-screen confirmations already.
+    var showUniversalDeleteConfirm by remember { mutableStateOf(false) }
+    var pendingDeleteTab by remember { mutableStateOf(-1) }
     var showVariablePaymentDialog by remember { mutableStateOf(false) }
     var variablePaymentAmount by remember { mutableStateOf("") }
     var variablePaymentNote by remember { mutableStateOf("") }
@@ -1036,25 +1046,15 @@ fun MainScreen(
                         IconButton(
                             onClick = {
                                 when (currentTab) {
-                                    0 -> {
-                                        selectedRenters.forEach { id -> viewModel.deleteRenter(id) }
-                                        selectedRenters = emptySet()
-                                    }
-                                    1 -> {
-                                        scooters.filter { it.id in selectedScooters }.forEach {
-                                            scooterViewModel.deleteScooter(it)
-                                        }
-                                        selectedScooters = emptySet()
+                                    0, 1, 7 -> {
+                                        // ── Dangerous actions: ask for confirmation first (§10) ──
+                                        // Tabs 2/3/5/8 already have their own per-screen confirmations.
+                                        pendingDeleteTab = currentTab
+                                        showUniversalDeleteConfirm = true
                                     }
                                     2 -> contractDeleteTrigger++
                                     3 -> transactionDeleteTrigger++
                                     5 -> cardDeleteTrigger++
-                                    7 -> selectedHistoryEventId?.let { id ->
-                                        historyTimelineViewModel.events.value.firstOrNull { it.id == id }?.let {
-                                            historyTimelineViewModel.archiveSelected(it)
-                                        }
-                                        selectedHistoryEventId = null
-                                    }
                                     8 -> trashPurgeTrigger++
                                 }
                             },
@@ -2058,6 +2058,79 @@ fun MainScreen(
                     }
                     showAddScooterDialog = false
                     scooterToEdit = null
+                }
+            )
+        }
+
+        // ── Universal dangerous-action confirmation dialog (§10) ───────────
+        // Single dialog for renters/scooters/history delete. Shows item count
+        // and warning; user must explicitly confirm before destructive action.
+        if (showUniversalDeleteConfirm) {
+            val itemCount = when (pendingDeleteTab) {
+                0 -> selectedRenters.size
+                1 -> selectedScooters.size
+                7 -> if (selectedHistoryEventId != null) 1 else 0
+                else -> 0
+            }
+            val itemLabel = when (pendingDeleteTab) {
+                0 -> "arendator(lar)"
+                1 -> "skuter(lar)"
+                7 -> "tarix voqeasi"
+                else -> "element"
+            }
+            AlertDialog(
+                onDismissRequest = {
+                    showUniversalDeleteConfirm = false
+                    pendingDeleteTab = -1
+                },
+                title = { Text("Tasdiqlash") },
+                text = {
+                    Column {
+                        Text(
+                            "$itemCount $itemLabel o'chirilsinmi?",
+                            style = MaterialTheme.typography.bodyLarge,
+                            color = ClaudeText
+                        )
+                        Spacer(Modifier.height(8.dp))
+                        Text(
+                            "Ushbu amal bekor qilib bo'lmaydi. O'chirilgan elementlar " +
+                            "korzinaga ko'chiriladi va u yerdan qayta tiklanishi mumkin.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = ClaudeTextSecondary
+                        )
+                    }
+                },
+                confirmButton = {
+                    TextButton(
+                        onClick = {
+                            when (pendingDeleteTab) {
+                                0 -> {
+                                    selectedRenters.forEach { id -> viewModel.deleteRenter(id) }
+                                    selectedRenters = emptySet()
+                                }
+                                1 -> {
+                                    scooters.filter { it.id in selectedScooters }.forEach {
+                                        scooterViewModel.deleteScooter(it)
+                                    }
+                                    selectedScooters = emptySet()
+                                }
+                                7 -> selectedHistoryEventId?.let { id ->
+                                    historyTimelineViewModel.events.value.firstOrNull { it.id == id }?.let {
+                                        historyTimelineViewModel.archiveSelected(it)
+                                    }
+                                    selectedHistoryEventId = null
+                                }
+                            }
+                            showUniversalDeleteConfirm = false
+                            pendingDeleteTab = -1
+                        }
+                    ) { Text("O'chirish", color = StatusOverdue, fontWeight = FontWeight.Bold) }
+                },
+                dismissButton = {
+                    TextButton(onClick = {
+                        showUniversalDeleteConfirm = false
+                        pendingDeleteTab = -1
+                    }) { Text("Bekor qilish") }
                 }
             )
         }
@@ -3831,7 +3904,7 @@ private fun scooterStatusColor(s: ScooterStatus): Color = when (s) {
     ScooterStatus.RESERVED -> Color(0xFFF59E0B)
     ScooterStatus.REPAIR -> StatusOverdue
     ScooterStatus.SERVICE -> Color(0xFF7C3AED)
-    ScooterStatus.RETIRED -> StatusReturned
+    ScooterStatus.RETIRED -> StatusArchived    // grey — decommissioned/archived
     ScooterStatus.AVAILABLE -> StatusOk
 }
 
