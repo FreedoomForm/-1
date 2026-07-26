@@ -91,11 +91,11 @@ class FinansiViewModel(application: Application) : AndroidViewModel(application)
     fun deleteCard(card: VirtualCard) {
         viewModelScope.launch {
             try {
-                com.example.data.OperatorSessionRepository(getApplication())
+                val operator = com.example.data.OperatorSessionRepository(getApplication())
                     .requirePermission(AppDatabase.getDatabase(getApplication()), com.example.data.AccessPolicy.FINANCE_REVERSE)
                 // A financial account is closed by archiving it; this retains
                 // its history and prevents money from disappearing.
-                repository.archiveCard(card)
+                repository.archiveCard(card, operator.displayName)
                 WidgetUpdater.updateAll(getApplication())
             } catch (e: Exception) {
                 Log.e(TAG, "Failed to delete card", e)
@@ -164,9 +164,9 @@ class FinansiViewModel(application: Application) : AndroidViewModel(application)
     fun deleteTransaction(id: Int) {
         viewModelScope.launch(Dispatchers.IO) {
             try {
-                com.example.data.OperatorSessionRepository(getApplication())
+                val operator = com.example.data.OperatorSessionRepository(getApplication())
                     .requirePermission(AppDatabase.getDatabase(getApplication()), com.example.data.AccessPolicy.FINANCE_REVERSE)
-                repository.reverseTransaction(id, "Bekor qilindi: foydalanuvchi so'rovi")
+                repository.reverseTransaction(id, "Bekor qilindi: foydalanuvchi so'rovi", operator.displayName)
                 WidgetUpdater.updateAll(getApplication())
             } catch (e: Exception) {
                 Log.e(TAG, "Failed to delete transaction", e)

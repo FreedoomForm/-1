@@ -74,12 +74,13 @@ class VirtualCardRepository(
     }
 
     /** Closes an empty non-system card while preserving its full audit trail. */
-    suspend fun archiveCard(card: VirtualCard): Int = atomic {
+    suspend fun archiveCard(card: VirtualCard, actor: String = "LOCAL_SYSTEM"): Int = atomic {
         require(!card.isDefault) { "System cards cannot be archived" }
         val current = requireCard(card.id)
         require(kotlin.math.abs(current.balance) < 0.005) { "Transfer or reconcile the card balance before closing it" }
         val result = cardDao.archiveCard(card.id)
         if (result > 0) database?.auditEventDao()?.insert(AuditEvent(
+            actor = actor,
             action = AuditEvent.ACTION_CARD_ARCHIVED,
             entityType = "VIRTUAL_CARD",
             entityId = card.id.toString(),
@@ -179,7 +180,7 @@ class VirtualCardRepository(
     }
 
     /** Financial rows are immutable. Delete is an auditable reversal, not a silent erase. */
-    suspend fun reverseTransaction(id: Int, note: String) = atomic {
+    suspend fun reverseTransaction(id: Int, note: String, actor: String = "LOCAL_SYSTEM") = atomic {
         val tx = txDao.getById(id) ?: throw IllegalArgumentException("Transaction #$id does not exist")
         require(!note.isBlank()) { "Reversal reason is required" }
         if (!VirtualCard.isExternalId(tx.fromCardId)) cardDao.adjustBalance(tx.fromCardId, tx.amount)
@@ -192,6 +193,7 @@ class VirtualCardRepository(
                 BusinessOperationRepository(db).reverse(original.id, note)
             }
             db.auditEventDao().insert(AuditEvent(
+                actor = actor,
                 action = AuditEvent.ACTION_CARD_TRANSACTION_REVERSED,
                 entityType = "CARD_TRANSACTION",
                 entityId = id.toString(),

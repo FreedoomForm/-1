@@ -923,13 +923,14 @@ class RenterViewModel(application: Application) : AndroidViewModel(application) 
             try {
                 require(amount > 0.0 && amount.isFinite()) { "Payment must be positive" }
                 val db = AppDatabase.getDatabase(getApplication())
-                com.example.data.OperatorSessionRepository(getApplication())
+                val operator = com.example.data.OperatorSessionRepository(getApplication())
                     .requirePermission(db, com.example.data.AccessPolicy.PAYMENT_ACCEPT)
                 com.example.data.RentPeriodAccountingService(db)
                     .acceptPayment(
                         renterId = renterId,
                         amountMinor = com.example.data.BusinessOperation.toMinor(amount),
-                        note = note.ifBlank { "Qisman to'lov" }
+                        note = note.ifBlank { "Qisman to'lov" },
+                        actor = operator.displayName
                     )
                 com.example.widget.WidgetUpdater.updateAll(getApplication())
             } catch (e: Exception) {

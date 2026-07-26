@@ -13,6 +13,7 @@ class RentPeriodAccountingService(private val db: AppDatabase) {
         amountMinor: Long,
         note: String,
         toCardId: Int = VirtualCard.MAIN_CARD_ID,
+        actor: String = "LOCAL_SYSTEM",
         occurredAt: Long = System.currentTimeMillis()
     ): Long = db.withTransaction {
         require(amountMinor > 0) { "Payment must be positive" }
@@ -96,6 +97,7 @@ class RentPeriodAccountingService(private val db: AppDatabase) {
         ))
         db.auditEventDao().insert(AuditEvent(
             occurredAt = occurredAt,
+            actor = actor,
             action = AuditEvent.ACTION_PAYMENT_ACCEPTED,
             entityType = "BUSINESS_OPERATION",
             entityId = operationId.toString(),
