@@ -66,6 +66,12 @@ class SmsWorker(
                     skippedCount++
                     return@forEach
                 }
+                val cooldownMs = settingsRepo.smsReminderCooldownHours * 60L * 60 * 1000
+                val latestSent = db.smsDeliveryDao().latestSuccessfulForRenter(renter.id)
+                if (latestSent != null && currentTime - latestSent.timestamp < cooldownMs) {
+                    skippedCount++
+                    return@forEach
+                }
                 val daysOverdue = ((currentTime - overduePeriod.endsAt) / (24L * 60 * 60 * 1000)).toInt().coerceAtLeast(1)
                 val debt = maxOf(0.0, -renter.balance)
                 val message = settingsRepo.smsTemplate

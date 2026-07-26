@@ -109,6 +109,10 @@ class SettingsRepository(context: Context) {
         prefs.edit().putLong("auto_sms_day", day).putInt("auto_sms_count", current + 1).apply()
     }
 
+    var smsReminderCooldownHours: Int
+        get() = prefs.getInt("sms_reminder_cooldown_hours", 24).coerceIn(1, 168)
+        set(value) = prefs.edit().putInt("sms_reminder_cooldown_hours", value.coerceIn(1, 168)).apply()
+
     /**
      * Avto-zaxira nusxa (auto-backup to Downloads/ScooterRent/).
      * Yoqilgan bo'lsa, har bir ma'lumot o'zgarishidan so'ng ilova .xlsx
