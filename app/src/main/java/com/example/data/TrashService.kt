@@ -38,7 +38,29 @@ class TrashService(private val db: AppDatabase) {
             DeletedItem.TYPE_TRANSACTION -> db.transactionDao().insert(item.snapshotJson.toTransaction())
             DeletedItem.TYPE_CONTRACT -> {
                 val contract = item.snapshotJson.toContract()
-                db.contractHistoryDao().insert(contract)
+                val renter = db.renterDao().getRenterById(contract.renterId)
+                    ?: error("Cannot restore contract: renter no longer exists")
+                val start = contract.weekStart ?: contract.timestamp
+                val end = contract.weekEnd ?: start + 7L * 24 * 60 * 60 * 1000
+                renter.scooterId?.let { scooterId ->
+                    check(db.rentPeriodDao().conflictsForScooter(scooterId, start, end).isEmpty()) {
+                        "Cannot restore contract: scooter period conflicts with an active rental"
+                    }
+                }
+                val contractId = db.contractHistoryDao().insert(contract)
+                val status = when {
+                    contract.isPaid -> RentPeriod.STATUS_PAID
+                    end <= System.currentTimeMillis() -> RentPeriod.STATUS_OVERDUE
+                    else -> RentPeriod.STATUS_ACTIVE
+                }
+                db.rentPeriodDao().insert(RentPeriod(
+                    contractHistoryId = contractId.toInt(), renterId = contract.renterId,
+                    scooterId = renter.scooterId, startsAt = start, endsAt = end,
+                    chargeMinor = BusinessOperation.toMinor(kotlin.math.abs(contract.amount)),
+                    paidMinor = if (contract.isPaid) BusinessOperation.toMinor(kotlin.math.abs(contract.amount)) else 0,
+                    status = status
+                ))
+                contractId
             }
             else -> error("Restore for ${item.sourceType} is not implemented")
         }

@@ -908,6 +908,15 @@ fun MainScreen(
                         )
                     }
 
+                    // Fast access to the two operational pages. They are kept
+                    // outside the already crowded bottom navigation on phones.
+                    IconButton(onClick = { currentTab = 7 }) {
+                        Icon(Icons.Default.Receipt, contentDescription = "Tarix", tint = ClaudeText)
+                    }
+                    IconButton(onClick = { currentTab = 8 }) {
+                        Icon(Icons.Default.Delete, contentDescription = "Korzinka", tint = ClaudeText)
+                    }
+
                     // ── Универсальные кнопки верхнего бара ──────────────────────
                     // +  — добавление сущности для текущей вкладки (всегда активна)
                     // ✎  — редактирование выбранной строки (активна при выборе 1)
@@ -918,7 +927,7 @@ fun MainScreen(
                     // сущностей для создания (только виджеты). Edit/delete там тоже
                     // не показываются — нет строк для выбора.
                     // ── Кнопка «+» — скрыта на «Отчётах» (4) и «Sozlamalar» (6) ─
-                    if (currentTab != 4 && currentTab != 6) {
+                    if (currentTab !in setOf(4, 6, 7, 8)) {
                         IconButton(
                             onClick = {
                                 when (currentTab) {
@@ -944,7 +953,7 @@ fun MainScreen(
                     }
 
                     // ── Кнопка «✎ Tahrirlash» — скрыта на «Отчётах» (4) и «Sozlamalar» (6)
-                    if (currentTab != 4 && currentTab != 6) {
+                    if (currentTab !in setOf(4, 6, 7, 8)) {
                         val editEnabled = when (currentTab) {
                             0 -> selectedRenters.size == 1
                             1 -> selectedScooters.size == 1
@@ -1789,6 +1798,10 @@ fun MainScreen(
                     // TopAppBar «Sozlamalar») и снизу (contentWindowInsets).
                     showTopBar = false
                 )
+            } else if (currentTab == 7) {
+                HistoryScreen()
+            } else if (currentTab == 8) {
+                TrashScreen()
             }
         }
 

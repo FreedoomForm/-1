@@ -45,4 +45,17 @@ class HistoryViewModel(application: Application) : AndroidViewModel(application)
             )
         }).sortedByDescending { it.timestamp }
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+
+    /** Adds a non-financial manual history branch at the operator-selected time. */
+    fun createBranch(timestamp: Long, note: String) {
+        viewModelScope.launch {
+            db.auditEventDao().insert(AuditEvent(
+                occurredAt = timestamp,
+                action = "HISTORY_BRANCH_CREATED",
+                entityType = "HISTORY_BRANCH",
+                entityId = "manual-$timestamp",
+                reason = note.ifBlank { "Manual history branch" }
+            ))
+        }
+    }
 }

@@ -182,12 +182,19 @@ class TransactionViewModel(application: Application) : AndroidViewModel(applicat
         }
     }
 
+    /** Moves a user-visible manual transaction to the recycle bin. */
     fun deleteTransaction(id: Int) {
-        viewModelScope.launch(Dispatchers.IO) { repo.deleteById(id) }
+        viewModelScope.launch(Dispatchers.IO) {
+            val db = AppDatabase.getDatabase(getApplication())
+            repo.getById(id)?.let { TrashService(db).moveTransactionToTrash(it, "User deleted transaction") }
+        }
     }
 
     fun deleteTransactions(ids: List<Int>) {
-        viewModelScope.launch(Dispatchers.IO) { repo.deleteByIds(ids) }
+        viewModelScope.launch(Dispatchers.IO) {
+            val db = AppDatabase.getDatabase(getApplication())
+            ids.forEach { id -> repo.getById(id)?.let { TrashService(db).moveTransactionToTrash(it, "Bulk deletion") } }
+        }
     }
 
     fun clear() {
