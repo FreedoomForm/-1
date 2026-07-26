@@ -107,6 +107,7 @@ import com.example.data.remote.InAppUpdateState
 import com.example.data.remote.UpdateCheckResult
 import com.example.data.remote.UpdateChecker
 import com.example.data.remote.UpdateInfo
+import com.example.ui.AppUserViewModel
 import com.example.ui.ContractHistoryViewModel
 import com.example.ui.NotificationHistoryViewModel
 import com.example.ui.RenterViewModel
@@ -2955,6 +2956,7 @@ fun SettingsScreen(
     onCheckUpdate: () -> Unit = {},
     onExportBackup: (android.net.Uri) -> Unit = {},
     onImportBackup: (android.net.Uri) -> Unit = {},
+    userViewModel: AppUserViewModel = viewModel(),
     // ── showTopBar ───────────────────────────────────────────────────────
     // true  — рендерить собственный Scaffold + TopAppBar с «Sozlamalar».
     //         Используется когда SettingsScreen открыт как отдельная страница
@@ -2983,6 +2985,10 @@ fun SettingsScreen(
     var paymeLink by remember { mutableStateOf(settingsRepo.paymeLink) }
     var callCenter by remember { mutableStateOf(settingsRepo.callCenter) }
     var partialPeriodMode by remember { mutableStateOf(settingsRepo.partialPeriodPricingMode) }
+    val appUsers by userViewModel.users.collectAsStateWithLifecycle()
+    val activeOperatorId by userViewModel.activeUserId.collectAsStateWithLifecycle()
+    var newOperatorName by remember { mutableStateOf("") }
+    var newOperatorRole by remember { mutableStateOf(com.example.data.AppUser.ROLE_CASHIER) }
     // ── Поля для страницы Отчёты: стоимость скутера и курс USD ──────────
     var scooterPriceUsd by remember {
         mutableStateOf(settingsRepo.scooterPriceUsd.let {
@@ -3123,6 +3129,46 @@ fun SettingsScreen(
                         modifier = Modifier.fillMaxWidth(),
                         shape = RoundedCornerShape(8.dp)
                     )
+                }
+
+                Column {
+                    Text("Foydalanuvchilar va rollar", style = MaterialTheme.typography.labelMedium, color = ClaudeText)
+                    Spacer(modifier = Modifier.height(6.dp))
+                    appUsers.forEach { user ->
+                        Row(
+                            modifier = Modifier.fillMaxWidth().clickable { userViewModel.switchUser(user.id) }.padding(vertical = 3.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            RadioButton(selected = user.id == activeOperatorId, onClick = { userViewModel.switchUser(user.id) })
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(user.displayName, style = MaterialTheme.typography.bodyMedium)
+                                Text(user.role, style = MaterialTheme.typography.labelSmall, color = ClaudeTextSecondary)
+                            }
+                            if (user.id == activeOperatorId) Text("Faol", style = MaterialTheme.typography.labelSmall, color = ClaudeAccent)
+                        }
+                    }
+                    OutlinedTextField(
+                        value = newOperatorName,
+                        onValueChange = { newOperatorName = it },
+                        label = { Text("Yangi foydalanuvchi") },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    listOf(
+                        com.example.data.AppUser.ROLE_OWNER to "Owner",
+                        com.example.data.AppUser.ROLE_MANAGER to "Manager",
+                        com.example.data.AppUser.ROLE_CASHIER to "Cashier",
+                        com.example.data.AppUser.ROLE_VIEWER to "Viewer"
+                    ).forEach { (role, label) ->
+                        Row(modifier = Modifier.clickable { newOperatorRole = role }, verticalAlignment = Alignment.CenterVertically) {
+                            RadioButton(selected = newOperatorRole == role, onClick = { newOperatorRole = role })
+                            Text(label)
+                        }
+                    }
+                    TextButton(onClick = {
+                        userViewModel.addUser(newOperatorName, newOperatorRole)
+                        newOperatorName = ""
+                    }, enabled = newOperatorName.isNotBlank()) { Text("Foydalanuvchi qo'shish") }
                 }
 
                 Column {
