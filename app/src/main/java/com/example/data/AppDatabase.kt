@@ -380,6 +380,40 @@ abstract class AppDatabase : RoomDatabase() {
         }
 
         /**
+         * Migration 22 → 23: copy every legacy REAL money value into an exact
+         * Long tийин mirror. The old columns remain for UI compatibility.
+         */
+        private val MIGRATION_22_23 = object : Migration(22, 23) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("""
+                    CREATE TABLE IF NOT EXISTS `legacy_money_amounts` (
+                        `id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                        `entityType` TEXT NOT NULL,
+                        `entityId` INTEGER NOT NULL,
+                        `field` TEXT NOT NULL,
+                        `amountMinor` INTEGER NOT NULL,
+                        `migratedAt` INTEGER NOT NULL
+                    )
+                """.trimIndent())
+                db.execSQL("CREATE UNIQUE INDEX IF NOT EXISTS `index_legacy_money_amounts_entityType_entityId_field` ON `legacy_money_amounts` (`entityType`, `entityId`, `field`)")
+                val now = System.currentTimeMillis()
+                fun copy(table: String, entity: String, field: String) {
+                    db.execSQL("""
+                        INSERT OR REPLACE INTO legacy_money_amounts (entityType, entityId, field, amountMinor, migratedAt)
+                        SELECT '$entity', id, '$field', CAST(ROUND($field * 100.0) AS INTEGER), $now FROM $table
+                    """.trimIndent())
+                }
+                copy("renters", "RENTER", "debtAmount")
+                copy("renters", "RENTER", "balance")
+                copy("transactions", "TRANSACTION", "amount")
+                copy("card_transactions", "CARD_TRANSACTION", "amount")
+                copy("virtual_cards", "VIRTUAL_CARD", "balance")
+                copy("contract_history", "CONTRACT", "amount")
+                copy("contract_history", "CONTRACT", "weeklyPrice")
+            }
+        }
+
+        /**
          * Copies the raw Room database before the first open after an app
          * schema upgrade. This runs before Room can migrate anything, so a
          * recoverable snapshot exists even if a device loses power mid-update.
