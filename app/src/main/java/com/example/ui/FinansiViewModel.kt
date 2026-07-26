@@ -106,6 +106,24 @@ class FinansiViewModel(application: Application) : AndroidViewModel(application)
     }
 
     /**
+     * Reopens a previously-archived card. Per PLAN_UNIVERSAL_ACCOUNTING §3:
+     * archived cards shown in separate UI section, closure only via balance
+     * transfer; reopening reverses the archive flag.
+     */
+    fun unarchiveCard(card: VirtualCard) {
+        viewModelScope.launch {
+            try {
+                val operator = com.example.data.OperatorSessionRepository(getApplication())
+                    .requirePermission(AppDatabase.getDatabase(getApplication()), com.example.data.AccessPolicy.FINANCE_REVERSE)
+                repository.unarchiveCard(card, operator.displayName)
+                WidgetUpdater.updateAll(getApplication())
+            } catch (e: Exception) {
+                Log.e(TAG, "Failed to unarchive card", e)
+            }
+        }
+    }
+
+    /**
      * Переводит [amount] с карты [fromCardId] на карту [toCardId].
      * Если [reversed] = true — меняет направление (для кнопки разворота стрелки).
      *

@@ -92,6 +92,29 @@ class VirtualCardRepository(
     }
 
     /**
+     * Reopens a previously-archived non-system card. Per §3: archived cards
+     * can be unarchived only if their balance is still zero (no reconciliation
+     * needed) — otherwise user must reconcile first.
+     */
+    suspend fun unarchiveCard(card: VirtualCard, actor: String = "LOCAL_SYSTEM"): Int = atomic {
+        require(!card.isDefault) { "System cards cannot be archived/unarchived" }
+        val current = requireCard(card.id)
+        require(current.isArchived) { "Card is not archived" }
+        require(kotlin.math.abs(current.balance) < 0.005) { "Cannot unarchive a card with non-zero balance — reconcile first" }
+        val result = cardDao.unarchiveCard(card.id)
+        if (result > 0) database?.auditEventDao()?.insert(AuditEvent(
+            actor = actor,
+            action = "CARD_UNARCHIVED",
+            entityType = "VIRTUAL_CARD",
+            entityId = card.id.toString(),
+            reason = "Account reopened by user",
+            beforeSnapshot = "archived=true",
+            afterSnapshot = "archived=false"
+        ))
+        result
+    }
+
+    /**
      * Переводит [amount] с карты [fromCardId] на карту [toCardId].
      * Атомарно: обновляет оба баланса и создаёт запись в истории транзакций.
      *
