@@ -119,6 +119,9 @@ class VirtualCardRepository(
         // only receive funds. This prevents accidental fictitious cash flows.
         require(from.kind != VirtualCard.KIND_EXTERNAL_OUT) { "Cannot transfer from an external sink" }
         require(to.kind != VirtualCard.KIND_EXTERNAL_IN) { "Cannot transfer to an external source" }
+        if (!from.isExternal) {
+            require(from.balance + 0.005 >= amount) { "Insufficient available balance" }
+        }
         if (VirtualCard.isExternalId(fromCardId) || VirtualCard.isExternalId(toCardId)) {
             require(!note.isNullOrBlank()) { "External transfers require a note" }
         }

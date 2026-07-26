@@ -39,6 +39,7 @@ class ScooterMaintenanceService(private val db: AppDatabase) {
             ?: throw IllegalArgumentException("Card #$fromCardId does not exist")
         require(!card.isExternal && !card.isArchived) { "Choose an active business card" }
         val amount = BusinessOperation.fromMinor(amountMinor)
+        require(card.balance + 0.005 >= amount) { "Insufficient available balance for repair" }
         db.virtualCardDao().adjustBalance(fromCardId, -amount)
         val cardTxId = db.cardTransactionDao().insertTransaction(CardTransaction(
             timestamp = occurredAt, fromCardId = fromCardId, toCardId = VirtualCard.EXTERNAL_OUT_CARD_ID,
