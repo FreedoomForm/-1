@@ -4,7 +4,12 @@ import androidx.room.withTransaction
 
 /** Operational status and repair costs are changed through one audited service. */
 class ScooterMaintenanceService(private val db: AppDatabase) {
-    suspend fun changeStatus(scooterId: Int, status: String, reason: String) = db.withTransaction {
+    suspend fun changeStatus(
+        scooterId: Int,
+        status: String,
+        reason: String,
+        repairScenario: String = RepairOrder.SCENARIO_RENTER_REPAIR
+    ) = db.withTransaction {
         require(status in setOf(
             Scooter.STATUS_AVAILABLE, Scooter.STATUS_SERVICE, Scooter.STATUS_REPAIR, Scooter.STATUS_RETIRED
         )) { "Unsupported manual lifecycle status" }
@@ -27,7 +32,7 @@ class ScooterMaintenanceService(private val db: AppDatabase) {
             db.repairOrderDao().insert(RepairOrder(
                 scooterId = scooterId,
                 renterId = billablePeriods.firstOrNull()?.renterId,
-                scenario = RepairOrder.SCENARIO_RENTER_REPAIR,
+                scenario = repairScenario,
                 diagnosis = reason,
                 documentNote = "Rental billing paused automatically"
             ))

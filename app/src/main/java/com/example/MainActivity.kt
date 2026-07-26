@@ -368,6 +368,7 @@ fun MainScreen(
     var showRepairDialog by remember { mutableStateOf(false) }
     var showRepairResumeDialog by remember { mutableStateOf(false) }
     var repairNote by remember { mutableStateOf("") }
+    var repairScenario by remember { mutableStateOf(com.example.data.RepairOrder.SCENARIO_RENTER_REPAIR) }
     var searchQuery by remember { mutableStateOf("") }
     var showDateRangePicker by remember { mutableStateOf(false) }
     val dateRangePickerState = rememberDateRangePickerState()
@@ -1614,7 +1615,11 @@ fun MainScreen(
                         if (selectedScooter.lifecycleStatus == Scooter.STATUS_REPAIR) {
                             TextButton(onClick = { repairNote = ""; showRepairResumeDialog = true }) { Text("Ta'mirdan qaytdi") }
                         } else {
-                            TextButton(onClick = { repairNote = ""; showRepairDialog = true }) { Text("Ta'mirga") }
+                            TextButton(onClick = {
+                                repairNote = ""
+                                repairScenario = com.example.data.RepairOrder.SCENARIO_RENTER_REPAIR
+                                showRepairDialog = true
+                            }) { Text("Ta'mirga") }
                         }
                     }
                     Spacer(Modifier.weight(1f))
@@ -1862,12 +1867,24 @@ fun MainScreen(
                         Text(if (showRepairDialog)
                             "Ijara davri to'xtatiladi: ta'mir kunlari uchun to'lov hisoblanmaydi."
                             else "Ijara davri ta'mir davomiyligiga uzaytiriladi; to'lov qayta boshlanadi.")
+                        if (showRepairDialog) {
+                            listOf(
+                                com.example.data.RepairOrder.SCENARIO_RENTER_REPAIR to "Ijarachi ta'mirlaydi",
+                                com.example.data.RepairOrder.SCENARIO_OWNER_REPAIR to "Egasi / servis ta'mirlaydi",
+                                com.example.data.RepairOrder.SCENARIO_REPLACEMENT to "Almashtirish rejalashtirilgan"
+                            ).forEach { (scenario, label) ->
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    RadioButton(selected = repairScenario == scenario, onClick = { repairScenario = scenario })
+                                    Text(label)
+                                }
+                            }
+                        }
                         OutlinedTextField(repairNote, { repairNote = it }, label = { Text("Izoh / sabab") })
                     }
                 },
                 confirmButton = { TextButton(onClick = {
                     if (selectedId != null && repairNote.isNotBlank()) {
-                        if (showRepairDialog) scooterViewModel.sendToRepair(selectedId, repairNote)
+                        if (showRepairDialog) scooterViewModel.sendToRepair(selectedId, repairNote, repairScenario)
                         else scooterViewModel.resumeAfterRepair(selectedId, repairNote)
                         showRepairDialog = false; showRepairResumeDialog = false; repairNote = ""
                     } else Toast.makeText(localContext, "Izoh kiriting", Toast.LENGTH_SHORT).show()

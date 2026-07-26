@@ -69,10 +69,14 @@ class ScooterViewModel(application: Application) : AndroidViewModel(application)
         }
     }
 
-    fun sendToRepair(scooterId: Int, reason: String) {
+    fun sendToRepair(
+        scooterId: Int,
+        reason: String,
+        scenario: String = com.example.data.RepairOrder.SCENARIO_RENTER_REPAIR
+    ) {
         viewModelScope.launch {
             try { com.example.data.ScooterMaintenanceService(AppDatabase.getDatabase(getApplication()))
-                .changeStatus(scooterId, Scooter.STATUS_REPAIR, reason) }
+                .changeStatus(scooterId, Scooter.STATUS_REPAIR, reason, scenario) }
             catch (e: Exception) { Log.e(TAG, "Failed to pause rental for repair", e) }
         }
     }
