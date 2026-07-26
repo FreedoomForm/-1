@@ -15,9 +15,14 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         ContractHistoryEntry::class,
         Transaction::class,
         VirtualCard::class,
-        CardTransaction::class
+        CardTransaction::class,
+        BusinessOperation::class,
+        RentPeriod::class,
+        PaymentAllocationEntity::class,
+        AuditEvent::class,
+        AppUser::class
     ],
-    version = 15,
+    version = 20,
     exportSchema = false
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -28,6 +33,11 @@ abstract class AppDatabase : RoomDatabase() {
     abstract fun transactionDao(): TransactionDao
     abstract fun virtualCardDao(): VirtualCardDao
     abstract fun cardTransactionDao(): CardTransactionDao
+    abstract fun businessOperationDao(): BusinessOperationDao
+    abstract fun rentPeriodDao(): RentPeriodDao
+    abstract fun paymentAllocationDao(): PaymentAllocationDao
+    abstract fun auditEventDao(): AuditEventDao
+    abstract fun appUserDao(): AppUserDao
 
     companion object {
         @Volatile
@@ -178,6 +188,159 @@ abstract class AppDatabase : RoomDatabase() {
             }
         }
 
+        /**
+         * Migration 15 → 16: immutable universal business ledger. Existing
+         * card movements are imported once. Contract income becomes revenue;
+         * transfers remain neutral and therefore cannot inflate profit.
+         */
+        private val MIGRATION_15_16 = object : Migration(15, 16) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("""
+                    CREATE TABLE IF NOT EXISTS `business_operations` (
+                        `id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                        `occurredAt` INTEGER NOT NULL,
+                        `type` TEXT NOT NULL,
+                        `direction` TEXT NOT NULL,
+                        `amountMinor` INTEGER NOT NULL,
+                        `renterId` INTEGER,
+                        `scooterId` INTEGER,
+                        `contractId` INTEGER,
+                        `fromCardId` INTEGER,
+                        `toCardId` INTEGER,
+                        `cardTransactionId` INTEGER,
+                        `legacyTransactionId` INTEGER,
+                        `note` TEXT,
+                        `status` TEXT NOT NULL,
+                        `reversesOperationId` INTEGER,
+                        `createdAt` INTEGER NOT NULL
+                    )
+                """.trimIndent())
+                db.execSQL("CREATE INDEX IF NOT EXISTS `index_business_operations_occurredAt` ON `business_operations` (`occurredAt`)")
+                db.execSQL("CREATE INDEX IF NOT EXISTS `index_business_operations_renterId` ON `business_operations` (`renterId`)")
+                db.execSQL("CREATE INDEX IF NOT EXISTS `index_business_operations_contractId` ON `business_operations` (`contractId`)")
+                db.execSQL("CREATE INDEX IF NOT EXISTS `index_business_operations_cardTransactionId` ON `business_operations` (`cardTransactionId`)")
+                db.execSQL("CREATE INDEX IF NOT EXISTS `index_business_operations_status` ON `business_operations` (`status`)")
+                // Legacy card transactions are the most reliable historical
+                // cash source. ROUND converts REAL sums to exact tийин units.
+                db.execSQL("""
+                    INSERT INTO business_operations
+                    (occurredAt,type,direction,amountMinor,contractId,fromCardId,toCardId,cardTransactionId,note,status,createdAt)
+                    SELECT timestamp,
+                           CASE WHEN type = 'CONTRACT_INCOME' THEN 'RENT_PAYMENT' ELSE 'TRANSFER' END,
+                           CASE WHEN type = 'CONTRACT_INCOME' THEN 'INCOME' ELSE 'TRANSFER' END,
+                           CAST(ROUND(ABS(amount) * 100.0) AS INTEGER),
+                           contractId, fromCardId, toCardId, id, note, 'ACTIVE', timestamp
+                    FROM card_transactions
+                    WHERE amount <> 0
+                """.trimIndent())
+            }
+        }
+
+        /** Migration 16 → 17: retain closed cards for audit instead of deleting them. */
+        private val MIGRATION_16_17 = object : Migration(16, 17) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE `virtual_cards` ADD COLUMN `isArchived` INTEGER NOT NULL DEFAULT 0")
+            }
+        }
+
+        /**
+         * Migration 17 → 18: materialise billable rental periods and payment
+         * allocations. Existing contract history is copied without deleting it.
+         */
+        private val MIGRATION_17_18 = object : Migration(17, 18) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("""
+                    CREATE TABLE IF NOT EXISTS `rent_periods` (
+                        `id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                        `contractHistoryId` INTEGER,
+                        `renterId` INTEGER NOT NULL,
+                        `scooterId` INTEGER,
+                        `startsAt` INTEGER NOT NULL,
+                        `endsAt` INTEGER NOT NULL,
+                        `chargeMinor` INTEGER NOT NULL,
+                        `paidMinor` INTEGER NOT NULL,
+                        `status` TEXT NOT NULL,
+                        `createdAt` INTEGER NOT NULL,
+                        `updatedAt` INTEGER NOT NULL
+                    )
+                """.trimIndent())
+                db.execSQL("CREATE UNIQUE INDEX IF NOT EXISTS `index_rent_periods_contractHistoryId` ON `rent_periods` (`contractHistoryId`)")
+                db.execSQL("CREATE INDEX IF NOT EXISTS `index_rent_periods_renterId_status` ON `rent_periods` (`renterId`, `status`)")
+                db.execSQL("CREATE INDEX IF NOT EXISTS `index_rent_periods_scooterId_startsAt_endsAt` ON `rent_periods` (`scooterId`, `startsAt`, `endsAt`)")
+                db.execSQL("""
+                    CREATE TABLE IF NOT EXISTS `payment_allocations` (
+                        `id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                        `operationId` INTEGER NOT NULL,
+                        `rentPeriodId` INTEGER NOT NULL,
+                        `amountMinor` INTEGER NOT NULL,
+                        `createdAt` INTEGER NOT NULL
+                    )
+                """.trimIndent())
+                db.execSQL("CREATE INDEX IF NOT EXISTS `index_payment_allocations_operationId` ON `payment_allocations` (`operationId`)")
+                db.execSQL("CREATE INDEX IF NOT EXISTS `index_payment_allocations_rentPeriodId` ON `payment_allocations` (`rentPeriodId`)")
+                // Snapshot the legacy contracts. When a period is marked paid,
+                // it is fully settled; old partial payments did not have a
+                // durable allocation model and therefore remain auditable only
+                // in the legacy history until manually reconciled.
+                db.execSQL("""
+                    INSERT OR IGNORE INTO rent_periods
+                    (contractHistoryId,renterId,scooterId,startsAt,endsAt,chargeMinor,paidMinor,status,createdAt,updatedAt)
+                    SELECT h.id, h.renterId, r.scooterId,
+                           COALESCE(h.weekStart, h.timestamp),
+                           COALESCE(h.weekEnd, h.timestamp + 604800000),
+                           CAST(ROUND(ABS(h.amount) * 100.0) AS INTEGER),
+                           CASE WHEN h.isPaid = 1 THEN CAST(ROUND(ABS(h.amount) * 100.0) AS INTEGER) ELSE 0 END,
+                           CASE
+                             WHEN h.isPaid = 1 THEN 'PAID'
+                             WHEN COALESCE(h.weekStart, h.timestamp) > strftime('%s','now') * 1000 THEN 'SCHEDULED'
+                             WHEN COALESCE(h.weekEnd, h.timestamp + 604800000) <= strftime('%s','now') * 1000 THEN 'OVERDUE'
+                             ELSE 'ACTIVE'
+                           END,
+                           h.timestamp, h.timestamp
+                    FROM contract_history h
+                    LEFT JOIN renters r ON r.id = h.renterId
+                    WHERE h.type IN ('CREATED','AUTO_RENEW')
+                """.trimIndent())
+            }
+        }
+
+        /** Migration 18 → 19: immutable local audit trail. */
+        private val MIGRATION_18_19 = object : Migration(18, 19) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("""
+                    CREATE TABLE IF NOT EXISTS `audit_events` (
+                        `id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                        `occurredAt` INTEGER NOT NULL,
+                        `actor` TEXT NOT NULL,
+                        `action` TEXT NOT NULL,
+                        `entityType` TEXT NOT NULL,
+                        `entityId` TEXT NOT NULL,
+                        `reason` TEXT,
+                        `beforeSnapshot` TEXT,
+                        `afterSnapshot` TEXT
+                    )
+                """.trimIndent())
+                db.execSQL("CREATE INDEX IF NOT EXISTS `index_audit_events_occurredAt` ON `audit_events` (`occurredAt`)")
+                db.execSQL("CREATE INDEX IF NOT EXISTS `index_audit_events_entityType_entityId` ON `audit_events` (`entityType`, `entityId`)")
+            }
+        }
+
+        /** Migration 19 → 20: local roles; every existing installation gets an owner. */
+        private val MIGRATION_19_20 = object : Migration(19, 20) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("""
+                    CREATE TABLE IF NOT EXISTS `app_users` (
+                        `id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                        `displayName` TEXT NOT NULL,
+                        `role` TEXT NOT NULL,
+                        `isActive` INTEGER NOT NULL,
+                        `createdAt` INTEGER NOT NULL
+                    )
+                """.trimIndent())
+                db.execSQL("INSERT INTO app_users (id,displayName,role,isActive,createdAt) VALUES (1,'Owner','OWNER',1,strftime('%s','now')*1000)")
+            }
+        }
+
         fun getDatabase(context: Context): AppDatabase {
             return INSTANCE ?: synchronized(this) {
                 val instance = Room.databaseBuilder(
@@ -185,10 +348,9 @@ abstract class AppDatabase : RoomDatabase() {
                     AppDatabase::class.java,
                     "scooter_rent_db"
                 )
-                    .addMigrations(MIGRATION_11_12, MIGRATION_12_13, MIGRATION_13_14, MIGRATION_14_15)
-                    // На случай если кто-то перескакивает через несколько версий —
-                    // лучше потерять локальные данные, чем крашнуться при старте.
-                    .fallbackToDestructiveMigration(true)
+                    .addMigrations(MIGRATION_11_12, MIGRATION_12_13, MIGRATION_13_14, MIGRATION_14_15, MIGRATION_15_16, MIGRATION_16_17, MIGRATION_17_18, MIGRATION_18_19, MIGRATION_19_20)
+                    // Production data must never be silently erased on an unknown migration.
+                    // Room will fail visibly and the user can restore a backup instead.
                     .addCallback(object : RoomDatabase.Callback() {
                         override fun onCreate(db: SupportSQLiteDatabase) {
                             super.onCreate(db)
@@ -206,6 +368,7 @@ abstract class AppDatabase : RoomDatabase() {
                                     (3, 'Tashqidan', 0.0, '#FF00838F', 'Tashqidan kirgan pul (bank, naqd va h.k.)', 1, strftime('%s','now') * 1000, 'EXTERNAL_IN'),
                                     (4, 'Tashqiga',  0.0, '#FFC62828', 'Tashqiga chiqarilgan pul (yechib olish, to''lovlar)', 1, strftime('%s','now') * 1000, 'EXTERNAL_OUT')
                             """.trimIndent())
+                            db.execSQL("INSERT OR IGNORE INTO app_users (id, displayName, role, isActive, createdAt) VALUES (1, 'Owner', 'OWNER', 1, strftime('%s','now') * 1000)")
                         }
                     })
                     .build()

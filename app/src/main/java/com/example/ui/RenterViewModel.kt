@@ -71,7 +71,8 @@ class RenterViewModel(application: Application) : AndroidViewModel(application) 
         transactionRepository = com.example.data.TransactionRepository(database.transactionDao())
         virtualCardRepository = com.example.data.VirtualCardRepository(
             database.virtualCardDao(),
-            database.cardTransactionDao()
+            database.cardTransactionDao(),
+            database
         )
         actionUseCase = com.example.data.RenterActionUseCase.fromContext(application)
         rentersList = repository.allRenters.stateIn(
@@ -154,7 +155,12 @@ class RenterViewModel(application: Application) : AndroidViewModel(application) 
             //               создаётся Transaction, depositContractIncome.
             // isPaid = false → долг (минус), balance -= weeklyPrice,
             //                Transaction НЕ создаётся, на карту ничего не падает.
-            data class ContractSpec(val weekStart: Long, val weekEnd: Long, val isPaid: Boolean)
+            data class ContractSpec(
+                val weekStart: Long,
+                val weekEnd: Long,
+                val isPaid: Boolean,
+                val isScheduled: Boolean = false
+            )
 
             val specs: List<ContractSpec> = when (scenario) {
                 4 -> {
@@ -165,48 +171,94 @@ class RenterViewModel(application: Application) : AndroidViewModel(application) 
                     }
                 }
                 1 -> {
-                    // Более недели назад → один контракт с минусом (долг)
-                    listOf(ContractSpec(startTimestamp, startTimestamp + weekMs, isPaid = false))
-                }
-                2 -> {
-                    // Менее недели назад → один контракт с плюсом (предоплата)
-                    listOf(ContractSpec(startTimestamp, startTimestamp + weekMs, isPaid = true))
-                }
-                3 -> {
-                    // Сегодня или в будущем → несколько контрактов с плюсом
-                    // от today до выбранного дня. Каждая неделя = один контракт.
+                    // Historical start: materialise every elapsed contractual
+                    // period immediately, rather than inventing one debt and
+                    // letting the hourly worker catch up later.
                     val specsList = mutableListOf<ContractSpec>()
                     var cursor = startTimestamp
-                    val today = now
-                    // Если старт в будущем, начинаем с сегодняшнего дня
-                    if (cursor > today) {
-                        cursor = today
-                    }
-                    // Создаём недели пока не достигнем выбранной даты
-                    while (cursor < startTimestamp + dayMs) {
-                        val ws = cursor
-                        val we = cursor + weekMs
-                        specsList.add(ContractSpec(ws, we, isPaid = true))
-                        cursor = we
-                        if (specsList.size > 52) break // защита от бесконечного цикла (макс 1 год)
+                    while (cursor < expiryTime && specsList.size < 104) {
+                        val end = minOf(cursor + weekMs, expiryTime)
+                        specsList += ContractSpec(cursor, end, isPaid = false)
+                        cursor = end
                     }
                     specsList
+                }
+                2 -> {
+                    // Recent start: first period is paid, the remaining agreed
+                    // duration is planned and is not charged in advance.
+                    val specsList = mutableListOf<ContractSpec>()
+                    var cursor = startTimestamp
+                    var first = true
+                    while (cursor < expiryTime && specsList.size < 104) {
+                        val end = minOf(cursor + weekMs, expiryTime)
+                        specsList += ContractSpec(cursor, end, isPaid = first, isScheduled = !first)
+                        first = false
+                        cursor = end
+                    }
+                    specsList
+                }
+                3 -> {
+                    // Future rental is a reservation, not a cash receipt and
+                    // not a debt. Build the real coverage from its start to
+                    // its contractual expiry; no interval starts "today".
+                    if (startTimestamp > now) {
+                        val specsList = mutableListOf<ContractSpec>()
+                        var cursor = startTimestamp
+                        while (cursor < expiryTime && specsList.size < 104) {
+                            val end = minOf(cursor + weekMs, expiryTime)
+                            specsList += ContractSpec(cursor, end, isPaid = false, isScheduled = true)
+                            cursor = end
+                        }
+                        specsList
+                    } else {
+                        // A same-day handover may settle only the first week.
+                        // The rest of the agreed duration is scheduled now and
+                        // becomes a receivable exactly on each start date.
+                        val specsList = mutableListOf<ContractSpec>()
+                        var cursor = startTimestamp
+                        var first = true
+                        while (cursor < expiryTime && specsList.size < 104) {
+                            val end = minOf(cursor + weekMs, expiryTime)
+                            specsList += ContractSpec(
+                                cursor, end,
+                                isPaid = first,
+                                isScheduled = !first
+                            )
+                            first = false
+                            cursor = end
+                        }
+                        specsList
+                    }
                 }
                 else -> listOf(ContractSpec(startTimestamp, startTimestamp + weekMs, isPaid = true))
             }
 
             // ── Начальный баланс ───────────────────────────────────────────
-            // Для каждого контракта: isPaid=true → +weeklyPrice (предоплата)
-            //                        isPaid=false → -weeklyPrice (долг)
-            // Также учитываем явный debt из формы (если указан).
+            // A settled period is neither debt nor advance: it contributes 0
+            // to the renter balance. Only an unpaid active/historical period
+            // is a liability; planned periods are not charged yet.
             val contractsBalance = specs.fold(0.0) { acc, s ->
-                acc + if (s.isPaid) effectiveWeeklyPrice else -effectiveWeeklyPrice
+                val periodPrice = effectiveWeeklyPrice * (s.weekEnd - s.weekStart).toDouble() / weekMs.toDouble()
+                acc + if (s.isScheduled || s.isPaid) 0.0 else -periodPrice
             }
             val initialBalance = when {
                 debt > 0 -> -debt + contractsBalance
                 else -> contractsBalance
             }
             val finalDebt = if (initialBalance < 0) -initialBalance else 0.0
+
+            // A scooter cannot be reserved or rented by two people for
+            // overlapping periods. Validate before the renter itself is saved.
+            if (scooterId != null) {
+                val periodDao = AppDatabase.getDatabase(getApplication()).rentPeriodDao()
+                specs.forEach { spec ->
+                    val conflicts = periodDao.conflictsForScooter(scooterId, spec.weekStart, spec.weekEnd)
+                    if (conflicts.isNotEmpty()) {
+                        Log.w(TAG, "Rental blocked: scooter #$scooterId overlaps an existing period")
+                        return@launch
+                    }
+                }
+            }
 
             val provisional = Renter(
                 name = name, phoneNumber = phone, debtAmount = finalDebt,
@@ -230,7 +282,7 @@ class RenterViewModel(application: Application) : AndroidViewModel(application) 
             // Это обеспечивает каскадную связь: при удалении контракта
             // (deleteContractWithCascade) автоматически удаляются Transaction
             // и реверсится CardTransaction главной карты.
-            val shouldNotifyOverdue = specs.any { !it.isPaid }
+            val shouldNotifyOverdue = specs.any { !it.isPaid && !it.isScheduled }
             viewModelScope.launch(Dispatchers.IO) {
                 try {
                     val dateFmt = java.text.SimpleDateFormat("dd.MM.yyyy", java.util.Locale.getDefault())
@@ -249,6 +301,7 @@ class RenterViewModel(application: Application) : AndroidViewModel(application) 
                         val calendarMarker =
                             if (scenario == 4) "Kalendar orqali yaratildi — " else ""
                         val notes = when {
+                            spec.isScheduled -> "${calendarMarker}Rejalashtirilgan ijara davri"
                             spec.isPaid && specs.size > 1 ->
                                 "${calendarMarker}${idx + 1}-hafta oldindan to'lov"
                             spec.isPaid ->
@@ -257,11 +310,15 @@ class RenterViewModel(application: Application) : AndroidViewModel(application) 
                                 "${calendarMarker}Kechikkan holda yaratildi (qarz)"
                         }
 
+                        // Every final partial week is billed pro-rata by its
+                        // calendar duration; full periods retain weekly price.
+                        val periodAmount = effectiveWeeklyPrice *
+                            (spec.weekEnd - spec.weekStart).toDouble() / weekMs.toDouble()
                         val contractId = historyRepository.insert(ContractHistoryEntry(
                             renterId = savedRenter.id,
                             timestamp = now,
                             type = contractType,
-                            amount = effectiveWeeklyPrice,
+                            amount = periodAmount,
                             notes = notes,
                             renterName = savedRenter.name,
                             renterPhone = savedRenter.phoneNumber,
@@ -280,6 +337,35 @@ class RenterViewModel(application: Application) : AndroidViewModel(application) 
                             additionalInfo = scooter?.additionalInfo ?: "",
                             isPaid = spec.isPaid
                         )).toInt()
+
+                        // Native billable period: the legacy history record is
+                        // retained for documents, while all new payment logic
+                        // uses this explicit outstanding amount and status.
+                        try {
+                            val periodStatus = when {
+                                spec.weekStart > now -> com.example.data.RentPeriod.STATUS_SCHEDULED
+                                spec.isPaid -> com.example.data.RentPeriod.STATUS_PAID
+                                spec.weekEnd <= now -> com.example.data.RentPeriod.STATUS_OVERDUE
+                                else -> com.example.data.RentPeriod.STATUS_ACTIVE
+                            }
+                            AppDatabase.getDatabase(getApplication()).rentPeriodDao().insert(
+                                com.example.data.RentPeriod(
+                                    contractHistoryId = contractId,
+                                    renterId = savedRenter.id,
+                                    scooterId = savedRenter.scooterId,
+                                    startsAt = spec.weekStart,
+                                    endsAt = spec.weekEnd,
+                                    chargeMinor = com.example.data.BusinessOperation.toMinor(periodAmount),
+                                    paidMinor = if (spec.isPaid) com.example.data.BusinessOperation.toMinor(periodAmount) else 0,
+                                    status = periodStatus,
+                                    createdAt = now,
+                                    updatedAt = now
+                                )
+                            )
+                        } catch (e: Exception) {
+                            Log.e(TAG, "Failed to create rent period for contract #$contractId", e)
+                            throw e // do not leave a silently incomplete rental
+                        }
 
                         // ── Для оплаченного контракта: создаём Transaction ──
                         // и зачисляем сумму на главную карту (Glavnaya) через
@@ -313,7 +399,9 @@ class RenterViewModel(application: Application) : AndroidViewModel(application) 
                                 virtualCardRepository.depositContractIncome(
                                     amount = effectiveWeeklyPrice,
                                     note = "To'lov: ${savedRenter.name} — #$contractId",
-                                    contractId = contractId
+                                    contractId = contractId,
+                                    renterId = savedRenter.id,
+                                    scooterId = savedRenter.scooterId
                                 )
                             } catch (e: Exception) {
                                 Log.w(TAG, "depositContractIncome failed for new contract #$contractId: ${e.message}")
@@ -805,8 +893,46 @@ class RenterViewModel(application: Application) : AndroidViewModel(application) 
         }
     }
 
+    /**
+     * Accepts any amount (including a partial payment or an overpayment) and
+     * allocates it FIFO to explicit rent periods. New UI payment forms should
+     * use this instead of changing balance/debt directly.
+     */
+    fun acceptVariablePayment(renterId: Int, amount: Double, note: String) {
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                require(amount > 0.0 && amount.isFinite()) { "Payment must be positive" }
+                val db = AppDatabase.getDatabase(getApplication())
+                com.example.data.OperatorSessionRepository(getApplication())
+                    .requirePermission(db, com.example.data.AccessPolicy.PAYMENT_ACCEPT)
+                com.example.data.RentPeriodAccountingService(db)
+                    .acceptPayment(
+                        renterId = renterId,
+                        amountMinor = com.example.data.BusinessOperation.toMinor(amount),
+                        note = note.ifBlank { "Qisman to'lov" }
+                    )
+                com.example.widget.WidgetUpdater.updateAll(getApplication())
+            } catch (e: Exception) {
+                Log.e(TAG, "Variable payment failed for renter #$renterId", e)
+            }
+        }
+    }
+
     fun markPaymentReceived(renter: Renter) {
-        viewModelScope.launch { applyWeeklyPayment(renter, "Bitta to'lov") }
+        viewModelScope.launch(Dispatchers.IO) {
+            val db = AppDatabase.getDatabase(getApplication())
+            val price = SettingsRepository(getApplication()).weeklyPrice
+                .let { if (it > 0) it else SettingsRepository.DEFAULT_WEEKLY_PRICE }
+            if (db.rentPeriodDao().openForRenter(renter.id).isNotEmpty()) {
+                try {
+                    com.example.data.RentPeriodAccountingService(db).acceptPayment(
+                        renter.id, com.example.data.BusinessOperation.toMinor(price), "Bitta to'lov"
+                    )
+                } catch (e: Exception) { Log.e(TAG, "Payment failed", e) }
+            } else {
+                applyWeeklyPayment(renter, "Bitta to'lov")
+            }
+        }
     }
 
     /**

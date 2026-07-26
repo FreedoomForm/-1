@@ -9,6 +9,7 @@ import androidx.work.WorkManager
 import androidx.work.WorkerParameters
 import androidx.work.workDataOf
 import com.example.data.AppDatabase
+import com.example.data.BusinessOperation
 import com.example.data.ContractHistoryEntry
 import com.example.data.SettingsRepository
 import kotlinx.coroutines.Dispatchers
@@ -52,19 +53,35 @@ class PaymentCheckWorker(
 
             val activeRenters = db.renterDao().getActiveRenters()
             for (renter in activeRenters) {
-                val expiryTime = renter.rentStartDateTimestamp +
-                    (renter.rentDurationDays * 24L * 60 * 60 * 1000)
+                // A planned contract becomes a real receivable only when its
+                // period starts. This prevents future bookings from creating
+                // debt early while still billing each week on its due date.
+                val currentRenter = activateScheduledPeriods(db, renter, now)
+                val expiryTime = currentRenter.rentStartDateTimestamp +
+                    (currentRenter.rentDurationDays * 24L * 60 * 60 * 1000)
 
                 if (now >= expiryTime) {
-                    // Всегда продлеваем на 1 неделю и списываем weeklyPrice.
-                    // Баланс уходит в минус → это долг. Так появляется новый контракт
-                    // в истории и обновляются даты в таблице арендатора.
-                    val newBalance = autoRenew(db, settingsRepo, renter, now)
-
-                    if (newBalance < 0.0 && !renter.isOverdueSmsSent) {
-                        // Есть долг — планируем уведомление на 01:00.
+                    // Catch up all missed weekly periods in one worker run. The
+                    // previous code added only one week every hour, so an old
+                    // contract remained financially incorrect for hours.
+                    var current = currentRenter
+                    var renewedPeriods = 0
+                    val maxCatchUpPeriods = 104 // two years; protects corrupt dates
+                    while (
+                        now >= current.rentStartDateTimestamp +
+                            current.rentDurationDays * 24L * 60 * 60 * 1000 &&
+                        renewedPeriods < maxCatchUpPeriods
+                    ) {
+                        autoRenew(db, settingsRepo, current, now)
+                        current = db.renterDao().getRenterById(current.id) ?: break
+                        renewedPeriods++
+                    }
+                    if (renewedPeriods == maxCatchUpPeriods) {
+                        Log.e(TAG, "Auto-renew cap reached for renter #${renter.id}; manual reconciliation required")
+                    }
+                    if (current.balance < 0.0 && !currentRenter.isOverdueSmsSent) {
                         scheduleNextOneAmNotification(applicationContext, renter.id)
-                        Log.d(TAG, "Scheduled 01:00 notification for renter #${renter.id}")
+                        Log.d(TAG, "Scheduled 01:00 notification for renter #${renter.id}; periods=$renewedPeriods")
                     }
                 }
             }
@@ -75,8 +92,45 @@ class PaymentCheckWorker(
         }
     }
 
+    /** Activates every scheduled period whose start has arrived exactly once. */
+    private suspend fun activateScheduledPeriods(
+        db: AppDatabase,
+        renter: com.example.data.Renter,
+        now: Long
+    ): com.example.data.Renter {
+        val due = db.rentPeriodDao().scheduledDueForRenter(renter.id, now)
+        if (due.isEmpty()) return renter
+        var balanceMinor = com.example.data.BusinessOperation.toMinor(renter.balance)
+        due.forEach { period ->
+            val outstanding = period.outstandingMinor
+            val status = if (period.endsAt <= now) com.example.data.RentPeriod.STATUS_OVERDUE
+                         else com.example.data.RentPeriod.STATUS_ACTIVE
+            db.rentPeriodDao().update(period.copy(status = status, updatedAt = now))
+            if (outstanding > 0) {
+                balanceMinor -= outstanding
+                db.businessOperationDao().insert(com.example.data.BusinessOperation(
+                    occurredAt = now,
+                    type = com.example.data.BusinessOperation.TYPE_ADJUSTMENT,
+                    direction = com.example.data.BusinessOperation.DIRECTION_LIABILITY,
+                    amountMinor = outstanding,
+                    renterId = renter.id,
+                    scooterId = renter.scooterId,
+                    contractId = period.contractHistoryId,
+                    note = "Scheduled rental period activated"
+                ))
+            }
+        }
+        val updated = renter.copy(
+            balance = com.example.data.BusinessOperation.fromMinor(balanceMinor),
+            debtAmount = com.example.data.BusinessOperation.fromMinor((-balanceMinor).coerceAtLeast(0)),
+            isOverdueSmsSent = false
+        )
+        db.renterDao().updateRenter(updated)
+        return updated
+    }
+
     /**
-     * Продлевает контракт арендатора на 1 неделю:
+     * Продлевает контракт арендатора:
      *   • rentStartDateTimestamp НЕ МЕНЯЕТСЯ — это первоначальная дата начала
      *     аренды, она должна оставаться неизменной для корректного отображения
      *     в PDF-договоре и UI. Раньше здесь было += 7 дней, что приводило к
@@ -123,7 +177,7 @@ class PaymentCheckWorker(
         val newWeekStart = renter.rentStartDateTimestamp +
             renter.rentDurationDays * 24L * 60 * 60 * 1000
         val newWeekEnd = newWeekStart + sevenDays
-        db.contractHistoryDao().insert(
+        val contractId = db.contractHistoryDao().insert(
             ContractHistoryEntry(
                 renterId = renter.id,
                 timestamp = now,
@@ -148,6 +202,29 @@ class PaymentCheckWorker(
                 isPaid = false  // авто-продление создаёт НЕОПЛАЧЕННЫЙ контракт (долг)
             )
         )
+        db.rentPeriodDao().insert(com.example.data.RentPeriod(
+            contractHistoryId = contractId.toInt(),
+            renterId = renter.id,
+            scooterId = renter.scooterId,
+            startsAt = newWeekStart,
+            endsAt = newWeekEnd,
+            chargeMinor = BusinessOperation.toMinor(weeklyPrice),
+            paidMinor = 0,
+            status = if (newWeekEnd <= now) com.example.data.RentPeriod.STATUS_OVERDUE
+                else com.example.data.RentPeriod.STATUS_ACTIVE,
+            createdAt = now,
+            updatedAt = now
+        ))
+        db.businessOperationDao().insert(BusinessOperation(
+            occurredAt = now,
+            type = BusinessOperation.TYPE_ADJUSTMENT,
+            direction = BusinessOperation.DIRECTION_LIABILITY,
+            amountMinor = BusinessOperation.toMinor(weeklyPrice),
+            renterId = renter.id,
+            scooterId = renter.scooterId,
+            contractId = contractId.toInt(),
+            note = "Automatic weekly rent accrual"
+        ))
         Log.d(TAG, "Auto-renewed renter #${renter.id} for 1 week, balance ${renter.balance} → $newBalance")
         return newBalance
     }

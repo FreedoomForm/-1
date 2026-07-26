@@ -56,6 +56,8 @@ data class VirtualCard(
      * Добавлено в миграции 13→14; у всех существующих карт значение 'REGULAR'.
      */
     val kind: String = KIND_REGULAR,
+    /** Closed cards are retained for audit but are unavailable for new transfers. */
+    val isArchived: Boolean = false,
     val createdAt: Long = System.currentTimeMillis()
 ) {
     companion object {

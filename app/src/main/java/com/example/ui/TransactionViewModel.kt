@@ -5,6 +5,7 @@ import android.util.Log
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.data.AppDatabase
+import com.example.data.BusinessOperation
 import com.example.data.ContractHistoryEntry
 import com.example.data.Renter
 import com.example.data.RenterRepository
@@ -41,6 +42,7 @@ import java.util.Locale
 class TransactionViewModel(application: Application) : AndroidViewModel(application) {
     private val repo: TransactionRepository
     private val renterRepo: RenterRepository
+    private lateinit var database: AppDatabase
     val transactions: StateFlow<List<Transaction>>
 
     // Кэши StateFlow по renterId / scooterId / contractId — чтобы не создавать
@@ -52,6 +54,7 @@ class TransactionViewModel(application: Application) : AndroidViewModel(applicat
 
     init {
         val db = AppDatabase.getDatabase(application)
+        database = db
         repo = TransactionRepository(db.transactionDao())
         renterRepo = RenterRepository(db.renterDao())
         transactions = repo.all.stateIn(
@@ -140,7 +143,24 @@ class TransactionViewModel(application: Application) : AndroidViewModel(applicat
                 scooterName = finalScooterName,
                 contractLabel = finalContractLabel
             )
-            repo.insert(tx)
+            val legacyId = repo.insert(tx)
+            // Manual entries are also appended to the universal journal. They
+            // do not change a card automatically: cash movement must be made
+            // through the card-transfer screen, avoiding invisible balances.
+            val (operationType, direction) = when (type) {
+                Transaction.TYPE_PAYMENT -> BusinessOperation.TYPE_RENT_PAYMENT to BusinessOperation.DIRECTION_INCOME
+                Transaction.TYPE_REPAIR -> BusinessOperation.TYPE_EXPENSE to BusinessOperation.DIRECTION_EXPENSE
+                Transaction.TYPE_PENALTY -> BusinessOperation.TYPE_PENALTY to BusinessOperation.DIRECTION_INCOME
+                else -> BusinessOperation.TYPE_ADJUSTMENT to BusinessOperation.DIRECTION_LIABILITY
+            }
+            if (amount > 0.0 && amount.isFinite()) {
+                database.businessOperationDao().insert(BusinessOperation(
+                    occurredAt = timestamp, type = operationType, direction = direction,
+                    amountMinor = BusinessOperation.toMinor(amount), renterId = renterId.takeIf { it > 0 },
+                    scooterId = scooterId, contractId = contractId,
+                    legacyTransactionId = legacyId.toInt(), note = notes?.ifBlank { null }
+                ))
+            }
         }
     }
 

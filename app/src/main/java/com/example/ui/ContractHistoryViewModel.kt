@@ -7,9 +7,11 @@ import android.util.Log
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.data.AppDatabase
+import com.example.data.BusinessOperation
 import com.example.data.ContractHistoryEntry
 import com.example.data.ContractHistoryRepository
 import com.example.data.Renter
+import com.example.data.RentPeriod
 import com.example.data.RenterRepository
 import com.example.data.Scooter
 import com.example.data.SettingsRepository
@@ -48,7 +50,7 @@ class ContractHistoryViewModel(application: Application) : AndroidViewModel(appl
         repo = ContractHistoryRepository(db.contractHistoryDao())
         renterRepo = RenterRepository(db.renterDao())
         transactionRepo = TransactionRepository(db.transactionDao())
-        virtualCardRepo = VirtualCardRepository(db.virtualCardDao(), db.cardTransactionDao())
+        virtualCardRepo = VirtualCardRepository(db.virtualCardDao(), db.cardTransactionDao(), db)
         history = repo.allHistory.stateIn(
             viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList()
         )
@@ -194,6 +196,24 @@ class ContractHistoryViewModel(application: Application) : AndroidViewModel(appl
                 isPaid = isPaid
             )
             val contractId = repo.insert(entry).toInt()
+            val periodStatus = when {
+                weekStart > now -> RentPeriod.STATUS_SCHEDULED
+                isPaid -> RentPeriod.STATUS_PAID
+                weekEnd <= now -> RentPeriod.STATUS_OVERDUE
+                else -> RentPeriod.STATUS_ACTIVE
+            }
+            AppDatabase.getDatabase(getApplication()).rentPeriodDao().insert(RentPeriod(
+                contractHistoryId = contractId,
+                renterId = renter.id,
+                scooterId = renter.scooterId,
+                startsAt = weekStart,
+                endsAt = weekEnd,
+                chargeMinor = BusinessOperation.toMinor(effectiveAmount),
+                paidMinor = if (isPaid) BusinessOperation.toMinor(effectiveAmount) else 0,
+                status = periodStatus,
+                createdAt = now,
+                updatedAt = now
+            ))
 
             // ── 2. Если оплачен — создаём Transaction + зачисляем на карту ──
             if (isPaid && contractId > 0) {
@@ -224,7 +244,9 @@ class ContractHistoryViewModel(application: Application) : AndroidViewModel(appl
                     virtualCardRepo.depositContractIncome(
                         amount = effectiveAmount,
                         note = "To'lov: ${renter.name} (kalendar) — #$contractId",
-                        contractId = contractId
+                        contractId = contractId,
+                        renterId = renter.id,
+                        scooterId = renter.scooterId
                     )
                 } catch (e: Exception) {
                     Log.w("ContractHistoryVM", "depositContractIncome failed: ${e.message}")
@@ -783,7 +805,9 @@ class ContractHistoryViewModel(application: Application) : AndroidViewModel(appl
                         virtualCardRepo.depositContractIncome(
                             amount = amountForStatus,
                             note = noteText,
-                            contractId = entry.id
+                            contractId = entry.id,
+                            renterId = renter.id,
+                            scooterId = renter.scooterId
                         )
                     } catch (e: Exception) {
                         Log.w("ContractHistoryVM", "depositContractIncome failed: ${e.message}")
@@ -800,6 +824,24 @@ class ContractHistoryViewModel(application: Application) : AndroidViewModel(appl
                 renterRepo.update(updated)
             }
             repo.update(entry)
+            // Keep the explicit billing period in sync with legacy calendar
+            // edits until the UI is fully migrated to RentPeriod.
+            AppDatabase.getDatabase(getApplication()).rentPeriodDao().byContractHistoryId(entry.id)?.let { period ->
+                val charge = BusinessOperation.toMinor(kotlin.math.abs(entry.amount))
+                val paid = if (entry.isPaid) charge else 0L
+                val status = when {
+                    entry.weekStart != null && entry.weekStart > System.currentTimeMillis() -> RentPeriod.STATUS_SCHEDULED
+                    entry.isPaid -> RentPeriod.STATUS_PAID
+                    entry.weekEnd != null && entry.weekEnd <= System.currentTimeMillis() -> RentPeriod.STATUS_OVERDUE
+                    else -> RentPeriod.STATUS_ACTIVE
+                }
+                AppDatabase.getDatabase(getApplication()).rentPeriodDao().update(period.copy(
+                    chargeMinor = charge,
+                    paidMinor = paid,
+                    status = status,
+                    updatedAt = System.currentTimeMillis()
+                ))
+            }
         }
     }
 

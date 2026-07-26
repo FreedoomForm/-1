@@ -31,8 +31,11 @@ interface VirtualCardDao {
     @Query("DELETE FROM virtual_cards WHERE id = :id AND isDefault = 0")
     suspend fun deleteCardIfNotDefault(id: Int): Int
 
-    @Query("UPDATE virtual_cards SET balance = balance + :delta WHERE id = :id")
-    suspend fun adjustBalance(id: Int, delta: Double)
+    @Query("UPDATE virtual_cards SET balance = balance + :delta WHERE id = :id AND isArchived = 0")
+    suspend fun adjustBalance(id: Int, delta: Double): Int
+
+    @Query("UPDATE virtual_cards SET isArchived = 1 WHERE id = :id AND isDefault = 0 AND balance = 0")
+    suspend fun archiveCard(id: Int): Int
 
     @Query("SELECT COUNT(*) FROM virtual_cards")
     suspend fun count(): Int

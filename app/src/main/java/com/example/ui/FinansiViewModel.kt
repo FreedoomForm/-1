@@ -40,7 +40,8 @@ class FinansiViewModel(application: Application) : AndroidViewModel(application)
         val database = AppDatabase.getDatabase(application)
         repository = VirtualCardRepository(
             database.virtualCardDao(),
-            database.cardTransactionDao()
+            database.cardTransactionDao(),
+            database
         )
         cards = repository.allCards.stateIn(
             scope = viewModelScope,
@@ -90,10 +91,11 @@ class FinansiViewModel(application: Application) : AndroidViewModel(application)
     fun deleteCard(card: VirtualCard) {
         viewModelScope.launch {
             try {
-                val deleted = repository.deleteCard(card)
-                if (deleted == 0) {
-                    Log.w(TAG, "Attempted to delete default card #${card.id} — blocked")
-                }
+                com.example.data.OperatorSessionRepository(getApplication())
+                    .requirePermission(AppDatabase.getDatabase(getApplication()), com.example.data.AccessPolicy.FINANCE_REVERSE)
+                // A financial account is closed by archiving it; this retains
+                // its history and prevents money from disappearing.
+                repository.archiveCard(card)
                 WidgetUpdater.updateAll(getApplication())
             } catch (e: Exception) {
                 Log.e(TAG, "Failed to delete card", e)
@@ -162,7 +164,9 @@ class FinansiViewModel(application: Application) : AndroidViewModel(application)
     fun deleteTransaction(id: Int) {
         viewModelScope.launch(Dispatchers.IO) {
             try {
-                repository.deleteTransaction(id)
+                com.example.data.OperatorSessionRepository(getApplication())
+                    .requirePermission(AppDatabase.getDatabase(getApplication()), com.example.data.AccessPolicy.FINANCE_REVERSE)
+                repository.reverseTransaction(id, "Bekor qilindi: foydalanuvchi so'rovi")
                 WidgetUpdater.updateAll(getApplication())
             } catch (e: Exception) {
                 Log.e(TAG, "Failed to delete transaction", e)

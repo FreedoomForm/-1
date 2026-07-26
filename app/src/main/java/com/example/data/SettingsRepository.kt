@@ -61,6 +61,11 @@ class SettingsRepository(context: Context) {
         get() = prefs.getBoolean("sms_auto_send_enabled", true)
         set(value) = prefs.edit().putBoolean("sms_auto_send_enabled", value).apply()
 
+    /** Personal identifiers are never sent to an external AI service by default. */
+    var aiPersonalDataSharingEnabled: Boolean
+        get() = prefs.getBoolean("ai_personal_data_sharing_enabled", false)
+        set(value) = prefs.edit().putBoolean("ai_personal_data_sharing_enabled", value).apply()
+
     /**
      * Avto-zaxira nusxa (auto-backup to Downloads/ScooterRent/).
      * Yoqilgan bo'lsa, har bir ma'lumot o'zgarishidan so'ng ilova .xlsx

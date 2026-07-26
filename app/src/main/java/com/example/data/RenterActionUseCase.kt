@@ -67,7 +67,8 @@ class RenterActionUseCase(
                 transactionRepository = TransactionRepository(db.transactionDao()),
                 virtualCardRepository = VirtualCardRepository(
                     db.virtualCardDao(),
-                    db.cardTransactionDao()
+                    db.cardTransactionDao(),
+                    db
                 ),
                 settingsRepository = SettingsRepository(context),
                 scooterDao = db.scooterDao()
@@ -102,6 +103,13 @@ class RenterActionUseCase(
             val unpaid = historyRepository.getEarliestUnpaidContract(renter.id)
             if (unpaid != null) {
                 historyRepository.update(unpaid.copy(isPaid = true))
+                AppDatabase.getDatabase(context).rentPeriodDao().byContractHistoryId(unpaid.id)?.let { period ->
+                    AppDatabase.getDatabase(context).rentPeriodDao().update(period.copy(
+                        paidMinor = period.chargeMinor,
+                        status = RentPeriod.STATUS_PAID,
+                        updatedAt = now
+                    ))
+                }
             }
             // Запись PAYMENT — для истории контрактов (не показывается на экране контрактов)
             val scooter: Scooter? = renter.scooterId?.let { fetchScooterById(it) }
@@ -156,7 +164,9 @@ class RenterActionUseCase(
                 virtualCardRepository.depositContractIncome(
                     amount = effectivePrice,
                     note = "To'lov: ${renter.name} (qarz yopildi) — $notes",
-                    contractId = unpaid?.id
+                    contractId = unpaid?.id,
+                    renterId = renter.id,
+                    scooterId = renter.scooterId
                 )
             } catch (e: Exception) {
                 Log.w(TAG, "depositContractIncome failed: ${e.message}")
@@ -226,6 +236,18 @@ class RenterActionUseCase(
                 isPaid = true
             )
             val newContractId = historyRepository.insert(newContract)
+            AppDatabase.getDatabase(context).rentPeriodDao().insert(RentPeriod(
+                contractHistoryId = newContractId.toInt(),
+                renterId = renter.id,
+                scooterId = renter.scooterId,
+                startsAt = weekStart,
+                endsAt = weekEnd,
+                chargeMinor = BusinessOperation.toMinor(effectivePrice),
+                paidMinor = BusinessOperation.toMinor(effectivePrice),
+                status = RentPeriod.STATUS_PAID,
+                createdAt = now,
+                updatedAt = now
+            ))
 
             // Запись PAYMENT — для истории транзакций
             val paymentEntry = ContractHistoryEntry(
@@ -276,7 +298,9 @@ class RenterActionUseCase(
                 virtualCardRepository.depositContractIncome(
                     amount = effectivePrice,
                     note = "To'lov: ${renter.name} (oldindan) — $notes",
-                    contractId = newContractId.toInt()
+                    contractId = newContractId.toInt(),
+                    renterId = renter.id,
+                    scooterId = renter.scooterId
                 )
             } catch (e: Exception) {
                 Log.w(TAG, "depositContractIncome failed: ${e.message}")
@@ -325,6 +349,13 @@ class RenterActionUseCase(
         var paidContractId: Int? = null
         if (unpaid != null) {
             historyRepository.update(unpaid.copy(isPaid = true))
+            AppDatabase.getDatabase(context).rentPeriodDao().byContractHistoryId(unpaid.id)?.let { period ->
+                AppDatabase.getDatabase(context).rentPeriodDao().update(period.copy(
+                    paidMinor = period.chargeMinor,
+                    status = RentPeriod.STATUS_PAID,
+                    updatedAt = now
+                ))
+            }
             paidContractId = unpaid.id
 
             val paymentEntry = ContractHistoryEntry(
@@ -377,7 +408,9 @@ class RenterActionUseCase(
                 virtualCardRepository.depositContractIncome(
                     amount = effectivePrice,
                     note = "To'lov: ${renter.name} (tugatish vaqtida)",
-                    contractId = unpaid.id
+                    contractId = unpaid.id,
+                    renterId = renter.id,
+                    scooterId = renter.scooterId
                 )
             } catch (e: Exception) {
                 Log.w(TAG, "depositContractIncome failed: ${e.message}")
@@ -393,6 +426,12 @@ class RenterActionUseCase(
             isOverdueSmsSent = false
         )
         renterRepository.update(updated)
+        // Release the scooter immediately and preserve completed/scheduled
+        // period states; otherwise a returned renter would still block a new
+        // booking through overlap validation.
+        val periodDao = AppDatabase.getDatabase(context).rentPeriodDao()
+        periodDao.closeOpenForRenter(renter.id, now)
+        periodDao.cancelScheduledForRenter(renter.id, now)
 
         // ── Шаг 3: создаём запись TERMINATED в истории контрактов ──────────
         val entry = ContractHistoryEntry(
@@ -416,6 +455,15 @@ class RenterActionUseCase(
             additionalInfo = scooter?.additionalInfo ?: ""
         )
         historyRepository.insert(entry)
+        AppDatabase.getDatabase(context).auditEventDao().insert(AuditEvent(
+            occurredAt = now,
+            action = AuditEvent.ACTION_RENT_TERMINATED,
+            entityType = "RENTER",
+            entityId = renter.id.toString(),
+            reason = entry.notes,
+            beforeSnapshot = "balance=${renter.balance}; returned=${renter.isReturned}",
+            afterSnapshot = "balance=$finalBalance; returned=true"
+        ))
 
         // ── Шаг 4: Transaction TERMINATED в таблице транзакций ─────────────
         try {
