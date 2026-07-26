@@ -12,6 +12,7 @@ import com.example.data.RenterRepository
 import com.example.data.Scooter
 import com.example.data.Transaction
 import com.example.data.TransactionRepository
+import com.example.data.TrashService
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
