@@ -102,6 +102,10 @@ import androidx.work.WorkManager
 import com.example.data.NotificationHistoryEntity
 import com.example.data.Renter
 import com.example.data.Scooter
+import com.example.data.maskAddress
+import com.example.data.maskIdentifier
+import com.example.data.maskPhone
+import com.example.data.PrivacyPolicy
 import com.example.data.remote.InAppUpdateManager
 import com.example.data.remote.InAppUpdateState
 import com.example.data.remote.UpdateCheckResult
@@ -2386,10 +2390,12 @@ fun RenterTable(
                                 overflow = TextOverflow.Visible
                             )
                         }
-                        // Tel
+                        // Tel — masked per §10 (full phone visible on detail screen)
                         if (showPhone) {
+                            val displayPhone = if (PrivacyPolicy.MASK_PHONES_IN_TABLES)
+                                maskPhone(renter.phoneNumber) else renter.phoneNumber
                             Text(
-                                renter.phoneNumber,
+                                displayPhone,
                                 modifier = Modifier
                                     .width(wPhone)
                                     .padding(horizontal = 4.dp),
@@ -2470,9 +2476,12 @@ fun RenterTable(
                             )
                         }
                         // ── Опциональные колонки (показываются если включены) ─
+                        // §10: mask passport/address/PINFL in tables — full info on detail screen
                         if (showPassport) {
+                            val displayPassport = if (PrivacyPolicy.MASK_PASSPORT_IN_TABLES)
+                                maskIdentifier(renter.passportData) else renter.passportData.ifBlank { "—" }
                             Text(
-                                renter.passportData.ifBlank { "—" },
+                                displayPassport,
                                 modifier = Modifier.width(wPassport).padding(horizontal = 4.dp),
                                 style = MaterialTheme.typography.bodySmall,
                                 color = ClaudeText,
@@ -2482,8 +2491,10 @@ fun RenterTable(
                             )
                         }
                         if (showAddress) {
+                            val displayAddress = if (PrivacyPolicy.MASK_ADDRESS_IN_TABLES)
+                                maskAddress(renter.address) else renter.address.ifBlank { "—" }
                             Text(
-                                renter.address.ifBlank { "—" },
+                                displayAddress,
                                 modifier = Modifier.width(wAddress).padding(horizontal = 4.dp),
                                 style = MaterialTheme.typography.bodySmall,
                                 color = ClaudeText,
@@ -2493,8 +2504,10 @@ fun RenterTable(
                             )
                         }
                         if (showPinfl) {
+                            val displayPinfl = if (PrivacyPolicy.MASK_PINFL_IN_TABLES)
+                                maskIdentifier(renter.pinfl) else renter.pinfl.ifBlank { "—" }
                             Text(
-                                renter.pinfl.ifBlank { "—" },
+                                displayPinfl,
                                 modifier = Modifier.width(wPinfl).padding(horizontal = 4.dp),
                                 style = MaterialTheme.typography.bodySmall,
                                 color = ClaudeText,

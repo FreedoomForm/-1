@@ -255,19 +255,46 @@ class RenterViewModel(application: Application) : AndroidViewModel(application) 
 
             // A scooter cannot be reserved or rented by two people for
             // overlapping periods. Validate before the renter itself is saved.
+            // §4: also block SERVICE/REPAIR/RETIRED scooters explicitly with a
+            // user-visible error message instead of silent return.
             if (scooterId != null) {
                 val db = AppDatabase.getDatabase(getApplication())
                 val scooter = db.scooterDao().getScooterById(scooterId)
-                if (scooter == null || scooter.lifecycleStatus in setOf(
+                if (scooter == null) {
+                    _smsResults.tryEmit(SmsResult(
+                        false,
+                        "Skuter topilmadi (#$scooterId)",
+                        "SCOOTER_NOT_FOUND"
+                    ))
+                    return@launch
+                }
+                if (scooter.lifecycleStatus in setOf(
                         Scooter.STATUS_SERVICE, Scooter.STATUS_REPAIR, Scooter.STATUS_RETIRED
                     )) {
-                    Log.w(TAG, "Rental blocked: scooter #$scooterId is unavailable")
+                    val statusLabel = when (scooter.lifecycleStatus) {
+                        Scooter.STATUS_SERVICE -> "servisda"
+                        Scooter.STATUS_REPAIR -> "ta'mirda"
+                        Scooter.STATUS_RETIRED -> "ro'yxatdan o'chirilgan"
+                        else -> "noyaroqsiz holatda"
+                    }
+                    _smsResults.tryEmit(SmsResult(
+                        false,
+                        "Skuter ${scooter.name} hozirda $statusLabel. Ijaraga berib bo'lmaydi.",
+                        "SCOOTER_UNAVAILABLE",
+                        exceptionMessage = scooter.lifecycleStatus
+                    ))
+                    Log.w(TAG, "Rental blocked: scooter #$scooterId is ${scooter.lifecycleStatus}")
                     return@launch
                 }
                 val periodDao = db.rentPeriodDao()
                 specs.forEach { spec ->
                     val conflicts = periodDao.conflictsForScooter(scooterId, spec.weekStart, spec.weekEnd)
                     if (conflicts.isNotEmpty()) {
+                        _smsResults.tryEmit(SmsResult(
+                            false,
+                            "Skuter ${scooter.name} tanlangan davrda band. Boshqa sanani tanlang.",
+                            "SCOOTER_CONFLICT"
+                        ))
                         Log.w(TAG, "Rental blocked: scooter #$scooterId overlaps an existing period")
                         return@launch
                     }

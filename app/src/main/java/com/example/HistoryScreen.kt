@@ -20,6 +20,10 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.CalendarMonth
 import androidx.compose.material.icons.filled.FilterList
 import androidx.compose.material.icons.filled.Info
+import androidx.compose.material.icons.filled.Pause
+import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.SkipNext
+import androidx.compose.material.icons.filled.SkipPrevious
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.AssistChip
 import androidx.compose.material3.AssistChipDefaults
@@ -493,6 +497,17 @@ fun HistoryScreen(
         } else if (visualMode) {
             val index = timelinePosition.toInt().coerceIn(0, filteredEvents.lastIndex)
             val event = filteredEvents[index]
+            // ── Play/pause auto-advance state (§9.1: play sequentially plays events) ──
+            var isPlaying by remember { mutableStateOf(false) }
+            LaunchedEffect(isPlaying, index, filteredEvents.size) {
+                if (isPlaying && index < filteredEvents.lastIndex) {
+                    kotlinx.coroutines.delay(800L)
+                    timelinePosition = (index + 1).toFloat()
+                    onSelectedEventChange(filteredEvents[index + 1].id)
+                } else if (isPlaying && index >= filteredEvents.lastIndex) {
+                    isPlaying = false
+                }
+            }
             Column(Modifier.fillMaxSize().padding(16.dp), verticalArrangement = Arrangement.SpaceBetween) {
                 Card(Modifier.fillMaxWidth().clickable { onSelectedEventChange(event.id) }) {
                     Column(Modifier.padding(20.dp)) {
@@ -509,11 +524,51 @@ fun HistoryScreen(
                         value = timelinePosition,
                         onValueChange = { value ->
                             timelinePosition = value
+                            isPlaying = false
                             onSelectedEventChange(filteredEvents[value.toInt().coerceIn(0, filteredEvents.lastIndex)].id)
                         },
                         valueRange = 0f..filteredEvents.lastIndex.toFloat(),
                         steps = (filteredEvents.size - 2).coerceAtLeast(0)
                     )
+                    // ── Media-player-style controls (§9.1) ──────────────────────
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.Center,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        IconButton(
+                            onClick = {
+                                isPlaying = false
+                                val newIndex = (index - 1).coerceAtLeast(0)
+                                timelinePosition = newIndex.toFloat()
+                                onSelectedEventChange(filteredEvents[newIndex].id)
+                            },
+                            enabled = index > 0
+                        ) {
+                            Icon(Icons.Default.SkipPrevious, contentDescription = "Oldingi", tint = ClaudeAccent)
+                        }
+                        Spacer(Modifier.width(16.dp))
+                        IconButton(onClick = { isPlaying = !isPlaying }) {
+                            Icon(
+                                imageVector = if (isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
+                                contentDescription = if (isPlaying) "Pauza" else "Ijro",
+                                tint = ClaudeAccent,
+                                modifier = Modifier.size(36.dp)
+                            )
+                        }
+                        Spacer(Modifier.width(16.dp))
+                        IconButton(
+                            onClick = {
+                                isPlaying = false
+                                val newIndex = (index + 1).coerceAtMost(filteredEvents.lastIndex)
+                                timelinePosition = newIndex.toFloat()
+                                onSelectedEventChange(filteredEvents[newIndex].id)
+                            },
+                            enabled = index < filteredEvents.lastIndex
+                        ) {
+                            Icon(Icons.Default.SkipNext, contentDescription = "Keyingi", tint = ClaudeAccent)
+                        }
+                    }
                 }
             }
         } else {

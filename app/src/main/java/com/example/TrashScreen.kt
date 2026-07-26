@@ -6,6 +6,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
@@ -48,9 +49,16 @@ fun TrashScreen(
     val items = viewModel.items.collectAsStateWithLifecycle().value
     var showEditDialog by remember { mutableStateOf(false) }
     var showPurgeConfirm by remember { mutableStateOf(false) }
+    // ─§9.2: card restore balance check — surface error to user ─────────────
+    var restoreError by remember { mutableStateOf<String?>(null) }
     var editedReason by remember { mutableStateOf("") }
+
+    // Subscribe to async restore errors (from viewModelScope) ──────────────
+    LaunchedEffect(Unit) {
+        viewModel.restoreErrors.collect { msg -> restoreError = msg }
+    }
     LaunchedEffect(restoreTrigger) {
-        if (restoreTrigger > 0) selected.forEach { viewModel.restore(it) }
+        if (restoreTrigger > 0) selected.forEach { id -> viewModel.restore(id) }
         if (restoreTrigger > 0) onSelectedChange(emptySet())
     }
     LaunchedEffect(editTrigger) {
@@ -62,6 +70,37 @@ fun TrashScreen(
     LaunchedEffect(purgeTrigger) {
         if (purgeTrigger > 0 && selected.isNotEmpty()) showPurgeConfirm = true
     }
+
+    // ─§9.2: restore error dialog with actionable hint ──────────────────────
+    restoreError?.let { msg ->
+        AlertDialog(
+            onDismissRequest = { restoreError = null },
+            title = { Text("Qayta tiklash xatosi") },
+            text = {
+                Column {
+                    Text(msg, style = MaterialTheme.typography.bodyMedium)
+                    Spacer(Modifier.height(8.dp))
+                    if (msg.contains("balance", ignoreCase = true)) {
+                        Text(
+                            "Karta qoldig'i 0 emas. Avval balansni tekshiring yoki " +
+                            "bank operatsiyalari orqali moslang, so'ng qayta urinib ko'ring.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colors.error
+                        )
+                    } else if (msg.contains("conflict", ignoreCase = true)) {
+                        Text(
+                            "Skuter boshaka aktiv ijara bilan band. Avval joriy " +
+                            "ijarani tugating yoki sanalarni o'zgartiring.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colors.error
+                        )
+                    }
+                }
+            },
+            confirmButton = { TextButton(onClick = { restoreError = null }) { Text("Tushunarli") } }
+        )
+    }
+
     if (showPurgeConfirm) {
         AlertDialog(
             onDismissRequest = { showPurgeConfirm = false },
