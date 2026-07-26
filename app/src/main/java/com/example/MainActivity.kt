@@ -72,6 +72,7 @@ import androidx.compose.material.icons.filled.CreditCard
 import androidx.compose.material.icons.filled.Bolt
 import androidx.compose.material.icons.filled.Description
 import androidx.compose.material.icons.filled.Receipt
+import androidx.compose.material.icons.filled.ReceiptLong
 import androidx.compose.material.icons.filled.RequestQuote
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.outlined.Notifications
@@ -1314,6 +1315,18 @@ fun MainScreen(
                         indicatorColor = ClaudeAccentBg
                     )
                 )
+                // §2: Operations journal tab — full financial audit trail
+                NavigationBarItem(
+                    selected = currentTab == 9,
+                    onClick = { currentTab = 9 },
+                    icon = { Icon(Icons.Default.ReceiptLong, contentDescription = "Jurnal") },
+                    label = { Text("Jurnal") },
+                    colors = NavigationBarItemDefaults.colors(
+                        selectedIconColor = ClaudeAccent, unselectedIconColor = ClaudeTextSecondary,
+                        selectedTextColor = ClaudeAccent, unselectedTextColor = ClaudeTextSecondary,
+                        indicatorColor = ClaudeAccentBg
+                    )
+                )
             }
             }
         }
@@ -2007,6 +2020,9 @@ fun MainScreen(
                     onSelectedChange = { selectedTrashItems = it },
                     viewModel = trashViewModel
                 )
+            } else if (currentTab == 9) {
+                // §2: Operations journal — full financial audit trail
+                OperationsJournalScreen()
             }
         }
 
