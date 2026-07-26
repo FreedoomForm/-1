@@ -202,7 +202,7 @@ fun ReportsScreen(
 
     // ── Серии данных для графиков ─────────────────────────────────────
     // 8 недель: суммы платежей по неделям (для BarChart и Sparkline)
-    val weeklyPayments = remember(history) {
+    val weeklyPayments = remember(businessOperations, now) {
         val cal = Calendar.getInstance()
         val series = mutableListOf<Pair<String, Float>>()
         val spark = mutableListOf<Float>()
@@ -216,9 +216,9 @@ fun ReportsScreen(
             cal.set(Calendar.MILLISECOND, 0)
             val weekStart = cal.timeInMillis
             val weekEnd = weekStart + weekMs
-            val sum = history
-                .filter { it.type == ContractHistoryEntry.TYPE_PAYMENT && it.timestamp in weekStart until weekEnd }
-                .sumOf { it.amount }
+            val sum = businessOperations
+                .filter { it.direction == com.example.data.BusinessOperation.DIRECTION_INCOME && it.occurredAt in weekStart until weekEnd }
+                .sumOf { com.example.data.BusinessOperation.fromMinor(it.amountMinor) }
                 .toFloat()
             val label = SimpleDateFormat("dd.MM", Locale.getDefault()).format(Date(weekStart))
             series.add(label to sum)
@@ -351,34 +351,38 @@ fun ReportsScreen(
         set(Calendar.HOUR_OF_DAY, 0); set(Calendar.MINUTE, 0)
         set(Calendar.SECOND, 0); set(Calendar.MILLISECOND, 0)
     }.timeInMillis
-    val paymentsThisMonth = cardTransactions
-        .filter { it.type == CardTransaction.TYPE_CONTRACT_INCOME && it.timestamp >= thisMonthStart }
-        .sumOf { it.amount }
-    val paymentsPrevMonth = cardTransactions
-        .filter { it.type == CardTransaction.TYPE_CONTRACT_INCOME && it.timestamp in prevMonthStart until thisMonthStart }
-        .sumOf { it.amount }
+    val paymentsThisMonth = businessOperations
+        .filter { it.direction == com.example.data.BusinessOperation.DIRECTION_INCOME && it.occurredAt >= thisMonthStart }
+        .sumOf { com.example.data.BusinessOperation.fromMinor(it.amountMinor) }
+    val paymentsPrevMonth = businessOperations
+        .filter { it.direction == com.example.data.BusinessOperation.DIRECTION_INCOME && it.occurredAt in prevMonthStart until thisMonthStart }
+        .sumOf { com.example.data.BusinessOperation.fromMinor(it.amountMinor) }
     val revenueDeltaPercent = if (paymentsPrevMonth > 0)
         ((paymentsThisMonth - paymentsPrevMonth) / paymentsPrevMonth * 100).toInt() else 0
 
     // ── Топ-5 арендаторов и скутеров ──────────────────────────────────
-    val topRenters = remember(paymentsInRange) {
-        paymentsInRange
-            .groupBy { it.renterName }
-            .map { (name, payments) -> name to payments.sumOf { it.amount } }
+    val topRenters = remember(operationsInRange, renters) {
+        val names = renters.associate { it.id to it.name }
+        operationsInRange
+            .filter { it.direction == com.example.data.BusinessOperation.DIRECTION_INCOME }
+            .groupBy { it.renterId }
+            .map { (id, ops) -> (id?.let { names[it] } ?: "—") to ops.sumOf { com.example.data.BusinessOperation.fromMinor(it.amountMinor) } }
             .sortedByDescending { it.second }
             .take(5)
     }
-    val topScooters = remember(paymentsInRange) {
-        paymentsInRange
-            .groupBy { it.scooterName ?: "—" }
-            .map { (name, payments) -> name to payments.sumOf { it.amount } }
+    val topScooters = remember(operationsInRange, scooters) {
+        val names = scooters.associate { it.id to it.name }
+        operationsInRange
+            .filter { it.direction == com.example.data.BusinessOperation.DIRECTION_INCOME }
+            .groupBy { it.scooterId }
+            .map { (id, ops) -> (id?.let { names[it] } ?: "—") to ops.sumOf { com.example.data.BusinessOperation.fromMinor(it.amountMinor) } }
             .sortedByDescending { it.second }
             .take(5)
     }
 
     // ── Тепловая карта простоев (4 нед × N скутеров) ──────────────────
     // Значение 0 = всегда занят, 1 = всегда простаивал.
-    val heatmapData = remember(scooters, renters, history) {
+    val heatmapData = remember(scooters, rentPeriods, now) {
         val cal = Calendar.getInstance()
         val weeksStarts = (0 until 4).map { idx ->
             cal.time = Date(now)
@@ -388,21 +392,19 @@ fun ReportsScreen(
             cal.set(Calendar.SECOND, 0); cal.set(Calendar.MILLISECOND, 0)
             cal.timeInMillis
         }
-        val scooterNames = scooters.take(6).map { it.name }  // топ-6 скутеров для краткости
-        val values = scooterNames.map { sName ->
+        val visibleScooters = scooters.take(6)
+        val values = visibleScooters.map { scooter ->
             weeksStarts.map { wStart ->
-                // Если скутер не был в аренде в эту неделю — простой
                 val wEnd = wStart + weekMs
-                val rented = renters.any { r ->
-                    r.scooterName == sName && !r.isReturned &&
-                        r.rentStartDateTimestamp < wEnd &&
-                        (r.rentStartDateTimestamp + r.rentDurationDays * dayMs) > wStart
+                val rented = rentPeriods.any { period ->
+                    period.scooterId == scooter.id && period.startsAt < wEnd && period.endsAt > wStart &&
+                        period.status !in setOf(com.example.data.RentPeriod.STATUS_CANCELLED, com.example.data.RentPeriod.STATUS_SCHEDULED)
                 }
                 if (rented) 0f else 1f
             }
         }
         val weekLabels = weeksStarts.map { SimpleDateFormat("dd.MM", Locale.getDefault()).format(Date(it)) }
-        Triple(scooterNames, weekLabels, values)
+        Triple(visibleScooters.map { it.name }, weekLabels, values)
     }
 
     // ── Список должников (для таблицы) ────────────────────────────────
