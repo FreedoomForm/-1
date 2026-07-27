@@ -270,28 +270,33 @@ class MainActivity : ComponentActivity() {
 
                 if (showSplash) {
                     SplashScreen(onFinished = { showSplash = false })
-                } else if (showLauncher) {
-                    // Restore the existing Android-home style launcher rather
-                    // than jumping under the main screen immediately.
-                    com.example.ui.components.LauncherScreen(
-                        onPageClick = { page ->
-                            launcherTab = when (page) {
-                                "renters" -> 0
-                                "scooters" -> 1
-                                "contracts" -> 2
-                                "finansi" -> 5
-                                "reports" -> 4
-                                "history" -> 7
-                                "trash" -> 8
-                                "settings" -> 6
-                                else -> 0
-                            }
-                            showLauncher = false
-                        },
-                        onCollapseToMain = { showLauncher = false }
-                    )
                 } else {
-                    MainScreen(initialTab = launcherTab, onShowLauncher = { showLauncher = true })
+                    // Keep the working screen rendered behind the launcher.
+                    // When the launcher curtain moves down, the renters page
+                    // becomes visible continuously instead of popping in after
+                    // the animation has already ended.
+                    Box(Modifier.fillMaxSize()) {
+                        MainScreen(initialTab = launcherTab, onShowLauncher = { showLauncher = true })
+                        if (showLauncher) {
+                            com.example.ui.components.LauncherScreen(
+                                onPageClick = { page ->
+                                    launcherTab = when (page) {
+                                        "renters" -> 0
+                                        "scooters" -> 1
+                                        "contracts" -> 2
+                                        "finansi" -> 5
+                                        "reports" -> 4
+                                        "history" -> 7
+                                        "trash" -> 8
+                                        "settings" -> 6
+                                        else -> 0
+                                    }
+                                    showLauncher = false
+                                },
+                                onCollapseToMain = { showLauncher = false }
+                            )
+                        }
+                    }
                 }
             }
         }

@@ -173,9 +173,10 @@ fun LauncherScreen(
     Box(
         modifier = Modifier
             .fillMaxSize()
-            // Use the same neutral background as working pages. The launcher
-            // must feel like a curtain over the renters page, not a separate app.
-            .background(ClaudeBackground)
+            // Same neutral background as working pages. Its alpha follows
+            // curtain collapse so the already-composed renters page appears
+            // progressively behind the moving launcher icons.
+            .background(ClaudeBackground.copy(alpha = 1f - collapseProgress.value))
     ) {
 
         // ── Upper region: title + grid + page dots ───────────────────────
@@ -273,14 +274,14 @@ fun LauncherScreen(
         }
 
         // ── Bottom dock (4 main pages, always visible) ───────────────────
-        // Translucent dark "frosted glass" background. Swipe up when
-        // collapsed → expand grid.
+        // Same background as the launcher grid; only a subtle divider makes
+        // it a dock. This avoids a visually unrelated dark lower panel.
         Box(
             modifier = Modifier
                 .align(Alignment.BottomCenter)
                 .fillMaxWidth()
-                .height(96.dp)
-                .background(Color(0xFF1A1410).copy(alpha = 0.78f))
+                .height(106.dp)
+                .background(ClaudeBackground.copy(alpha = 1f - collapseProgress.value * 0.15f))
                 .pointerInput(collapseProgress.value) {
                     detectVerticalDragGestures(
                         onVerticalDrag = { change, dragAmount ->
@@ -349,7 +350,7 @@ private fun LauncherTile(
         Text(
             page.title,
             style = MaterialTheme.typography.labelSmall,
-            color = Color.White,
+            color = ClaudeDarkText,
             fontSize = 11.sp,
             fontWeight = FontWeight.Medium,
             maxLines = 1,
@@ -358,25 +359,36 @@ private fun LauncherTile(
     }
 }
 
-/** Dock tile — slightly larger, no label (icon only, like Android dock). */
+/** Dock tile — same icon and readable label style as launcher grid. */
 @Composable
 private fun DockTile(
     page: LauncherPage,
     onClick: () -> Unit
 ) {
-    Box(
+    Column(
+        horizontalAlignment = Alignment.CenterHorizontally,
         modifier = Modifier
-            .size(60.dp)
-            .clip(RoundedCornerShape(18.dp))
-            .background(page.tileColor)
-            .combinedClickable(onClick = onClick, onLongClick = {}),
-        contentAlignment = Alignment.Center
+            .width(72.dp)
+            .combinedClickable(onClick = onClick, onLongClick = {})
+            .padding(vertical = 2.dp)
     ) {
-        Icon(
-            imageVector = page.icon,
-            contentDescription = page.title,
-            tint = Color.White,
-            modifier = Modifier.size(32.dp)
+        Box(
+            modifier = Modifier
+                .size(56.dp)
+                .clip(RoundedCornerShape(18.dp))
+                .background(page.tileColor),
+            contentAlignment = Alignment.Center
+        ) {
+            Icon(page.icon, page.title, tint = Color.White, modifier = Modifier.size(30.dp))
+        }
+        Spacer(Modifier.height(3.dp))
+        Text(
+            page.title,
+            style = MaterialTheme.typography.labelSmall,
+            color = ClaudeDarkText,
+            fontSize = 10.sp,
+            maxLines = 1,
+            textAlign = TextAlign.Center
         )
     }
 }
