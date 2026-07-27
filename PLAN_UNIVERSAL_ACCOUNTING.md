@@ -273,7 +273,7 @@
   (Примечание: сценарии покрыты на уровне DAO/Repository в CoreUserJourneyInstrumentedTest. Полные Compose UI-тесты с эмулятором — отложено: требуют отладки на реальном устройстве и стабильной test-tag стратегии.)
 - [x] Debug CI-сборка проходит после исправления Kotlin mapping для штрафа.
 - [x] Unit tests теперь запускаются в каждом CI build и блокируют выпуск при ошибке.
-- [x] Сделать проверку обновления видимой даже при недоступности/rate-limit GitHub API: fallback ведёт на стабильный `releases/latest/download/app-debug.apk`, а системный установщик проверяет versionCode.
+- [x] Проверять обновление только по подтверждённому GitHub Release и показывать баннер только при строго большем versionCode; API/rate-limit ошибки не создают ложное уведомление.
 - [x] Собрать APK и проверить Android API 24 и API 36 на устройстве/эмуляторе.
   (Примечание: debug APK собран успешно (`app-debug-v108.apk`, 27 МБ, versionCode=108, versionName=1.2.108) на JDK17 + AGP 9.1.1 + compileSdk 36 + minSdk 24. Сборка прошла с `./gradlew :app:assembleDebug` без ошибок компиляции после рефакторинга launcher-а и маскирования VIN/engine/serial. Установка и тест на реальном устройстве API 24/36 — остаётся за пользователем.)
 - [x] Подготовить обновление существующих установок и rollback через backup.

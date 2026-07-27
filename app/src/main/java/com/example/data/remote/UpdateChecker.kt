@@ -68,11 +68,9 @@ class UpdateChecker(
             if (responseCode != 200) {
                 val errorBody = connection.errorStream?.bufferedReader()?.use { it.readText() } ?: ""
                 Log.e(TAG, "GitHub API returned HTTP $responseCode: $errorBody")
-                // Anonymous GitHub API limits are common on shared mobile
-                // networks. Keep the update visible through GitHub's stable
-                // latest-release asset URL; installer still rejects an equal
-                // version safely during its own APK version pre-check.
-                return@withContext Pair(UpdateCheckResult.UPDATE_AVAILABLE, fallbackLatestAsset(currentVersionCode))
+                // Do not show a fake update on API/rate-limit errors. The UI
+                // must only display a banner after a verified newer release.
+                return@withContext Pair(UpdateCheckResult.ERROR, null)
             }
 
             val json = connection.inputStream.bufferedReader().use { it.readText() }
@@ -137,7 +135,7 @@ class UpdateChecker(
             )
         } catch (e: Exception) {
             Log.e(TAG, "Failed to check for updates", e)
-            Pair(UpdateCheckResult.UPDATE_AVAILABLE, fallbackLatestAsset(getCurrentVersionCode()))
+            Pair(UpdateCheckResult.ERROR, null)
         }
     }
 
@@ -229,15 +227,6 @@ class UpdateChecker(
             null
         }
     }
-
-    private fun fallbackLatestAsset(currentVersionCode: Int): UpdateInfo = UpdateInfo(
-        versionName = "GitHub latest",
-        versionCode = currentVersionCode + 1,
-        downloadUrl = "https://github.com/$REPO_OWNER/$REPO_NAME/releases/latest/download/app-debug.apk",
-        releaseNotes = "GitHub API vaqtincha mavjud emas. Eng so'nggi release APK yuklanadi.",
-        fileSize = 0,
-        publishDate = ""
-    )
 
     /**
      * Получает текущий versionCode приложения.
