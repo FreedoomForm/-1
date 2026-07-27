@@ -2620,7 +2620,7 @@ private fun formatDurationMs(ms: Long): String {
     if (ms <= 0) return "—"
     val days = ms / (24L * 60 * 60 * 1000)
     val hours = (ms % (24L * 60 * 60 * 1000)) / (60 * 60 * 1000)
-    return if (days > 0) "$days k $hs"
-           else if (hours > 0) "$hs"
+    return if (days > 0) "$days k ${hours}s"
+           else if (hours > 0) "${hours}s"
            else "<1s"
 }

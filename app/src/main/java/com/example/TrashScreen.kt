@@ -85,14 +85,14 @@ fun TrashScreen(
                             "Karta qoldig'i 0 emas. Avval balansni tekshiring yoki " +
                             "bank operatsiyalari orqali moslang, so'ng qayta urinib ko'ring.",
                             style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colors.error
+                            color = MaterialTheme.colorScheme.error
                         )
                     } else if (msg.contains("conflict", ignoreCase = true)) {
                         Text(
                             "Skuter boshaka aktiv ijara bilan band. Avval joriy " +
                             "ijarani tugating yoki sanalarni o'zgartiring.",
                             style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colors.error
+                            color = MaterialTheme.colorScheme.error
                         )
                     }
                 }

@@ -58,7 +58,7 @@ class ScooterViewModel(application: Application) : AndroidViewModel(application)
             repository.insert(scooter)
             // §9.0: таймкод критического действия — SCOOTER_CREATE.
             try {
-                val inserted = scooterList.value.firstOrNull { it.name == scooter.name }
+                val inserted = scootersList.value.firstOrNull { it.name == scooter.name }
                 com.example.data.TimelineService(AppDatabase.getDatabase(getApplication()))
                     .recordCriticalAction(
                         actionType = "SCOOTER_CREATE",

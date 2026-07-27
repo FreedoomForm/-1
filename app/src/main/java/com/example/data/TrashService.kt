@@ -131,10 +131,6 @@ class TrashService(private val db: AppDatabase) {
         // аудируемый след операции.
         try {
             val mainBranch = db.timelineDao().mainBranch()
-                ?: db.timelineDao().branches().let { flow ->
-                    // Берем первую ветку из Flow как fallback.
-                    kotlinx.coroutines.flow.first(flow)
-                }.firstOrNull()
             if (mainBranch != null) {
                 db.timelineDao().insertEvent(TimelineEvent(
                     branchId = mainBranch.id,

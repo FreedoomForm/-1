@@ -97,8 +97,8 @@ fun OperationsJournalScreen(
         operations.filter { op ->
             (filterType == null || op.type == filterType) &&
             (filterDirection == null || op.direction == filterDirection) &&
-            (filterStartMs == null || op.occurredAt >= filterStartMs) &&
-            (filterEndMs == null || op.occurredAt <= filterEndMs) &&
+            (filterStartMs?.let { op.occurredAt >= it } ?: true) &&
+            (filterEndMs?.let { op.occurredAt <= it } ?: true) &&
             (filterSearchText.isBlank() ||
              op.type.contains(filterSearchText, ignoreCase = true) ||
              op.direction.contains(filterSearchText, ignoreCase = true) ||

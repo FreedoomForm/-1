@@ -902,6 +902,7 @@ class RenterViewModel(application: Application) : AndroidViewModel(application) 
 
     fun deleteRenter(id: Int) {
         viewModelScope.launch {
+            var deletedContractsCount = 0
             // ── Каскадное удаление арендатора ──────────────────────────────
             // Полная цепочка:
             //   1. Найти все контракты (ContractHistoryEntry) этого арендатора
@@ -922,6 +923,7 @@ class RenterViewModel(application: Application) : AndroidViewModel(application) 
                     com.example.data.TrashService(db).snapshotRenter(renter, "Renter deleted with related records")
                 }
                 val contracts = historyRepository.getForRenterOnce(id)
+                deletedContractsCount = contracts.size
                 val trashService = com.example.data.TrashService(db)
                 contracts.forEach { trashService.snapshotContract(it, "Removed with renter #$id") }
                 for (contract in contracts) {
@@ -983,7 +985,7 @@ class RenterViewModel(application: Application) : AndroidViewModel(application) 
                     title = "Arendator o'chirildi: #$id",
                     entityType = "RENTER",
                     entityId = id.toString(),
-                    payloadJson = "{\"cascadeContracts\":${contracts.size}}",
+                    payloadJson = "{\"cascadeContracts\":$deletedContractsCount}",
                     major = true
                 )
             } catch (_: Exception) {}

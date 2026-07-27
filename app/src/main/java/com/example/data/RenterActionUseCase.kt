@@ -106,10 +106,10 @@ class RenterActionUseCase(
         // Это замена старой логики `renter.balance < 0`. Источник истины —
         // история контрактов (CREATED + AUTO_RENEW), а не хранимое поле balance.
         val turnover = historyRepository
-            .getContractsForRenterOnce(renter.id)
+            .contractsForRenterOnce(renter.id)
             .sumOf { it.amount }
         val paidTotal = historyRepository
-            .getContractsForRenterOnce(renter.id)
+            .contractsForRenterOnce(renter.id)
             .filter { it.isPaid }
             .sumOf { it.amount }
         val computedBalance = paidTotal - turnover
@@ -378,7 +378,7 @@ class RenterActionUseCase(
         val dayMs = 24L * 60 * 60 * 1000
         val weekMs = 7L * dayMs
 
-        val contracts = historyRepository.getContractsForRenterOnce(renter.id)
+        val contracts = historyRepository.contractsForRenterOnce(renter.id)
         if (contracts.isEmpty()) return
 
         val latestEnd = contracts.maxOfOrNull { it.weekEnd ?: 0L } ?: return

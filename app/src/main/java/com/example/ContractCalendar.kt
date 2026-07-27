@@ -1,5 +1,6 @@
 package com.example
 
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -608,6 +609,7 @@ private fun handleDayClickWithAddCallback(
 
 /* ── Ячейка дня (объявлена как RowScope для доступа к Modifier.weight) ─── */
 @OptIn(ExperimentalComposeUiApi::class)
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun RowScope.DayCell(
     dayMs: Long,

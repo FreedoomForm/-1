@@ -131,8 +131,8 @@ fun HistoryScreen(
             (filterEntityType == null || ev.entityType == filterEntityType) &&
             (filterActionType == null || ev.actionType.equals(filterActionType, ignoreCase = true)) &&
             (!filterMoneyOnly || ev.actionType.uppercase() in moneyActionTypes || ev.actionType.uppercase().contains("PAY")) &&
-            (filterStartMs == null || ev.timestamp >= filterStartMs) &&
-            (filterEndMs == null || ev.timestamp <= filterEndMs) &&
+            (filterStartMs?.let { ev.timestamp >= it } ?: true) &&
+            (filterEndMs?.let { ev.timestamp <= it } ?: true) &&
             (filterSearchText.isBlank() ||
              ev.title.contains(filterSearchText, ignoreCase = true) ||
              ev.screen.contains(filterSearchText, ignoreCase = true) ||
