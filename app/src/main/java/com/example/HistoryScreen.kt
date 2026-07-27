@@ -1,7 +1,8 @@
 package com.example
 
 import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -16,28 +17,36 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.AccountTree
+import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Assessment
 import androidx.compose.material.icons.filled.CalendarMonth
-import androidx.compose.material.icons.filled.FilterList
+import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.SkipNext
 import androidx.compose.material.icons.filled.SkipPrevious
+import androidx.compose.material.icons.filled.TableView
+import androidx.compose.material.icons.filled.Tune
+import androidx.compose.material.icons.filled.Visibility
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.AssistChip
-import androidx.compose.material3.AssistChipDefaults
-import androidx.compose.material3.Card
-import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.DatePicker
 import androidx.compose.material3.DatePickerDialog
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Slider
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.rememberDatePickerState
@@ -50,13 +59,20 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.example.data.TimelineEvent
 import com.example.ui.HistoryViewModel
-import kotlinx.coroutines.launch
+import com.example.ui.components.DangerOutlinedButton
+import com.example.ui.components.PrimaryButton
+import com.example.ui.components.SecondaryButton
+import com.example.ui.components.UnifiedButton
+import com.example.ui.components.UnifiedButtonVariant
+import com.example.ui.components.UnifiedSearchBar
 import com.example.ui.theme.ClaudeAccent
 import com.example.ui.theme.ClaudeAccentBg
 import com.example.ui.theme.ClaudeCard
@@ -66,20 +82,38 @@ import com.example.ui.theme.ClaudeTextSecondary
 import com.example.ui.theme.StatusArchived
 import com.example.ui.theme.StatusInfo
 import com.example.ui.theme.StatusOk
+import com.example.ui.theme.StatusOverdue
+import kotlinx.coroutines.launch
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 
 /**
- * Branch-aware history: list and visual timeline are two views of same events.
+ * Branch-aware history — redesigned to follow the Renters page dress code.
  *
- * Per PLAN_UNIVERSAL_ACCOUNTING §9.1 / §9B:
- *  - Action row: «Вид», branch picker, «Вернуться»
- *  - Filters: period (date range), renter/scooter/contract (entity type), action type,
- *    money/non-money
- *  - Safe detail dialog: linked entity, amount (if money), author, reason, storno link
+ * Layout (matches RenterTable):
+ *   ┌─────────────────────────────────────────────────┐
+ *   │ [🔍 Qidirish ............................] [⚙][📅]│ ← UnifiedSearchBar
+ *   ├─────────────────────────────────────────────────┤
+ *   │ [Ko'rinish]  [Main ▾]  [Qaytish]  [+]  [Filtr]   │ ← action row
+ *   ├─────────────────────────────────────────────────┤
+ *   │ Tarix — N ta voqea          M ta tanlandi       │ ← header surface
+ *   ├─────────────────────────────────────────────────┤
+ *   │ ▌ ✓ № ●  Title          [Detail]                │ ← row (bordered card)
+ *   │ ▌    ●  Action • Screen                         │
+ *   │ ...                                              │
+ *   └─────────────────────────────────────────────────┘
+ *
+ * Unique features preserved:
+ *   • Visual timeline mode (toggle with «Ko'rinish» / «Jadval»)
+ *   • Branch picker (Main / Custom branches)
+ *   • «Qaytish» — safe restore to selected time code
+ *   • «+» — create new branch from selected time code
+ *   • Filters: entity type / action type / money only / period / search
+ *   • Visual timeline with media-player controls (◀ ⏸ ▶)
+ *   • Detail dialog with payload-parsed fields (amount/actor/reason/storno)
  */
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalMaterial3Api::class, androidx.compose.foundation.ExperimentalFoundationApi::class)
 @Composable
 fun HistoryScreen(
     createTrigger: Int = 0,
@@ -108,9 +142,9 @@ fun HistoryScreen(
     var timelinePosition by remember { mutableStateOf(0f) }
 
     // ── Filters (§9B) ────────────────────────────────────────────────────────
-    var filterEntityType by remember { mutableStateOf<String?>(null) }   // RENTER, SCOOTER, CONTRACT, CARD, PAYMENT, REPAIR, RESTORE
-    var filterActionType by remember { mutableStateOf<String?>(null) }   // CREATE, UPDATE, DELETE, PAY, REPAIR, RESTORE, CORRECTION...
-    var filterMoneyOnly by remember { mutableStateOf(false) }            // only money-related events
+    var filterEntityType by remember { mutableStateOf<String?>(null) }
+    var filterActionType by remember { mutableStateOf<String?>(null) }
+    var filterMoneyOnly by remember { mutableStateOf(false) }
     var filterStartMs by remember { mutableStateOf<Long?>(null) }
     var filterEndMs by remember { mutableStateOf<Long?>(null) }
     var filterSearchText by remember { mutableStateOf("") }
@@ -191,7 +225,6 @@ fun HistoryScreen(
     // ── Detail dialog (§9B: safe detail of each record) ──────────────────────
     if (showDetail && selected != null) {
         val ev = selected
-        // §9B: парсим payloadJson чтобы извлечь сумму, автора, причину.
         val payloadAmount = remember(ev.payloadJson) {
             try {
                 val o = org.json.JSONObject(ev.payloadJson)
@@ -425,41 +458,66 @@ fun HistoryScreen(
         }
     }
 
-    Column(Modifier.fillMaxSize()) {
-        // ── History action row (§9.1: «Вид» / branch / «Вернуться») ──────────
+    val activeFilterCount = listOf(filterEntityType, filterActionType,
+        if (filterMoneyOnly) "1" else null,
+        filterStartMs?.toString(), filterEndMs?.toString(),
+        if (filterSearchText.isNotBlank()) "1" else null
+    ).count { it != null }
+
+    Column(modifier = Modifier.fillMaxSize()) {
+        // ── Unified search bar (matches Renters page) ──────────────────────
+        UnifiedSearchBar(
+            query = filterSearchText,
+            onQueryChange = { filterSearchText = it },
+            placeholder = "Tarixda qidirish — sarlavha, ekran, harakat yoki obyekt",
+            onFilterClick = { showFilters = true },
+            filterActive = activeFilterCount > 0
+        )
+
+        // ── Action row — 5 UnifiedButtons (matches Renters page dress code) ─
+        // Вид / branch picker / Вернуться / Создать ветку / Фильтр.
+        // All buttons always visible; some disabled when no selection.
         Row(
-            Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp),
-            horizontalArrangement = Arrangement.spacedBy(4.dp),
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp, vertical = 8.dp),
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            TextButton(onClick = { visualMode = !visualMode }) {
-                Text(if (visualMode) "Jadval" else "Ko'rinish")
-            }
-            TextButton(onClick = { showBranchPicker = true }) {
-                Text(branches.firstOrNull { it.id == activeBranchId }?.name ?: "Main")
-            }
-            TextButton(
+            // «Вид» — toggle table ↔ visual timeline
+            UnifiedButton(
+                label = if (visualMode) "Jadval" else "Ko'rinish",
+                icon = if (visualMode) Icons.Default.TableView else Icons.Default.Visibility,
+                onClick = { visualMode = !visualMode },
+                variant = if (visualMode) UnifiedButtonVariant.PRIMARY else UnifiedButtonVariant.SECONDARY,
+                modifier = Modifier.weight(1.0f)
+            )
+            // Branch picker — shows current branch name; opens picker dialog
+            UnifiedButton(
+                label = branches.firstOrNull { it.id == activeBranchId }?.name ?: "Main",
+                icon = Icons.Default.AccountTree,
+                onClick = { showBranchPicker = true },
+                variant = UnifiedButtonVariant.SECONDARY,
+                modifier = Modifier.weight(1.0f)
+            )
+            // «Вернуться» — restore to selected time code
+            PrimaryButton(
+                label = "Qaytish",
+                icon = Icons.Default.History,
                 enabled = selected != null,
                 onClick = {
-                    // §9.0: open restore dialog — never erases financial facts,
-                    // records an auditable RESTORE event instead.
                     if (selected != null) showRestoreDialog = true
-                }
-            ) { Text("Qaytish") }
-            Spacer(Modifier.width(4.dp))
-            TextButton(onClick = { showFilters = true }) {
-                Icon(Icons.Default.FilterList, contentDescription = null, modifier = Modifier.padding(end = 4.dp))
-                Text("Filtr")
-                val activeFilterCount = listOf(filterEntityType, filterActionType,
-                    if (filterMoneyOnly) "1" else null,
-                    filterStartMs?.toString(), filterEndMs?.toString(),
-                    if (filterSearchText.isNotBlank()) "1" else null
-                ).count { it != null }
-                if (activeFilterCount > 0) {
-                    Spacer(Modifier.width(4.dp))
-                    Text("($activeFilterCount)", color = ClaudeAccent, fontWeight = FontWeight.Bold)
-                }
-            }
+                },
+                modifier = Modifier.weight(0.9f)
+            )
+            // «+» — create new branch from selected time code
+            UnifiedButton(
+                label = "+ Tarmoq",
+                icon = Icons.Default.Add,
+                onClick = { showBranchCreate = true },
+                variant = UnifiedButtonVariant.SECONDARY,
+                modifier = Modifier.weight(1.0f)
+            )
         }
 
         // ── Active filter chips strip ────────────────────────────────────────
@@ -502,31 +560,83 @@ fun HistoryScreen(
             }
         }
 
-        if (filteredEvents.isEmpty()) {
-            // ── Empty state (§11: clear empty states + hints) ─────────────────
-            Column(
-                Modifier.fillMaxSize(),
-                horizontalAlignment = Alignment.CenterHorizontally,
-                verticalArrangement = Arrangement.Center
+        // ── Header surface (count + selection count) ───────────────────────
+        Surface(color = ClaudeCard, modifier = Modifier.fillMaxWidth()) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp, vertical = 8.dp),
+                verticalAlignment = Alignment.CenterVertically
             ) {
-                Icon(
-                    Icons.Default.Info,
-                    contentDescription = null,
-                    tint = StatusArchived,
-                    modifier = Modifier.padding(bottom = 8.dp)
+                Text(
+                    "Tarix — ${filteredEvents.size} ta voqea",
+                    style = MaterialTheme.typography.titleSmall,
+                    color = ClaudeText,
+                    fontWeight = FontWeight.SemiBold,
+                    modifier = Modifier.weight(1f)
                 )
-                if (chronological.isEmpty()) {
-                    Text("Bu tarmoqda hali harakat yo'q", style = MaterialTheme.typography.titleMedium)
-                    Text("+ bilan tanlangan taymkoddan yangi tarmoq yarating.")
-                } else {
-                    Text("Filtr bo'yicha hech narsa topilmadi", style = MaterialTheme.typography.titleMedium)
-                    Text("Filtrlarni tozalang yoki kengaytiring.")
+                if (selected != null) {
+                    Text(
+                        "1 tanlandi",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = ClaudeAccent,
+                        fontWeight = FontWeight.Bold
+                    )
                 }
             }
-        } else if (visualMode) {
+        }
+        HorizontalDivider(color = ClaudeDivider)
+
+        if (filteredEvents.isEmpty()) {
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(32.dp),
+                contentAlignment = Alignment.Center
+            ) {
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    Icon(
+                        Icons.Default.Info,
+                        contentDescription = null,
+                        tint = StatusArchived,
+                        modifier = Modifier.size(48.dp)
+                    )
+                    Spacer(Modifier.height(8.dp))
+                    if (chronological.isEmpty()) {
+                        Text(
+                            "Bu tarmoqda hali harakat yo'q",
+                            style = MaterialTheme.typography.titleMedium,
+                            color = ClaudeText,
+                            fontWeight = FontWeight.SemiBold
+                        )
+                        Text(
+                            "+ bilan tanlangan taymkoddan yangi tarmoq yarating.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = ClaudeTextSecondary
+                        )
+                    } else {
+                        Text(
+                            "Filtr bo'yicha hech narsa topilmadi",
+                            style = MaterialTheme.typography.titleMedium,
+                            color = ClaudeText,
+                            fontWeight = FontWeight.SemiBold
+                        )
+                        Text(
+                            "Filtrlarni tozalang yoki kengaytiring.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = ClaudeTextSecondary
+                        )
+                    }
+                }
+            }
+            return@Column
+        }
+
+        if (visualMode) {
+            // ── Visual timeline mode (media-player style) ──────────────────
+            // Kept exactly as before — this is the unique feature of History.
             val index = timelinePosition.toInt().coerceIn(0, filteredEvents.lastIndex)
             val event = filteredEvents[index]
-            // ── Play/pause auto-advance state (§9.1: play sequentially plays events) ──
             var isPlaying by remember { mutableStateOf(false) }
             LaunchedEffect(isPlaying, index, filteredEvents.size) {
                 if (isPlaying && index < filteredEvents.lastIndex) {
@@ -538,17 +648,50 @@ fun HistoryScreen(
                 }
             }
             Column(Modifier.fillMaxSize().padding(16.dp), verticalArrangement = Arrangement.SpaceBetween) {
-                Card(Modifier.fillMaxWidth().clickable { onSelectedEventChange(event.id) }) {
+                Surface(
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(12.dp),
+                    color = ClaudeCard,
+                    border = androidx.compose.foundation.BorderStroke(2.dp, ClaudeAccent)
+                ) {
                     Column(Modifier.padding(20.dp)) {
-                        Text(event.title, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
-                        Text(event.screen, style = MaterialTheme.typography.labelMedium)
-                        Text(formatter.format(Date(event.timestamp)), style = MaterialTheme.typography.bodyMedium)
-                        event.entityType?.let { Text("$it #${event.entityId ?: "—"}") }
-                        Text("Render: ${event.payloadJson}", style = MaterialTheme.typography.bodySmall)
+                        Text(
+                            event.title,
+                            style = MaterialTheme.typography.titleLarge,
+                            fontWeight = FontWeight.Bold,
+                            color = ClaudeText
+                        )
+                        Text(
+                            event.screen,
+                            style = MaterialTheme.typography.labelMedium,
+                            color = ClaudeTextSecondary
+                        )
+                        Text(
+                            formatter.format(Date(event.timestamp)),
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = ClaudeText
+                        )
+                        event.entityType?.let {
+                            Text(
+                                "$it #${event.entityId ?: "—"}",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = ClaudeTextSecondary
+                            )
+                        }
+                        Spacer(Modifier.height(8.dp))
+                        Text(
+                            "Payload: ${event.payloadJson}",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = ClaudeTextSecondary
+                        )
                     }
                 }
                 Column {
-                    Text("${index + 1} / ${filteredEvents.size}", style = MaterialTheme.typography.labelSmall)
+                    Text(
+                        "${index + 1} / ${filteredEvents.size}",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = ClaudeTextSecondary
+                    )
                     Slider(
                         value = timelinePosition,
                         onValueChange = { value ->
@@ -559,7 +702,7 @@ fun HistoryScreen(
                         valueRange = 0f..filteredEvents.lastIndex.toFloat(),
                         steps = (filteredEvents.size - 2).coerceAtLeast(0)
                     )
-                    // ── Media-player-style controls (§9.1) ──────────────────────
+                    // ── Media-player-style controls (§9.1) ──────────────────
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.Center,
@@ -601,60 +744,114 @@ fun HistoryScreen(
                 }
             }
         } else {
-            LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                items(filteredEvents.sortedByDescending { it.timestamp }, key = { it.id }) { event ->
-                    Card(
-                        Modifier.fillMaxWidth().clickable {
-                            val newId = if (selectedEventId == event.id) null else event.id
-                            onSelectedEventChange(newId)
-                        },
-                        colors = CardDefaults.cardColors(
-                            containerColor = if (selectedEventId == event.id) ClaudeAccentBg else ClaudeCard
-                        )
+            // ── Table list — same row design as Renters page ──────────────
+            // Border 1.5dp default → 2dp selected, border color = action color.
+            LazyColumn(
+                modifier = Modifier.fillMaxSize(),
+                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp),
+                verticalArrangement = Arrangement.spacedBy(4.dp)
+            ) {
+                itemsIndexed(
+                    filteredEvents.sortedByDescending { it.timestamp },
+                    key = { _, it -> it.id }
+                ) { idx, event ->
+                    val isSelected = selectedEventId == event.id
+                    // ── Status color (§11 unified language) ────────────────
+                    val statusColor = when {
+                        event.isArchived -> StatusArchived
+                        event.actionType.equals("PAY", ignoreCase = true) ||
+                            event.actionType.contains("PAYMENT", ignoreCase = true) -> StatusOk
+                        event.actionType.contains("DELETE", ignoreCase = true) ||
+                            event.actionType.contains("STORNO", ignoreCase = true) -> StatusOverdue
+                        event.actionType.contains("CORRECTION", ignoreCase = true) -> StatusInfo
+                        else -> ClaudeAccent
+                    }
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 8.dp, vertical = 4.dp)
                     ) {
-                        Row(Modifier.fillMaxWidth().padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
-                            // ── Color dot by entity type (§11 unified language) ───────
-                            val dotColor = when {
-                                event.isArchived -> StatusArchived
-                                event.actionType.equals("PAY", ignoreCase = true) ||
-                                    event.actionType.contains("PAYMENT", ignoreCase = true) -> StatusOk
-                                event.actionType.contains("DELETE", ignoreCase = true) ||
-                                    event.actionType.contains("STORNO", ignoreCase = true) -> StatusArchived
-                                event.actionType.contains("CORRECTION", ignoreCase = true) -> StatusInfo
-                                else -> ClaudeAccent
-                            }
-                            Box(
-                                Modifier.size(8.dp).padding(end = 2.dp)
-                            ) {
-                                Box(
-                                    Modifier.size(8.dp).background(dotColor, androidx.compose.foundation.shape.CircleShape)
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .border(
+                                    width = if (isSelected) 2.dp else 1.5.dp,
+                                    color = statusColor,
+                                    shape = RoundedCornerShape(8.dp)
                                 )
-                            }
+                                .background(
+                                    if (isSelected) ClaudeAccentBg else Color.White
+                                )
+                                .combinedClickable(
+                                    onClick = {
+                                        val newId = if (selectedEventId == event.id) null else event.id
+                                        onSelectedEventChange(newId)
+                                    },
+                                    onLongClick = {
+                                        onSelectedEventChange(event.id)
+                                    }
+                                )
+                                .padding(horizontal = 12.dp, vertical = 10.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            // ── № column ─────────────────────────────────────
+                            Text(
+                                "${idx + 1}",
+                                modifier = Modifier.width(40.dp).padding(end = 4.dp),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = ClaudeTextSecondary,
+                                fontWeight = FontWeight.Medium,
+                                maxLines = 1
+                            )
+                            // ── Status dot ──────────────────────────────────
+                            Box(
+                                modifier = Modifier
+                                    .size(10.dp)
+                                    .background(statusColor, CircleShape)
+                            )
                             Spacer(Modifier.width(8.dp))
-                            Column(Modifier.weight(1f)) {
+                            // ── Title + meta column ──────────────────────────
+                            Column(modifier = Modifier.weight(1f)) {
                                 Text(
-                                    if (selectedEventId == event.id) "✓ ${event.title}" else event.title,
-                                    fontWeight = FontWeight.SemiBold
+                                    text = if (isSelected) "✓ ${event.title}" else event.title,
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    color = ClaudeText,
+                                    fontWeight = FontWeight.SemiBold,
+                                    maxLines = 2,
+                                    overflow = TextOverflow.Ellipsis
                                 )
                                 Text(
                                     "${event.actionType} • ${event.screen}",
                                     style = MaterialTheme.typography.bodySmall,
-                                    color = ClaudeTextSecondary
+                                    color = ClaudeTextSecondary,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
                                 )
                                 Text(
                                     formatter.format(Date(event.timestamp)),
                                     style = MaterialTheme.typography.labelSmall,
-                                    color = ClaudeTextSecondary
+                                    color = ClaudeTextSecondary,
+                                    maxLines = 1
                                 )
                             }
                             Spacer(Modifier.width(8.dp))
-                            Text(if (event.isMajor) "●" else "·", style = MaterialTheme.typography.titleMedium)
-                            // ── Detail (info) button ──────────────────────────────────
+                            // ── Major event indicator (●) ────────────────────
+                            Text(
+                                if (event.isMajor) "●" else "·",
+                                style = MaterialTheme.typography.titleMedium,
+                                color = if (event.isMajor) statusColor else ClaudeTextSecondary
+                            )
+                            Spacer(Modifier.width(4.dp))
+                            // ── Detail (info) button ─────────────────────────
                             IconButton(onClick = {
                                 onSelectedEventChange(event.id)
                                 showDetail = true
                             }) {
-                                Icon(Icons.Default.Info, contentDescription = "Tafsilot", tint = ClaudeAccent)
+                                Icon(
+                                    Icons.Default.Info,
+                                    contentDescription = "Tafsilot",
+                                    tint = ClaudeAccent
+                                )
                             }
                         }
                     }

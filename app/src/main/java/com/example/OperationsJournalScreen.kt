@@ -2,6 +2,8 @@ package com.example
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -16,17 +18,18 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Assessment
 import androidx.compose.material.icons.filled.FilterList
 import androidx.compose.material.icons.filled.Info
+import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.AssistChip
-import androidx.compose.material3.Card
-import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -38,12 +41,18 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.example.data.BusinessOperation
 import com.example.ui.BusinessOperationViewModel
+import com.example.ui.components.SecondaryButton
+import com.example.ui.components.UnifiedButton
+import com.example.ui.components.UnifiedButtonVariant
+import com.example.ui.components.UnifiedSearchBar
 import com.example.ui.theme.ClaudeAccent
 import com.example.ui.theme.ClaudeAccentBg
 import com.example.ui.theme.ClaudeCard
@@ -60,23 +69,34 @@ import java.util.Date
 import java.util.Locale
 
 /**
- * §2: Visual page for the complete operations journal with filters, detail,
- * and storno (reversal) view.
+ * §2: Operations journal — redesigned to follow the Renters page dress code.
  *
- * Shows every BusinessOperation record — payments, transfers, deposits,
- * discounts, refunds, repairs, reversals. Each row has a colored dot by
- * direction (income=green, expense=red, transfer=amber, liability=grey).
+ * Layout (matches RenterTable):
+ *   ┌─────────────────────────────────────────────────┐
+ *   │ [🔍 Qidirish ............................] [⚙][📅]│ ← UnifiedSearchBar
+ *   ├─────────────────────────────────────────────────┤
+ *   │ [Filtr ▾]  [Storno only]                        │ ← action row
+ *   ├─────────────────────────────────────────────────┤
+ *   │ Korzinka — N ta yozuv           M ta tanlandi   │ ← header surface
+ *   ├─────────────────────────────────────────────────┤
+ *   │ ▌ ✓ №  ●  Title          Amount      [Detail]  │ ← row (bordered card)
+ *   │ ▌    ●  Type • Date                            │
+ *   │ ...                                              │
+ *   └─────────────────────────────────────────────────┘
  *
- * Per PLAN_UNIVERSAL_ACCOUNTING §2: 'Visual page of the complete operations
- * journal with filters, detail, and storno.'
+ * Unique features preserved:
+ *   • Filters by type / direction / reversed-only / date / search text
+ *   • Detail dialog with full operation info + storno link
+ *   • Status-aware row coloring (income green, expense red, etc.)
+ *   • Storno badge on reversed operations
  */
+@OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
 @Composable
 fun OperationsJournalScreen(
     viewModel: BusinessOperationViewModel = viewModel()
 ) {
     val operations by viewModel.operations.collectAsStateWithLifecycle()
     val formatter = remember { SimpleDateFormat("dd.MM.yyyy HH:mm", Locale.getDefault()) }
-    val dateFmt = remember { SimpleDateFormat("dd.MM.yyyy", Locale.getDefault()) }
 
     var showFilters by remember { mutableStateOf(false) }
     var showDetail by remember { mutableStateOf(false) }
@@ -219,101 +239,235 @@ fun OperationsJournalScreen(
         )
     }
 
-    Column(Modifier.fillMaxSize()) {
-        // ── Header row with filter button ─────────────────────────────────
+    // ── Active filter chips strip (matches History screen pattern) ─────────
+    val hasActiveFilters = filterType != null || filterDirection != null ||
+        filterReversedOnly || filterStartMs != null || filterEndMs != null ||
+        filterSearchText.isNotBlank()
+    val activeFilterCount = listOf(filterType, filterDirection,
+        if (filterReversedOnly) "1" else null,
+        filterStartMs?.toString(), filterEndMs?.toString(),
+        if (filterSearchText.isNotBlank()) "1" else null
+    ).count { it != null }
+
+    Column(modifier = Modifier.fillMaxSize()) {
+        // ── Unified search bar (matches Renters page) ──────────────────────
+        UnifiedSearchBar(
+            query = filterSearchText,
+            onQueryChange = { filterSearchText = it },
+            placeholder = "Operatsiyalarda qidirish — tur, yo'nalish yoki izoh",
+            onFilterClick = { showFilters = true },
+            filterActive = activeFilterCount > 0
+        )
+
+        // ── Action row (matches Renters page) ──────────────────────────────
         Row(
-            modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp),
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp, vertical = 8.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            Text(
-                "Operatsiyalar jurnali (${filteredOps.size})",
-                style = MaterialTheme.typography.titleMedium,
-                color = ClaudeText,
-                fontWeight = FontWeight.Bold,
-                modifier = Modifier.weight(1f)
+            SecondaryButton(
+                label = "Filtr",
+                icon = Icons.Default.Tune,
+                onClick = { showFilters = true },
+                modifier = Modifier.weight(1.4f)
             )
-            val activeFilterCount = listOf(filterType, filterDirection,
-                if (filterReversedOnly) "1" else null,
-                filterStartMs?.toString(), filterEndMs?.toString(),
-                if (filterSearchText.isNotBlank()) "1" else null
-            ).count { it != null }
-            TextButton(onClick = { showFilters = true }) {
-                Icon(Icons.Default.FilterList, contentDescription = null, modifier = Modifier.padding(end = 4.dp))
-                Text("Filtr")
-                if (activeFilterCount > 0) {
-                    Spacer(Modifier.width(4.dp))
-                    Text("($activeFilterCount)", color = ClaudeAccent, fontWeight = FontWeight.Bold)
+            UnifiedButton(
+                label = if (filterReversedOnly) "✓ Storno" else "Storno",
+                icon = Icons.Default.Assessment,
+                onClick = { filterReversedOnly = !filterReversedOnly },
+                variant = if (filterReversedOnly) UnifiedButtonVariant.PRIMARY
+                         else UnifiedButtonVariant.SECONDARY,
+                modifier = Modifier.weight(1.4f)
+            )
+            if (activeFilterCount > 0) {
+                TextButton(
+                    onClick = {
+                        filterType = null
+                        filterDirection = null
+                        filterReversedOnly = false
+                        filterStartMs = null
+                        filterEndMs = null
+                        filterSearchText = ""
+                    }
+                ) {
+                    Text("Tozalash ($activeFilterCount)", color = ClaudeAccent)
                 }
             }
         }
 
-        if (filteredOps.isEmpty()) {
-            Column(
-                Modifier.fillMaxSize(),
-                horizontalAlignment = Alignment.CenterHorizontally,
-                verticalArrangement = Arrangement.Center
+        // ── Header surface (count + selection count, matches Renters) ──────
+        Surface(color = ClaudeCard, modifier = Modifier.fillMaxWidth()) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp, vertical = 8.dp),
+                verticalAlignment = Alignment.CenterVertically
             ) {
-                Icon(Icons.Default.Info, contentDescription = null, tint = StatusArchived, modifier = Modifier.padding(bottom = 8.dp))
-                Text("Operatsiyalar yo'q", style = MaterialTheme.typography.titleMedium)
-                Text("Moliyaviy harakatlar shu yerda ko'rinadi.", style = MaterialTheme.typography.bodySmall, color = ClaudeTextSecondary)
+                Text(
+                    "Operatsiyalar jurnali — ${filteredOps.size} ta yozuv",
+                    style = MaterialTheme.typography.titleSmall,
+                    color = ClaudeText,
+                    fontWeight = FontWeight.SemiBold,
+                    modifier = Modifier.weight(1f)
+                )
+                if (selectedOpId != null) {
+                    Text(
+                        "1 tanlandi",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = ClaudeAccent,
+                        fontWeight = FontWeight.Bold
+                    )
+                }
             }
-        } else {
-            LazyColumn(
-                Modifier.fillMaxSize(),
-                contentPadding = PaddingValues(12.dp),
-                verticalArrangement = Arrangement.spacedBy(8.dp)
+        }
+        HorizontalDivider(color = ClaudeDivider)
+
+        if (filteredOps.isEmpty()) {
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(32.dp),
+                contentAlignment = Alignment.Center
             ) {
-                items(filteredOps, key = { it.id }) { op ->
-                    val dotColor = when (op.direction) {
-                        BusinessOperation.DIRECTION_INCOME -> StatusOk
-                        BusinessOperation.DIRECTION_EXPENSE -> StatusOverdue
-                        BusinessOperation.DIRECTION_TRANSFER -> StatusReserved
-                        BusinessOperation.DIRECTION_LIABILITY -> StatusArchived
-                        else -> ClaudeTextSecondary
-                    }
-                    val isReversed = op.status == BusinessOperation.STATUS_REVERSED
-                    Card(
-                        modifier = Modifier.fillMaxWidth().clickable {
-                            selectedOpId = op.id
-                            showDetail = true
-                        },
-                        colors = CardDefaults.cardColors(
-                            containerColor = if (isReversed) StatusArchived.copy(alpha = 0.1f) else ClaudeCard
-                        ),
-                        shape = RoundedCornerShape(8.dp)
-                    ) {
-                        Row(
-                            modifier = Modifier.fillMaxWidth().padding(12.dp),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Box(modifier = Modifier.size(10.dp).background(dotColor, CircleShape))
-                            Spacer(Modifier.width(8.dp))
-                            Column(modifier = Modifier.weight(1f)) {
-                                Text(
-                                    typeLabel(op.type) + if (isReversed) " (storno)" else "",
-                                    style = MaterialTheme.typography.bodyMedium,
-                                    color = ClaudeText,
-                                    fontWeight = FontWeight.SemiBold
-                                )
-                                Text(
-                                    formatter.format(Date(op.occurredAt)),
-                                    style = MaterialTheme.typography.labelSmall,
-                                    color = ClaudeTextSecondary
-                                )
-                                op.note?.takeIf { it.isNotBlank() }?.let {
-                                    Text(
-                                        it.take(80) + if (it.length > 80) "…" else "",
-                                        style = MaterialTheme.typography.labelSmall,
-                                        color = ClaudeTextSecondary
-                                    )
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    Icon(
+                        Icons.Default.Info,
+                        contentDescription = null,
+                        tint = StatusArchived,
+                        modifier = Modifier.size(48.dp)
+                    )
+                    Spacer(Modifier.height(8.dp))
+                    Text(
+                        "Operatsiyalar yo'q",
+                        style = MaterialTheme.typography.titleMedium,
+                        color = ClaudeText,
+                        fontWeight = FontWeight.SemiBold
+                    )
+                    Text(
+                        "Moliyaviy harakatlar shu yerda ko'rinadi.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = ClaudeTextSecondary
+                    )
+                }
+            }
+            return@Column
+        }
+
+        // ── LazyColumn — same row design as Renters page ───────────────────
+        // Border 1.5dp default → 2dp selected, border color = direction color
+        // (income=green, expense=red, transfer=amber, liability=grey).
+        LazyColumn(
+            modifier = Modifier.fillMaxSize(),
+            contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp),
+            verticalArrangement = Arrangement.spacedBy(4.dp)
+        ) {
+            itemsIndexed(filteredOps, key = { _, it -> it.id }) { idx, op ->
+                val dotColor = when (op.direction) {
+                    BusinessOperation.DIRECTION_INCOME -> StatusOk
+                    BusinessOperation.DIRECTION_EXPENSE -> StatusOverdue
+                    BusinessOperation.DIRECTION_TRANSFER -> StatusReserved
+                    BusinessOperation.DIRECTION_LIABILITY -> StatusArchived
+                    else -> ClaudeTextSecondary
+                }
+                val isReversed = op.status == BusinessOperation.STATUS_REVERSED
+                val isSelected = selectedOpId == op.id
+
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 8.dp, vertical = 4.dp)
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .border(
+                                width = if (isSelected) 2.dp else 1.5.dp,
+                                color = if (isReversed) StatusArchived else dotColor,
+                                shape = RoundedCornerShape(8.dp)
+                            )
+                            .background(
+                                when {
+                                    isSelected -> Color(0xFFF3F4F6)
+                                    isReversed -> StatusArchived.copy(alpha = 0.08f)
+                                    else -> Color.White
                                 }
-                            }
-                            Spacer(Modifier.width(8.dp))
+                            )
+                            .combinedClickable(
+                                onClick = {
+                                    selectedOpId = if (isSelected) null else op.id
+                                },
+                                onLongClick = {
+                                    selectedOpId = op.id
+                                    showDetail = true
+                                }
+                            )
+                            .padding(horizontal = 12.dp, vertical = 10.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        // ── № column ─────────────────────────────────────────
+                        Text(
+                            "${idx + 1}",
+                            modifier = Modifier.width(40.dp).padding(end = 4.dp),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = ClaudeTextSecondary,
+                            fontWeight = FontWeight.Medium,
+                            maxLines = 1
+                        )
+                        // ── Direction dot ────────────────────────────────────
+                        Box(
+                            modifier = Modifier
+                                .size(10.dp)
+                                .background(dotColor, CircleShape)
+                        )
+                        Spacer(Modifier.width(8.dp))
+                        // ── Title + meta column ──────────────────────────────
+                        Column(modifier = Modifier.weight(1f)) {
                             Text(
-                                "${BusinessOperation.fromMinor(op.amountMinor).toLong()} so'm",
-                                style = MaterialTheme.typography.titleSmall,
-                                color = dotColor,
-                                fontWeight = FontWeight.Bold
+                                text = typeLabel(op.type) + if (isReversed) " (storno)" else "",
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = if (isReversed) ClaudeTextSecondary else ClaudeText,
+                                fontWeight = FontWeight.SemiBold,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                            Text(
+                                formatter.format(Date(op.occurredAt)),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = ClaudeTextSecondary,
+                                maxLines = 1
+                            )
+                            op.note?.takeIf { it.isNotBlank() }?.let {
+                                Text(
+                                    it.take(80) + if (it.length > 80) "…" else "",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = ClaudeTextSecondary,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                            }
+                        }
+                        Spacer(Modifier.width(8.dp))
+                        // ── Amount column ────────────────────────────────────
+                        Text(
+                            "${BusinessOperation.fromMinor(op.amountMinor).toLong()} so'm",
+                            style = MaterialTheme.typography.titleSmall,
+                            color = dotColor,
+                            fontWeight = FontWeight.Bold,
+                            modifier = Modifier.padding(end = 4.dp)
+                        )
+                        // ── Detail button ────────────────────────────────────
+                        androidx.compose.material3.IconButton(
+                            onClick = {
+                                selectedOpId = op.id
+                                showDetail = true
+                            }
+                        ) {
+                            Icon(
+                                Icons.Default.Info,
+                                contentDescription = "Tafsilot",
+                                tint = ClaudeAccent
                             )
                         }
                     }
