@@ -248,8 +248,10 @@ class MainActivity : ComponentActivity() {
 
                 // ── §9A: Splash screen with loading animation ────────────────
                 // Shows logo + progress indicator while data prepares, then
-                // smoothly transitions to MainScreen. The launcher + drawer
-                // part of §9A is deferred (large UI work).
+                // smoothly transitions to MainScreen. MainScreen's first frame
+                // opens the launcher (showLauncher defaults to true) — user
+                // sees the Android-home-screen-style launcher right after
+                // splash and taps an icon to enter the actual app screens.
                 var showSplash by remember { mutableStateOf(true) }
 
                 // Авто-запрос SMS + POST_NOTIFICATIONS (Android 13+) + READ_PHONE_STATE при первом старте.
@@ -532,9 +534,11 @@ fun MainScreen(
     // ── Навигация ────────────────────────────────────────────────────
     var navState by remember { mutableStateOf<NavigationState>(NavigationState.MainView) }
 
-    // §9.A: launcher overlay + navigation drawer.
-    var showLauncher by remember { mutableStateOf(false) }
-    var showDrawer by remember { mutableStateOf(false) }
+    // §9.A: launcher overlay.
+    // Defaults to true so launcher opens automatically after splash screen
+    // (splash → MainScreen first-frame → LauncherScreen shown). User taps an
+    // icon to dismiss; can re-open via the Apps icon in the top app bar.
+    var showLauncher by remember { mutableStateOf(true) }
 
     var renterSortState by remember { mutableStateOf(TableSortState()) }
     var scooterSortState by remember { mutableStateOf(TableSortState()) }
@@ -2425,9 +2429,10 @@ fun MainScreen(
             }
         }
 
-        // ── §9.A: Launcher overlay + drawer ────────────────────────────────
-        // Полноэкранный launcher с кубиками-иконками. Свайп вверх по handle
-        // внизу → открывает многоуровневую navigation drawer.
+        // ── §9.A: Launcher overlay (Android home-screen style) ───────────
+        // Полноэкранный launcher: wallpaper gradient + 4×2 grid + dock.
+        // Свайп сверху вниз → grid уезжает под экран, остаётся только dock.
+        // Свайп снизу вверх (по dock) → grid возвращается.
         if (showLauncher) {
             com.example.ui.components.LauncherScreen(
                 onPageClick = { pageId ->
@@ -2444,28 +2449,9 @@ fun MainScreen(
                         "settings"  -> 6
                         else        -> 0
                     }
-                },
-                onDrawerPullUp = { showDrawer = true }
+                }
             )
         }
-        com.example.ui.components.NavigationDrawerSheet(
-            expanded = showDrawer,
-            onDismiss = { showDrawer = false },
-            onPageSelect = { pageId ->
-                showDrawer = false
-                currentTab = when (pageId) {
-                    "renters"   -> 0
-                    "scooters"  -> 1
-                    "contracts" -> 2
-                    "finansi"   -> 3
-                    "reports"   -> 4
-                    "history"   -> 5
-                    "trash"     -> 7
-                    "settings"  -> 6
-                    else        -> 0
-                }
-            }
-        )
     }
 }
 

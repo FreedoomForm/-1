@@ -2,13 +2,11 @@
 
 package com.example.ui.components
 
-import android.content.Context
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.combinedClickable
-import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
 import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -25,19 +23,17 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AccountBalanceWallet
+import androidx.compose.material.icons.filled.Apps
 import androidx.compose.material.icons.filled.Assessment
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.DirectionsBike
 import androidx.compose.material.icons.filled.History
-import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -49,11 +45,11 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.pointer.pointerInput
-import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -64,30 +60,48 @@ import com.example.ui.theme.ClaudeAccent
 import com.example.ui.theme.ClaudeAccentBg
 import com.example.ui.theme.ClaudeBackground
 import com.example.ui.theme.ClaudeCard
-import com.example.ui.theme.ClaudeDivider
-import com.example.ui.theme.ClaudeText
-import com.example.ui.theme.ClaudeTextSecondary
+import com.example.ui.theme.ClaudeDarkBg
+import com.example.ui.theme.ClaudeDarkText
+import com.example.ui.theme.ClaudeGold
+import com.example.ui.theme.ClaudeTeal
+import com.example.ui.theme.StatusOk
+import com.example.ui.theme.StatusOverdue
+import com.example.ui.theme.StatusReserved
+import com.example.ui.theme.StatusArchived
 import kotlinx.coroutines.launch
-import org.json.JSONObject
 
 /**
- * §9.A — In-app launcher + interactive navigation drawer.
+ * §9.A — In-app launcher styled as Android home screen.
  *
- * Two layers, exactly as the user described:
+ * Layout (matches the user's reference screenshot — MIUI/Xiaomi home):
  *
- * 1. **Launcher** — full-screen canvas with **free-form draggable** cube icons.
- *    Long-press + drag = move the cube anywhere on the canvas.
- *    Tap = open the page. Positions are persisted to SharedPreferences
- *    (so layout survives restarts).
+ *  ```
+ *  ┌────────────────────────────────────────┐
+ *  │  [wallpaper gradient + abstract shapes]│  ← full-screen wallpaper
+ *  │                                        │
+ *  │   ┌──┐   ┌──┐   ┌──┐   ┌──┐            │  ← upper grid (4 columns)
+ *  │   │📋│   │🛵│   │📑│   │💰│            │     Mijozlar / Skuterlar /
+ *  │   └──┘   └──┘   └──┘   └──┘            │     Kontraktlar / Moliya
+ *  │   Mijoz  Skut   Kontr  Moliya          │
+ *  │                                        │
+ *  │   ┌──┐   ┌──┐   ┌──┐   ┌──┐            │  ← row 2
+ *  │   │📊│   │🕓│   │🗑│   │⚙│             │     Hisobotlar / Tarix /
+ *  │   └──┘   └──┘   └──┘   └──┘            │     Chiqindi / Sozlamalar
+ *  │   Hisob  Tarix  Chiq   Sozlam          │
+ *  │                                        │
+ *  │              ● ● ● ●                   │  ← page indicator dots
+ *  │                                        │
+ *  │  ┌─────────────────────────────────┐   │  ← bottom dock (translucent
+ *  │  │  [📋]    [🛵]    [📑]    [💰]   │   │     dark "frosted glass")
+ *  │  └─────────────────────────────────┘   │
+ *  └────────────────────────────────────────┘
+ *  ```
  *
- * 2. **Drawer / curtain** — a swipe-up gesture at the bottom reveals the
- *    "Android-home-screen-mini" curtain. The curtain has:
- *      • 4 square icons in the bottom row (always visible once open)
- *      • Row 2 revealed as the curtain rises above 30%
- *      • Row 3 revealed as the curtain rises above 70%
- *    Drag height controls curtain height — same gesture, smooth UX.
+ * Swipe-down gesture (anywhere on grid): the entire upper grid + page dots
+ * slide DOWN off-screen. Only the bottom dock stays visible. This is the
+ * "mini Android home" mode — user can still tap dock icons to navigate.
  *
- * All cubes and curtain icons have 72dp / 56dp touch targets (§11).
+ * Swipe-up gesture on dock (when collapsed): grid slides back up.
  */
 
 /** One launcher page descriptor. */
@@ -95,367 +109,228 @@ data class LauncherPage(
     val id: String,
     val title: String,
     val icon: ImageVector,
-    val accentColor: Color = ClaudeAccent
+    /** Squircle background color. */
+    val tileColor: Color = ClaudeAccent,
+    /** Whether this page is also pinned to the dock (defaults: 4 main pages). */
+    val pinnedToDock: Boolean = false
 )
 
-/** Default page set (order = default position seed). */
+/**
+ * Default page set. First 4 are pinned to the dock (most-used); the upper
+ * grid shows ALL 8 (dock items appear in both places, exactly like Android).
+ */
 val DefaultLauncherPages: List<LauncherPage> = listOf(
-    LauncherPage("renters",   "Mijozlar",    Icons.Default.Person),
-    LauncherPage("scooters",  "Skuterlar",   Icons.Default.DirectionsBike),
-    LauncherPage("contracts", "Kontraktlar", Icons.Default.Home),
-    LauncherPage("finansi",   "Moliya",      Icons.Default.AccountBalanceWallet),
-    LauncherPage("reports",   "Hisobotlar",  Icons.Default.Assessment),
-    LauncherPage("history",   "Tarix",       Icons.Default.History),
-    LauncherPage("trash",     "Chiqindi",    Icons.Default.Delete),
-    LauncherPage("settings",  "Sozlamalar",  Icons.Default.Settings)
+    LauncherPage("renters",   "Mijozlar",    Icons.Default.Person,               tileColor = Color(0xFF2E7D32), pinnedToDock = true),
+    LauncherPage("scooters",  "Skuterlar",   Icons.Default.DirectionsBike,       tileColor = Color(0xFF1565C0), pinnedToDock = true),
+    LauncherPage("contracts", "Kontraktlar", Icons.Default.Apps,                 tileColor = Color(0xFFE65100), pinnedToDock = true),
+    LauncherPage("finansi",   "Moliya",      Icons.Default.AccountBalanceWallet, tileColor = Color(0xFFB8862B), pinnedToDock = true),
+    LauncherPage("reports",   "Hisobotlar",  Icons.Default.Assessment,           tileColor = Color(0xFF6A1B9A)),
+    LauncherPage("history",   "Tarix",       Icons.Default.History,              tileColor = Color(0xFF00838F)),
+    LauncherPage("trash",     "Chiqindi",    Icons.Default.Delete,               tileColor = Color(0xFFC62828)),
+    LauncherPage("settings",  "Sozlamalar",  Icons.Default.Settings,             tileColor = Color(0xFF455A64))
 )
-
-/* ──────────────────────────────────────────────────────────────────────
-   Position persistence — cube positions stored as JSON in SharedPreferences.
-   Stored as fractions of canvas size so they survive rotation / device size.
-   ────────────────────────────────────────────────────────────────────── */
-
-private const val PREFS_NAME = "launcher_layout"
-private const val KEY_POSITIONS = "cube_positions_json"
-
-private fun loadPositions(context: Context): Map<String, Offset> {
-    val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-    val raw = prefs.getString(KEY_POSITIONS, null) ?: return emptyMap()
-    return try {
-        val obj = JSONObject(raw)
-        val out = mutableMapOf<String, Offset>()
-        for (key in obj.keys()) {
-            val o = obj.getJSONObject(key)
-            out[key] = Offset(o.getDouble("x").toFloat(), o.getDouble("y").toFloat())
-        }
-        out
-    } catch (_: Exception) { emptyMap() }
-}
-
-private fun savePositions(context: Context, positions: Map<String, Offset>) {
-    val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-    val obj = JSONObject()
-    positions.forEach { (id, off) ->
-        val o = JSONObject()
-        o.put("x", off.x.toDouble())
-        o.put("y", off.y.toDouble())
-        obj.put(id, o)
-    }
-    prefs.edit().putString(KEY_POSITIONS, obj.toString()).apply()
-}
 
 /* ════════════════════════════════════════════════════════════════════
-   LAUNCHER — free-form draggable cubes on a full-screen canvas.
+   LAUNCHER — Android-home-screen style.
    ════════════════════════════════════════════════════════════════════ */
 
 /**
- * Full-screen launcher.
+ * Full-screen launcher shown after the splash screen.
  *
  * @param pages list of pages to show.
- * @param onPageClick called with page id when user taps a cube.
- * @param onDrawerPullUp called when user swipes up on the bottom handle.
+ * @param onPageClick called with page id when user taps any icon (grid or dock).
  */
 @Composable
 fun LauncherScreen(
     pages: List<LauncherPage> = DefaultLauncherPages,
     onPageClick: (String) -> Unit,
-    onDrawerPullUp: () -> Unit = {}
+    onDrawerPullUp: () -> Unit = {}  // kept for signature compat, unused
 ) {
-    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
     val density = LocalDensity.current
 
-    // Position in fractions (0..1) of the canvas (excluding bottom handle).
-    var positions by remember { mutableStateOf(loadPositions(context)) }
-    // Dragged cube id (so we can elevate it visually).
-    var draggedId by remember { mutableStateOf<String?>(null) }
+    // Collapse progress: 0f = fully expanded (grid visible), 1f = collapsed (only dock).
+    val collapseProgress = remember { Animatable(0f) }
+    var gridHeightPx by remember { mutableStateOf(1) }
 
-    // Seed default positions if a new page appears without one.
-    val seeded = remember(positions, pages) {
-        val out = positions.toMutableMap()
-        pages.forEachIndexed { idx, p ->
-            if (out[p.id] == null) {
-                // 2-column seed grid for first launch.
-                val col = idx % 2
-                val row = idx / 2
-                out[p.id] = Offset(0.15f + col * 0.55f, 0.08f + row * 0.18f)
-            }
+    fun collapse() {
+        scope.launch {
+            collapseProgress.animateTo(1f, tween(280))
         }
-        out
+    }
+    fun expand() {
+        scope.launch {
+            collapseProgress.animateTo(0f, tween(280))
+        }
     }
 
-    fun persist(newPositions: Map<String, Offset>) {
-        positions = newPositions
-        savePositions(context, newPositions)
-    }
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(
+                // Warm Driftwood-inspired wallpaper gradient.
+                Brush.verticalGradient(
+                    colors = listOf(
+                        Color(0xFF2A1F3D),  // deep violet (top)
+                        Color(0xFF6B3F2F),  // warm brown (middle)
+                        Color(0xFFC14E24),  // terracotta (lower-middle)
+                        Color(0xFFE6C97F)   // gold (bottom, behind dock)
+                    )
+                )
+            )
+    ) {
+        // ── Abstract decorative shapes (very subtle, wallpaper-like) ───────
+        // Large translucent circles to add depth, mimicking MIUI wallpaper.
+        Box(
+            modifier = Modifier
+                .size(280.dp)
+                .offset { IntOffset(-80, 60) }
+                .clip(CircleShape)
+                .background(Color(0xFF8E5BA6).copy(alpha = 0.35f))
+        )
+        Box(
+            modifier = Modifier
+                .size(220.dp)
+                .offset { IntOffset(280, 200) }
+                .clip(CircleShape)
+                .background(Color(0xFFD97757).copy(alpha = 0.30f))
+        )
+        Box(
+            modifier = Modifier
+                .size(180.dp)
+                .offset { IntOffset(40, 480) }
+                .clip(CircleShape)
+                .background(Color(0xFFE6C97F).copy(alpha = 0.25f))
+        )
 
-    Box(modifier = Modifier.fillMaxSize().background(ClaudeBackground)) {
-        // ── Header ──────────────────────────────────────────────────────
+        // ── Upper region: title + grid + page dots ───────────────────────
+        // This entire region slides DOWN off-screen as collapseProgress → 1.
+        // translate Y by gridHeightPx * collapseProgress + a bit extra so it
+        // fully disappears under the dock.
         Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 16.dp, vertical = 16.dp),
-            horizontalAlignment = Alignment.CenterHorizontally
-        ) {
-            Text(
-                "Scooter Rent",
-                style = MaterialTheme.typography.headlineSmall,
-                color = ClaudeText,
-                fontWeight = FontWeight.Bold
-            )
-            Spacer(Modifier.height(2.dp))
-            Text(
-                "Kubikni bosib ushlang va sudrang — joyini o'zgartiring",
-                style = MaterialTheme.typography.bodySmall,
-                color = ClaudeTextSecondary,
-                textAlign = TextAlign.Center
-            )
-        }
-
-        // ── Canvas with draggable cubes ─────────────────────────────────
-        // Drag deltas tracked in px, converted to fractions of canvas size,
-        // persisted to SharedPreferences so layout survives restart.
-        var canvasWidthPx by remember { mutableStateOf(1) }
-        var canvasHeightPx by remember { mutableStateOf(1) }
-        Box(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(top = 80.dp, bottom = 56.dp, start = 8.dp, end = 8.dp)
+                .fillMaxHeight(0.82f)  // leave 18% for dock at bottom
                 .onGloballyPositioned { coords ->
-                    canvasWidthPx = coords.size.width.coerceAtLeast(1)
-                    canvasHeightPx = coords.size.height.coerceAtLeast(1)
+                    gridHeightPx = coords.size.height.coerceAtLeast(1)
                 }
-        ) {
-            // Render each cube at its fractional position.
-            seeded.forEach { page ->
-                val pos = seeded[page.id] ?: return@forEach
-                val cubeSizePx = with(density) { 72.dp.toPx() }
-                Box(
-                    modifier = Modifier
-                        .offset {
-                            val w = canvasWidthPx.coerceAtLeast(1)
-                            val h = canvasHeightPx.coerceAtLeast(1)
-                            val x = (pos.x * w).toInt() - cubeSizePx.toInt() / 2
-                            val y = (pos.y * h).toInt() - cubeSizePx.toInt() / 2
-                            IntOffset(
-                                x.coerceIn(0, (w - cubeSizePx).toInt().coerceAtLeast(0)),
-                                y.coerceIn(0, (h - cubeSizePx).toInt().coerceAtLeast(0))
-                            )
-                        }
-                        .size(72.dp)
-                        .clip(RoundedCornerShape(16.dp))
-                        .background(
-                            if (draggedId == page.id) ClaudeAccentBg else ClaudeCard
-                        )
-                        .border(
-                            width = if (draggedId == page.id) 2.dp else 1.dp,
-                            color = if (draggedId == page.id) ClaudeAccent else ClaudeDivider,
-                            shape = RoundedCornerShape(16.dp)
-                        )
-                        .combinedClickable(
-                            onClick = { onPageClick(page.id) },
-                            onLongClick = { /* long press starts drag below */ }
-                        )
-                        .pointerInput(page.id) {
-                            detectDragGesturesAfterLongPress(
-                                onDragStart = { draggedId = page.id },
-                                onDragEnd = {
-                                    draggedId = null
-                                    persist(seeded)
-                                },
-                                onDragCancel = { draggedId = null },
-                                onDrag = { change, dragAmount ->
-                                    change.consume()
-                                    val w = canvasWidthPx.coerceAtLeast(1).toFloat()
-                                    val h = canvasHeightPx.coerceAtLeast(1).toFloat()
-                                    if (w > 0f && h > 0f) {
-                                        val cur = seeded[page.id] ?: return@detectDragGesturesAfterLongPress
-                                        val newX = (cur.x + dragAmount.x / w).coerceIn(0f, 1f)
-                                        val newY = (cur.y + dragAmount.y / h).coerceIn(0f, 1f)
-                                        seeded[page.id] = Offset(newX, newY)
-                                    }
-                                }
-                            )
-                        },
-                    contentAlignment = Alignment.Center
-                ) {
-                    Column(
-                        horizontalAlignment = Alignment.CenterHorizontally,
-                        verticalArrangement = Arrangement.Center
-                    ) {
-                        Box(
-                            modifier = Modifier
-                                .size(40.dp)
-                                .clip(CircleShape)
-                                .background(page.accentColor.copy(alpha = 0.15f)),
-                            contentAlignment = Alignment.Center
-                        ) {
-                            Icon(
-                                imageVector = page.icon,
-                                contentDescription = page.title,
-                                tint = page.accentColor,
-                                modifier = Modifier.size(24.dp)
-                            )
-                        }
-                        Spacer(Modifier.height(4.dp))
-                        Text(
-                            page.title,
-                            style = MaterialTheme.typography.labelSmall,
-                            color = ClaudeText,
-                            fontSize = 10.sp,
-                            maxLines = 1,
-                            textAlign = TextAlign.Center
-                        )
-                    }
+                .offset {
+                    val shift = (gridHeightPx * collapseProgress.value).toInt() +
+                        (with(density) { 80.dp.toPx() }).toInt()
+                    IntOffset(0, shift)
                 }
-            }
-        }
-
-        // ── Bottom handle (swipe up to open curtain drawer) ─────────────
-        DrawerPullHandle(
-            modifier = Modifier
-                .align(Alignment.BottomCenter)
-                .fillMaxWidth(),
-            onPullUp = onDrawerPullUp
-        )
-    }
-}
-
-/* ════════════════════════════════════════════════════════════════════
-   PROGRESSIVE CURTAIN DRAWER
-   — bottom sheet whose height tracks the drag, revealing rows one-by-one.
-   ════════════════════════════════════════════════════════════════════ */
-
-/**
- * Multi-level bottom navigation drawer (curtain).
- *
- * The drawer has three rows:
- *   • Row 1 (always visible): 4 main pages — Mijozlar / Skuterlar / Kontraktlar / Moliya
- *   • Row 2 (revealed at ≥30% drag): Hisobotlar / Tarix
- *   • Row 3 (revealed at ≥70% drag): Chiqindi / Sozlamalar
- *
- * When [expanded] = true, the curtain animates up; the user can drag it
- * higher to reveal more rows. Swipe down or tap scrim to dismiss.
- *
- * @param expanded whether the drawer is currently shown.
- * @param onDismiss called when user dismisses the drawer.
- * @param onPageSelect called with page id when a row item is tapped.
- */
-@Composable
-fun NavigationDrawerSheet(
-    expanded: Boolean,
-    onDismiss: () -> Unit,
-    onPageSelect: (String) -> Unit
-) {
-    if (!expanded) return
-    val scope = rememberCoroutineScope()
-
-    // Curtain height as a fraction (0..1) of the screen height.
-    // 0.18 = only row 1 visible (compact); 0.45 = row 2 added; 0.70 = all rows.
-    val minH = 0.18f
-    val midH = 0.45f
-    val maxH = 0.70f
-    val heightFraction = remember { Animatable(minH) }
-
-    LaunchedEffect(expanded) {
-        if (expanded) {
-            // Snap to min then animate up to mid for a smooth reveal.
-            heightFraction.snapTo(minH)
-            heightFraction.animateTo(midH, tween(280))
-        }
-    }
-
-    Box(modifier = Modifier.fillMaxSize()) {
-        // Scrim — tap dismisses.
-        Box(
-            modifier = Modifier
-                .fillMaxSize()
-                .background(Color.Black.copy(alpha = 0.35f))
-                .combinedClickable(onClick = onDismiss, onLongClick = {})
-        )
-
-        // The curtain itself.
-        Surface(
-            modifier = Modifier
-                .align(Alignment.BottomCenter)
-                .fillMaxWidth()
-                .fillMaxHeight(heightFraction.value)
+                // Swipe down anywhere on the grid → collapse.
                 .pointerInput(Unit) {
                     detectVerticalDragGestures(
                         onVerticalDrag = { change, dragAmount ->
                             change.consume()
-                            // dragAmount > 0 = finger moved down → curtain shrinks.
-                            // dragAmount < 0 = finger moved up → curtain grows.
-                            val screenPx = this.size.height.toFloat().coerceAtLeast(1f)
-                            val delta = -dragAmount / screenPx
-                            scope.launch {
-                                heightFraction.snapTo(
-                                    (heightFraction.value + delta).coerceIn(minH, maxH)
-                                )
+                            // dragAmount > 0 = finger moving down → collapse
+                            if (dragAmount > 6f && collapseProgress.value < 0.5f) {
+                                collapse()
+                            } else if (dragAmount < -6f && collapseProgress.value > 0.5f) {
+                                expand()
                             }
                         }
                     )
-                },
-            color = ClaudeCard,
-            shape = RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp)
+                }
+                .padding(top = 56.dp, start = 16.dp, end = 16.dp),
+            horizontalAlignment = Alignment.CenterHorizontally
         ) {
-            Column(
-                modifier = Modifier.fillMaxSize().padding(top = 8.dp, bottom = 16.dp),
-                horizontalAlignment = Alignment.CenterHorizontally
+            // ── Title at top (like MIUI clock + date) ─────────────────────
+            Text(
+                "Scooter Rent",
+                style = MaterialTheme.typography.headlineMedium,
+                color = Color.White,
+                fontWeight = FontWeight.Light,
+                letterSpacing = 1.sp
+            )
+            Spacer(Modifier.height(2.dp))
+            Text(
+                "Boshqaruv tizimi",
+                style = MaterialTheme.typography.bodySmall,
+                color = Color.White.copy(alpha = 0.78f),
+                fontWeight = FontWeight.Normal
+            )
+
+            Spacer(Modifier.height(40.dp))
+
+            // ── Grid of all pages (4 columns × 2 rows = 8 items) ─────────
+            // Using Column{Row,Row} for a stable 4×2 layout (pages.count = 8).
+            val rows = pages.chunked(4)
+            rows.forEach { rowPages ->
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceEvenly,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    rowPages.forEach { page ->
+                        LauncherTile(
+                            page = page,
+                            onClick = { onPageClick(page.id) }
+                        )
+                    }
+                }
+                Spacer(Modifier.height(28.dp))
+            }
+
+            Spacer(Modifier.weight(1f))
+
+            // ── Page indicator dots (always 1 active = 4 dots, page 1 of 1) ──
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(bottom = 16.dp),
+                horizontalArrangement = Arrangement.Center
             ) {
-                // Drag handle pill at the top of the curtain.
-                Box(
-                    modifier = Modifier
-                        .width(44.dp)
-                        .height(5.dp)
-                        .clip(RoundedCornerShape(3.dp))
-                        .background(ClaudeTextSecondary)
-                )
-                Spacer(Modifier.height(8.dp))
-
-                // Row 1 — always visible (4 main pages).
-                DrawerRow(
-                    pages = listOf(
-                        DefaultLauncherPages[0], // Mijozlar
-                        DefaultLauncherPages[1], // Skuterlar
-                        DefaultLauncherPages[2], // Kontraktlar
-                        DefaultLauncherPages[3]  // Moliya
-                    ),
-                    onPageSelect = { id -> onPageSelect(id); onDismiss() }
-                )
-
-                // Row 2 — revealed at ≥30%.
-                if (heightFraction.value >= 0.30f) {
-                    Spacer(Modifier.height(12.dp))
-                    DrawerRow(
-                        pages = listOf(
-                            DefaultLauncherPages[4], // Hisobotlar
-                            DefaultLauncherPages[5]  // Tarix
-                        ),
-                        onPageSelect = { id -> onPageSelect(id); onDismiss() }
+                repeat(4) { i ->
+                    Box(
+                        modifier = Modifier
+                            .padding(horizontal = 4.dp)
+                            .size(if (i == 0) 8.dp else 6.dp)
+                            .clip(CircleShape)
+                            .background(
+                                if (i == 0) Color.White
+                                else Color.White.copy(alpha = 0.45f)
+                            )
                     )
                 }
+            }
+        }
 
-                // Row 3 — revealed at ≥70%.
-                if (heightFraction.value >= 0.70f) {
-                    Spacer(Modifier.height(12.dp))
-                    DrawerCompactRow(
-                        pages = listOf(
-                            DefaultLauncherPages[6], // Chiqindi
-                            DefaultLauncherPages[7]  // Sozlamalar
-                        ),
-                        onPageSelect = { id -> onPageSelect(id); onDismiss() }
+        // ── Bottom dock (4 main pages, always visible) ───────────────────
+        // Translucent dark "frosted glass" background. Swipe up when
+        // collapsed → expand grid.
+        Box(
+            modifier = Modifier
+                .align(Alignment.BottomCenter)
+                .fillMaxWidth()
+                .height(96.dp)
+                .background(Color(0xFF1A1410).copy(alpha = 0.78f))
+                .pointerInput(collapseProgress.value) {
+                    detectVerticalDragGestures(
+                        onVerticalDrag = { change, dragAmount ->
+                            change.consume()
+                            // dragAmount < 0 = finger moving up → expand
+                            if (dragAmount < -6f && collapseProgress.value > 0.5f) {
+                                expand()
+                            } else if (dragAmount > 6f && collapseProgress.value < 0.5f) {
+                                collapse()
+                            }
+                        }
                     )
                 }
-
-                Spacer(Modifier.weight(1f))
-
-                // Hint at the bottom — only visible when curtain is small.
-                if (heightFraction.value < 0.40f) {
-                    Text(
-                        "Yuqoriga sudrang — qo'shimcha sahifalar",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = ClaudeTextSecondary,
-                        fontSize = 10.sp
+                .padding(horizontal = 24.dp, vertical = 12.dp),
+            contentAlignment = Alignment.Center
+        ) {
+            Row(
+                modifier = Modifier.fillMaxSize(),
+                horizontalArrangement = Arrangement.SpaceEvenly,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                pages.filter { it.pinnedToDock }.forEach { page ->
+                    DockTile(
+                        page = page,
+                        onClick = { onPageClick(page.id) }
                     )
                 }
             }
@@ -464,60 +339,12 @@ fun NavigationDrawerSheet(
 }
 
 /* ──────────────────────────────────────────────────────────────────────
-   Smaller building blocks
+   Tile composables
    ────────────────────────────────────────────────────────────────────── */
 
-/** Full row with 4 square-ish icons (with labels). */
+/** Grid tile — squircle background + white icon + white label below. */
 @Composable
-private fun DrawerRow(
-    pages: List<LauncherPage>,
-    onPageSelect: (String) -> Unit
-) {
-    Row(
-        modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp),
-        horizontalArrangement = Arrangement.SpaceEvenly,
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        pages.forEach { page ->
-            DrawerItem(page = page, onClick = { onPageSelect(page.id) })
-        }
-    }
-}
-
-/** Compact square icons (no labels) — used for the last row. */
-@Composable
-private fun DrawerCompactRow(
-    pages: List<LauncherPage>,
-    onPageSelect: (String) -> Unit
-) {
-    Row(
-        modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp),
-        horizontalArrangement = Arrangement.SpaceEvenly,
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        pages.forEach { page ->
-            Box(
-                modifier = Modifier
-                    .size(56.dp)
-                    .clip(RoundedCornerShape(14.dp))
-                    .background(page.accentColor.copy(alpha = 0.14f))
-                    .combinedClickable(onClick = { onPageSelect(page.id) }, onLongClick = {}),
-                contentAlignment = Alignment.Center
-            ) {
-                Icon(
-                    imageVector = page.icon,
-                    contentDescription = page.title,
-                    tint = page.accentColor,
-                    modifier = Modifier.size(32.dp)
-                )
-            }
-        }
-    }
-}
-
-/** Single drawer item — square-ish card with icon + label below. */
-@Composable
-private fun DrawerItem(
+private fun LauncherTile(
     page: LauncherPage,
     onClick: () -> Unit
 ) {
@@ -530,79 +357,70 @@ private fun DrawerItem(
     ) {
         Box(
             modifier = Modifier
-                .size(56.dp)
-                .clip(RoundedCornerShape(14.dp))
-                .background(page.accentColor.copy(alpha = 0.14f)),
+                .size(64.dp)
+                .clip(RoundedCornerShape(20.dp))  // squircle-ish
+                .background(page.tileColor)
+                .border(1.dp, Color.White.copy(alpha = 0.12f), RoundedCornerShape(20.dp)),
             contentAlignment = Alignment.Center
         ) {
             Icon(
                 imageVector = page.icon,
                 contentDescription = page.title,
-                tint = page.accentColor,
-                modifier = Modifier.size(32.dp)
+                tint = Color.White,
+                modifier = Modifier.size(34.dp)
             )
         }
-        Spacer(Modifier.height(4.dp))
+        Spacer(Modifier.height(6.dp))
         Text(
             page.title,
             style = MaterialTheme.typography.labelSmall,
-            color = ClaudeText,
+            color = Color.White,
             fontSize = 11.sp,
-            maxLines = 1
+            fontWeight = FontWeight.Medium,
+            maxLines = 1,
+            textAlign = TextAlign.Center
         )
     }
 }
 
-/**
- * Handle bar at the very bottom of the launcher — swipe up to open the
- * curtain drawer. 36dp tall, full-width, with a pill + hint text.
- */
+/** Dock tile — slightly larger, no label (icon only, like Android dock). */
 @Composable
-private fun DrawerPullHandle(
-    modifier: Modifier = Modifier,
-    onPullUp: () -> Unit
+private fun DockTile(
+    page: LauncherPage,
+    onClick: () -> Unit
 ) {
-    val scope = rememberCoroutineScope()
-    val dragAccumulator = remember { Animatable(0f) }
-
     Box(
-        modifier = modifier
-            .height(40.dp)
-            .background(ClaudeCard)
-            .pointerInput(Unit) {
-                detectVerticalDragGestures(
-                    onVerticalDrag = { change, dragAmount ->
-                        change.consume()
-                        // dragAmount < 0 = swipe up (open).
-                        scope.launch {
-                            dragAccumulator.snapTo(
-                                (dragAccumulator.value - dragAmount / 200f).coerceIn(0f, 1f)
-                            )
-                            if (dragAccumulator.value > 0.5f) {
-                                onPullUp()
-                                dragAccumulator.snapTo(0f)
-                            }
-                        }
-                    }
-                )
-            },
+        modifier = Modifier
+            .size(60.dp)
+            .clip(RoundedCornerShape(18.dp))
+            .background(page.tileColor)
+            .combinedClickable(onClick = onClick, onLongClick = {}),
         contentAlignment = Alignment.Center
     ) {
-        Column(horizontalAlignment = Alignment.CenterHorizontally) {
-            Box(
-                modifier = Modifier
-                    .width(44.dp)
-                    .height(5.dp)
-                    .clip(RoundedCornerShape(3.dp))
-                    .background(ClaudeTextSecondary)
-            )
-            Spacer(Modifier.height(4.dp))
-            Text(
-                "Yuqoriga torting — navigatsiya",
-                style = MaterialTheme.typography.labelSmall,
-                color = ClaudeTextSecondary,
-                fontSize = 10.sp
-            )
-        }
+        Icon(
+            imageVector = page.icon,
+            contentDescription = page.title,
+            tint = Color.White,
+            modifier = Modifier.size(32.dp)
+        )
     }
+}
+
+/* ════════════════════════════════════════════════════════════════════
+   COMPAT SHIM — old curtain drawer API kept as no-op so MainActivity
+   still compiles if it references NavigationDrawerSheet. The new
+   swipe-down-to-dock behavior replaces the curtain entirely.
+   ════════════════════════════════════════════════════════════════════ */
+
+/**
+ * @deprecated The curtain drawer is replaced by the swipe-down-to-dock
+ * behavior in [LauncherScreen]. Kept as a no-op for source compatibility.
+ */
+@Composable
+fun NavigationDrawerSheet(
+    expanded: Boolean,
+    onDismiss: () -> Unit,
+    onPageSelect: (String) -> Unit
+) {
+    // No-op — new design uses swipe-down on launcher to reveal dock-only mode.
 }
