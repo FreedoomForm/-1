@@ -253,6 +253,10 @@ class MainActivity : ComponentActivity() {
                 // bottom nav (collapsed). User can pull the bottom nav up
                 // to reveal the secondary icons row.
                 var showSplash by remember { mutableStateOf(true) }
+                // Launcher is deliberately shown after every cold start. It
+                // replaces the old behavior that jumped straight to renters.
+                var showLauncher by remember { mutableStateOf(true) }
+                var launcherTab by remember { mutableStateOf(0) }
 
                 // Авто-запрос SMS + POST_NOTIFICATIONS (Android 13+) + READ_PHONE_STATE при первом старте.
                 LaunchedEffect(Unit) {
@@ -265,11 +269,14 @@ class MainActivity : ComponentActivity() {
                 }
 
                 if (showSplash) {
-                    SplashScreen(
-                        onFinished = { showSplash = false }
-                    )
+                    SplashScreen(onFinished = { showSplash = false })
+                } else if (showLauncher) {
+                    LauncherHomeScreen { tab ->
+                        launcherTab = tab
+                        showLauncher = false
+                    }
                 } else {
-                    MainScreen()
+                    MainScreen(initialTab = launcherTab)
                 }
             }
         }
@@ -461,6 +468,7 @@ fun SplashScreen(
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun MainScreen(
+    initialTab: Int = 0,
     viewModel: RenterViewModel = viewModel(),
     settingsViewModel: SettingsViewModel = viewModel(),
     scooterViewModel: ScooterViewModel = viewModel(),
@@ -471,7 +479,7 @@ fun MainScreen(
     trashViewModel: com.example.ui.TrashViewModel = viewModel(),
     historyTimelineViewModel: com.example.ui.HistoryViewModel = viewModel()
 ) {
-    var currentTab by remember { mutableStateOf(0) }
+    var currentTab by remember { mutableStateOf(initialTab) }
     var showAddDialog by remember { mutableStateOf(false) }
     var showAddScooterDialog by remember { mutableStateOf(false) }
     var renterToEdit by remember { mutableStateOf<Renter?>(null) }
