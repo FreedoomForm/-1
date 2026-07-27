@@ -50,7 +50,6 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.compose.ui.ExperimentalComposeUiApi
 import com.example.ui.theme.ClaudeAccent
 import com.example.ui.theme.ClaudeAccentBg
 import com.example.ui.theme.ClaudeBackground
@@ -608,7 +607,6 @@ private fun handleDayClickWithAddCallback(
 }
 
 /* ── Ячейка дня (объявлена как RowScope для доступа к Modifier.weight) ─── */
-@OptIn(ExperimentalComposeUiApi::class)
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun RowScope.DayCell(
