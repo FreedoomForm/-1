@@ -290,7 +290,7 @@ class MainActivity : ComponentActivity() {
                         }
                     )
                 } else {
-                    MainScreen(initialTab = launcherTab)
+                    MainScreen(initialTab = launcherTab, onShowLauncher = { showLauncher = true })
                 }
             }
         }
@@ -483,6 +483,7 @@ fun SplashScreen(
 @Composable
 fun MainScreen(
     initialTab: Int = 0,
+    onShowLauncher: () -> Unit = {},
     viewModel: RenterViewModel = viewModel(),
     settingsViewModel: SettingsViewModel = viewModel(),
     scooterViewModel: ScooterViewModel = viewModel(),
@@ -556,16 +557,6 @@ fun MainScreen(
     // ── Навигация ────────────────────────────────────────────────────
     var navState by remember { mutableStateOf<NavigationState>(NavigationState.MainView) }
 
-    // §9.A: expandable bottom navigation.
-    // The bottom nav panel can be pulled UP to reveal a second row of
-    // secondary icons (Reports/History/Trash/Settings). Defaults to false —
-    // after splash, the user lands directly on Mijozlar with only the
-    // 4 primary icons visible at the bottom.
-    //
-    // User can expand it by:
-    //   • pulling UP on the bottom nav panel
-    //   • tapping the "Skuter Ijarasi" title in the TopAppBar
-    var bottomNavExpanded by remember { mutableStateOf(false) }
 
     var renterSortState by remember { mutableStateOf(TableSortState()) }
     var scooterSortState by remember { mutableStateOf(TableSortState()) }
@@ -1037,7 +1028,7 @@ fun MainScreen(
                     Text(
                         "Skuter Ijarasi",
                         style = MaterialTheme.typography.headlineMedium.copy(fontWeight = FontWeight.Bold),
-                        modifier = Modifier.clickable { bottomNavExpanded = true }
+                        modifier = Modifier.clickable { onShowLauncher() }
                     )
                 },
                 colors = TopAppBarDefaults.topAppBarColors(
@@ -1248,45 +1239,31 @@ fun MainScreen(
             )
         },
         bottomBar = {
-            // ── §9.A: Expandable bottom navigation ────────────────────────
-            // 4 primary icons always visible. Pull UP on the panel (or tap
-            // the title "Skuter Ijarasi") to reveal a second row with 4
-            // secondary icons (Reports/History/Trash/Settings) and an
-            // animated down-arrow hint at the top.
-            //
-            // Icons + labels are identical in style between the two rows,
-            // per user request.
-            com.example.ui.components.ExpandableBottomNav(
-                selectedId = when (currentTab) {
-                    0    -> "renters"
-                    1    -> "scooters"
-                    2    -> "contracts"
-                    5    -> "finansi"
-                    4    -> "reports"
-                    7    -> "history"
-                    8    -> "trash"
-                    6    -> "settings"
-                    else -> "renters"
-                },
-                onPageClick = { pageId ->
-                    // Collapse the panel after a secondary page is chosen
-                    // (so the user sees the page they just picked).
-                    bottomNavExpanded = false
-                    currentTab = when (pageId) {
-                        "renters"   -> 0
-                        "scooters"  -> 1
-                        "contracts" -> 2
-                        "finansi"   -> 5
-                        "reports"   -> 4
-                        "history"   -> 7
-                        "trash"     -> 8
-                        "settings"  -> 6
-                        else        -> 0
-                    }
-                },
-                expanded = bottomNavExpanded,
-                onExpandedChange = { bottomNavExpanded = it }
-            )
+            // The full Android-home launcher is shown after splash and can be
+            // reopened from the title. Main content keeps a stable 4-icon dock
+            // so secondary pages never overlay or clip the current screen.
+            NavigationBar(containerColor = ClaudeCard, contentColor = ClaudeText) {
+                listOf(
+                    Triple(0, "Mijozlar", Icons.Default.Person),
+                    Triple(1, "Skuterlar", Icons.Default.DirectionsBike),
+                    Triple(2, "Kontraktlar", Icons.Default.Description),
+                    Triple(5, "Moliya", Icons.Default.AccountBalanceWallet)
+                ).forEach { (tab, label, icon) ->
+                    NavigationBarItem(
+                        selected = currentTab == tab,
+                        onClick = { currentTab = tab },
+                        icon = { Icon(icon, label) },
+                        label = { Text(label) },
+                        colors = NavigationBarItemDefaults.colors(
+                            selectedIconColor = ClaudeAccent,
+                            unselectedIconColor = ClaudeTextSecondary,
+                            selectedTextColor = ClaudeAccent,
+                            unselectedTextColor = ClaudeTextSecondary,
+                            indicatorColor = ClaudeAccentBg
+                        )
+                    )
+                }
+            }
         }
     ) { innerPadding ->
         Column(
