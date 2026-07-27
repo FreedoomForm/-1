@@ -249,9 +249,9 @@ class MainActivity : ComponentActivity() {
                 // ── §9A: Splash screen with loading animation ────────────────
                 // Shows logo + progress indicator while data prepares, then
                 // smoothly transitions to MainScreen. MainScreen's first frame
-                // opens the launcher (showLauncher defaults to true) — user
-                // sees the Android-home-screen-style launcher right after
-                // splash and taps an icon to enter the actual app screens.
+                // shows the Mijozlar page with the 4 primary icons in the
+                // bottom nav (collapsed). User can pull the bottom nav up
+                // to reveal the secondary icons row.
                 var showSplash by remember { mutableStateOf(true) }
 
                 // Авто-запрос SMS + POST_NOTIFICATIONS (Android 13+) + READ_PHONE_STATE при первом старте.
@@ -534,11 +534,16 @@ fun MainScreen(
     // ── Навигация ────────────────────────────────────────────────────
     var navState by remember { mutableStateOf<NavigationState>(NavigationState.MainView) }
 
-    // §9.A: launcher overlay.
-    // Defaults to true so launcher opens automatically after splash screen
-    // (splash → MainScreen first-frame → LauncherScreen shown). User taps an
-    // icon to dismiss; can re-open via the Apps icon in the top app bar.
-    var showLauncher by remember { mutableStateOf(true) }
+    // §9.A: expandable bottom navigation.
+    // The bottom nav panel can be pulled UP to reveal a second row of
+    // secondary icons (Reports/History/Trash/Settings). Defaults to false —
+    // after splash, the user lands directly on Mijozlar with only the
+    // 4 primary icons visible at the bottom.
+    //
+    // User can expand it by:
+    //   • pulling UP on the bottom nav panel
+    //   • tapping the "Skuter Ijarasi" title in the TopAppBar
+    var bottomNavExpanded by remember { mutableStateOf(false) }
 
     var renterSortState by remember { mutableStateOf(TableSortState()) }
     var scooterSortState by remember { mutableStateOf(TableSortState()) }
@@ -992,29 +997,25 @@ fun MainScreen(
         NavigationState.MainView -> { /* продолжаем — основной Scaffold ниже */ }
     }
 
-    // ── §9.A: Wrapper Box — Scaffold + Launcher overlay ────────────────
-    // Launcher рисуется ПОВЕРХ Scaffold (включая topBar + bottomBar), чтобы
-    // свайп сверху вниз плавно "сдвигал" launcher и под ним открывалась
-    // страница «Mijozlar» (или активная вкладка) целиком, без осколков
-    // верхней панели. Launcher — fillMaxSize, его фон белый, поэтому пока
-    // showLauncher=true пользователь видит только launcher.
-    Box(modifier = Modifier.fillMaxSize()) {
+    // ── §9.A: Scaffold with expandable bottom navigation ───────────────
+    // The bottom navigation panel is itself expandable — pulling it up
+    // reveals a second row of secondary icons (Reports/History/Trash/
+    // Settings). No more full-screen launcher overlay; the bottom nav
+    // IS the launcher now.
     Scaffold(
         modifier = Modifier.fillMaxSize(),
         containerColor = ClaudeBackground,
         topBar = {
             TopAppBar(
                 title = {
-                    // ── §9.A: Title is tappable — opens the launcher overlay.
-                    // Since the launcher button was removed from the TopAppBar
-                    // and the bottom nav was reduced to 4 primary icons, the
-                    // user needs a way back to the launcher to reach secondary
-                    // pages (Reports, History, Trash, Settings). Tapping the
-                    // title "Skuter Ijarasi" re-opens the launcher.
+                    // ── §9.A: Title is tappable — expands the bottom nav.
+                    // Tapping "Skuter Ijarasi" pulls up the bottom nav panel
+                    // to reveal the secondary icons row (a shortcut instead
+                    // of having to swipe up on the bottom nav).
                     Text(
                         "Skuter Ijarasi",
                         style = MaterialTheme.typography.headlineMedium.copy(fontWeight = FontWeight.Bold),
-                        modifier = Modifier.clickable { showLauncher = true }
+                        modifier = Modifier.clickable { bottomNavExpanded = true }
                     )
                 },
                 colors = TopAppBarDefaults.topAppBarColors(
@@ -1024,11 +1025,11 @@ fun MainScreen(
                 ),
                 actions = {
                     // ── §9.A: Кнопка launcher (домик) убрана из TopAppBar по
-                    // запросу пользователя — она стояла слева от кнопки сканера.
-                    // Launcher теперь открывается автоматически после splash
-                    // (showLauncher=true), свайп вниз закрывает его и открывает
-                    // страницу «Mijozlar». Отдельная кнопка в верхнем баре
-                    // больше не нужна.
+                    // запросу пользователя. Вместо неё — expandable bottom nav:
+                    // тяни нижнюю панель вверх (или жми на заголовок «Skuter
+                    // Ijarasi»), чтобы открыть второй ряд иконок (Reports /
+                    // History / Trash / Settings). Свайп вниз или клик по
+                    // стрелке закрывает второй ряд обратно.
 
                     // ── Кнопка сканера (Mistral OCR) ──────────────────────────────
                     // Иконка камеры, доступна с любой вкладки. Открывает экран
@@ -1225,66 +1226,45 @@ fun MainScreen(
             )
         },
         bottomBar = {
-            // ── §9.A: Bottom navigation reduced to 4 primary icons ────────
-            // per user request: "в обычном режиме остав в нижней панели
-            // только четыре иконки". Остальные страницы (Tranzaksiya, Reports,
-            // Settings, Tarix, Chiqindi, Jurnal) доступны через launcher —
-            // пользователь свайпает вниз по верхнему бару или жмёт на заголовок
-            // «Skuter Ijarasi», чтобы открыть launcher с secondary иконками.
-            NavigationBar(containerColor = ClaudeCard, contentColor = ClaudeText) {
-                NavigationBarItem(
-                    selected = currentTab == 0,
-                    onClick = { currentTab = 0 },
-                    icon = { Icon(Icons.Default.List, contentDescription = "Ijarachilar") },
-                    label = { Text("Ijarachilar") },
-                    colors = NavigationBarItemDefaults.colors(
-                        selectedIconColor = ClaudeAccent,
-                        unselectedIconColor = ClaudeTextSecondary,
-                        selectedTextColor = ClaudeAccent,
-                        unselectedTextColor = ClaudeTextSecondary,
-                        indicatorColor = ClaudeAccentBg
-                    )
-                )
-                NavigationBarItem(
-                    selected = currentTab == 1,
-                    onClick = { currentTab = 1 },
-                    icon = { Icon(Icons.Default.DirectionsBike, contentDescription = "Skuterlar") },
-                    label = { Text("Skuterlar") },
-                    colors = NavigationBarItemDefaults.colors(
-                        selectedIconColor = ClaudeAccent,
-                        unselectedIconColor = ClaudeTextSecondary,
-                        selectedTextColor = ClaudeAccent,
-                        unselectedTextColor = ClaudeTextSecondary,
-                        indicatorColor = ClaudeAccentBg
-                    )
-                )
-                NavigationBarItem(
-                    selected = currentTab == 2,
-                    onClick = { currentTab = 2 },
-                    icon = { Icon(Icons.Default.Description, contentDescription = "Kontraktlar") },
-                    label = { Text("Kontraktlar") },
-                    colors = NavigationBarItemDefaults.colors(
-                        selectedIconColor = ClaudeAccent,
-                        unselectedIconColor = ClaudeTextSecondary,
-                        selectedTextColor = ClaudeAccent,
-                        unselectedTextColor = ClaudeTextSecondary,
-                        indicatorColor = ClaudeAccentBg
-                    )
-                )
-                NavigationBarItem(
-                    selected = currentTab == 5,
-                    onClick = { currentTab = 5 },
-                    icon = { Icon(Icons.Default.AccountBalanceWallet, contentDescription = "Finansi") },
-                    label = { Text("Finansi") },
-                    colors = NavigationBarItemDefaults.colors(
-                        selectedIconColor = ClaudeAccent,
-                        unselectedIconColor = ClaudeTextSecondary,
-                        selectedTextColor = ClaudeAccent,
-                        unselectedTextColor = ClaudeTextSecondary,
-                        indicatorColor = ClaudeAccentBg
-                    )
-                )
-            }
+            // ── §9.A: Expandable bottom navigation ────────────────────────
+            // 4 primary icons always visible. Pull UP on the panel (or tap
+            // the title "Skuter Ijarasi") to reveal a second row with 4
+            // secondary icons (Reports/History/Trash/Settings) and an
+            // animated down-arrow hint at the top.
+            //
+            // Icons + labels are identical in style between the two rows,
+            // per user request.
+            com.example.ui.components.ExpandableBottomNav(
+                selectedId = when (currentTab) {
+                    0    -> "renters"
+                    1    -> "scooters"
+                    2    -> "contracts"
+                    5    -> "finansi"
+                    4    -> "reports"
+                    7    -> "history"
+                    8    -> "trash"
+                    6    -> "settings"
+                    else -> "renters"
+                },
+                onPageClick = { pageId ->
+                    // Collapse the panel after a secondary page is chosen
+                    // (so the user sees the page they just picked).
+                    bottomNavExpanded = false
+                    currentTab = when (pageId) {
+                        "renters"   -> 0
+                        "scooters"  -> 1
+                        "contracts" -> 2
+                        "finansi"   -> 5
+                        "reports"   -> 4
+                        "history"   -> 7
+                        "trash"     -> 8
+                        "settings"  -> 6
+                        else        -> 0
+                    }
+                },
+                expanded = bottomNavExpanded,
+                onExpandedChange = { bottomNavExpanded = it }
+            )
         }
     ) { innerPadding ->
         Column(
@@ -2356,37 +2336,11 @@ fun MainScreen(
             }
         }
 
-        // ── §9.A: Launcher overlay (Android home-screen style) ───────────
-        // Launcher рисуется ПОВЕРХ MainView, а не вместо него. Поэтому при
-        // свайпе сверху вниз launcher уезжает вниз и под ним видна страница
-        // «Mijozlar» (или та вкладка, которая сейчас активна — по умолчанию 0).
-        // Это поведение повторяет Android home screen: свайп убирает лаунчер,
-        // открывая приложение, которое под ним.
-        //
-        // Старый dock и wallpaper gradient убраны — теперь launcher белый,
-        // с двумя рядами иконок (4 secondary сверху + 4 primary в центре).
+        // ── §9.A: Bottom navigation is now EXPANDABLE ──────────────────
+        // The bottom nav itself can be pulled up to reveal a second row
+        // of secondary icons. No more full-screen launcher overlay — the
+        // expandable bottom nav IS the launcher.
     }   // ← end of Scaffold (Column was already closed earlier at L2084)
-    if (showLauncher) {
-        com.example.ui.components.LauncherScreen(
-            onPageClick = { pageId ->
-                showLauncher = false
-                // Маппинг id страницы → currentTab.
-                currentTab = when (pageId) {
-                    "renters"   -> 0
-                    "scooters"  -> 1
-                    "contracts" -> 2
-                    "finansi"   -> 5   // virtual cards + transfers
-                    "reports"   -> 4
-                    "history"   -> 7   // HistoryScreen
-                    "trash"     -> 8   // TrashScreen
-                    "settings"  -> 6
-                    else        -> 0
-                }
-            },
-            onCollapsed = { showLauncher = false }
-        )
-    }
-    }   // ← end of wrapper Box
 }
 
 /* ============================================================================
