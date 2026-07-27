@@ -17,6 +17,10 @@ android {
     versionCode = 107
     versionName = "1.2.107"
 
+    // Never commit an AI key. Release/CI injects it through an environment
+    // variable; an empty key simply disables external Mistral calls.
+    buildConfigField("String", "MISTRAL_API_KEY", "\"${System.getenv("MISTRAL_API_KEY") ?: ""}\"")
+
     testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
   }
 

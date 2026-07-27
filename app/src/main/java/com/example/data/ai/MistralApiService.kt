@@ -2,6 +2,7 @@ package com.example.data.ai
 
 import android.util.Base64
 import android.util.Log
+import com.example.BuildConfig
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -20,8 +21,9 @@ import java.util.concurrent.TimeUnit
  *      команд → JSON-команда для выполнения в приложении
  *      (через `mistral-large-latest`).
  *
- * API-ключ жёстко зашит в [API_KEY] и НЕ отображается в UI. Ключ принадлежит
- * приложению и используется только для серверных запросов к Mistral.
+ * Ключ приходит только через BuildConfig из окружения сборки и никогда не
+ * хранится в исходниках, журнале или резервной копии. Пустой ключ отключает
+ * внешние вызовы Mistral безопасно.
  *
  * Все запросы выполняются синхронно (через OkHttp) — вызывающий код должен
  * запускать их в `Dispatchers.IO` корутины.
@@ -40,6 +42,10 @@ class MistralApiService(
      * @return распознанный текст (Markdown) или пустая строка при ошибке
      */
     fun performOcr(imageFile: File): String {
+        if (BuildConfig.MISTRAL_API_KEY.isBlank()) {
+            Log.w(TAG, "Mistral OCR skipped: key is not configured")
+            return ""
+        }
         try {
             if (!imageFile.exists() || imageFile.length() == 0L) {
                 Log.e(TAG, "performOcr: image file missing or empty: ${imageFile.absolutePath}")
@@ -67,7 +73,7 @@ class MistralApiService(
 
             val request = Request.Builder()
                 .url(ENDPOINT_OCR)
-                .addHeader("Authorization", "Bearer $API_KEY")
+                .addHeader("Authorization", "Bearer ${BuildConfig.MISTRAL_API_KEY}")
                 .addHeader("Content-Type", "application/json")
                 .addHeader("Accept", "application/json")
                 .post(requestBody.toRequestBody("application/json".toMediaType()))
@@ -124,6 +130,10 @@ class MistralApiService(
      * @return "сырая" строка ответа модели (нужно парсить через [CommandExecutor])
      */
     fun generateCommand(ocrText: String, dbSnapshot: String = ""): String {
+        if (BuildConfig.MISTRAL_API_KEY.isBlank()) {
+            Log.w(TAG, "Mistral command generation skipped: key is not configured")
+            return ""
+        }
         try {
             if (ocrText.isBlank()) {
                 Log.w(TAG, "generateCommand: ocrText is empty, nothing to send")
@@ -172,7 +182,7 @@ class MistralApiService(
 
             val request = Request.Builder()
                 .url(ENDPOINT_CHAT)
-                .addHeader("Authorization", "Bearer $API_KEY")
+                .addHeader("Authorization", "Bearer ${BuildConfig.MISTRAL_API_KEY}")
                 .addHeader("Content-Type", "application/json")
                 .addHeader("Accept", "application/json")
                 .post(requestBody.toRequestBody("application/json".toMediaType()))
@@ -254,12 +264,6 @@ class MistralApiService(
 
     companion object {
         private const val TAG = "MistralApiService"
-
-        /**
-         * API-ключ Mistral. Зашит в код — НЕ отображается в UI.
-         * Используется только для авторизации серверных запросов к api.mistral.ai.
-         */
-        private const val API_KEY = "aolOnvT9Ma0OYgN7Qv2uf1p40TQLYvKl"
 
         private const val ENDPOINT_OCR = "https://api.mistral.ai/v1/ocr"
         private const val ENDPOINT_CHAT = "https://api.mistral.ai/v1/chat/completions"
