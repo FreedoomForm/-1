@@ -46,8 +46,10 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -142,35 +144,65 @@ fun ExpandableBottomNav(
     expanded: Boolean,
     onExpandedChange: (Boolean) -> Unit
 ) {
-    fun toggleExpanded() = onExpandedChange(!expanded)
+    val scope = rememberCoroutineScope()
+    val progress = remember { Animatable(if (expanded) 1f else 0f) }
+    var isDragging by remember { mutableStateOf(false) }
+    val secondaryHeight = 118.dp
 
-    // Important: this is a normal Column, not an overlay. When it expands,
-    // Scaffold measures the larger bottom bar and moves content upward. This
-    // prevents secondary tiles from drawing over a table or below system nav.
+    // Parent can still programmatically expand/collapse, while a user drag
+    // owns intermediate progress values continuously.
+    LaunchedEffect(expanded) {
+        if (!isDragging) progress.animateTo(if (expanded) 1f else 0f, tween(260))
+    }
+    fun settle() {
+        val target = progress.value >= 0.5f
+        onExpandedChange(target)
+        scope.launch { progress.animateTo(if (target) 1f else 0f, tween(220)) }
+    }
+
     Column(
         modifier = Modifier
             .fillMaxWidth()
             .background(ClaudeCard)
             .pointerInput(Unit) {
                 detectVerticalDragGestures(
+                    onDragStart = {
+                        isDragging = true
+                        scope.launch { progress.stop() }
+                    },
                     onVerticalDrag = { change, dragAmount ->
                         change.consume()
-                        if (dragAmount < -10f && !expanded) onExpandedChange(true)
-                        else if (dragAmount > 10f && expanded) onExpandedChange(false)
-                    }
+                        scope.launch {
+                            // Up = negative drag = larger drawer. 300 px is a
+                            // comfortable full travel on compact phones.
+                            progress.snapTo((progress.value - dragAmount / 300f).coerceIn(0f, 1f))
+                        }
+                    },
+                    onDragEnd = { isDragging = false; settle() },
+                    onDragCancel = { isDragging = false; settle() }
                 )
             }
     ) {
-        AnimatedVisibility(
-            visible = expanded,
-            enter = expandVertically(expandFrom = Alignment.Bottom) + fadeIn(),
-            exit = shrinkVertically(shrinkTowards = Alignment.Bottom) + fadeOut()
+        // This physical height is measured by Scaffold at every drag frame:
+        // page content moves with the curtain instead of being overlaid.
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(secondaryHeight * progress.value)
+                .clipToBounds()
+                .background(ClaudeBackground)
         ) {
             Column(
-                modifier = Modifier.fillMaxWidth().background(ClaudeBackground).padding(horizontal = 12.dp, vertical = 8.dp),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .offset(y = secondaryHeight * (progress.value - 1f))
+                    .padding(horizontal = 12.dp, vertical = 8.dp),
                 horizontalAlignment = Alignment.CenterHorizontally
             ) {
-                AnimatedDownArrow(alpha = 1f, onClick = { onExpandedChange(false) })
+                AnimatedDownArrow(alpha = progress.value, onClick = {
+                    onExpandedChange(false)
+                    scope.launch { progress.animateTo(0f, tween(220)) }
+                })
                 Spacer(Modifier.height(6.dp))
                 Row(
                     modifier = Modifier.fillMaxWidth(),
@@ -181,14 +213,21 @@ fun ExpandableBottomNav(
                         NavTile(page, page.id == selectedId, { onPageClick(page.id) }, size = 60.dp, iconSize = 30.dp, labelSize = 11.sp)
                     }
                 }
-                Spacer(Modifier.height(6.dp))
             }
         }
         Row(
-            modifier = Modifier.fillMaxWidth()
+            modifier = Modifier
+                .fillMaxWidth()
                 .background(ClaudeCard)
                 .border(1.dp, Color.Black.copy(alpha = 0.06f))
-                .combinedClickable(onClick = { toggleExpanded() }, onLongClick = {})
+                .combinedClickable(
+                    onClick = {
+                        val target = progress.value < 0.5f
+                        onExpandedChange(target)
+                        scope.launch { progress.animateTo(if (target) 1f else 0f, tween(220)) }
+                    },
+                    onLongClick = {}
+                )
                 .padding(horizontal = 12.dp, vertical = 10.dp),
             horizontalArrangement = Arrangement.SpaceEvenly,
             verticalAlignment = Alignment.CenterVertically
