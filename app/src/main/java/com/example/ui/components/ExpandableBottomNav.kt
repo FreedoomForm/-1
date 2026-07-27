@@ -66,6 +66,7 @@ import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.ui.theme.ClaudeAccent
+import kotlinx.coroutines.launch
 import com.example.ui.theme.ClaudeBackground
 import com.example.ui.theme.ClaudeCard
 import com.example.ui.theme.ClaudeDarkText

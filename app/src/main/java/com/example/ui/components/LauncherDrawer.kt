@@ -62,6 +62,8 @@ import com.example.ui.theme.ClaudeBackground
 import com.example.ui.theme.ClaudeCard
 import com.example.ui.theme.ClaudeDarkBg
 import com.example.ui.theme.ClaudeDarkText
+import com.example.ui.theme.ClaudeText
+import com.example.ui.theme.ClaudeTextSecondary
 import com.example.ui.theme.ClaudeGold
 import com.example.ui.theme.ClaudeTeal
 import com.example.ui.theme.StatusOk
