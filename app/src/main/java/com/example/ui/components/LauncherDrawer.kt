@@ -36,7 +36,6 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -45,7 +44,6 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.pointer.pointerInput
@@ -71,37 +69,34 @@ import com.example.ui.theme.StatusArchived
 import kotlinx.coroutines.launch
 
 /**
- * §9.A — In-app launcher styled as Android home screen.
+ * §9.A — In-app launcher styled as a minimal Android home screen.
  *
- * Layout (matches the user's reference screenshot — MIUI/Xiaomi home):
+ * Layout (per user's latest request — clean white background, two rows):
  *
  *  ```
  *  ┌────────────────────────────────────────┐
- *  │  [wallpaper gradient + abstract shapes]│  ← full-screen wallpaper
+ *  │  (white background)                    │
  *  │                                        │
- *  │   ┌──┐   ┌──┐   ┌──┐   ┌──┐            │  ← upper grid (4 columns)
- *  │   │📋│   │🛵│   │📑│   │💰│            │     Mijozlar / Skuterlar /
- *  │   └──┘   └──┘   └──┘   └──┘            │     Kontraktlar / Moliya
- *  │   Mijoz  Skut   Kontr  Moliya          │
- *  │                                        │
- *  │   ┌──┐   ┌──┐   ┌──┐   ┌──┐            │  ← row 2
+ *  │   ┌──┐   ┌──┐   ┌──┐   ┌──┐            │  ← top row (4 secondary icons)
  *  │   │📊│   │🕓│   │🗑│   │⚙│             │     Hisobotlar / Tarix /
  *  │   └──┘   └──┘   └──┘   └──┘            │     Chiqindi / Sozlamalar
  *  │   Hisob  Tarix  Chiq   Sozlam          │
  *  │                                        │
- *  │              ● ● ● ●                   │  ← page indicator dots
  *  │                                        │
- *  │  ┌─────────────────────────────────┐   │  ← bottom dock (translucent
- *  │  │  [📋]    [🛵]    [📑]    [💰]   │   │     dark "frosted glass")
- *  │  └─────────────────────────────────┘   │
+ *  │   ┌──┐   ┌──┐   ┌──┐   ┌──┐            │  ← main row (4 primary icons)
+ *  │   │📋│   │🛵│   │📑│   │💰│            │     Mijozlar / Skuterlar /
+ *  │   └──┘   └──┘   └──┘   └──┘            │     Kontraktlar / Moliya
+ *  │   Mijoz  Skut   Kontr  Moliya          │
  *  └────────────────────────────────────────┘
  *  ```
  *
- * Swipe-down gesture (anywhere on grid): the entire upper grid + page dots
- * slide DOWN off-screen. Only the bottom dock stays visible. This is the
- * "mini Android home" mode — user can still tap dock icons to navigate.
+ * Swipe-down gesture (anywhere on launcher): the entire launcher panel
+ * slides DOWN off-screen, revealing the Renters page (or whatever main
+ * view is underneath) behind it. This is the new "open the app" gesture —
+ * the user swipes the launcher away like an Android home screen curtain.
  *
- * Swipe-up gesture on dock (when collapsed): grid slides back up.
+ * The previous bottom dock (4 translucent tiles) is REMOVED — the user
+ * wants only the two rows above, white background, no decorative wallpaper.
  */
 
 /** One launcher page descriptor. */
@@ -110,20 +105,22 @@ data class LauncherPage(
     val title: String,
     val icon: ImageVector,
     /** Squircle background color. */
-    val tileColor: Color = ClaudeAccent,
-    /** Whether this page is also pinned to the dock (defaults: 4 main pages). */
-    val pinnedToDock: Boolean = false
+    val tileColor: Color = ClaudeAccent
 )
 
 /**
- * Default page set. First 4 are pinned to the dock (most-used); the upper
- * grid shows ALL 8 (dock items appear in both places, exactly like Android).
+ * Default page set split into two visual rows:
+ *   • primary   — the 4 most-used pages (main row, large tiles)
+ *   • secondary — the 4 utility pages (top row, slightly smaller tiles)
  */
-val DefaultLauncherPages: List<LauncherPage> = listOf(
-    LauncherPage("renters",   "Mijozlar",    Icons.Default.Person,               tileColor = Color(0xFF2E7D32), pinnedToDock = true),
-    LauncherPage("scooters",  "Skuterlar",   Icons.Default.DirectionsBike,       tileColor = Color(0xFF1565C0), pinnedToDock = true),
-    LauncherPage("contracts", "Kontraktlar", Icons.Default.Apps,                 tileColor = Color(0xFFE65100), pinnedToDock = true),
-    LauncherPage("finansi",   "Moliya",      Icons.Default.AccountBalanceWallet, tileColor = Color(0xFFB8862B), pinnedToDock = true),
+val PrimaryLauncherPages: List<LauncherPage> = listOf(
+    LauncherPage("renters",   "Mijozlar",    Icons.Default.Person,               tileColor = Color(0xFF2E7D32)),
+    LauncherPage("scooters",  "Skuterlar",   Icons.Default.DirectionsBike,       tileColor = Color(0xFF1565C0)),
+    LauncherPage("contracts", "Kontraktlar", Icons.Default.Apps,                 tileColor = Color(0xFFE65100)),
+    LauncherPage("finansi",   "Moliya",      Icons.Default.AccountBalanceWallet, tileColor = Color(0xFFB8862B))
+)
+
+val SecondaryLauncherPages: List<LauncherPage> = listOf(
     LauncherPage("reports",   "Hisobotlar",  Icons.Default.Assessment,           tileColor = Color(0xFF6A1B9A)),
     LauncherPage("history",   "Tarix",       Icons.Default.History,              tileColor = Color(0xFF00838F)),
     LauncherPage("trash",     "Chiqindi",    Icons.Default.Delete,               tileColor = Color(0xFFC62828)),
@@ -131,251 +128,186 @@ val DefaultLauncherPages: List<LauncherPage> = listOf(
 )
 
 /* ════════════════════════════════════════════════════════════════════
-   LAUNCHER — Android-home-screen style.
+   LAUNCHER — minimal Android-home style, white background.
    ════════════════════════════════════════════════════════════════════ */
 
 /**
  * Full-screen launcher shown after the splash screen.
  *
- * @param pages list of pages to show.
- * @param onPageClick called with page id when user taps any icon (grid or dock).
+ * Renders as an overlay ABOVE the main view (which is rendered underneath
+ * by MainActivity). When the user swipes down, the launcher slides off the
+ * bottom of the screen, revealing the Renters / main view underneath.
+ *
+ * @param onPageClick called with page id when user taps any icon.
+ * @param onCollapsed  called when swipe-down animation completes — host
+ *                     (MainActivity) uses it to fully dismiss the launcher.
  */
 @Composable
 fun LauncherScreen(
-    pages: List<LauncherPage> = DefaultLauncherPages,
     onPageClick: (String) -> Unit,
-    onDrawerPullUp: () -> Unit = {}  // kept for signature compat, unused
+    onCollapsed: () -> Unit = {}
 ) {
     val scope = rememberCoroutineScope()
     val density = LocalDensity.current
 
-    // Collapse progress: 0f = fully expanded (grid visible), 1f = collapsed (only dock).
+    // Collapse progress: 0f = launcher fully visible, 1f = launcher slid
+    // off-screen entirely. Once it reaches 1f we notify the host so it can
+    // drop the overlay state.
     val collapseProgress = remember { Animatable(0f) }
-    var gridHeightPx by remember { mutableStateOf(1) }
+    var panelHeightPx by remember { mutableStateOf(1) }
+    var dismissed by remember { mutableStateOf(false) }
 
     fun collapse() {
+        if (dismissed) return
+        dismissed = true
         scope.launch {
-            collapseProgress.animateTo(1f, tween(280))
-        }
-    }
-    fun expand() {
-        scope.launch {
-            collapseProgress.animateTo(0f, tween(280))
+            collapseProgress.animateTo(1f, tween(320))
+            onCollapsed()
         }
     }
 
     Box(
         modifier = Modifier
             .fillMaxSize()
-            .background(
-                // Warm Driftwood-inspired wallpaper gradient.
-                Brush.verticalGradient(
-                    colors = listOf(
-                        Color(0xFF2A1F3D),  // deep violet (top)
-                        Color(0xFF6B3F2F),  // warm brown (middle)
-                        Color(0xFFC14E24),  // terracotta (lower-middle)
-                        Color(0xFFE6C97F)   // gold (bottom, behind dock)
-                    )
+            .background(ClaudeBackground)  // white, matches app background
+            .onGloballyPositioned { coords ->
+                panelHeightPx = coords.size.height.coerceAtLeast(1)
+            }
+            .offset {
+                // Slide the entire panel down off-screen as collapseProgress → 1.
+                val shift = (panelHeightPx * collapseProgress.value).toInt()
+                IntOffset(0, shift)
+            }
+            // Swipe down anywhere → collapse (reveal Renters page underneath).
+            .pointerInput(Unit) {
+                detectVerticalDragGestures(
+                    onVerticalDrag = { change, dragAmount ->
+                        change.consume()
+                        // dragAmount > 0 = finger moving down → collapse
+                        if (dragAmount > 8f && !dismissed) {
+                            collapse()
+                        }
+                    }
                 )
-            )
+            }
     ) {
-        // ── Abstract decorative shapes (very subtle, wallpaper-like) ───────
-        // Large translucent circles to add depth, mimicking MIUI wallpaper.
-        Box(
-            modifier = Modifier
-                .size(280.dp)
-                .offset { IntOffset(-80, 60) }
-                .clip(CircleShape)
-                .background(Color(0xFF8E5BA6).copy(alpha = 0.35f))
-        )
-        Box(
-            modifier = Modifier
-                .size(220.dp)
-                .offset { IntOffset(280, 200) }
-                .clip(CircleShape)
-                .background(Color(0xFFD97757).copy(alpha = 0.30f))
-        )
-        Box(
-            modifier = Modifier
-                .size(180.dp)
-                .offset { IntOffset(40, 480) }
-                .clip(CircleShape)
-                .background(Color(0xFFE6C97F).copy(alpha = 0.25f))
-        )
-
-        // ── Upper region: title + grid + page dots ───────────────────────
-        // This entire region slides DOWN off-screen as collapseProgress → 1.
-        // translate Y by gridHeightPx * collapseProgress + a bit extra so it
-        // fully disappears under the dock.
         Column(
             modifier = Modifier
-                .fillMaxWidth()
-                .fillMaxHeight(0.82f)  // leave 18% for dock at bottom
-                .onGloballyPositioned { coords ->
-                    gridHeightPx = coords.size.height.coerceAtLeast(1)
-                }
-                .offset {
-                    val shift = (gridHeightPx * collapseProgress.value).toInt() +
-                        (with(density) { 80.dp.toPx() }).toInt()
-                    IntOffset(0, shift)
-                }
-                // Swipe down anywhere on the grid → collapse.
-                .pointerInput(Unit) {
-                    detectVerticalDragGestures(
-                        onVerticalDrag = { change, dragAmount ->
-                            change.consume()
-                            // dragAmount > 0 = finger moving down → collapse
-                            if (dragAmount > 6f && collapseProgress.value < 0.5f) {
-                                collapse()
-                            } else if (dragAmount < -6f && collapseProgress.value > 0.5f) {
-                                expand()
-                            }
-                        }
-                    )
-                }
-                .padding(top = 56.dp, start = 16.dp, end = 16.dp),
+                .fillMaxSize()
+                .padding(top = 64.dp, start = 16.dp, end = 16.dp, bottom = 32.dp),
+            verticalArrangement = Arrangement.Top,
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
-            // ── Title at top (like MIUI clock + date) ─────────────────────
+            // ── Title at top ─────────────────────────────────────────────
             Text(
                 "Scooter Rent",
                 style = MaterialTheme.typography.headlineMedium,
-                color = Color.White,
-                fontWeight = FontWeight.Light,
-                letterSpacing = 1.sp
+                color = ClaudeDarkText,
+                fontWeight = FontWeight.Bold,
+                letterSpacing = 0.5.sp
             )
             Spacer(Modifier.height(2.dp))
             Text(
                 "Boshqaruv tizimi",
                 style = MaterialTheme.typography.bodySmall,
-                color = Color.White.copy(alpha = 0.78f),
+                color = ClaudeDarkText.copy(alpha = 0.6f),
                 fontWeight = FontWeight.Normal
             )
 
-            Spacer(Modifier.height(40.dp))
+            Spacer(Modifier.height(36.dp))
 
-            // ── Grid of all pages (4 columns × 2 rows = 8 items) ─────────
-            // Using Column{Row,Row} for a stable 4×2 layout (pages.count = 8).
-            val rows = pages.chunked(4)
-            rows.forEach { rowPages ->
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceEvenly,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    rowPages.forEach { page ->
-                        LauncherTile(
-                            page = page,
-                            onClick = { onPageClick(page.id) }
-                        )
-                    }
+            // ── Top row: 4 secondary (utility) pages ────────────────────
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceEvenly,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                SecondaryLauncherPages.forEach { page ->
+                    LauncherTile(
+                        page = page,
+                        onClick = { onPageClick(page.id) },
+                        size = 56.dp,
+                        iconSize = 28.dp,
+                        labelSize = 10.sp
+                    )
                 }
-                Spacer(Modifier.height(28.dp))
             }
 
             Spacer(Modifier.weight(1f))
 
-            // ── Page indicator dots (always 1 active = 4 dots, page 1 of 1) ──
+            // ── Main row: 4 primary (most-used) pages ───────────────────
             Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(bottom = 16.dp),
-                horizontalArrangement = Arrangement.Center
-            ) {
-                repeat(4) { i ->
-                    Box(
-                        modifier = Modifier
-                            .padding(horizontal = 4.dp)
-                            .size(if (i == 0) 8.dp else 6.dp)
-                            .clip(CircleShape)
-                            .background(
-                                if (i == 0) Color.White
-                                else Color.White.copy(alpha = 0.45f)
-                            )
-                    )
-                }
-            }
-        }
-
-        // ── Bottom dock (4 main pages, always visible) ───────────────────
-        // Translucent dark "frosted glass" background. Swipe up when
-        // collapsed → expand grid.
-        Box(
-            modifier = Modifier
-                .align(Alignment.BottomCenter)
-                .fillMaxWidth()
-                .height(96.dp)
-                .background(Color(0xFF1A1410).copy(alpha = 0.78f))
-                .pointerInput(collapseProgress.value) {
-                    detectVerticalDragGestures(
-                        onVerticalDrag = { change, dragAmount ->
-                            change.consume()
-                            // dragAmount < 0 = finger moving up → expand
-                            if (dragAmount < -6f && collapseProgress.value > 0.5f) {
-                                expand()
-                            } else if (dragAmount > 6f && collapseProgress.value < 0.5f) {
-                                collapse()
-                            }
-                        }
-                    )
-                }
-                .padding(horizontal = 24.dp, vertical = 12.dp),
-            contentAlignment = Alignment.Center
-        ) {
-            Row(
-                modifier = Modifier.fillMaxSize(),
+                modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceEvenly,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                pages.filter { it.pinnedToDock }.forEach { page ->
-                    DockTile(
+                PrimaryLauncherPages.forEach { page ->
+                    LauncherTile(
                         page = page,
-                        onClick = { onPageClick(page.id) }
+                        onClick = { onPageClick(page.id) },
+                        size = 64.dp,
+                        iconSize = 32.dp,
+                        labelSize = 11.sp
                     )
                 }
             }
+
+            Spacer(Modifier.height(24.dp))
+
+            // ── Subtle hint text — swipe down to open ───────────────────
+            Text(
+                "Pastga suring — Mijozlar sahifasini ochish uchun",
+                style = MaterialTheme.typography.labelSmall,
+                color = ClaudeDarkText.copy(alpha = 0.45f),
+                fontSize = 11.sp,
+                fontWeight = FontWeight.Normal,
+                textAlign = TextAlign.Center
+            )
         }
     }
 }
 
 /* ──────────────────────────────────────────────────────────────────────
-   Tile composables
+   Tile composable
    ────────────────────────────────────────────────────────────────────── */
 
-/** Grid tile — squircle background + white icon + white label below. */
+/** Grid tile — squircle background + white icon + label below. */
 @Composable
 private fun LauncherTile(
     page: LauncherPage,
-    onClick: () -> Unit
+    onClick: () -> Unit,
+    size: androidx.compose.ui.unit.Dp = 64.dp,
+    iconSize: androidx.compose.ui.unit.Dp = 32.dp,
+    labelSize: androidx.compose.ui.unit.TextUnit = 11.sp
 ) {
     Column(
         horizontalAlignment = Alignment.CenterHorizontally,
         modifier = Modifier
-            .width(72.dp)
+            .width(76.dp)
             .combinedClickable(onClick = onClick, onLongClick = {})
             .padding(vertical = 4.dp)
     ) {
         Box(
             modifier = Modifier
-                .size(64.dp)
+                .size(size)
                 .clip(RoundedCornerShape(20.dp))  // squircle-ish
                 .background(page.tileColor)
-                .border(1.dp, Color.White.copy(alpha = 0.12f), RoundedCornerShape(20.dp)),
+                .border(1.dp, Color.Black.copy(alpha = 0.06f), RoundedCornerShape(20.dp)),
             contentAlignment = Alignment.Center
         ) {
             Icon(
                 imageVector = page.icon,
                 contentDescription = page.title,
                 tint = Color.White,
-                modifier = Modifier.size(34.dp)
+                modifier = Modifier.size(iconSize)
             )
         }
         Spacer(Modifier.height(6.dp))
         Text(
             page.title,
             style = MaterialTheme.typography.labelSmall,
-            color = Color.White,
-            fontSize = 11.sp,
+            color = ClaudeDarkText,
+            fontSize = labelSize,
             fontWeight = FontWeight.Medium,
             maxLines = 1,
             textAlign = TextAlign.Center
@@ -383,38 +315,15 @@ private fun LauncherTile(
     }
 }
 
-/** Dock tile — slightly larger, no label (icon only, like Android dock). */
-@Composable
-private fun DockTile(
-    page: LauncherPage,
-    onClick: () -> Unit
-) {
-    Box(
-        modifier = Modifier
-            .size(60.dp)
-            .clip(RoundedCornerShape(18.dp))
-            .background(page.tileColor)
-            .combinedClickable(onClick = onClick, onLongClick = {}),
-        contentAlignment = Alignment.Center
-    ) {
-        Icon(
-            imageVector = page.icon,
-            contentDescription = page.title,
-            tint = Color.White,
-            modifier = Modifier.size(32.dp)
-        )
-    }
-}
-
 /* ════════════════════════════════════════════════════════════════════
    COMPAT SHIM — old curtain drawer API kept as no-op so MainActivity
-   still compiles if it references NavigationDrawerSheet. The new
-   swipe-down-to-dock behavior replaces the curtain entirely.
+   still compiles if it references NavigationDrawerSheet. Removed in
+   the latest design — swipe-down replaces the curtain entirely.
    ════════════════════════════════════════════════════════════════════ */
 
 /**
- * @deprecated The curtain drawer is replaced by the swipe-down-to-dock
- * behavior in [LauncherScreen]. Kept as a no-op for source compatibility.
+ * @deprecated Replaced by swipe-down behavior in [LauncherScreen].
+ * Kept as a no-op for source compatibility.
  */
 @Composable
 fun NavigationDrawerSheet(
@@ -422,5 +331,5 @@ fun NavigationDrawerSheet(
     onDismiss: () -> Unit,
     onPageSelect: (String) -> Unit
 ) {
-    // No-op — new design uses swipe-down on launcher to reveal dock-only mode.
+    // No-op.
 }

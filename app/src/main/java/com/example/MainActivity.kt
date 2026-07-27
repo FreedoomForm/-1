@@ -992,6 +992,13 @@ fun MainScreen(
         NavigationState.MainView -> { /* продолжаем — основной Scaffold ниже */ }
     }
 
+    // ── §9.A: Wrapper Box — Scaffold + Launcher overlay ────────────────
+    // Launcher рисуется ПОВЕРХ Scaffold (включая topBar + bottomBar), чтобы
+    // свайп сверху вниз плавно "сдвигал" launcher и под ним открывалась
+    // страница «Mijozlar» (или активная вкладка) целиком, без осколков
+    // верхней панели. Launcher — fillMaxSize, его фон белый, поэтому пока
+    // showLauncher=true пользователь видит только launcher.
+    Box(modifier = Modifier.fillMaxSize()) {
     Scaffold(
         modifier = Modifier.fillMaxSize(),
         containerColor = ClaudeBackground,
@@ -1009,23 +1016,12 @@ fun MainScreen(
                     actionIconContentColor = ClaudeText
                 ),
                 actions = {
-                    // ── §9.A: Кнопка launcher (домик) — открывает fullscreen launcher
-                    // с кубиками-иконками + шторкой навигации.
-                    IconButton(
-                        onClick = { showLauncher = true },
-                        modifier = Modifier
-                            .padding(end = 6.dp)
-                            .size(40.dp)
-                            .background(ClaudeCard, CircleShape)
-                            .border(1.dp, ClaudeDivider, CircleShape)
-                    ) {
-                        Icon(
-                            Icons.Default.Apps,
-                            contentDescription = "Launcher",
-                            tint = ClaudeText,
-                            modifier = Modifier.size(20.dp)
-                        )
-                    }
+                    // ── §9.A: Кнопка launcher (домик) убрана из TopAppBar по
+                    // запросу пользователя — она стояла слева от кнопки сканера.
+                    // Launcher теперь открывается автоматически после splash
+                    // (showLauncher=true), свайп вниз закрывает его и открывает
+                    // страницу «Mijozlar». Отдельная кнопка в верхнем баре
+                    // больше не нужна.
 
                     // ── Кнопка сканера (Mistral OCR) ──────────────────────────────
                     // Иконка камеры, доступна с любой вкладки. Открывает экран
@@ -2430,29 +2426,36 @@ fun MainScreen(
         }
 
         // ── §9.A: Launcher overlay (Android home-screen style) ───────────
-        // Полноэкранный launcher: wallpaper gradient + 4×2 grid + dock.
-        // Свайп сверху вниз → grid уезжает под экран, остаётся только dock.
-        // Свайп снизу вверх (по dock) → grid возвращается.
-        if (showLauncher) {
-            com.example.ui.components.LauncherScreen(
-                onPageClick = { pageId ->
-                    showLauncher = false
-                    // Маппинг id страницы → currentTab.
-                    currentTab = when (pageId) {
-                        "renters"   -> 0
-                        "scooters"  -> 1
-                        "contracts" -> 2
-                        "finansi"   -> 3
-                        "reports"   -> 4
-                        "history"   -> 5
-                        "trash"     -> 7
-                        "settings"  -> 6
-                        else        -> 0
-                    }
+        // Launcher рисуется ПОВЕРХ MainView, а не вместо него. Поэтому при
+        // свайпе сверху вниз launcher уезжает вниз и под ним видна страница
+        // «Mijozlar» (или та вкладка, которая сейчас активна — по умолчанию 0).
+        // Это поведение повторяет Android home screen: свайп убирает лаунчер,
+        // открывая приложение, которое под ним.
+        //
+        // Старый dock и wallpaper gradient убраны — теперь launcher белый,
+        // с двумя рядами иконок (4 secondary сверху + 4 primary в центре).
+    }   // ← end of Scaffold (Column was already closed earlier at L2084)
+    if (showLauncher) {
+        com.example.ui.components.LauncherScreen(
+            onPageClick = { pageId ->
+                showLauncher = false
+                // Маппинг id страницы → currentTab.
+                currentTab = when (pageId) {
+                    "renters"   -> 0
+                    "scooters"  -> 1
+                    "contracts" -> 2
+                    "finansi"   -> 3
+                    "reports"   -> 4
+                    "history"   -> 5
+                    "trash"     -> 7
+                    "settings"  -> 6
+                    else        -> 0
                 }
-            )
-        }
+            },
+            onCollapsed = { showLauncher = false }
+        )
     }
+    }   // ← end of wrapper Box
 }
 
 /* ============================================================================
@@ -3603,17 +3606,10 @@ fun SettingsScreen(
                 .padding(horizontal = 16.dp),
             verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
-                Card(modifier = Modifier.fillMaxWidth(), colors = CardDefaults.cardColors(containerColor = ClaudeAccentBg)) {
-                    Column(Modifier.padding(12.dp)) {
-                        Text("Ilova versiyasi", style = MaterialTheme.typography.labelMedium, color = ClaudeText)
-                        Text("v${BuildConfig.VERSION_NAME}  •  build ${BuildConfig.VERSION_CODE}", style = MaterialTheme.typography.bodyMedium, color = ClaudeText)
-                        if (updateInfo != null) {
-                            Text("Yangi build: ${updateInfo.versionCode}. Pastdagi Yangila tugmasini bosing.", style = MaterialTheme.typography.bodySmall, color = ClaudeText)
-                        } else if (isUpToDate) {
-                            Text("Sizda so'nggi versiya o'rnatilgan.", style = MaterialTheme.typography.bodySmall, color = ClaudeText)
-                        }
-                    }
-                }
+                // ── §9.A: Текстовую карточку «Ilova versiyasi» убрали из верха
+                // настроек по запросу пользователя — версия не нужна на этой
+                // странице. Информация об обновлениях остаётся доступной через
+                // кнопку «Tekshirish» ниже (updateInfo/isUpToDate).
 
                 Column {
                     Text("Tariflar", style = MaterialTheme.typography.labelMedium, color = ClaudeText)
