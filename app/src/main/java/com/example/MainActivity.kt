@@ -1005,9 +1005,16 @@ fun MainScreen(
         topBar = {
             TopAppBar(
                 title = {
+                    // ── §9.A: Title is tappable — opens the launcher overlay.
+                    // Since the launcher button was removed from the TopAppBar
+                    // and the bottom nav was reduced to 4 primary icons, the
+                    // user needs a way back to the launcher to reach secondary
+                    // pages (Reports, History, Trash, Settings). Tapping the
+                    // title "Skuter Ijarasi" re-opens the launcher.
                     Text(
                         "Skuter Ijarasi",
-                        style = MaterialTheme.typography.headlineMedium.copy(fontWeight = FontWeight.Bold)
+                        style = MaterialTheme.typography.headlineMedium.copy(fontWeight = FontWeight.Bold),
+                        modifier = Modifier.clickable { showLauncher = true }
                     )
                 },
                 colors = TopAppBarDefaults.topAppBarColors(
@@ -1218,7 +1225,12 @@ fun MainScreen(
             )
         },
         bottomBar = {
-            Column {
+            // ── §9.A: Bottom navigation reduced to 4 primary icons ────────
+            // per user request: "в обычном режиме остав в нижней панели
+            // только четыре иконки". Остальные страницы (Tranzaksiya, Reports,
+            // Settings, Tarix, Chiqindi, Jurnal) доступны через launcher —
+            // пользователь свайпает вниз по верхнему бару или жмёт на заголовок
+            // «Skuter Ijarasi», чтобы открыть launcher с secondary иконками.
             NavigationBar(containerColor = ClaudeCard, contentColor = ClaudeText) {
                 NavigationBarItem(
                     selected = currentTab == 0,
@@ -1260,32 +1272,6 @@ fun MainScreen(
                     )
                 )
                 NavigationBarItem(
-                    selected = currentTab == 3,
-                    onClick = { currentTab = 3 },
-                    icon = { Icon(Icons.Default.RequestQuote, contentDescription = "Tranzaksiyalar") },
-                    label = { Text("Tranzaksiya") },
-                    colors = NavigationBarItemDefaults.colors(
-                        selectedIconColor = ClaudeAccent,
-                        unselectedIconColor = ClaudeTextSecondary,
-                        selectedTextColor = ClaudeAccent,
-                        unselectedTextColor = ClaudeTextSecondary,
-                        indicatorColor = ClaudeAccentBg
-                    )
-                )
-                NavigationBarItem(
-                    selected = currentTab == 4,
-                    onClick = { currentTab = 4 },
-                    icon = { Icon(Icons.Default.RequestQuote, contentDescription = "Otchetlar") },
-                    label = { Text("Otchetlar") },
-                    colors = NavigationBarItemDefaults.colors(
-                        selectedIconColor = ClaudeAccent,
-                        unselectedIconColor = ClaudeTextSecondary,
-                        selectedTextColor = ClaudeAccent,
-                        unselectedTextColor = ClaudeTextSecondary,
-                        indicatorColor = ClaudeAccentBg
-                    )
-                )
-                NavigationBarItem(
                     selected = currentTab == 5,
                     onClick = { currentTab = 5 },
                     icon = { Icon(Icons.Default.AccountBalanceWallet, contentDescription = "Finansi") },
@@ -1298,61 +1284,6 @@ fun MainScreen(
                         indicatorColor = ClaudeAccentBg
                     )
                 )
-                // ── 7-я вкладка: Sozlamalar ──────────────────────────────────
-                // Раньше была кнопка-иконка в TopAppBar. Теперь — полноценная
-                // вкладка внизу, рядом с остальными главными страницами.
-                NavigationBarItem(
-                    selected = currentTab == 6,
-                    onClick = { currentTab = 6 },
-                    icon = { Icon(Icons.Outlined.Settings, contentDescription = "Sozlamalar") },
-                    label = { Text("Sozlamalar") },
-                    colors = NavigationBarItemDefaults.colors(
-                        selectedIconColor = ClaudeAccent,
-                        unselectedIconColor = ClaudeTextSecondary,
-                        selectedTextColor = ClaudeAccent,
-                        unselectedTextColor = ClaudeTextSecondary,
-                        indicatorColor = ClaudeAccentBg
-                    )
-                )
-            }
-            // Second navigation row keeps operational pages reachable without
-            // squeezing nine labels into one phone-width bar.
-            NavigationBar(containerColor = ClaudeCard, contentColor = ClaudeText) {
-                NavigationBarItem(
-                    selected = currentTab == 7,
-                    onClick = { currentTab = 7 },
-                    icon = { Icon(Icons.Default.Receipt, contentDescription = "Tarix") },
-                    label = { Text("Tarix") },
-                    colors = NavigationBarItemDefaults.colors(
-                        selectedIconColor = ClaudeAccent, unselectedIconColor = ClaudeTextSecondary,
-                        selectedTextColor = ClaudeAccent, unselectedTextColor = ClaudeTextSecondary,
-                        indicatorColor = ClaudeAccentBg
-                    )
-                )
-                NavigationBarItem(
-                    selected = currentTab == 8,
-                    onClick = { currentTab = 8 },
-                    icon = { Icon(Icons.Default.Delete, contentDescription = "Korzinka") },
-                    label = { Text("Korzinka") },
-                    colors = NavigationBarItemDefaults.colors(
-                        selectedIconColor = ClaudeAccent, unselectedIconColor = ClaudeTextSecondary,
-                        selectedTextColor = ClaudeAccent, unselectedTextColor = ClaudeTextSecondary,
-                        indicatorColor = ClaudeAccentBg
-                    )
-                )
-                // §2: Operations journal tab — full financial audit trail
-                NavigationBarItem(
-                    selected = currentTab == 9,
-                    onClick = { currentTab = 9 },
-                    icon = { Icon(Icons.Default.ReceiptLong, contentDescription = "Jurnal") },
-                    label = { Text("Jurnal") },
-                    colors = NavigationBarItemDefaults.colors(
-                        selectedIconColor = ClaudeAccent, unselectedIconColor = ClaudeTextSecondary,
-                        selectedTextColor = ClaudeAccent, unselectedTextColor = ClaudeTextSecondary,
-                        indicatorColor = ClaudeAccentBg
-                    )
-                )
-            }
             }
         }
     ) { innerPadding ->
@@ -2444,10 +2375,10 @@ fun MainScreen(
                     "renters"   -> 0
                     "scooters"  -> 1
                     "contracts" -> 2
-                    "finansi"   -> 3
+                    "finansi"   -> 5   // virtual cards + transfers
                     "reports"   -> 4
-                    "history"   -> 5
-                    "trash"     -> 7
+                    "history"   -> 7   // HistoryScreen
+                    "trash"     -> 8   // TrashScreen
                     "settings"  -> 6
                     else        -> 0
                 }
