@@ -47,6 +47,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.pointer.pointerInput
@@ -156,35 +157,27 @@ fun ExpandableBottomNav(
         modifier = Modifier
             .fillMaxWidth()
             .background(ClaudeCard)
+            .pointerInput(Unit) {
+                detectVerticalDragGestures(
+                    onVerticalDrag = { change, dragAmount ->
+                        change.consume()
+                        // dragAmount < 0 = finger moving up → expand
+                        if (dragAmount < -10f && !expanded) expand()
+                        // dragAmount > 0 = finger moving down → collapse
+                        else if (dragAmount > 10f && expanded) collapse()
+                    }
+                )
+            }
     ) {
-        // ── Secondary row + arrow: hidden behind primary row when collapsed ─
-        // We render it ABOVE the primary row, translated DOWN by its own
-        // height when collapsed (so it's pushed below the primary row and
-        // off-panel). As expandProgress → 1, the translation → 0 and the
-        // row slides up into view.
-        //
-        // The whole panel grows in height to accommodate the secondary row
-        // when expanded — accomplished by adding top padding equal to
-        // (secondaryHeight × expandProgress).
-        Box(
-            modifier = Modifier
-                .fillMaxWidth()
-                .pointerInput(Unit) {
-                    detectVerticalDragGestures(
-                        onVerticalDrag = { change, dragAmount ->
-                            change.consume()
-                            // dragAmount < 0 = finger moving up → expand
-                            if (dragAmount < -10f && !expanded) expand()
-                            // dragAmount > 0 = finger moving down → collapse
-                            else if (dragAmount > 10f && expanded) collapse()
-                        }
-                    )
-                }
+        Column(
+            modifier = Modifier.fillMaxWidth()
         ) {
-            // Spacer that grows with expandProgress to give the secondary
-            // row room to appear above the primary row.
+            // ── Secondary section (arrow + secondary row + divider) ───────
+            // Height animates 0 → secondaryHeight as expandProgress → 1.
+            // Content is rendered at full height but shifted up & clipped
+            // when collapsed, so it slides into view smoothly.
             val density = LocalDensity.current
-            Spacer(
+            Box(
                 modifier = Modifier
                     .fillMaxWidth()
                     .height(
@@ -192,68 +185,65 @@ fun ExpandableBottomNav(
                             (secondaryHeightPx.toDp()) * expandProgress.value
                         }
                     )
-            )
-
-            // ── Secondary row + arrow, positioned above primary ──────────
-            // We position it absolutely above the primary row, translated
-            // down by its own height when collapsed so it slides into view.
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .onGloballyPositioned { coords ->
-                        if (secondaryHeightPx == 0) {
-                            secondaryHeightPx = coords.size.height
-                        }
-                    }
-                    .offset {
-                        // When collapsed (progress=0), shift down by full height
-                        // → row is pushed below primary row (hidden).
-                        // When expanded (progress=1), shift = 0 → row is visible.
-                        val shift = (secondaryHeightPx * (1f - expandProgress.value)).toInt()
-                        IntOffset(0, shift)
-                    }
+                    .clipToBounds()
                     .background(ClaudeBackground.copy(alpha = expandProgress.value))
-                    .padding(horizontal = 12.dp, vertical = 8.dp),
-                horizontalAlignment = Alignment.CenterHorizontally
             ) {
-                // Animated down arrow — only visible when expanded
-                AnimatedDownArrow(
-                    alpha = expandProgress.value,
-                    onClick = { collapse() }
-                )
-
-                Spacer(Modifier.height(8.dp))
-
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceEvenly,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    SecondaryNavPages.forEach { page ->
-                        NavTile(
-                            page = page,
-                            selected = page.id == selectedId,
-                            onClick = { onPageClick(page.id) },
-                            size = 60.dp,
-                            iconSize = 30.dp,
-                            labelSize = 11.sp
-                        )
-                    }
-                }
-
-                Spacer(Modifier.height(6.dp))
-
-                // Divider line between rows (only visible when expanded)
-                Box(
+                Column(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(horizontal = 16.dp)
-                        .height(1.dp)
-                        .background(Color.Black.copy(alpha = 0.08f * expandProgress.value))
-                )
+                        .onGloballyPositioned { coords ->
+                            if (secondaryHeightPx == 0) {
+                                secondaryHeightPx = coords.size.height
+                            }
+                        }
+                        // Shift content up by its own height when collapsed,
+                        // so it slides down into view as expandProgress → 1.
+                        .offset {
+                            val shift = (secondaryHeightPx * (1f - expandProgress.value)).toInt()
+                            IntOffset(0, -shift)
+                        }
+                        .padding(horizontal = 12.dp, vertical = 8.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally
+                ) {
+                    // Animated down arrow — only visible when expanded
+                    AnimatedDownArrow(
+                        alpha = expandProgress.value,
+                        onClick = { collapse() }
+                    )
+
+                    Spacer(Modifier.height(8.dp))
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceEvenly,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        SecondaryNavPages.forEach { page ->
+                            NavTile(
+                                page = page,
+                                selected = page.id == selectedId,
+                                onClick = { onPageClick(page.id) },
+                                size = 60.dp,
+                                iconSize = 30.dp,
+                                labelSize = 11.sp
+                            )
+                        }
+                    }
+
+                    Spacer(Modifier.height(6.dp))
+
+                    // Divider line between rows
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 16.dp)
+                            .height(1.dp)
+                            .background(Color.Black.copy(alpha = 0.08f))
+                    )
+                }
             }
 
-            // ── Primary row — always at the bottom of the panel ──────────
+            // ── Primary row — always visible at the bottom ───────────────
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
