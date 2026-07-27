@@ -115,6 +115,81 @@ class VirtualCardRepository(
     }
 
     /**
+     * §3: Закрывает карту с переносом остатка на другую карту.
+     *
+     * Если на закрываемой карте есть деньги, они переносятся на [toCardId]
+     * отдельной операцией перевода (CardTransaction.TYPE_CARD_TRANSFER +
+     * BusinessOperation.TYPE_TRANSFER), после чего карта архивируется.
+     *
+     * Это позволяет закрыть карту без потери средств: все деньги попадают
+     * на указанную карту-приёмник, а аудит-трейл сохраняет обе операции
+     * (перевод + архивация).
+     *
+     * @param card карта для закрытия (должна существовать и не быть системной).
+     * @param toCardId карта-приёмник для переноса остатка (должна быть активной).
+     * @param note описание причины закрытия.
+     * @param actor инициатор операции (для аудит-трейла).
+     */
+    suspend fun closeCardWithBalanceTransfer(
+        card: VirtualCard,
+        toCardId: Int,
+        note: String,
+        actor: String = "LOCAL_SYSTEM"
+    ): Int = atomic {
+        require(!card.isDefault) { "System cards cannot be closed" }
+        require(card.id != toCardId) { "Cannot transfer to the same card being closed" }
+        val current = requireCard(card.id)
+        val target = requireCard(toCardId)
+        require(!target.isArchived) { "Target card must be active" }
+        require(note.isNotBlank()) { "Close reason is required" }
+        // Если есть остаток — сначала переносим его на карту-приёмник.
+        if (kotlin.math.abs(current.balance) >= 0.005) {
+            // Используем прямой SQL-перенос, а не transfer(), чтобы обойти
+            // проверку `!from.isArchived` — мы ведь собираемся архивировать.
+            cardDao.adjustBalance(card.id, -current.balance)
+            cardDao.adjustBalance(toCardId, +current.balance)
+            val txId = txDao.insertTransaction(CardTransaction(
+                fromCardId = card.id,
+                toCardId = toCardId,
+                amount = current.balance,
+                note = "Карта закрывается: $note",
+                type = CardTransaction.TYPE_CARD_TRANSFER
+            ))
+            appendOperation(BusinessOperation(
+                occurredAt = System.currentTimeMillis(),
+                type = BusinessOperation.TYPE_TRANSFER,
+                direction = BusinessOperation.DIRECTION_TRANSFER,
+                amountMinor = BusinessOperation.toMinor(current.balance),
+                fromCardId = card.id,
+                toCardId = toCardId,
+                cardTransactionId = txId.toInt(),
+                note = "Close-with-transfer: $note"
+            ))
+            database?.auditEventDao()?.insert(AuditEvent(
+                actor = actor,
+                action = AuditEvent.ACTION_CARD_TRANSACTION_REVERSED,
+                entityType = "VIRTUAL_CARD",
+                entityId = card.id.toString(),
+                reason = "Balance transferred to #$toCardId before closure",
+                beforeSnapshot = "balance=${current.balance}",
+                afterSnapshot = "balance=0; transferred=${current.balance}; toCard=$toCardId"
+            ))
+        }
+        // Теперь баланс = 0, можно архивировать.
+        val result = cardDao.archiveCard(card.id)
+        if (result > 0) database?.auditEventDao()?.insert(AuditEvent(
+            actor = actor,
+            action = AuditEvent.ACTION_CARD_ARCHIVED,
+            entityType = "VIRTUAL_CARD",
+            entityId = card.id.toString(),
+            reason = "Card closed with balance transfer: $note",
+            beforeSnapshot = "name=${current.name}; balance=${current.balance}",
+            afterSnapshot = "archived=true; transferredTo=$toCardId"
+        ))
+        result
+    }
+
+    /**
      * Переводит [amount] с карты [fromCardId] на карту [toCardId].
      * Атомарно: обновляет оба баланса и создаёт запись в истории транзакций.
      *

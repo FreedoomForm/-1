@@ -56,6 +56,19 @@ class ScooterViewModel(application: Application) : AndroidViewModel(application)
                 nextServiceAt = nextServiceAt
             )
             repository.insert(scooter)
+            // §9.0: таймкод критического действия — SCOOTER_CREATE.
+            try {
+                val inserted = scooterList.value.firstOrNull { it.name == scooter.name }
+                com.example.data.TimelineService(AppDatabase.getDatabase(getApplication()))
+                    .recordCriticalAction(
+                        actionType = "SCOOTER_CREATE",
+                        screen = "SCOOTERS",
+                        title = "Yangi skuter: ${scooter.name}",
+                        entityType = "SCOOTER",
+                        entityId = (inserted?.id ?: 0).toString(),
+                        payloadJson = "{\"name\":\"${scooter.name}\",\"vin\":\"${scooter.vinNumber}\"}"
+                    )
+            } catch (_: Exception) {}
         }
     }
 
@@ -66,6 +79,18 @@ class ScooterViewModel(application: Application) : AndroidViewModel(application)
                 return@launch
             }
             repository.update(scooter)
+            // §9.0: таймкод критического действия — SCOOTER_UPDATE.
+            try {
+                com.example.data.TimelineService(AppDatabase.getDatabase(getApplication()))
+                    .recordCriticalAction(
+                        actionType = "SCOOTER_UPDATE",
+                        screen = "SCOOTERS",
+                        title = "Skuter yangilandi: ${scooter.name}",
+                        entityType = "SCOOTER",
+                        entityId = scooter.id.toString(),
+                        payloadJson = "{\"name\":\"${scooter.name}\",\"status\":\"${scooter.lifecycleStatus}\"}"
+                    )
+            } catch (_: Exception) {}
         }
     }
 
@@ -101,6 +126,19 @@ class ScooterViewModel(application: Application) : AndroidViewModel(application)
 
     fun deleteScooter(scooter: Scooter) {
         viewModelScope.launch {
+            // §9.0: таймкод критического действия — SCOOTER_DELETE (до удаления,
+            // чтобы entity id ещё был валиден).
+            try {
+                com.example.data.TimelineService(AppDatabase.getDatabase(getApplication()))
+                    .recordCriticalAction(
+                        actionType = "SCOOTER_DELETE",
+                        screen = "SCOOTERS",
+                        title = "Skuter o'chirildi: ${scooter.name}",
+                        entityType = "SCOOTER",
+                        entityId = scooter.id.toString(),
+                        payloadJson = "{\"name\":\"${scooter.name}\"}"
+                    )
+            } catch (_: Exception) {}
             repository.delete(scooter)
         }
     }

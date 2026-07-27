@@ -191,6 +191,31 @@ fun HistoryScreen(
     // ── Detail dialog (§9B: safe detail of each record) ──────────────────────
     if (showDetail && selected != null) {
         val ev = selected
+        // §9B: парсим payloadJson чтобы извлечь сумму, автора, причину.
+        val payloadAmount = remember(ev.payloadJson) {
+            try {
+                val o = org.json.JSONObject(ev.payloadJson)
+                if (o.has("amount")) o.optDouble("amount", 0.0) else null
+            } catch (_: Exception) { null }
+        }
+        val payloadActor = remember(ev.payloadJson) {
+            try {
+                val o = org.json.JSONObject(ev.payloadJson)
+                o.optString("actor", "").ifBlank { null }
+            } catch (_: Exception) { null }
+        }
+        val payloadReason = remember(ev.payloadJson) {
+            try {
+                val o = org.json.JSONObject(ev.payloadJson)
+                o.optString("reason", "").ifBlank { null }
+            } catch (_: Exception) { null }
+        }
+        val payloadStornoOf = remember(ev.payloadJson) {
+            try {
+                val o = org.json.JSONObject(ev.payloadJson)
+                if (o.has("stornoOf")) o.optLong("stornoOf") else null
+            } catch (_: Exception) { null }
+        }
         AlertDialog(
             onDismissRequest = { showDetail = false },
             title = { Text("Voqea tafsiloti") },
@@ -201,6 +226,10 @@ fun HistoryScreen(
                     DetailRow("Harakat turi", ev.actionType)
                     DetailRow("Vaqt", formatter.format(Date(ev.timestamp)))
                     ev.entityType?.let { DetailRow("Bog'langan obyekt", "$it #${ev.entityId ?: "—"}") }
+                    payloadAmount?.let { DetailRow("Summa", "${it.toLong()} so'm") }
+                    payloadActor?.let { DetailRow("Autor", it) }
+                    payloadReason?.let { DetailRow("Sabab", it) }
+                    payloadStornoOf?.let { DetailRow("Storno of", "#$it") }
                     DetailRow("Asosiy voqea", if (ev.isMajor) "ha" else "yo'q")
                     DetailRow("Arxivlangan", if (ev.isArchived) "ha" else "yo'q")
                     Spacer(Modifier.height(4.dp))

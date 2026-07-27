@@ -3,6 +3,7 @@ package com.example
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -48,6 +49,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.ExperimentalComposeUiApi
 import com.example.ui.theme.ClaudeAccent
 import com.example.ui.theme.ClaudeAccentBg
 import com.example.ui.theme.ClaudeBackground
@@ -472,30 +474,28 @@ fun ContractCalendar(
                                         )
                                     } else if (onAddGroup != null) {
                                         // Режим просмотра с возможностью добавления —
-                                        // логика та же, но новая группа передаётся в
-                                        // onAddGroup (для создания контрактов в БД).
-                                        // ОДНАКО: если включён onEditDayContract и тап
-                                        // пришёлся на день, который уже входит в
-                                        // существующий контракт — открываем диалог
-                                        // редактирования контракта вместо выбора
-                                        // нового диапазона.
+                                        // одиночный тап всегда создаёт новый диапазон;
+                                        // для редактирования существующего контракта
+                                        // нужно долгое нажатие (long-press).
+                                        handleDayClickWithAddCallback(
+                                            ms = ms,
+                                            pendingStartMs = pendingStartMs,
+                                            setPendingStart = { pendingStartMs = it },
+                                            activeGroupId = activeGroupId,
+                                            newGroupIsPaid = newGroupIsPaid,
+                                            onAddGroup = onAddGroup
+                                        )
+                                    } else {
+                                        onDayClick(ms)
+                                    }
+                                },
+                                onDayLongClick = onEditDayContract?.let { cb ->
+                                    { ms ->
+                                        // Срабатывает только если день в существующем контракте.
                                         val inExisting = groups.firstOrNull { g ->
                                             ms >= g.startMs && ms <= g.endMs
                                         }
-                                        if (inExisting != null && onEditDayContract != null) {
-                                            onEditDayContract.invoke(ms)
-                                        } else {
-                                            handleDayClickWithAddCallback(
-                                                ms = ms,
-                                                pendingStartMs = pendingStartMs,
-                                                setPendingStart = { pendingStartMs = it },
-                                                activeGroupId = activeGroupId,
-                                                newGroupIsPaid = newGroupIsPaid,
-                                                onAddGroup = onAddGroup
-                                            )
-                                        }
-                                    } else {
-                                        onDayClick(ms)
+                                        if (inExisting != null) cb.invoke(ms)
                                     }
                                 }
                             )
@@ -607,6 +607,7 @@ private fun handleDayClickWithAddCallback(
 }
 
 /* ── Ячейка дня (объявлена как RowScope для доступа к Modifier.weight) ─── */
+@OptIn(ExperimentalComposeUiApi::class)
 @Composable
 private fun RowScope.DayCell(
     dayMs: Long,
@@ -616,7 +617,8 @@ private fun RowScope.DayCell(
     activeGroupId: Int?,
     pendingStartMs: Long?,
     dayStatusFor: (Long) -> DayStatus,
-    onDayClick: (Long) -> Unit
+    onDayClick: (Long) -> Unit,
+    onDayLongClick: ((Long) -> Unit)? = null
 ) {
     val cal = remember { Calendar.getInstance() }
     cal.timeInMillis = dayMs
@@ -685,7 +687,16 @@ private fun RowScope.DayCell(
                 if (borderColor != null) Modifier.border(1.dp, borderColor, RoundedCornerShape(6.dp))
                 else Modifier
             )
-            .clickable { onDayClick(dayMs) },
+            .then(
+                if (onDayLongClick != null) {
+                    Modifier.combinedClickable(
+                        onClick = { onDayClick(dayMs) },
+                        onLongClick = { onDayLongClick.invoke(dayMs) }
+                    )
+                } else {
+                    Modifier.clickable { onDayClick(dayMs) }
+                }
+            ),
         contentAlignment = Alignment.Center
     ) {
         Text(

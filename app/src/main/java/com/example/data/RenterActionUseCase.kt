@@ -95,10 +95,27 @@ class RenterActionUseCase(
     ) {
         val weeklyPrice = weeklyPriceOverride ?: settingsRepository.weeklyPrice
         val effectivePrice = if (weeklyPrice > 0) weeklyPrice else SettingsRepository.DEFAULT_WEEKLY_PRICE
-        val newBalance = renter.balance + effectivePrice
         val now = System.currentTimeMillis()
 
-        if (renter.balance < 0) {
+        // ── §5: сначала автосоздание неоплаченного контракта, если активный
+        // арендатор прошёл конец последнего контракта. Это гарантирует что
+        // FIFO-оплата всегда находит целевой контракт (старый или свежесозданный).
+        autoCreateUnpaidForRenter(renter, effectivePrice)
+
+        // ── §5: вычисляем баланс по новой формуле: paid − turnover ──────
+        // Это замена старой логики `renter.balance < 0`. Источник истины —
+        // история контрактов (CREATED + AUTO_RENEW), а не хранимое поле balance.
+        val turnover = historyRepository
+            .getContractsForRenterOnce(renter.id)
+            .sumOf { it.amount }
+        val paidTotal = historyRepository
+            .getContractsForRenterOnce(renter.id)
+            .filter { it.isPaid }
+            .sumOf { it.amount }
+        val computedBalance = paidTotal - turnover
+        val newBalance = computedBalance + effectivePrice
+
+        if (computedBalance < 0) {
             // ── Гашение долга: помечаем самый ранний неоплаченный контракт ──
             val unpaid = historyRepository.getEarliestUnpaidContract(renter.id)
             if (unpaid != null) {
@@ -320,6 +337,127 @@ class RenterActionUseCase(
 
         // Обновляем нативные виджеты Android
         try { WidgetUpdater.updateAll(context) } catch (_: Exception) {}
+
+        // §9.0: таймкод критического действия — PAYMENT_ACCEPTED.
+        try {
+            com.example.data.TimelineService(
+                AppDatabase.getDatabase(context)
+            ).recordCriticalAction(
+                actionType = "PAYMENT_ACCEPTED",
+                screen = "FINANCE",
+                title = "To'lov: ${renter.name} — $effectivePrice so'm",
+                entityType = "PAYMENT",
+                entityId = renter.id.toString(),
+                payloadJson = "{\"renterId\":${renter.id},\"amount\":$effectivePrice,\"balanceBefore\":${renter.balance},\"balanceAfter\":$newBalance,\"computedBalanceBefore\":$computedBalance}"
+            )
+        } catch (_: Exception) {}
+    }
+
+    /**
+     * §4/§5: Автоматически создаёт неоплаченный контракт на следующую неделю,
+     * если активный арендатор прошёл конец последнего контракта и у него ещё
+     * нет контракта, покрывающего сегодняшний день.
+     *
+     * Логика:
+     *   1. Если renter.isReturned = true → пропускаем (пассивный арендатор).
+     *   2. Берём все контракты арендатора (CREATED + AUTO_RENEW).
+     *   3. Находим последний weekEnd.
+     *   4. Если weekEnd > now → контракт ещё действует, ничего не создаём.
+     *   5. Если weekEnd ≤ now → создаём новый контракт с weekStart = weekEnd
+     *      и weekEnd = weekEnd + 7 дней, isPaid = false.
+     *
+     * Это гарантирует что у активного арендатора всегда есть «текущий»
+     * контракт, который можно оплатить через FIFO (pay oldest unpaid).
+     */
+    suspend fun autoCreateUnpaidForRenter(
+        renter: Renter,
+        weeklyPriceOverride: Double? = null
+    ) {
+        if (renter.isReturned) return
+        val now = System.currentTimeMillis()
+        val dayMs = 24L * 60 * 60 * 1000
+        val weekMs = 7L * dayMs
+
+        val contracts = historyRepository.getContractsForRenterOnce(renter.id)
+        if (contracts.isEmpty()) return
+
+        val latestEnd = contracts.maxOfOrNull { it.weekEnd ?: 0L } ?: return
+        if (latestEnd > now) return  // есть действующий контракт
+
+        val weeklyPrice = weeklyPriceOverride ?: settingsRepository.weeklyPrice
+        val effectivePrice = if (weeklyPrice > 0) weeklyPrice else SettingsRepository.DEFAULT_WEEKLY_PRICE
+
+        val scooter: Scooter? = renter.scooterId?.let { fetchScooterById(it) }
+        val newStart = latestEnd
+        val newEnd = latestEnd + weekMs
+
+        val newContract = ContractHistoryEntry(
+            renterId = renter.id, timestamp = now,
+            type = ContractHistoryEntry.TYPE_AUTO_RENEW, amount = effectivePrice,
+            notes = "Avtomatik yaratildi (faol mijoz, eski kontrakt tugadi)",
+            renterName = renter.name, renterPhone = renter.phoneNumber,
+            scooterName = renter.scooterName,
+            weekStart = newStart, weekEnd = newEnd,
+            weeklyPrice = effectivePrice,
+            passportData = renter.passportData,
+            address = renter.address,
+            pinfl = renter.pinfl,
+            vinNumber = scooter?.vinNumber ?: "",
+            engineNumber = scooter?.engineNumber ?: "",
+            scooterSerialNumber = scooter?.scooterSerialNumber ?: "",
+            batteryId1 = scooter?.batteryId1 ?: "",
+            batteryId2 = scooter?.batteryId2 ?: "",
+            additionalInfo = scooter?.additionalInfo ?: "",
+            isPaid = false
+        )
+        val newContractId = historyRepository.insert(newContract)
+        // Создаём связанный RentPeriod со статусом OVERDUE (неоплаченный, период начался).
+        AppDatabase.getDatabase(context).rentPeriodDao().insert(RentPeriod(
+            contractHistoryId = newContractId.toInt(),
+            renterId = renter.id,
+            scooterId = renter.scooterId,
+            startsAt = newStart,
+            endsAt = newEnd,
+            chargeMinor = BusinessOperation.toMinor(effectivePrice),
+            paidMinor = 0L,
+            status = RentPeriod.STATUS_OVERDUE,
+            createdAt = now,
+            updatedAt = now
+        ))
+        AppDatabase.getDatabase(context).auditEventDao().insert(AuditEvent(
+            occurredAt = now,
+            action = AuditEvent.ACTION_RENT_RENEWED,
+            entityType = "RENTER",
+            entityId = renter.id.toString(),
+            reason = "Auto-create unpaid contract at end of last contract",
+            beforeSnapshot = "latestEnd=$latestEnd",
+            afterSnapshot = "newContractId=$newContractId; weekStart=$newStart; weekEnd=$newEnd"
+        ))
+        // §9.0: таймкод критического действия — CONTRACT_CREATE (auto).
+        try {
+            com.example.data.TimelineService(
+                AppDatabase.getDatabase(context)
+            ).recordCriticalAction(
+                actionType = "CONTRACT_CREATE_AUTO",
+                screen = "RENTERS",
+                title = "Auto-kontrakt: ${renter.name}",
+                entityType = "CONTRACT",
+                entityId = newContractId.toString(),
+                payloadJson = "{\"renterId\":${renter.id},\"amount\":$effectivePrice,\"auto\":true,\"weekStart\":$newStart,\"weekEnd\":$newEnd}"
+            )
+        } catch (_: Exception) {}
+    }
+
+    /**
+     * §4/§5: Запускает [autoCreateUnpaidForRenter] для всех активных арендаторов.
+     * Используется:
+     *   • из MainActivity LaunchedEffect — один раз при старте приложения;
+     *   • из SmsWorker — перед отправкой напоминаний о долге;
+     *   • из RenterViewModel.refresh() — при ручном обновлении списка.
+     */
+    suspend fun autoCreateForAllActiveRenters() {
+        val active = renterRepository.getActiveRenters()
+        active.forEach { autoCreateUnpaidForRenter(it) }
     }
 
     /**
@@ -512,5 +650,19 @@ class RenterActionUseCase(
 
         // Обновляем нативные виджеты Android
         try { WidgetUpdater.updateAll(context) } catch (_: Exception) {}
+
+        // §9.0: таймкод критического действия — RENT_TERMINATED.
+        try {
+            com.example.data.TimelineService(
+                AppDatabase.getDatabase(context)
+            ).recordCriticalAction(
+                actionType = "RENT_TERMINATED",
+                screen = "RENTERS",
+                title = "Tugatildi: ${renter.name}",
+                entityType = "RENTER",
+                entityId = renter.id.toString(),
+                payloadJson = "{\"renterId\":${renter.id},\"finalBalance\":$finalBalance,\"forgiven\":$forgiveDebt}"
+            )
+        } catch (_: Exception) {}
     }
 }

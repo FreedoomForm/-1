@@ -124,6 +124,23 @@ class FinansiViewModel(application: Application) : AndroidViewModel(application)
     }
 
     /**
+     * §3: Закрывает карту с переносом остатка на другую активную карту.
+     * Вызывается из UI FinansiPanel — кнопка «Yopish» на карточке карты.
+     */
+    fun closeCardWithTransfer(card: VirtualCard, toCardId: Int, note: String) {
+        viewModelScope.launch {
+            try {
+                val operator = com.example.data.OperatorSessionRepository(getApplication())
+                    .requirePermission(AppDatabase.getDatabase(getApplication()), com.example.data.AccessPolicy.FINANCE_REVERSE)
+                repository.closeCardWithBalanceTransfer(card, toCardId, note, operator.displayName)
+                WidgetUpdater.updateAll(getApplication())
+            } catch (e: Exception) {
+                Log.e(TAG, "Failed to close card with balance transfer", e)
+            }
+        }
+    }
+
+    /**
      * Переводит [amount] с карты [fromCardId] на карту [toCardId].
      * Если [reversed] = true — меняет направление (для кнопки разворота стрелки).
      *

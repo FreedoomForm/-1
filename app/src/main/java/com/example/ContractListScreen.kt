@@ -10,6 +10,7 @@ import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -264,6 +265,7 @@ fun ContractListScreen(
     // Ширины fixed-колонок. Увеличены чтобы вмещать полное содержимое —
     // maxLines=2 + softWrap разрешают перенос на вторую строку вместо
     // обрезки «Akmal…».
+    val wNum      = 40.dp    // № — порядковый номер строки
     val wId       = 55.dp
     val wRenter   = 150.dp   // увеличено с 110 — вмещает «Имя Фамилия»
     val wPhone    = 110.dp
@@ -341,6 +343,7 @@ fun ContractListScreen(
                         .padding(horizontal = 8.dp, vertical = 4.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
+                    NonSortableHeaderCellFixed(Icons.Default.Numbers, wNum, "№")
                     if (showId)       SortableHeaderCellFixed(Icons.Default.Numbers,              wId,       "col_id",      sortState) { sortState = sortState.click("col_id") }
                     if (showRenter)   SortableHeaderCellFixed(Icons.Default.Person,               wRenter,   "col_renter",  sortState) { sortState = sortState.click("col_renter") }
                     if (showPhone)    NonSortableHeaderCellFixed(Icons.Default.Phone,              wPhone,    "Telefon")
@@ -375,7 +378,7 @@ fun ContractListScreen(
                 }
             } else {
                 LazyColumn(modifier = Modifier.fillMaxSize()) {
-                    items(filteredContracts, key = { it.id }) { entry ->
+                    itemsIndexed(filteredContracts, key = { _, it -> it.id }) { idx, entry ->
                         val isSelected = entry.id in selectedContracts
                         val statusColor = if (entry.isPaid) StatusOk else StatusOverdue
                         val statusLabel = if (entry.isPaid) "To'langan" else "To'lanmagan"
@@ -413,6 +416,14 @@ fun ContractListScreen(
                                     .padding(horizontal = 8.dp, vertical = 10.dp),
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
+                                Text(
+                                    "${idx + 1}",
+                                    modifier = Modifier.width(wNum).padding(horizontal = 4.dp),
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = ClaudeTextSecondary,
+                                    fontWeight = FontWeight.Medium,
+                                    maxLines = 1
+                                )
                                 if (showId) {
                                     Text(
                                         "#${entry.id}",

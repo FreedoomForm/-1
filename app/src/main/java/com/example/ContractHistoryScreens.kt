@@ -100,6 +100,12 @@ fun RenterContractHistoryScreen(
     var editingContract by remember { mutableStateOf<ContractHistoryEntry?>(null) }
     var showDeleteConfirm by remember { mutableStateOf(false) }
     var showCreateDialog by remember { mutableStateOf(false) }
+    // §4: диалог акта выдачи/возврата.
+    var showHandoverActDialog by remember { mutableStateOf(false) }
+    var handoverActType by remember { mutableStateOf(com.example.data.HandoverAct.TYPE_HANDOVER) }
+    var handoverMileage by remember { mutableStateOf("") }
+    var handoverEquipment by remember { mutableStateOf("") }
+    var handoverCondition by remember { mutableStateOf("") }
     var generatingPdfFor by remember { mutableStateOf<Int?>(null) }
     var generatingUnlimitedPdf by remember { mutableStateOf(false) }
 
@@ -275,12 +281,21 @@ fun RenterContractHistoryScreen(
                                 "Boshlanish",
                                 dateFmt.format(Date(renter.rentStartDateTimestamp))
                             )
+                            // §5: Товарооборот = сумма всех контрактов арендатора.
+                            val turnover = contracts.sumOf { it.amount }
+                            SummaryColumn(
+                                "Tovaroborot",
+                                "${turnover.toLong()} UZS"
+                            )
+                            // §5: Баланс = paid − turnover: <0 долг, >0 аванс, =0 расчёт закрыт.
+                            val paidTotal = contracts.filter { it.isPaid }.sumOf { it.amount }
+                            val computedBalance = paidTotal - turnover
                             SummaryColumn(
                                 "Balans",
-                                "${renter.balance.toLong()} UZS",
+                                "${computedBalance.toLong()} UZS",
                                 valueColor = when {
-                                    renter.balance < 0 -> StatusOverdue
-                                    renter.balance > 0 -> StatusOk
+                                    computedBalance < 0 -> StatusOverdue
+                                    computedBalance > 0 -> StatusOk
                                     else -> ClaudeText
                                 }
                             )
@@ -294,7 +309,7 @@ fun RenterContractHistoryScreen(
                 // контрактов доступны через кнопки «Yaratish» / «O'chir» ниже
                 // (диалоги CreateContractDialog и EditContractDialog).
 
-                // ── Переключатель «Контракты» / «Транзакции» ────────────
+                // ── Переключатель «Контракты» / «Транзакции» / «Davrlar» ────
                 item {
                     Row(
                         modifier = Modifier
@@ -313,6 +328,12 @@ fun RenterContractHistoryScreen(
                             icon = Icons.Default.Payments,
                             isSelected = selectedTab == 1,
                             onClick = { selectedTab = 1 }
+                        )
+                        ToggleTabButton(
+                            label = "Davrlar",
+                            icon = Icons.Default.DateRange,
+                            isSelected = selectedTab == 2,
+                            onClick = { selectedTab = 2 }
                         )
                     }
                 }
@@ -359,6 +380,16 @@ fun RenterContractHistoryScreen(
                             enabled = selectedContracts.isNotEmpty(),
                             onClick = { showDeleteConfirm = true }
                         )
+                        // §4: Акт выдачи/возврата — открывает диалог записи акта
+                        // с пробегом и комплектацией. Доступен всегда, если у
+                        // арендатора есть скутер.
+                        if (renter.scooterId != null) {
+                            SecondaryButton(
+                                label = "Akt",
+                                icon = Icons.Default.Assignment,
+                                onClick = { showHandoverActDialog = true }
+                            )
+                        }
                         Spacer(Modifier.weight(1f))
                     }
                 }
@@ -491,6 +522,11 @@ fun RenterContractHistoryScreen(
                     }
                 }
             }
+        } else if (selectedTab == 2) {
+            // ── ВКЛАДКА «DAVRLAR» (RentPeriods) ─────────────────────────
+            // §4.1: режим просмотра уже созданных RentPeriod со статусами
+            // SCHEDULED / PARTIALLY_PAID / PAID / OVERDUE / CLOSED_WITH_DEBT.
+            RentPeriodsViewer(renterId = renter.id)
         } else {
             // ── ВКЛАДКА «ТРАНЗАКЦИИ» ─────────────────────────────────────
             // RenterTransactionListSection имеет собственный внутренний
@@ -550,12 +586,20 @@ fun RenterContractHistoryScreen(
                                 "Boshlanish",
                                 dateFmt.format(Date(renter.rentStartDateTimestamp))
                             )
+                            // §5: Товарооборот и баланс на вкладке транзакций.
+                            val turnoverTx = contracts.sumOf { it.amount }
+                            SummaryColumn(
+                                "Tovaroborot",
+                                "${turnoverTx.toLong()} UZS"
+                            )
+                            val paidTotalTx = contracts.filter { it.isPaid }.sumOf { it.amount }
+                            val computedBalanceTx = paidTotalTx - turnoverTx
                             SummaryColumn(
                                 "Balans",
-                                "${renter.balance.toLong()} UZS",
+                                "${computedBalanceTx.toLong()} UZS",
                                 valueColor = when {
-                                    renter.balance < 0 -> StatusOverdue
-                                    renter.balance > 0 -> StatusOk
+                                    computedBalanceTx < 0 -> StatusOverdue
+                                    computedBalanceTx > 0 -> StatusOk
                                     else -> ClaudeText
                                 }
                             )
@@ -585,6 +629,12 @@ fun RenterContractHistoryScreen(
                             icon = Icons.Default.Payments,
                             isSelected = selectedTab == 1,
                             onClick = { selectedTab = 1 }
+                        )
+                        ToggleTabButton(
+                            label = "Davrlar",
+                            icon = Icons.Default.DateRange,
+                            isSelected = selectedTab == 2,
+                            onClick = { selectedTab = 2 }
                         )
                     }
 
@@ -671,6 +721,107 @@ fun RenterContractHistoryScreen(
                     label = "Bekor",
                     icon = Icons.Default.Close,
                     onClick = { showDeleteConfirm = false }
+                )
+            }
+        )
+    }
+
+    // ── §4: Диалог акта выдачи/возврата ────────────────────────────────────
+    if (showHandoverActDialog) {
+        val scope = rememberCoroutineScope()
+        val ctx = LocalContext.current
+        AlertDialog(
+            onDismissRequest = { showHandoverActDialog = false },
+            title = { Text("Akt yozish — ${renter.name}") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    // Тип акта: выдача или возврат.
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        FilterChip(
+                            selected = handoverActType == com.example.data.HandoverAct.TYPE_HANDOVER,
+                            onClick = { handoverActType = com.example.data.HandoverAct.TYPE_HANDOVER },
+                            label = { Text("Berish (выдача)") }
+                        )
+                        FilterChip(
+                            selected = handoverActType == com.example.data.HandoverAct.TYPE_RETURN,
+                            onClick = { handoverActType = com.example.data.HandoverAct.TYPE_RETURN },
+                            label = { Text("Qaytarish (возврат)") }
+                        )
+                    }
+                    OutlinedTextField(
+                        value = handoverMileage,
+                        onValueChange = { handoverMileage = it.filter { c -> c.isDigit() } },
+                        label = { Text("Probeg (km)") },
+                        modifier = Modifier.fillMaxWidth(),
+                        singleLine = true
+                    )
+                    OutlinedTextField(
+                        value = handoverEquipment,
+                        onValueChange = { handoverEquipment = it },
+                        label = { Text("Komplektatsiya (akkumulyatorlar, kalit, dublkka...)") },
+                        modifier = Modifier.fillMaxWidth(),
+                        minLines = 2
+                    )
+                    OutlinedTextField(
+                        value = handoverCondition,
+                        onValueChange = { handoverCondition = it },
+                        label = { Text("Holat / kamchiliklar") },
+                        modifier = Modifier.fillMaxWidth(),
+                        minLines = 2
+                    )
+                }
+            },
+            confirmButton = {
+                PrimaryButton(
+                    label = "Saqlash",
+                    icon = Icons.Default.Save,
+                    onClick = {
+                        scope.launch {
+                            val db = com.example.data.AppDatabase.getDatabase(ctx)
+                            val mileage = handoverMileage.toLongOrNull() ?: 0L
+                            db.handoverActDao().insert(
+                                com.example.data.HandoverAct(
+                                    actType = handoverActType,
+                                    renterId = renter.id,
+                                    scooterId = renter.scooterId!!,
+                                    mileageKm = mileage,
+                                    equipmentChecklist = handoverEquipment.trim(),
+                                    conditionNotes = handoverCondition.trim()
+                                )
+                            )
+                            // При возврате обновляем текущий пробег скутера.
+                            if (handoverActType == com.example.data.HandoverAct.TYPE_RETURN) {
+                                val scooter = renter.scooterId?.let { db.scooterDao().getScooterById(it) }
+                                if (scooter != null && mileage > scooter.mileageKm) {
+                                    db.scooterDao().update(scooter.copy(mileageKm = mileage))
+                                }
+                            }
+                            db.auditEventDao().insert(
+                                com.example.data.AuditEvent(
+                                    action = if (handoverActType == com.example.data.HandoverAct.TYPE_HANDOVER)
+                                        com.example.data.AuditEvent.ACTION_CONTRACT_CREATE
+                                    else
+                                        com.example.data.AuditEvent.ACTION_CONTRACT_UPDATE,
+                                    entityType = "SCOOTER",
+                                    entityId = renter.scooterId.toString(),
+                                    reason = "Handover act: $handoverActType",
+                                    afterSnapshot = "mileage=$mileage; equipment=${handoverEquipment.take(80)}"
+                                )
+                            )
+                            Toast.makeText(ctx, "Akt saqlandi", Toast.LENGTH_SHORT).show()
+                            showHandoverActDialog = false
+                            handoverMileage = ""
+                            handoverEquipment = ""
+                            handoverCondition = ""
+                        }
+                    }
+                )
+            },
+            dismissButton = {
+                TextActionButton(
+                    label = "Bekor",
+                    icon = Icons.Default.Close,
+                    onClick = { showHandoverActDialog = false }
                 )
             }
         )
@@ -1985,6 +2136,157 @@ fun ScooterContractHistoryScreen(
             onDismiss = { showDateRangePicker = false },
             title = "Sana bo'yicha filter"
         )
+    }
+}
+
+// ============================================================================
+// §4.1: RentPeriodsViewer — список биллинговых периодов со статусами
+// ============================================================================
+
+/**
+ * Показывает список RentPeriod арендатора с их статусами:
+ * SCHEDULED / PARTIALLY_PAID / PAID / OVERDUE / CLOSED_WITH_DEBT / CLOSED / CANCELLED.
+ *
+ * Цвет статуса соответствует единому языку статусов (§11):
+ *   • PAID / CLOSED        → зелёный (StatusOk)
+ *   • PARTIALLY_PAID        → янтарный (StatusReserved)
+ *   • OVERDUE / CLOSED_WITH_DEBT → красный (StatusOverdue)
+ *   • SCHEDULED             → серый (ClaudeTextSecondary)
+ *   • CANCELLED / SUSPENDED_REPAIR → серый (StatusArchived)
+ *
+ * Каждый период показывает:
+ *   • дату начала и окончания
+ *   • сумму начисления (chargeMinor) и сумму оплаты (paidMinor)
+ *   • остаток (outstandingMinor) — сколько ещё нужно оплатить
+ *   • статус-чип с цветом
+ */
+@Composable
+private fun RentPeriodsViewer(renterId: Int) {
+    val db = com.example.data.AppDatabase.getDatabase(
+        androidx.compose.ui.platform.LocalContext.current
+    )
+    val periods by db.rentPeriodDao().forRenter(renterId)
+        .collectAsStateWithLifecycle(initialValue = emptyList())
+
+    val dateFmt = remember { java.text.SimpleDateFormat("dd.MM.yyyy", java.util.Locale.getDefault()) }
+
+    LazyColumn(
+        modifier = Modifier.fillMaxSize().padding(16.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
+        if (periods.isEmpty()) {
+            item {
+                Box(
+                    modifier = Modifier.fillMaxSize().padding(32.dp),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text(
+                        "Davrlar yo'q",
+                        color = ClaudeTextSecondary,
+                        style = MaterialTheme.typography.bodyMedium
+                    )
+                }
+            }
+        } else {
+            items(periods, key = { it.id }) { period ->
+                RentPeriodCard(period = period, dateFmt = dateFmt)
+            }
+        }
+    }
+}
+
+@Composable
+private fun RentPeriodCard(
+    period: com.example.data.RentPeriod,
+    dateFmt: java.text.SimpleDateFormat
+) {
+    val (statusColor, statusLabel) = when (period.status) {
+        com.example.data.RentPeriod.STATUS_PAID -> StatusOk to "To'langan"
+        com.example.data.RentPeriod.STATUS_CLOSED -> StatusOk to "Yopilgan"
+        com.example.data.RentPeriod.STATUS_PARTIALLY_PAID -> StatusReserved to "Qisman to'langan"
+        com.example.data.RentPeriod.STATUS_OVERDUE -> StatusOverdue to "Muddati o'tgan"
+        com.example.data.RentPeriod.STATUS_CLOSED_WITH_DEBT -> StatusOverdue to "Qarz bilan yopilgan"
+        com.example.data.RentPeriod.STATUS_SCHEDULED -> ClaudeTextSecondary to "Rejada"
+        com.example.data.RentPeriod.STATUS_ACTIVE -> ClaudeAccent to "Faol"
+        com.example.data.RentPeriod.STATUS_SUSPENDED_REPAIR -> StatusArchived to "Ta'mir sababli to'xtatilgan"
+        com.example.data.RentPeriod.STATUS_CANCELLED -> StatusArchived to "Bekor qilingan"
+        else -> ClaudeTextSecondary to period.status
+    }
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(12.dp),
+        colors = CardDefaults.cardColors(containerColor = ClaudeCard),
+        border = BorderStroke(1.dp, statusColor.copy(alpha = 0.4f))
+    ) {
+        Column(modifier = Modifier.padding(12.dp)) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    "${dateFmt.format(java.util.Date(period.startsAt))} → ${dateFmt.format(java.util.Date(period.endsAt))}",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = ClaudeText,
+                    fontWeight = FontWeight.SemiBold
+                )
+                Surface(
+                    color = statusColor.copy(alpha = 0.12f),
+                    shape = RoundedCornerShape(8.dp)
+                ) {
+                    Text(
+                        statusLabel,
+                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+                        color = statusColor,
+                        style = MaterialTheme.typography.labelSmall,
+                        fontWeight = FontWeight.Bold
+                    )
+                }
+            }
+            Spacer(Modifier.height(8.dp))
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                Column {
+                    Text(
+                        "Hisoblang",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = ClaudeTextSecondary
+                    )
+                    Text(
+                        "${period.chargeMinor / 100} so'm",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = ClaudeText
+                    )
+                }
+                Column {
+                    Text(
+                        "To'langan",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = ClaudeTextSecondary
+                    )
+                    Text(
+                        "${period.paidMinor / 100} so'm",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = if (period.paidMinor > 0) StatusOk else ClaudeTextSecondary
+                    )
+                }
+                Column {
+                    Text(
+                        "Qoldi",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = ClaudeTextSecondary
+                    )
+                    Text(
+                        "${period.outstandingMinor / 100} so'm",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = if (period.outstandingMinor > 0) StatusOverdue else StatusOk,
+                        fontWeight = FontWeight.Bold
+                    )
+                }
+            }
+        }
     }
 }
 

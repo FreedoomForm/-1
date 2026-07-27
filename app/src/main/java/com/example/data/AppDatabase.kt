@@ -27,9 +27,10 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         RepairOrder::class,
         TimelineBranch::class,
         TimelineEvent::class,
-        TimelineSnapshot::class
+        TimelineSnapshot::class,
+        HandoverAct::class
     ],
-    version = 30,
+    version = 31,
     exportSchema = false
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -50,6 +51,7 @@ abstract class AppDatabase : RoomDatabase() {
     abstract fun smsDeliveryDao(): SmsDeliveryDao
     abstract fun repairOrderDao(): RepairOrderDao
     abstract fun timelineDao(): TimelineDao
+    abstract fun handoverActDao(): HandoverActDao
 
     companion object {
         @Volatile
@@ -601,6 +603,42 @@ abstract class AppDatabase : RoomDatabase() {
         }
 
         /**
+         * §4: Migration 30 → 31 — таблица `handover_acts` для актов выдачи/возврата
+         * скутера с пробегом и комплектацией. Также добавляем колонку `mileageKm`
+         * в `scooters` для текущего пробега.
+         */
+        private val MIGRATION_30_31 = object : Migration(30, 31) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("""
+                    CREATE TABLE IF NOT EXISTS `handover_acts` (
+                        `id` INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
+                        `timestamp` INTEGER NOT NULL,
+                        `actType` TEXT NOT NULL,
+                        `renterId` INTEGER NOT NULL,
+                        `scooterId` INTEGER NOT NULL,
+                        `contractHistoryId` INTEGER,
+                        `mileageKm` INTEGER NOT NULL DEFAULT 0,
+                        `equipmentChecklist` TEXT NOT NULL DEFAULT '',
+                        `conditionNotes` TEXT NOT NULL DEFAULT '',
+                        `signedBy` TEXT NOT NULL DEFAULT 'LOCAL_SYSTEM'
+                    )
+                """.trimIndent())
+                db.execSQL("CREATE INDEX IF NOT EXISTS `index_handover_acts_renterId_actType` ON `handover_acts` (`renterId`, `actType`)")
+                db.execSQL("CREATE INDEX IF NOT EXISTS `index_handover_acts_scooterId_timestamp` ON `handover_acts` (`scooterId`, `timestamp`)")
+                db.execSQL("CREATE INDEX IF NOT EXISTS `index_handover_acts_contractHistoryId` ON `handover_acts` (`contractHistoryId`)")
+                // Колонка текущего пробега скутера.
+                db.execSQL("ALTER TABLE `scooters` ADD COLUMN `mileageKm` INTEGER NOT NULL DEFAULT 0")
+                // §8: частичный ремонт — несколько пауз внутри одного RepairOrder.
+                // pauseIntervalsJson хранит JSON-массив пар [startMs, endMs].
+                // totalPauseMs — суммарная длительность всех пауз (для продления контракта).
+                db.execSQL("ALTER TABLE `repair_orders` ADD COLUMN `pauseIntervalsJson` TEXT NOT NULL DEFAULT '[]'")
+                db.execSQL("ALTER TABLE `repair_orders` ADD COLUMN `totalPauseMs` INTEGER NOT NULL DEFAULT 0")
+                db.execSQL("ALTER TABLE `repair_orders` ADD COLUMN `currentlyPaused` INTEGER NOT NULL DEFAULT 0")
+                db.execSQL("ALTER TABLE `repair_orders` ADD COLUMN `lastPausedAt` INTEGER")
+            }
+        }
+
+        /**
          * Copies the raw Room database before the first open after an app
          * schema upgrade. This runs before Room can migrate anything, so a
          * recoverable snapshot exists even if a device loses power mid-update.
@@ -608,17 +646,17 @@ abstract class AppDatabase : RoomDatabase() {
         private fun backupBeforeMigration(context: Context) {
             val appContext = context.applicationContext
             val prefs = appContext.getSharedPreferences("migration_backups", Context.MODE_PRIVATE)
-            val key = "backup_for_schema_30"
+            val key = "backup_for_schema_31"
             if (prefs.getBoolean(key, false)) return
             val source = appContext.getDatabasePath("scooter_rent_db")
             if (!source.exists() || source.length() == 0L) return
             try {
                 val directory = java.io.File(appContext.filesDir, "pre_migration_backups").apply { mkdirs() }
                 val stamp = System.currentTimeMillis()
-                source.copyTo(java.io.File(directory, "scooter_rent_db_before_v30_$stamp.db"), overwrite = true)
+                source.copyTo(java.io.File(directory, "scooter_rent_db_before_v31_$stamp.db"), overwrite = true)
                 listOf("-wal", "-shm").forEach { suffix ->
                     val sidecar = java.io.File(source.path + suffix)
-                    if (sidecar.exists()) sidecar.copyTo(java.io.File(directory, "scooter_rent_db_before_v30_$stamp$suffix"), overwrite = true)
+                    if (sidecar.exists()) sidecar.copyTo(java.io.File(directory, "scooter_rent_db_before_v31_$stamp$suffix"), overwrite = true)
                 }
                 prefs.edit().putBoolean(key, true).apply()
             } catch (_: Exception) {
@@ -635,7 +673,7 @@ abstract class AppDatabase : RoomDatabase() {
                     AppDatabase::class.java,
                     "scooter_rent_db"
                 )
-                    .addMigrations(MIGRATION_11_12, MIGRATION_12_13, MIGRATION_13_14, MIGRATION_14_15, MIGRATION_15_16, MIGRATION_16_17, MIGRATION_17_18, MIGRATION_18_19, MIGRATION_19_20, MIGRATION_20_21, MIGRATION_21_22, MIGRATION_22_23, MIGRATION_23_24, MIGRATION_24_25, MIGRATION_25_26, MIGRATION_26_27, MIGRATION_27_28, MIGRATION_28_29, MIGRATION_29_30)
+                    .addMigrations(MIGRATION_11_12, MIGRATION_12_13, MIGRATION_13_14, MIGRATION_14_15, MIGRATION_15_16, MIGRATION_16_17, MIGRATION_17_18, MIGRATION_18_19, MIGRATION_19_20, MIGRATION_20_21, MIGRATION_21_22, MIGRATION_22_23, MIGRATION_23_24, MIGRATION_24_25, MIGRATION_25_26, MIGRATION_26_27, MIGRATION_27_28, MIGRATION_28_29, MIGRATION_29_30, MIGRATION_30_31)
                     // Production data must never be silently erased on an unknown migration.
                     // Room will fail visibly and the user can restore a backup instead.
                     .addCallback(object : RoomDatabase.Callback() {

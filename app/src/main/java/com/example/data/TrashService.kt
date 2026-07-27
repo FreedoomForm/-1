@@ -126,6 +126,39 @@ class TrashService(private val db: AppDatabase) {
         }
         db.deletedItemDao().purge(itemId)
         audit("TRASH_RESTORED", item.sourceType, itemId.toString(), "Restored as #$restoredId")
+        // §9.2: запись события дерева истории — восстановление из корзины
+        // фиксируется в активной ветке Timeline, чтобы обеспечить полный
+        // аудируемый след операции.
+        try {
+            val mainBranch = db.timelineDao().mainBranch()
+                ?: db.timelineDao().branches().let { flow ->
+                    // Берем первую ветку из Flow как fallback.
+                    kotlinx.coroutines.flow.first(flow)
+                }.firstOrNull()
+            if (mainBranch != null) {
+                db.timelineDao().insertEvent(TimelineEvent(
+                    branchId = mainBranch.id,
+                    timestamp = System.currentTimeMillis(),
+                    actionType = "TRASH_RESTORE",
+                    screen = "TRASH",
+                    entityType = item.sourceType,
+                    entityId = restoredId.toString(),
+                    title = "Восстановлено из корзины: ${item.title}",
+                    payloadJson = "{\"itemId\":${itemId},\"sourceType\":\"${item.sourceType}\"}",
+                    isMajor = true
+                ))
+            }
+        } catch (_: Exception) {
+            // Не блокируем восстановление, если записать событие не удалось.
+        }
+        // §10: отдельная audit-запись с новым action-кодом.
+        db.auditEventDao().insert(AuditEvent(
+            occurredAt = System.currentTimeMillis(),
+            action = AuditEvent.ACTION_TRASH_RESTORE,
+            entityType = item.sourceType,
+            entityId = restoredId.toString(),
+            reason = "Restored from trash (itemId=$itemId)"
+        ))
         restoredId
     }
 

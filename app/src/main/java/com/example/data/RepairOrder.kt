@@ -24,7 +24,16 @@ data class RepairOrder(
     val partsUsed: String? = null,
     val estimatedMinor: Long = 0,
     val actualMinor: Long = 0,
-    val documentNote: String? = null
+    val documentNote: String? = null,
+    // ── §8: частичный ремонт — несколько пауз внутри одного order ──────
+    /** JSON-массив пар [startMs, endMs] — история пауз ремонта. */
+    val pauseIntervalsJson: String = "[]",
+    /** Суммарная длительность всех пауз в ms — на эту величину продлевается контракт. */
+    val totalPauseMs: Long = 0L,
+    /** true если ремонт сейчас на паузе (pause start without resume). */
+    val currentlyPaused: Boolean = false,
+    /** Timestamp последней паузы (или null если ремонт не на паузе). */
+    val lastPausedAt: Long? = null
 ) {
     companion object {
         const val STATUS_OPEN = "OPEN"

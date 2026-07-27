@@ -26,7 +26,9 @@ data class Scooter(
     /** AVAILABLE / RESERVED / RENTED / SERVICE / REPAIR / RETIRED. */
     val lifecycleStatus: String = STATUS_AVAILABLE,
     val lastServiceAt: Long? = null,
-    val nextServiceAt: Long? = null
+    val nextServiceAt: Long? = null,
+    /** §4: текущий пробег скутера в км (обновляется при акте возврата). */
+    val mileageKm: Long = 0L
 ) {
     companion object {
         const val STATUS_AVAILABLE = "AVAILABLE"

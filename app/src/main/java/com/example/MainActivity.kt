@@ -15,6 +15,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -51,6 +52,7 @@ import androidx.compose.material.icons.filled.Clear
 import androidx.compose.material.icons.filled.Tag
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Schedule
+import androidx.compose.material.icons.filled.Apps
 import androidx.compose.material.icons.filled.Category
 import androidx.compose.material.icons.filled.Build
 import androidx.compose.material.icons.filled.Numbers
@@ -530,6 +532,10 @@ fun MainScreen(
     // ── Навигация ────────────────────────────────────────────────────
     var navState by remember { mutableStateOf<NavigationState>(NavigationState.MainView) }
 
+    // §9.A: launcher overlay + navigation drawer.
+    var showLauncher by remember { mutableStateOf(false) }
+    var showDrawer by remember { mutableStateOf(false) }
+
     var renterSortState by remember { mutableStateOf(TableSortState()) }
     var scooterSortState by remember { mutableStateOf(TableSortState()) }
     // Filter panel state
@@ -554,6 +560,7 @@ fun MainScreen(
             FilterColumn("col_scooter",  "Skuter",           "Skuter nomi"),
             FilterColumn("col_start",    "Boshlanish sanasi","dd.MM.yyyy"),
             FilterColumn("col_end",      "Tugash sanasi",    "dd.MM.yyyy"),
+            FilterColumn("col_turnover", "Tovaroborot",      "summa kontraktlar"),
             FilterColumn("col_balance",  "Balans",           "summa"),
             FilterColumn("col_status",   "Holat",            "Faol / Qaytgan / Qarzdor"),
             FilterColumn("col_passport", "Pasport",          "AA 1234567"),
@@ -998,6 +1005,24 @@ fun MainScreen(
                     actionIconContentColor = ClaudeText
                 ),
                 actions = {
+                    // ── §9.A: Кнопка launcher (домик) — открывает fullscreen launcher
+                    // с кубиками-иконками + шторкой навигации.
+                    IconButton(
+                        onClick = { showLauncher = true },
+                        modifier = Modifier
+                            .padding(end = 6.dp)
+                            .size(40.dp)
+                            .background(ClaudeCard, CircleShape)
+                            .border(1.dp, ClaudeDivider, CircleShape)
+                    ) {
+                        Icon(
+                            Icons.Default.Apps,
+                            contentDescription = "Launcher",
+                            tint = ClaudeText,
+                            modifier = Modifier.size(20.dp)
+                        )
+                    }
+
                     // ── Кнопка сканера (Mistral OCR) ──────────────────────────────
                     // Иконка камеры, доступна с любой вкладки. Открывает экран
                     // сканера документов: пользователь фотографирует список
@@ -1636,6 +1661,36 @@ fun MainScreen(
                             }
                     }
 
+                // ── Товарооборот и оплаченный итог по каждому арендатору ──────
+                // turnover = сумма сумм всех контрактов (CREATED + AUTO_RENEW).
+                // paid     = сумма сумм оплаченных контрактов (isPaid=true).
+                // balance  = paid − turnover: <0 долг, >0 аванс, =0 расчёт закрыт.
+                val turnoverByRenter: Map<Int, Double> =
+                    remember(contractHistory) {
+                        contractHistory
+                            .asSequence()
+                            .filter {
+                                it.type == com.example.data.ContractHistoryEntry.TYPE_CREATED ||
+                                it.type == com.example.data.ContractHistoryEntry.TYPE_AUTO_RENEW
+                            }
+                            .filter { it.renterId > 0 }
+                            .groupBy { it.renterId }
+                            .mapValues { (_, entries) -> entries.sumOf { it.amount } }
+                    }
+                val paidByRenter: Map<Int, Double> =
+                    remember(contractHistory) {
+                        contractHistory
+                            .asSequence()
+                            .filter {
+                                it.type == com.example.data.ContractHistoryEntry.TYPE_CREATED ||
+                                it.type == com.example.data.ContractHistoryEntry.TYPE_AUTO_RENEW
+                            }
+                            .filter { it.isPaid }
+                            .filter { it.renterId > 0 }
+                            .groupBy { it.renterId }
+                            .mapValues { (_, entries) -> entries.sumOf { it.amount } }
+                    }
+
                 // Helper: даты последнего контракта (с fallback на поля Renter).
                 fun latestStartTs(r: Renter): Long =
                     latestContractByRenter[r.id]?.weekStart ?: r.rentStartDateTimestamp
@@ -1709,6 +1764,8 @@ fun MainScreen(
                     sortState = renterSortState,
                     columnVisibility = renterColumnVisibility,
                     latestContractByRenter = latestContractByRenter,
+                    turnoverByRenter = turnoverByRenter,
+                    paidByRenter = paidByRenter,
                     onSortClick = { colId ->
                         renterSortState = renterSortState.click(colId)
                     },
@@ -2367,6 +2424,48 @@ fun MainScreen(
                 }
             }
         }
+
+        // ── §9.A: Launcher overlay + drawer ────────────────────────────────
+        // Полноэкранный launcher с кубиками-иконками. Свайп вверх по handle
+        // внизу → открывает многоуровневую navigation drawer.
+        if (showLauncher) {
+            com.example.ui.components.LauncherScreen(
+                onPageClick = { pageId ->
+                    showLauncher = false
+                    // Маппинг id страницы → currentTab.
+                    currentTab = when (pageId) {
+                        "renters"   -> 0
+                        "scooters"  -> 1
+                        "contracts" -> 2
+                        "finansi"   -> 3
+                        "reports"   -> 4
+                        "history"   -> 5
+                        "trash"     -> 7
+                        "settings"  -> 6
+                        else        -> 0
+                    }
+                },
+                onDrawerPullUp = { showDrawer = true }
+            )
+        }
+        com.example.ui.components.NavigationDrawerSheet(
+            expanded = showDrawer,
+            onDismiss = { showDrawer = false },
+            onPageSelect = { pageId ->
+                showDrawer = false
+                currentTab = when (pageId) {
+                    "renters"   -> 0
+                    "scooters"  -> 1
+                    "contracts" -> 2
+                    "finansi"   -> 3
+                    "reports"   -> 4
+                    "history"   -> 5
+                    "trash"     -> 7
+                    "settings"  -> 6
+                    else        -> 0
+                }
+            }
+        )
     }
 }
 
@@ -2385,6 +2484,8 @@ fun RenterTable(
     sortState: TableSortState,
     columnVisibility: Map<String, Boolean>,
     latestContractByRenter: Map<Int, com.example.data.ContractHistoryEntry>,
+    turnoverByRenter: Map<Int, Double> = emptyMap(),
+    paidByRenter: Map<Int, Double> = emptyMap(),
     onSortClick: (String) -> Unit,
     onSelect: (Int, Boolean) -> Unit,
     onClick: (Renter) -> Unit
@@ -2400,6 +2501,7 @@ fun RenterTable(
     val showScooter  = isColVisible("col_scooter")
     val showStart    = isColVisible("col_start")
     val showEnd      = isColVisible("col_end")
+    val showTurnover = isColVisible("col_turnover")
     val showBalance  = isColVisible("col_balance")
     val showPassport = isColVisible("col_passport")
     val showAddress  = isColVisible("col_address")
@@ -2414,11 +2516,13 @@ fun RenterTable(
     // а пользователь скроллит таблицу по горизонтали если колонок много.
     val hasAnyExtraVisible = showPassport || showAddress || showPinfl
 
+    val wNum      = 40.dp    // № — порядковый номер строки
     val wName     = 160.dp   // увеличено с 110 — вмещает «Имя Фамилия»
     val wPhone    = 115.dp
     val wScoot    = 90.dp
     val wStart    = 90.dp
     val wEnd      = 90.dp
+    val wTurnover = 95.dp   // товарооборот — сумма всех контрактов
     val wDebt     = 80.dp
     val wPassport = 115.dp
     val wAddress  = 150.dp
@@ -2436,11 +2540,13 @@ fun RenterTable(
                     .padding(horizontal = 8.dp, vertical = 4.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
+                NonSortableHeaderCellFixed(Icons.Default.Numbers, wNum, "№")
                 if (showName)     SortableHeaderCellFixed(Icons.Default.Person,               wName,     "col_name",     sortState) { onSortClick("col_name") }
                 if (showPhone)    SortableHeaderCellFixed(Icons.Default.Phone,                wPhone,    "col_phone",    sortState) { onSortClick("col_phone") }
                 if (showScooter)  SortableHeaderCellFixed(Icons.Default.DirectionsBike,       wScoot,    "col_scooter",  sortState) { onSortClick("col_scooter") }
                 if (showStart)    SortableHeaderCellFixed(Icons.Default.CalendarToday,        wStart,    "col_start",    sortState) { onSortClick("col_start") }
                 if (showEnd)      SortableHeaderCellFixed(Icons.Default.Event,                wEnd,      "col_end",      sortState) { onSortClick("col_end") }
+                if (showTurnover) NonSortableHeaderCellFixed(Icons.Default.AccountBalanceWallet, wTurnover, "Tovaroborot")
                 if (showBalance)  SortableHeaderCellFixed(Icons.Default.AccountBalanceWallet, wDebt,     "col_balance",  sortState) { onSortClick("col_balance") }
                 if (showPassport) SortableHeaderCellFixed(Icons.Default.CreditCard,           wPassport, "col_passport", sortState) { onSortClick("col_passport") }
                 if (showAddress)  SortableHeaderCellFixed(Icons.Default.Home,                 wAddress,  "col_address",  sortState) { onSortClick("col_address") }
@@ -2466,7 +2572,7 @@ fun RenterTable(
         }
 
         LazyColumn(modifier = Modifier.fillMaxSize()) {
-            items(renters, key = { it.id }) { renter ->
+            itemsIndexed(renters, key = { _, it -> it.id }) { idx, renter ->
                 val isSelected = selected.contains(renter.id)
                 val status = statusOf(renter)
                 val sColor = statusColor(status)
@@ -2494,6 +2600,14 @@ fun RenterTable(
                             .padding(horizontal = 8.dp, vertical = 10.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
+                        Text(
+                            "${idx + 1}",
+                            modifier = Modifier.width(wNum).padding(horizontal = 4.dp),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = ClaudeTextSecondary,
+                            fontWeight = FontWeight.Medium,
+                            maxLines = 1
+                        )
                         // Mijoz — имя + фамилия. maxLines=2 чтобы «Akmal Karimov»
                         // переносилось на вторую строку вместо обрезки «Akmal…».
                         if (showName) {
@@ -2574,15 +2688,43 @@ fun RenterTable(
                                 overflow = TextOverflow.Visible
                             )
                         }
-                        // Balans
+                        // Tovaroborot — сумма сумм всех контрактов арендатора.
+                        // Вычисляется из истории контрактов (CREATED + AUTO_RENEW).
+                        if (showTurnover) {
+                            val turnover = turnoverByRenter[renter.id] ?: 0.0
+                            Text(
+                                turnover.toLong().toString(),
+                                modifier = Modifier
+                                    .width(wTurnover)
+                                    .padding(horizontal = 4.dp),
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = ClaudeText,
+                                fontWeight = FontWeight.Medium,
+                                textAlign = TextAlign.End,
+                                maxLines = 2,
+                                softWrap = true,
+                                overflow = TextOverflow.Visible
+                            )
+                        }
+                        // Balans = paid − turnover: <0 долг, >0 аванс, =0 расчёт закрыт.
+                        // Источник: turnoverByRenter и paidByRenter (из contract_history).
+                        // Fallback на renter.balance если контракт-история недоступна.
                         if (showBalance) {
+                            val computedBalance =
+                                (paidByRenter[renter.id] ?: 0.0) -
+                                    (turnoverByRenter[renter.id] ?: 0.0)
+                            val displayBalance = if (turnoverByRenter.containsKey(renter.id)) {
+                                computedBalance
+                            } else {
+                                renter.balance
+                            }
                             val balanceColor = when {
-                                renter.balance < 0 -> StatusOverdue
-                                renter.balance > 0 -> StatusOk
+                                displayBalance < 0 -> StatusOverdue
+                                displayBalance > 0 -> StatusOk
                                 else -> ClaudeText
                             }
                             Text(
-                                renter.balance.toLong().toString(),
+                                displayBalance.toLong().toString(),
                                 modifier = Modifier
                                     .width(wDebt)
                                     .padding(horizontal = 4.dp),
@@ -2965,11 +3107,47 @@ fun RenterFormDialog(
                 )
 
                 if (isEdit) {
-                    Text(
-                        "Holat: ${if (initialRenter?.isReturned == true) "Qaytarilgan" else "Faol"}",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = ClaudeTextSecondary
-                    )
+                    // ── Активный/пассивный статус (§4) ───────────────────────────
+                    // Toggle позволяет переключать арендатора между «Faol» (активен)
+                    // и «Qaytarilgan» (пассивен/возвращён) прямо в форме редактирования.
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(vertical = 4.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            "Holat:",
+                            style = MaterialTheme.typography.labelLarge,
+                            color = ClaudeText
+                        )
+                        Spacer(Modifier.width(12.dp))
+                        FilterChip(
+                            selected = isActive,
+                            onClick = { isActive = true },
+                            label = { Text("Faol") },
+                            leadingIcon = if (isActive) {
+                                { Icon(Icons.Default.Check, contentDescription = null, modifier = Modifier.size(16.dp)) }
+                            } else null,
+                            colors = FilterChipDefaults.filterChipColors(
+                                selectedContainerColor = StatusOkBg,
+                                selectedLabelColor = StatusOk
+                            )
+                        )
+                        Spacer(Modifier.width(8.dp))
+                        FilterChip(
+                            selected = !isActive,
+                            onClick = { isActive = false },
+                            label = { Text("Qaytarilgan") },
+                            leadingIcon = if (!isActive) {
+                                { Icon(Icons.Default.Close, contentDescription = null, modifier = Modifier.size(16.dp)) }
+                            } else null,
+                            colors = FilterChipDefaults.filterChipColors(
+                                selectedContainerColor = StatusArchivedBg,
+                                selectedLabelColor = StatusArchived
+                            )
+                        )
+                    }
                 }
 
                 ExposedDropdownMenuBox(
@@ -4089,6 +4267,7 @@ fun ScooterTable(
     // ВСЕГДА используем fixed widths + горизонтальный скролл — даже когда
     // скрыты все extra-колонки. Это гарантирует что имя скутера не будет
     // обрезано (maxLines=2 + softWrap позволяют переносу на 2 строки).
+    val wNum    = 40.dp    // № — порядковый номер строки
     val wName   = 140.dp   // увеличено с 110 — вмещает «Skillmax-001» с запасом
     val wDoc    = 115.dp
     val wVin    = 140.dp
@@ -4112,6 +4291,7 @@ fun ScooterTable(
                     .padding(horizontal = 8.dp, vertical = 4.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
+                NonSortableHeaderCellFixed(Icons.Default.Numbers, wNum, "№")
                 if (showName)   SortableHeaderCellFixed(Icons.Default.Label,         wName,   "col_name",  sortState) { onSortClick("col_name") }
                 if (showDoc)    NonSortableHeaderCellFixed(Icons.Default.CreditCard,   wDoc,    "Hujjat raqami")
                 if (showVin)    NonSortableHeaderCellFixed(Icons.Default.Numbers,      wVin,    "VIN")
@@ -4142,7 +4322,7 @@ fun ScooterTable(
         }
 
         LazyColumn(modifier = Modifier.fillMaxSize()) {
-            items(scooters, key = { it.id }) { scooter ->
+            itemsIndexed(scooters, key = { _, it -> it.id }) { idx, scooter ->
                 val isSelected = selected.contains(scooter.id)
                 val status = scooterStatusOf(scooter, renters)
                 val sColor = scooterStatusColor(status)
@@ -4168,6 +4348,14 @@ fun ScooterTable(
                             .padding(horizontal = 8.dp, vertical = 12.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
+                        Text(
+                            "${idx + 1}",
+                            modifier = Modifier.width(wNum).padding(horizontal = 4.dp),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = ClaudeTextSecondary,
+                            fontWeight = FontWeight.Medium,
+                            maxLines = 1
+                        )
                         if (showName) {
                             Text(
                                 scooter.name,

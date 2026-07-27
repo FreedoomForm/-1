@@ -64,7 +64,10 @@ class RenterViewModel(application: Application) : AndroidViewModel(application) 
 
     init {
         val database = AppDatabase.getDatabase(application)
-        repository = RenterRepository(database.renterDao())
+        repository = RenterRepository(
+            database.renterDao(),
+            database.contractHistoryDao()
+        )
         historyRepository = com.example.data.ContractHistoryRepository(
             database.contractHistoryDao()
         )
@@ -82,7 +85,16 @@ class RenterViewModel(application: Application) : AndroidViewModel(application) 
         )
     }
 
-    fun startAutoSync() { /* no-op: local-only mode */ }
+    fun startAutoSync() {
+        // §4/§5: при старте автоматически создаём неоплаченные контракты
+        // для активных арендаторов, у которых последний контракт закончился.
+        // Это гарантирует, что FIFO-оплата всегда находит целевой контракт.
+        viewModelScope.launch {
+            try {
+                actionUseCase.autoCreateForAllActiveRenters()
+            } catch (_: Exception) {}
+        }
+    }
     fun stopAutoSync() { /* no-op: local-only mode */ }
 
     /**
