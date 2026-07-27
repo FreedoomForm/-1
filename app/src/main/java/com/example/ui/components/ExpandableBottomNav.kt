@@ -141,6 +141,7 @@ fun ExpandableBottomNav(
     // 1f = fully expanded (secondary row + arrow visible above primary).
     val expandProgress = remember { Animatable(if (expanded) 1f else 0f) }
     var secondaryHeightPx by remember { mutableStateOf(0) }
+    var primaryHeightPx by remember { mutableStateOf(0) }
 
     // Sync animation with controlled state.
     LaunchedEffect(expanded) {
@@ -153,8 +154,29 @@ fun ExpandableBottomNav(
     fun expand()  { onExpandedChange(true)  }
     fun collapse(){ onExpandedChange(false) }
 
+    val density = LocalDensity.current
+
+    // ── Layout strategy ────────────────────────────────────────────────
+    // The outer Box has a FIXED height = primary row height. Scaffold
+    // sees a constant bottomBar height → no innerPadding reflow during
+    // animation (which was causing the previous bug where primary row
+    // slid off-screen when secondary opened).
+    //
+    // The secondary section is rendered as an OVERLAY positioned ABOVE
+    // the primary row. It slides UP into view when expanded, and DOWN
+    // (clipped behind primary) when collapsed.
+    //
+    // Before primaryHeightPx is measured (first frame), we use 0 height
+    // which falls back to wrapContent; once measured the explicit height
+    // kicks in.
+    val outerHeightModifier = if (primaryHeightPx > 0) {
+        Modifier.height(with(density) { primaryHeightPx.toDp() })
+    } else {
+        Modifier
+    }
+
     Box(
-        modifier = Modifier
+        modifier = outerHeightModifier
             .fillMaxWidth()
             .background(ClaudeCard)
             .pointerInput(Unit) {
@@ -169,39 +191,71 @@ fun ExpandableBottomNav(
                 )
             }
     ) {
-        Column(
-            modifier = Modifier.fillMaxWidth()
+        // ── Primary row — always at the bottom, FIXED height ───────────
+        // This is the only thing Scaffold sees as the bottom bar height.
+        // It never moves regardless of expand/collapse state.
+        Row(
+            modifier = Modifier
+                .align(Alignment.BottomCenter)
+                .fillMaxWidth()
+                .background(ClaudeCard)
+                .border(
+                    width = 1.dp,
+                    color = Color.Black.copy(alpha = 0.06f)
+                )
+                .onGloballyPositioned { coords ->
+                    if (primaryHeightPx == 0) {
+                        primaryHeightPx = coords.size.height
+                    }
+                }
+                .padding(horizontal = 12.dp, vertical = 10.dp),
+            horizontalArrangement = Arrangement.SpaceEvenly,
+            verticalAlignment = Alignment.CenterVertically
         ) {
-            // ── Secondary section (arrow + secondary row + divider) ───────
-            // Height animates 0 → secondaryHeight as expandProgress → 1.
-            // Content is rendered at full height but shifted up & clipped
-            // when collapsed, so it slides into view smoothly.
-            val density = LocalDensity.current
+            PrimaryNavPages.forEach { page ->
+                NavTile(
+                    page = page,
+                    selected = page.id == selectedId,
+                    onClick = { onPageClick(page.id) },
+                    size = 60.dp,
+                    iconSize = 30.dp,
+                    labelSize = 11.sp
+                )
+            }
+        }
+
+        // ── Secondary section — overlay above primary, slides UP when expanded ─
+        // The overlay's outer Box is anchored at the TOP-CENTER of the
+        // parent, but offset DOWN by primaryHeight so its bottom edge
+        // meets the primary row's top edge. As expandProgress → 1, the
+        // secondary slides up (negative offset grows) revealing it above
+        // the primary row.
+        //
+        // When collapsed (progress=0), the secondary is pushed BELOW
+        // the primary row (offset = primaryHeight + 0) and clipped.
+        if (secondaryHeightPx > 0) {
             Box(
                 modifier = Modifier
+                    .align(Alignment.TopCenter)
                     .fillMaxWidth()
-                    .height(
-                        with(density) {
-                            (secondaryHeightPx.toDp()) * expandProgress.value
-                        }
-                    )
+                    .height(with(density) { secondaryHeightPx.toDp() })
+                    // Push overlay DOWN by primaryHeight when collapsed (hidden
+                    // behind primary), UP by 0 when expanded (fully visible
+                    // above primary row).
+                    .offset {
+                        val primaryShift = primaryHeightPx
+                        val collapseShift = (secondaryHeightPx * (1f - expandProgress.value)).toInt()
+                        // Negative Y = move up. We position the overlay so its
+                        // bottom touches the primary's top edge when expanded,
+                        // and shifts down by secondaryHeight when collapsed.
+                        IntOffset(0, primaryShift - collapseShift)
+                    }
                     .clipToBounds()
-                    .background(ClaudeBackground.copy(alpha = expandProgress.value))
+                    .background(ClaudeBackground)
             ) {
                 Column(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .onGloballyPositioned { coords ->
-                            if (secondaryHeightPx == 0) {
-                                secondaryHeightPx = coords.size.height
-                            }
-                        }
-                        // Shift content up by its own height when collapsed,
-                        // so it slides down into view as expandProgress → 1.
-                        .offset {
-                            val shift = (secondaryHeightPx * (1f - expandProgress.value)).toInt()
-                            IntOffset(0, -shift)
-                        }
                         .padding(horizontal = 12.dp, vertical = 8.dp),
                     horizontalAlignment = Alignment.CenterHorizontally
                 ) {
@@ -232,7 +286,7 @@ fun ExpandableBottomNav(
 
                     Spacer(Modifier.height(6.dp))
 
-                    // Divider line between rows
+                    // Divider line at the bottom of secondary section
                     Box(
                         modifier = Modifier
                             .fillMaxWidth()
@@ -242,30 +296,48 @@ fun ExpandableBottomNav(
                     )
                 }
             }
+        }
 
-            // ── Primary row — always visible at the bottom ───────────────
-            Row(
+        // ── Hidden measurer: render secondary once at full size to get
+        // its natural height, then make it invisible. This is needed
+        // because the overlay above uses secondaryHeightPx for its
+        // height & offset.
+        if (secondaryHeightPx == 0) {
+            Column(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .background(ClaudeCard)
-                    .border(
-                        width = 1.dp,
-                        color = Color.Black.copy(alpha = 0.06f)
-                    )
-                    .padding(horizontal = 12.dp, vertical = 10.dp),
-                horizontalArrangement = Arrangement.SpaceEvenly,
-                verticalAlignment = Alignment.CenterVertically
+                    .onGloballyPositioned { coords ->
+                        secondaryHeightPx = coords.size.height
+                    }
+                    .padding(horizontal = 12.dp, vertical = 8.dp),
+                horizontalAlignment = Alignment.CenterHorizontally
             ) {
-                PrimaryNavPages.forEach { page ->
-                    NavTile(
-                        page = page,
-                        selected = page.id == selectedId,
-                        onClick = { onPageClick(page.id) },
-                        size = 60.dp,
-                        iconSize = 30.dp,
-                        labelSize = 11.sp
-                    )
+                AnimatedDownArrow(alpha = 1f, onClick = { collapse() })
+                Spacer(Modifier.height(8.dp))
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceEvenly,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    SecondaryNavPages.forEach { page ->
+                        NavTile(
+                            page = page,
+                            selected = false,
+                            onClick = {},
+                            size = 60.dp,
+                            iconSize = 30.dp,
+                            labelSize = 11.sp
+                        )
+                    }
                 }
+                Spacer(Modifier.height(6.dp))
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp)
+                        .height(1.dp)
+                        .background(Color.Black.copy(alpha = 0.08f))
+                )
             }
         }
     }
