@@ -216,7 +216,7 @@ fun LauncherScreen(
             Text(
                 "Scooter Rent",
                 style = MaterialTheme.typography.headlineMedium,
-                color = ClaudeDarkText,
+                color = ClaudeText,
                 fontWeight = FontWeight.Bold,
                 letterSpacing = 1.sp
             )
@@ -224,7 +224,7 @@ fun LauncherScreen(
             Text(
                 "Boshqaruv tizimi",
                 style = MaterialTheme.typography.bodySmall,
-                color = ClaudeDarkText.copy(alpha = 0.72f),
+                color = ClaudeTextSecondary,
                 fontWeight = FontWeight.Normal
             )
 
@@ -265,8 +265,8 @@ fun LauncherScreen(
                             .size(if (i == 0) 8.dp else 6.dp)
                             .clip(CircleShape)
                             .background(
-                                if (i == 0) Color.White
-                                else Color.White.copy(alpha = 0.45f)
+                                if (i == 0) ClaudeAccent
+                                else ClaudeTextSecondary.copy(alpha = 0.45f)
                             )
                     )
                 }
@@ -281,7 +281,7 @@ fun LauncherScreen(
                 .align(Alignment.BottomCenter)
                 .fillMaxWidth()
                 .height(106.dp)
-                .background(ClaudeBackground.copy(alpha = 1f - collapseProgress.value * 0.15f))
+                .background(ClaudeCard.copy(alpha = 1f - collapseProgress.value * 0.15f))
                 .pointerInput(collapseProgress.value) {
                     detectVerticalDragGestures(
                         onVerticalDrag = { change, dragAmount ->
@@ -350,7 +350,7 @@ private fun LauncherTile(
         Text(
             page.title,
             style = MaterialTheme.typography.labelSmall,
-            color = ClaudeDarkText,
+            color = ClaudeText,
             fontSize = 11.sp,
             fontWeight = FontWeight.Medium,
             maxLines = 1,
@@ -385,7 +385,7 @@ private fun DockTile(
         Text(
             page.title,
             style = MaterialTheme.typography.labelSmall,
-            color = ClaudeDarkText,
+            color = ClaudeText,
             fontSize = 10.sp,
             maxLines = 1,
             textAlign = TextAlign.Center
