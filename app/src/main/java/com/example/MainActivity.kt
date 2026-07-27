@@ -558,6 +558,9 @@ fun MainScreen(
     var navState by remember { mutableStateOf<NavigationState>(NavigationState.MainView) }
 
 
+    // Collapsed dock shows four main pages; pulling it up reveals the
+    // identical secondary icon row without overlaying page content.
+    var bottomNavExpanded by remember { mutableStateOf(false) }
     var renterSortState by remember { mutableStateOf(TableSortState()) }
     var scooterSortState by remember { mutableStateOf(TableSortState()) }
     // Filter panel state
@@ -1239,31 +1242,24 @@ fun MainScreen(
             )
         },
         bottomBar = {
-            // The full Android-home launcher is shown after splash and can be
-            // reopened from the title. Main content keeps a stable 4-icon dock
-            // so secondary pages never overlay or clip the current screen.
-            NavigationBar(containerColor = ClaudeCard, contentColor = ClaudeText) {
-                listOf(
-                    Triple(0, "Mijozlar", Icons.Default.Person),
-                    Triple(1, "Skuterlar", Icons.Default.DirectionsBike),
-                    Triple(2, "Kontraktlar", Icons.Default.Description),
-                    Triple(5, "Moliya", Icons.Default.AccountBalanceWallet)
-                ).forEach { (tab, label, icon) ->
-                    NavigationBarItem(
-                        selected = currentTab == tab,
-                        onClick = { currentTab = tab },
-                        icon = { Icon(icon, label) },
-                        label = { Text(label) },
-                        colors = NavigationBarItemDefaults.colors(
-                            selectedIconColor = ClaudeAccent,
-                            unselectedIconColor = ClaudeTextSecondary,
-                            selectedTextColor = ClaudeAccent,
-                            unselectedTextColor = ClaudeTextSecondary,
-                            indicatorColor = ClaudeAccentBg
-                        )
-                    )
-                }
-            }
+            com.example.ui.components.ExpandableBottomNav(
+                selectedId = when (currentTab) {
+                    0 -> "renters"; 1 -> "scooters"; 2 -> "contracts"; 5 -> "finansi"
+                    4 -> "reports"; 7 -> "history"; 8 -> "trash"; 6 -> "settings"
+                    else -> "renters"
+                },
+                onPageClick = { page ->
+                    currentTab = when (page) {
+                        "renters" -> 0; "scooters" -> 1; "contracts" -> 2; "finansi" -> 5
+                        "reports" -> 4; "history" -> 7; "trash" -> 8; "settings" -> 6
+                        else -> 0
+                    }
+                    // Keep the second row open only while user is browsing it.
+                    if (page in setOf("reports", "history", "trash", "settings")) bottomNavExpanded = true
+                },
+                expanded = bottomNavExpanded,
+                onExpandedChange = { bottomNavExpanded = it }
+            )
         }
     ) { innerPadding ->
         Column(
