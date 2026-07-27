@@ -271,10 +271,24 @@ class MainActivity : ComponentActivity() {
                 if (showSplash) {
                     SplashScreen(onFinished = { showSplash = false })
                 } else if (showLauncher) {
-                    LauncherHomeScreen { tab ->
-                        launcherTab = tab
-                        showLauncher = false
-                    }
+                    // Restore the existing Android-home style launcher rather
+                    // than jumping under the main screen immediately.
+                    com.example.ui.components.LauncherScreen(
+                        onPageClick = { page ->
+                            launcherTab = when (page) {
+                                "renters" -> 0
+                                "scooters" -> 1
+                                "contracts" -> 2
+                                "finansi" -> 5
+                                "reports" -> 4
+                                "history" -> 7
+                                "trash" -> 8
+                                "settings" -> 6
+                                else -> 0
+                            }
+                            showLauncher = false
+                        }
+                    )
                 } else {
                     MainScreen(initialTab = launcherTab)
                 }
