@@ -309,7 +309,11 @@ fun RenterContractHistoryScreen(
                 // контрактов доступны через кнопки «Yaratish» / «O'chir» ниже
                 // (диалоги CreateContractDialog и EditContractDialog).
 
-                // ── Переключатель «Контракты» / «Транзакции» / «Davrlar» ────
+                // ── Переключатель «Контракты» / «Транзакции» ─────────────
+                // Вкладка «Davrlar» удалена по запросу пользователя —
+                // просмотр арендных периодов больше не нужен на этой
+                // странице. RentPeriodsViewer() остаётся в коде на случай
+                // будущих вызовов, но из UI убран.
                 item {
                     Row(
                         modifier = Modifier
@@ -328,12 +332,6 @@ fun RenterContractHistoryScreen(
                             icon = Icons.Default.Payments,
                             isSelected = selectedTab == 1,
                             onClick = { selectedTab = 1 }
-                        )
-                        ToggleTabButton(
-                            label = "Davrlar",
-                            icon = Icons.Default.DateRange,
-                            isSelected = selectedTab == 2,
-                            onClick = { selectedTab = 2 }
                         )
                     }
                 }
@@ -522,11 +520,6 @@ fun RenterContractHistoryScreen(
                     }
                 }
             }
-        } else if (selectedTab == 2) {
-            // ── ВКЛАДКА «DAVRLAR» (RentPeriods) ─────────────────────────
-            // §4.1: режим просмотра уже созданных RentPeriod со статусами
-            // SCHEDULED / PARTIALLY_PAID / PAID / OVERDUE / CLOSED_WITH_DEBT.
-            RentPeriodsViewer(renterId = renter.id)
         } else {
             // ── ВКЛАДКА «ТРАНЗАКЦИИ» ─────────────────────────────────────
             // RenterTransactionListSection имеет собственный внутренний
@@ -611,7 +604,7 @@ fun RenterContractHistoryScreen(
                     // также не показываем — остаётся только сводка + табы +
                     // поиск + список транзакций.
 
-                    // Табы
+                    // Табы (вкладка «Davrlar» удалена — только 2 таба)
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
@@ -629,12 +622,6 @@ fun RenterContractHistoryScreen(
                             icon = Icons.Default.Payments,
                             isSelected = selectedTab == 1,
                             onClick = { selectedTab = 1 }
-                        )
-                        ToggleTabButton(
-                            label = "Davrlar",
-                            icon = Icons.Default.DateRange,
-                            isSelected = selectedTab == 2,
-                            onClick = { selectedTab = 2 }
                         )
                     }
 
