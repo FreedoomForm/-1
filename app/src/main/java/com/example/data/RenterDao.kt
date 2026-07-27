@@ -21,6 +21,10 @@ interface RenterDao {
     @Query("SELECT * FROM renters WHERE id = :id LIMIT 1")
     suspend fun getRenterById(id: Int): Renter?
 
+    /** §12: Total renter count — used by migration tests and analytics. */
+    @Query("SELECT COUNT(*) FROM renters")
+    suspend fun getCount(): Int
+
     /** Возвращает сгенерированный rowId — нужно для немедленного уведомления при создании. */
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertRenter(renter: Renter): Long

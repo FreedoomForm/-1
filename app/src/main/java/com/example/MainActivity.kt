@@ -4383,7 +4383,8 @@ fun ScooterTable(
                         }
                         if (showVin) {
                             Text(
-                                scooter.vinNumber.ifBlank { "—" },
+                                // §10: mask VIN/engine/serial in table — full info on detail screen
+                                if (PrivacyPolicy.MASK_PASSPORT_IN_TABLES) maskIdentifier(scooter.vinNumber) else scooter.vinNumber.ifBlank { "—" },
                                 modifier = Modifier.width(wVin).padding(horizontal = 4.dp),
                                 style = MaterialTheme.typography.bodySmall,
                                 color = ClaudeText,
@@ -4394,7 +4395,7 @@ fun ScooterTable(
                         }
                         if (showEngine) {
                             Text(
-                                scooter.engineNumber.ifBlank { "—" },
+                                if (PrivacyPolicy.MASK_PASSPORT_IN_TABLES) maskIdentifier(scooter.engineNumber) else scooter.engineNumber.ifBlank { "—" },
                                 modifier = Modifier.width(wEngine).padding(horizontal = 4.dp),
                                 style = MaterialTheme.typography.bodySmall,
                                 color = ClaudeText,
@@ -4405,7 +4406,7 @@ fun ScooterTable(
                         }
                         if (showSerial) {
                             Text(
-                                scooter.scooterSerialNumber.ifBlank { "—" },
+                                if (PrivacyPolicy.MASK_PASSPORT_IN_TABLES) maskIdentifier(scooter.scooterSerialNumber) else scooter.scooterSerialNumber.ifBlank { "—" },
                                 modifier = Modifier.width(wSerial).padding(horizontal = 4.dp),
                                 style = MaterialTheme.typography.bodySmall,
                                 color = ClaudeText,

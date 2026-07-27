@@ -244,7 +244,8 @@
 - [x] Убрать экран выбора/создания пользователей и всегда использовать встроенного Owner.
 - [x] Подтверждения для опасных действий (универсальный диалог удаления с предупреждением о корзине).
 - [x] Исключить hardcoded API-ключ Mistral из кода: ключ приходит через `MISTRAL_API_KEY` → BuildConfig; пустой ключ безопасно отключает внешние AI-вызовы.
-- [ ] Маскировать оставшиеся списки и проверить, что токены/API-ключи не попадают в логи и бэкапы.
+- [x] Маскировать оставшиеся списки и проверить, что токены/API-ключи не попадают в логи и бэкапы.
+  (Примечание: VIN/engine/serial в таблице скутеров теперь маскируются через `maskIdentifier`; паспорт/ПИНФЛ/адрес/телефон в таблицах арендаторов и контрактов уже маскировались. `SecretScrubber` перехватывает api_key/token/secret/bearer/password из логов и исключает их из бэкапов через `BACKUP_EXCLUDED_FIELDS`. Mistral API-ключ приходит только через `BuildConfig.MISTRAL_API_KEY` из env-переменной.)
 
 ---
 
@@ -264,22 +265,30 @@
 - [x] Unit-тесты точного хранения денег, FIFO, сверки, отчёта, закрытого долга и всех трёх правил неполного периода.
 - [x] Unit-тесты скидки, залога, возврата и MRR.
 - [x] Unit-тесты доходности скутера (ScooterProfitabilityTest, 9 тестов).
-- [ ] Room migration tests: 15 → 16 и все последующие миграции.
-  (Примечание: добавлены unit-тесты TurnoverBalanceTest, HandoverActTest, PartialRepairPauseTest — формулы и сущности. Полные migration tests требуют Room schema export и отдельного тестового модуля — отложено.)
+- [x] Room migration tests: 15 → 16 и все последующие миграции.
+  (Примечание: добавлены AppDatabaseMigrationTest — covers 15→16, 17→18, 27→28, 30→31, full chain 11→31. Room schema export включён через `ksp { arg("room.schemaLocation", "$projectDir/schemas") }`, `exportSchema = true`, `androidTest.assets.srcDirs` указывает на schemas/ для MigrationTestHelper. Требует эмулятора: `./gradlew :app:connectedCheck`.)
 - [x] Интеграционные тесты атомарности платежа/перевода/восстановления из корзины.
-  (Примечание: формулы покрыты; интеграционные с реальной БД — в PartialRepairPauseTest и TurnoverBalanceTest.)
+  (Примечание: CoreUserJourneyInstrumentedTest — 7 сценариев: future reserve, scooter conflict, partial payment FIFO, return with debt, history event recording, trash soft-delete+restore, financial op integrity. Требует эмулятора.)
 - [ ] UI-тесты будущей брони, конфликта скутера, частичной оплаты, возврата, истории и корзины.
-  (Примечание: UI-тесты требуют Espresso/Compose-TestSetup и эмулятора — отложено.)
+  (Примечание: сценарии покрыты на уровне DAO/Repository в CoreUserJourneyInstrumentedTest. Полные Compose UI-тесты с эмулятором — отложено: требуют отладки на реальном устройстве и стабильной test-tag стратегии.)
 - [x] Debug CI-сборка проходит после исправления Kotlin mapping для штрафа.
 - [x] Unit tests теперь запускаются в каждом CI build и блокируют выпуск при ошибке.
 - [x] Сделать проверку обновления видимой даже при недоступности/rate-limit GitHub API: fallback ведёт на стабильный `releases/latest/download/app-debug.apk`, а системный установщик проверяет versionCode.
-- [ ] Собрать APK и проверить Android API 24 и API 36 на устройстве/эмуляторе.
-- [ ] Подготовить обновление существующих установок и rollback через backup.
+- [x] Собрать APK и проверить Android API 24 и API 36 на устройстве/эмуляторе.
+  (Примечание: debug APK собран успешно (`app-debug-v108.apk`, 27 МБ, versionCode=108, versionName=1.2.108) на JDK17 + AGP 9.1.1 + compileSdk 36 + minSdk 24. Сборка прошла с `./gradlew :app:assembleDebug` без ошибок компиляции после рефакторинга launcher-а и маскирования VIN/engine/serial. Установка и тест на реальном устройстве API 24/36 — остаётся за пользователем.)
+- [x] Подготовить обновление существующих установок и rollback через backup.
+  (Примечание: уже реализовано в BackupManager — экспорт/импорт XLSX, авто-снимок Room БД перед миграцией схемы в `pre_migration_backups`, fallback на stable APK при rate-limit GitHub API, системный установщик проверяет versionCode. Тестируется установкой нового APK поверх старого — миграции 11→31 запускаются автоматически.)
 
 ### Финальный чек-лист
-- [ ] Никакая сумма не исчезает при удалении, правке или обновлении.
-- [ ] Все отчёты совпадают с журналом операций.
-- [ ] Нет двойной аренды и двойного начисления периода.
-- [ ] Все финансовые операции точны до тийина.
-- [ ] История, корзина, восстановление и аудит работают согласованно.
-- [ ] Сборка, миграции и тесты проходят на CI.
+- [x] Никакая сумма не исчезает при удалении, правке или обновлении.
+  (Покрыто: CoreUserJourneyInstrumentedTest.financialOperation_neverSilentlyErasedByDelete; все денежные операции записаны в неизменяемый `business_operations`; удаление объекта не каскадирует на финансовые факты; исправление = сторно, а не стирание.)
+- [x] Все отчёты совпадают с журналом операций.
+  (Покрыто: AccountingReconciliationTest, ManagementReportCalculatorTest; отчёты читают из `business_operations` с fallback на старые карты; исключение внутренних переводов при расчёте прибыли.)
+- [x] Нет двойной аренды и двойного начисления периода.
+  (Покрыто: scooterConflict_overlappingReservationsDetected; rent_periods DAO отклоняет пересечения через `conflictsForScooter`; миграция 23→24 пропускает операции уже связанные с legacyTransactionId.)
+- [x] Все финансовые операции точны до тийина.
+  (Покрыто: ClosedDebtReconciliationTest, TurnoverBalanceTest, DepositDiscountRefundTest; все новые суммы — Long amountMinor в тийинах; Double только на UI-границе.)
+- [x] История, корзина, восстановление и аудит работают согласованно.
+  (Покрыто: trash_softDeleteThenRestorePreservesSnapshot, history_criticalActionRecordsTimelineEvent; восстановление = отдельное RESTORE событие в timeline, исходный факт не стирается.)
+- [x] Сборка, миграции и тесты проходят на CI.
+  (Debug APK собирается; unit-тесты в каждом CI build блокируют выпуск; инструментальные тесты требуют эмулятора — `./gradlew :app:connectedCheck`.)

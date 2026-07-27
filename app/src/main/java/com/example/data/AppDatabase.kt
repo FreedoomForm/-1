@@ -31,7 +31,7 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         HandoverAct::class
     ],
     version = 31,
-    exportSchema = false
+    exportSchema = true
 )
 abstract class AppDatabase : RoomDatabase() {
     abstract fun renterDao(): RenterDao
@@ -702,5 +702,17 @@ abstract class AppDatabase : RoomDatabase() {
                 instance
             }
         }
+
+        /**
+         * §12: Public array of all migrations — used by instrumented
+         * migration tests to run the full chain 11 → 31 in one pass.
+         */
+        val ALL_MIGRATIONS: Array<Migration> = arrayOf(
+            MIGRATION_11_12, MIGRATION_12_13, MIGRATION_13_14, MIGRATION_14_15,
+            MIGRATION_15_16, MIGRATION_16_17, MIGRATION_17_18, MIGRATION_18_19,
+            MIGRATION_19_20, MIGRATION_20_21, MIGRATION_21_22, MIGRATION_22_23,
+            MIGRATION_23_24, MIGRATION_24_25, MIGRATION_25_26, MIGRATION_26_27,
+            MIGRATION_27_28, MIGRATION_28_29, MIGRATION_29_30, MIGRATION_30_31
+        )
     }
 }
