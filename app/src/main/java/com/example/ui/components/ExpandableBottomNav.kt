@@ -28,7 +28,6 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AccountBalanceWallet
 import androidx.compose.material.icons.filled.Apps
-import androidx.compose.material.icons.filled.ArrowDownward
 import androidx.compose.material.icons.filled.Assessment
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.DirectionsBike
@@ -40,9 +39,11 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -60,7 +61,6 @@ import com.example.ui.theme.ClaudeAccent
 import com.example.ui.theme.ClaudeBackground
 import com.example.ui.theme.ClaudeCard
 import com.example.ui.theme.ClaudeDarkText
-import kotlinx.coroutines.launch
 
 /**
  * §9.A — Expandable bottom navigation panel.
@@ -136,15 +136,13 @@ fun ExpandableBottomNav(
     expanded: Boolean,
     onExpandedChange: (Boolean) -> Unit
 ) {
-    val scope = rememberCoroutineScope()
-
     // Animate the expansion: 0f = collapsed (only primary row visible),
     // 1f = fully expanded (secondary row + arrow visible above primary).
     val expandProgress = remember { Animatable(if (expanded) 1f else 0f) }
-    var secondaryHeightPx by remember { androidx.compose.runtime.mutableStateOf(0) }
+    var secondaryHeightPx by remember { mutableStateOf(0) }
 
     // Sync animation with controlled state.
-    androidx.compose.runtime.LaunchedEffect(expanded) {
+    LaunchedEffect(expanded) {
         expandProgress.animateTo(
             targetValue = if (expanded) 1f else 0f,
             animationSpec = tween(320)
