@@ -287,7 +287,8 @@ class MainActivity : ComponentActivity() {
                                 else -> 0
                             }
                             showLauncher = false
-                        }
+                        },
+                        onCollapseToMain = { showLauncher = false }
                     )
                 } else {
                     MainScreen(initialTab = launcherTab, onShowLauncher = { showLauncher = true })

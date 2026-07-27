@@ -144,7 +144,9 @@ val DefaultLauncherPages: List<LauncherPage> = listOf(
 fun LauncherScreen(
     pages: List<LauncherPage> = DefaultLauncherPages,
     onPageClick: (String) -> Unit,
-    onDrawerPullUp: () -> Unit = {}  // kept for signature compat, unused
+    /** Called after the launcher curtain is pulled down, revealing MainScreen. */
+    onCollapseToMain: () -> Unit = {},
+    onDrawerPullUp: () -> Unit = {}  // kept for source compatibility
 ) {
     val scope = rememberCoroutineScope()
     val density = LocalDensity.current
@@ -156,6 +158,10 @@ fun LauncherScreen(
     fun collapse() {
         scope.launch {
             collapseProgress.animateTo(1f, tween(280))
+            // The former implementation only hid the grid inside the full
+            // launcher surface, leaving its wallpaper on top of MainScreen.
+            // After the curtain animation, reveal the actual working page.
+            onCollapseToMain()
         }
     }
     fun expand() {
@@ -167,41 +173,10 @@ fun LauncherScreen(
     Box(
         modifier = Modifier
             .fillMaxSize()
-            .background(
-                // Warm Driftwood-inspired wallpaper gradient.
-                Brush.verticalGradient(
-                    colors = listOf(
-                        Color(0xFF2A1F3D),  // deep violet (top)
-                        Color(0xFF6B3F2F),  // warm brown (middle)
-                        Color(0xFFC14E24),  // terracotta (lower-middle)
-                        Color(0xFFE6C97F)   // gold (bottom, behind dock)
-                    )
-                )
-            )
+            // Use the same neutral background as working pages. The launcher
+            // must feel like a curtain over the renters page, not a separate app.
+            .background(ClaudeBackground)
     ) {
-        // ── Abstract decorative shapes (very subtle, wallpaper-like) ───────
-        // Large translucent circles to add depth, mimicking MIUI wallpaper.
-        Box(
-            modifier = Modifier
-                .size(280.dp)
-                .offset { IntOffset(-80, 60) }
-                .clip(CircleShape)
-                .background(Color(0xFF8E5BA6).copy(alpha = 0.35f))
-        )
-        Box(
-            modifier = Modifier
-                .size(220.dp)
-                .offset { IntOffset(280, 200) }
-                .clip(CircleShape)
-                .background(Color(0xFFD97757).copy(alpha = 0.30f))
-        )
-        Box(
-            modifier = Modifier
-                .size(180.dp)
-                .offset { IntOffset(40, 480) }
-                .clip(CircleShape)
-                .background(Color(0xFFE6C97F).copy(alpha = 0.25f))
-        )
 
         // ── Upper region: title + grid + page dots ───────────────────────
         // This entire region slides DOWN off-screen as collapseProgress → 1.
@@ -240,15 +215,15 @@ fun LauncherScreen(
             Text(
                 "Scooter Rent",
                 style = MaterialTheme.typography.headlineMedium,
-                color = Color.White,
-                fontWeight = FontWeight.Light,
+                color = ClaudeDarkText,
+                fontWeight = FontWeight.Bold,
                 letterSpacing = 1.sp
             )
             Spacer(Modifier.height(2.dp))
             Text(
                 "Boshqaruv tizimi",
                 style = MaterialTheme.typography.bodySmall,
-                color = Color.White.copy(alpha = 0.78f),
+                color = ClaudeDarkText.copy(alpha = 0.72f),
                 fontWeight = FontWeight.Normal
             )
 
