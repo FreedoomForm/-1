@@ -90,6 +90,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.input.KeyboardType
@@ -149,6 +150,7 @@ import com.example.ui.components.PhoneReceiverSortIcon
 import com.example.ui.components.SortableHeaderCell
 import com.example.ui.components.PullDownShadeLayout
 import com.example.ui.components.LauncherShadeContent
+import com.example.ui.components.rememberLauncherCurtainState
 import com.example.ui.components.NonSortableHeaderCell
 import com.example.ui.components.TableSortState
 import com.example.ui.components.SortState
@@ -275,32 +277,36 @@ class MainActivity : ComponentActivity() {
                 if (showSplash) {
                     SplashScreen(onFinished = { showSplash = false })
                 } else {
-                    // Keep the working screen rendered behind the launcher.
-                    // When the launcher curtain moves down, the renters page
-                    // becomes visible continuously instead of popping in after
-                    // the animation has already ended.
-                    Box(Modifier.fillMaxSize()) {
-                        MainScreen(initialTab = launcherTab, onShowLauncher = { showLauncher = true })
-                        if (showLauncher) {
-                            com.example.ui.components.LauncherScreen(
-                                onPageClick = { page ->
-                                    launcherTab = when (page) {
-                                        "renters" -> 0
-                                        "scooters" -> 1
-                                        "contracts" -> 2
-                                        "finansi" -> 5
-                                        "reports" -> 4
-                                        "history" -> 7
-                                        "trash" -> 8
-                                        "settings" -> 6
-                                        else -> 0
-                                    }
-                                    showLauncher = false
-                                },
-                                onCollapseToMain = { showLauncher = false }
-                            )
+                    // Launcher is rendered INSIDE MainScreen's content area
+                    // so the bottom nav from Scaffold stays on top of it.
+                    // When the user drags the launcher down past the bottom
+                    // nav, the panel slides under it (visible only via the
+                    // "Yukoriga torting" hint chip that re-anchors above
+                    // the bottom nav). User taps a tile → launcher is
+                    // dismissed and the corresponding tab is opened.
+                    val launcherState = rememberLauncherCurtainState()
+                    MainScreen(
+                        initialTab = launcherTab,
+                        onShowLauncher = { showLauncher = true },
+                        showLauncher = showLauncher,
+                        launcherState = launcherState,
+                        onLauncherPageClick = { page ->
+                            launcherTab = when (page) {
+                                "renters"   -> 0
+                                "scooters"  -> 1
+                                "contracts" -> 2
+                                "finansi"   -> 5
+                                "reports"   -> 4
+                                "history"   -> 7
+                                "trash"     -> 8
+                                "settings"  -> 6
+                                else        -> 0
+                            }
+                            // Reset curtain so next time launcher opens at top.
+                            launcherState.offsetPx = 0f
+                            showLauncher = false
                         }
-                    }
+                    )
                 }
             }
         }
@@ -494,6 +500,9 @@ fun SplashScreen(
 fun MainScreen(
     initialTab: Int = 0,
     onShowLauncher: () -> Unit = {},
+    showLauncher: Boolean = false,
+    launcherState: com.example.ui.components.LauncherCurtainState = com.example.ui.components.rememberLauncherCurtainState(),
+    onLauncherPageClick: (String) -> Unit = {},
     viewModel: RenterViewModel = viewModel(),
     settingsViewModel: SettingsViewModel = viewModel(),
     scooterViewModel: ScooterViewModel = viewModel(),
@@ -1279,11 +1288,14 @@ fun MainScreen(
             )
         }
     ) { innerPadding ->
-        Column(
+        Box(
             modifier = Modifier
                 .padding(innerPadding)
                 .fillMaxSize()
         ) {
+          Column(
+              modifier = Modifier.fillMaxSize()
+          ) {
             // ── Баннер обновления (ТОЛЬКО если есть обновление) ──
             when (val st = updateState) {
                 is InAppUpdateState.Downloading -> {
@@ -2597,11 +2609,26 @@ fun MainScreen(
             }
         }
 
-        // ── §9.A: Bottom navigation is now EXPANDABLE ──────────────────
-        // The bottom nav itself can be pulled up to reveal a second row
-        // of secondary icons. No more full-screen launcher overlay — the
-        // expandable bottom nav IS the launcher.
-    }   // ← end of Scaffold (Column was already closed earlier at L2084)
+        // ── §9.B: Launcher curtain rendered INSIDE the content Box. ─────
+        // Because the bottom bar from Scaffold lives on top of the content
+        // area, the launcher will visually slide UNDER the bottom nav when
+        // dragged down — exactly the spec'd behavior. The launcher is a
+        // free-drag panel: where the user releases, it stays. No snap
+        // points. See LauncherScreen for the full behavior contract.
+        if (showLauncher) {
+            val density = LocalDensity.current
+            // Approximate bottom nav height in px — used by the launcher
+            // to decide when to flip the hint arrow ("Pastga torting" ↔
+            // "Yukoriga torting") and to clamp the off-screen safe area.
+            val bottomNavHeightPx = with(density) { 118.dp.toPx() }
+            com.example.ui.components.LauncherScreen(
+                state = launcherState,
+                onPageClick = onLauncherPageClick,
+                bottomNavHeightPx = bottomNavHeightPx
+            )
+        }
+        }   // ← end of content Box
+    }   // ← end of Scaffold
 }
 
 /* ============================================================================
