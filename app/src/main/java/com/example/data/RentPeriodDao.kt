@@ -11,6 +11,9 @@ interface RentPeriodDao {
     @Query("SELECT * FROM rent_periods WHERE renterId = :renterId ORDER BY startsAt ASC")
     fun forRenter(renterId: Int): Flow<List<RentPeriod>>
 
+    @Query("SELECT * FROM rent_periods WHERE renterId = :renterId ORDER BY startsAt ASC")
+    suspend fun getAllForRenter(renterId: Int): List<RentPeriod>
+
     @Query("SELECT * FROM rent_periods ORDER BY startsAt ASC, id ASC")
     fun all(): Flow<List<RentPeriod>>
 

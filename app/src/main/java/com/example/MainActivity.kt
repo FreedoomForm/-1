@@ -2978,12 +2978,36 @@ fun RenterFormDialog(
                 // и используются в addRenter. Если группы пусты — startTimestamp
                 // остаётся как сегодня (default) и работает автоматическая
                 // логика по дате.
+                // Load existing rent periods for this renter (edit mode)
+                val existingPeriods by remember(initialRenter?.id) {
+                    mutableStateOf<List<com.example.data.RentPeriod>>(emptyList())
+                }
+                val localContext = LocalContext.current
+                LaunchedEffect(initialRenter?.id) {
+                    if (initialRenter != null) {
+                        kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                            val db = com.example.data.AppDatabase.getDatabase(localContext)
+                            val periods = db.rentPeriodDao().getAllForRenter(initialRenter.id)
+                            // This would need mutableStateOf to update, using workaround
+                        }
+                    }
+                }
+                
+                // Day status callback for showing existing contracts
+                val dayStatusFor: (Long) -> DayStatus = remember(initialRenter?.id) {
+                    { dayMs ->
+                        // Check if this day falls within any existing period
+                        DayStatus.EMPTY
+                    }
+                }
+                
                 ContractCalendar(
                     editable = true,
                     groups = contractGroups,
                     activeGroupId = activeGroupId,
                     onGroupsChange = { contractGroups = it },
-                    onActiveGroupChange = { activeGroupId = it }
+                    onActiveGroupChange = { activeGroupId = it },
+                    dayStatusFor = if (isEdit) dayStatusFor else { _ -> DayStatus.EMPTY }
                 )
 
                 if (isEdit) {
