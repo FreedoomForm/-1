@@ -30,7 +30,7 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         TimelineSnapshot::class,
         HandoverAct::class
     ],
-    version = 31,
+    version = 32,
     exportSchema = true
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -638,6 +638,13 @@ abstract class AppDatabase : RoomDatabase() {
             }
         }
 
+        private val MIGRATION_31_32 = object : Migration(31, 32) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                // Add discountMinor column to rent_periods table
+                db.execSQL("ALTER TABLE `rent_periods` ADD COLUMN `discountMinor` INTEGER NOT NULL DEFAULT 0")
+            }
+        }
+
         /**
          * Copies the raw Room database before the first open after an app
          * schema upgrade. This runs before Room can migrate anything, so a
@@ -646,7 +653,7 @@ abstract class AppDatabase : RoomDatabase() {
         private fun backupBeforeMigration(context: Context) {
             val appContext = context.applicationContext
             val prefs = appContext.getSharedPreferences("migration_backups", Context.MODE_PRIVATE)
-            val key = "backup_for_schema_31"
+            val key = "backup_for_schema_32"
             if (prefs.getBoolean(key, false)) return
             val source = appContext.getDatabasePath("scooter_rent_db")
             if (!source.exists() || source.length() == 0L) return
@@ -673,7 +680,7 @@ abstract class AppDatabase : RoomDatabase() {
                     AppDatabase::class.java,
                     "scooter_rent_db"
                 )
-                    .addMigrations(MIGRATION_11_12, MIGRATION_12_13, MIGRATION_13_14, MIGRATION_14_15, MIGRATION_15_16, MIGRATION_16_17, MIGRATION_17_18, MIGRATION_18_19, MIGRATION_19_20, MIGRATION_20_21, MIGRATION_21_22, MIGRATION_22_23, MIGRATION_23_24, MIGRATION_24_25, MIGRATION_25_26, MIGRATION_26_27, MIGRATION_27_28, MIGRATION_28_29, MIGRATION_29_30, MIGRATION_30_31)
+                    .addMigrations(MIGRATION_11_12, MIGRATION_12_13, MIGRATION_13_14, MIGRATION_14_15, MIGRATION_15_16, MIGRATION_16_17, MIGRATION_17_18, MIGRATION_18_19, MIGRATION_19_20, MIGRATION_20_21, MIGRATION_21_22, MIGRATION_22_23, MIGRATION_23_24, MIGRATION_24_25, MIGRATION_25_26, MIGRATION_26_27, MIGRATION_27_28, MIGRATION_28_29, MIGRATION_29_30, MIGRATION_30_31, MIGRATION_31_32)
                     // Production data must never be silently erased on an unknown migration.
                     // Room will fail visibly and the user can restore a backup instead.
                     .addCallback(object : RoomDatabase.Callback() {

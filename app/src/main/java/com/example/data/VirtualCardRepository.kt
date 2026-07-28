@@ -117,13 +117,11 @@ class VirtualCardRepository(
     /**
      * §3: Закрывает карту с переносом остатка на другую карту.
      *
-     * Если на закрываемой карте есть деньги, они переносятся на [toCardId]
-     * отдельной операцией перевода (CardTransaction.TYPE_CARD_TRANSFER +
-     * BusinessOperation.TYPE_TRANSFER), после чего карта архивируется.
+     * Если на закрываемой карте есть деньги (положительный или отрицательный
+     * баланс), они переносятся на [toCardId] отдельной операцией перевода.
      *
-     * Это позволяет закрыть карту без потери средств: все деньги попадают
-     * на указанную карту-приёмник, а аудит-трейл сохраняет обе операции
-     * (перевод + архивация).
+     * ВАЖНО: корректно обрабатывает отрицательный баланс (долг на карте).
+     * При отрицательном балансе: долг переносится на целевую карту.
      *
      * @param card карта для закрытия (должна существовать и не быть системной).
      * @param toCardId карта-приёмник для переноса остатка (должна быть активной).
@@ -142,16 +140,29 @@ class VirtualCardRepository(
         val target = requireCard(toCardId)
         require(!target.isArchived) { "Target card must be active" }
         require(note.isNotBlank()) { "Close reason is required" }
+        
         // Если есть остаток — сначала переносим его на карту-приёмник.
         if (kotlin.math.abs(current.balance) >= 0.005) {
-            // Используем прямой SQL-перенос, а не transfer(), чтобы обойти
-            // проверку `!from.isArchived` — мы ведь собираемся архивировать.
-            cardDao.adjustBalance(card.id, -current.balance)
-            cardDao.adjustBalance(toCardId, +current.balance)
+            val balanceToTransfer = current.balance
+            val absBalance = kotlin.math.abs(balanceToTransfer)
+            
+            // Обнуляем баланс закрываемой карты
+            cardDao.adjustBalance(card.id, -balanceToTransfer)
+            // Переносим на целевую карту (включая отрицательный баланс)
+            cardDao.adjustBalance(toCardId, +balanceToTransfer)
+            
+            // Определяем направление для корректной записи операции
+            val (fromCard, toCard, txAmount) = if (balanceToTransfer >= 0) {
+                Triple(card.id, toCardId, balanceToTransfer)
+            } else {
+                // Отрицательный баланс = долг. Записываем как перевод долга.
+                Triple(toCardId, card.id, absBalance)
+            }
+            
             val txId = txDao.insertTransaction(CardTransaction(
-                fromCardId = card.id,
-                toCardId = toCardId,
-                amount = current.balance,
+                fromCardId = fromCard,
+                toCardId = toCard,
+                amount = absBalance,
                 note = "Карта закрывается: $note",
                 type = CardTransaction.TYPE_CARD_TRANSFER
             ))
@@ -159,9 +170,9 @@ class VirtualCardRepository(
                 occurredAt = System.currentTimeMillis(),
                 type = BusinessOperation.TYPE_TRANSFER,
                 direction = BusinessOperation.DIRECTION_TRANSFER,
-                amountMinor = BusinessOperation.toMinor(current.balance),
-                fromCardId = card.id,
-                toCardId = toCardId,
+                amountMinor = BusinessOperation.toMinor(absBalance),
+                fromCardId = fromCard,
+                toCardId = toCard,
                 cardTransactionId = txId.toInt(),
                 note = "Close-with-transfer: $note"
             ))
@@ -172,7 +183,7 @@ class VirtualCardRepository(
                 entityId = card.id.toString(),
                 reason = "Balance transferred to #$toCardId before closure",
                 beforeSnapshot = "balance=${current.balance}",
-                afterSnapshot = "balance=0; transferred=${current.balance}; toCard=$toCardId"
+                afterSnapshot = "balance=0; transferred=$balanceToTransfer; toCard=$toCardId"
             ))
         }
         // Теперь баланс = 0, можно архивировать.
@@ -192,16 +203,6 @@ class VirtualCardRepository(
     /**
      * Переводит [amount] с карты [fromCardId] на карту [toCardId].
      * Атомарно: обновляет оба баланса и создаёт запись в истории транзакций.
-     *
-     * ВНЕШНИЕ КАРТЫ (Tashqidan / Tashqiga):
-     *   Если одна из сторон — внешняя карта (kind = EXTERNAL_IN / EXTERNAL_OUT),
-     *   вызов adjustBalance для неё пропускается. Баланс внешней карты концептуально
-     *   бесконечен и не должен меняться. Это позволяет:
-     *     • вносить деньги «из вне» (с Tashqidan на любую обычную) — обычная карта
-     *       увеличивается, внешняя не трогается;
-     *     • выводить деньги «вне» (с любой обычной на Tashqiga) — обычная карта
-     *       уменьшается, внешняя не трогается.
-     *   Валидация обязательного [note] для таких переводов — в FinansiViewModel.transfer.
      */
     suspend fun transfer(
         fromCardId: Int,
@@ -214,8 +215,6 @@ class VirtualCardRepository(
         val from = requireCard(fromCardId)
         val to = requireCard(toCardId)
         require(!from.isArchived && !to.isArchived) { "Archived cards cannot receive new transfers" }
-        // An external source may only fund the business; an external sink may
-        // only receive funds. This prevents accidental fictitious cash flows.
         require(from.kind != VirtualCard.KIND_EXTERNAL_OUT) { "Cannot transfer from an external sink" }
         require(to.kind != VirtualCard.KIND_EXTERNAL_IN) { "Cannot transfer to an external source" }
         if (!from.isExternal) {
@@ -242,14 +241,6 @@ class VirtualCardRepository(
     /**
      * Зачисляет [amount] на главную карту (id=MAIN_CARD_ID) от «внешнего источника»
      * (id=0). Вызывается автоматически при оплате контракта арендатором.
-     *
-     * [note] — описание платежа (например, "To'lov: Akmal, 1 hafta").
-     *
-     * [contractId] — ID контракта ContractHistoryEntry, для которого выполняется
-     *   зачисление. Заполняет поле `contractId` в создаваемой CardTransaction,
-     *   что позволяет каскадно удалить/реверснуть эту запись при удалении
-     *   контракта (см. ContractHistoryViewModel.deleteContractWithCascade).
-     *   null допустим для обратной совместимости (старые вызовы).
      */
     suspend fun depositContractIncome(
         amount: Double,
@@ -284,8 +275,6 @@ class VirtualCardRepository(
         if (!VirtualCard.isExternalId(tx.fromCardId)) cardDao.adjustBalance(tx.fromCardId, tx.amount)
         if (!VirtualCard.isExternalId(tx.toCardId)) cardDao.adjustBalance(tx.toCardId, -tx.amount)
         txDao.deleteTransaction(id)
-        // The original journal movement is marked reversed; the card balance
-        // rollback above is the compensating accounting movement.
         database?.let { db ->
             db.businessOperationDao().getByCardTransactionId(id)?.let { original ->
                 BusinessOperationRepository(db).reverse(original.id, note)
@@ -307,32 +296,15 @@ class VirtualCardRepository(
     }
     suspend fun countCards(): Int = cardDao.count()
 
-    /**
-     * Возвращает все CardTransaction, привязанные к контракту [contractId].
-     * Используется каскадным удалением контракта для определения, какие
-     * записи нужно реверснуть и удалить.
-     */
     suspend fun getCardTxForContract(contractId: Int): List<CardTransaction> =
         txDao.getForContractOnce(contractId)
 
-    /**
-     * Удаляет все CardTransaction, привязанные к контракту [contractId].
-     * Возвращает количество удалённых строк. Сам баланс карт НЕ трогает —
-     * вызывающий код должен сначала реверснуть баланс через adjustBalance
-     * для каждой удаляемой записи, иначе деньги «потеряются».
-     */
     suspend fun deleteCardTxForContract(contractId: Int): Int {
-        // Room не возвращает count из @Query DELETE напрямую; используем
-        // getForContractOnce для подсчёта, затем deleteForContract.
         val list = txDao.getForContractOnce(contractId)
         txDao.deleteForContract(contractId)
         return list.size
     }
 
-    /**
-     * Прямой доступ к VirtualCardDao.adjustBalance — нужен каскадному удалению
-     * для реверса баланса главной карты при удалении оплаченного контракта.
-     */
     suspend fun adjustCardBalance(cardId: Int, delta: Double) {
         cardDao.adjustBalance(cardId, delta)
     }

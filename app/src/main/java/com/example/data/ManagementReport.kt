@@ -11,8 +11,10 @@ data class ManagementReport(
     val advancesMinor: Long,
     val rentedScooters: Int,
     val totalScooters: Int,
-    /** Monthly depreciation per scooter in minor units */
-    val depreciationMinor: Long = 0
+    /** Monthly depreciation for the period in minor units */
+    val depreciationMinor: Long = 0,
+    /** Monthly Recurring Revenue projection in minor units */
+    val mrrMinor: Long = 0
 ) {
     fun toCsv(): String = buildString {
         appendLine("metric,value_minor")
@@ -26,6 +28,7 @@ data class ManagementReport(
         appendLine("customer_advances,$advancesMinor")
         appendLine("rented_scooters,$rentedScooters")
         appendLine("total_scooters,$totalScooters")
+        appendLine("mrr,$mrrMinor")
     }
 
     fun toCsvWithScooters(scooters: List<ScooterProfitability>): String = buildString {
@@ -41,6 +44,7 @@ data class ManagementReport(
         appendLine("customer_advances,$advancesMinor")
         appendLine("rented_scooters,$rentedScooters")
         appendLine("total_scooters,$totalScooters")
+        appendLine("mrr,$mrrMinor")
         appendLine()
         appendLine("# Per-Scooter Profitability")
         appendLine(ScooterProfitability.CSV_HEADER)
@@ -49,6 +53,9 @@ data class ManagementReport(
 }
 
 object ManagementReportCalculator {
+    private const val DAY_MS = 24L * 60 * 60 * 1000
+    private const val MONTH_DAYS = 30.0
+    
     /** All expense operation types */
     private val EXPENSE_TYPES = setOf(
         BusinessOperation.TYPE_EXPENSE,
@@ -87,12 +94,13 @@ object ManagementReportCalculator {
             }
             .sumOf { it.amountMinor }
         
-        // Calculate depreciation for the period
-        val periodMonths = ((until - from) / (30L * 24 * 60 * 60 * 1000)).coerceAtLeast(1)
+        // Calculate depreciation for the period using fractional months
+        val periodDays = ((until - from).toDouble() / DAY_MS).coerceAtLeast(1.0)
+        val periodMonths = periodDays / MONTH_DAYS
         val monthlyDepreciationPerScooter = if (scooterPriceUzs > 0 && scooterLifespanMonths > 0) {
             BusinessOperation.toMinor(scooterPriceUzs / scooterLifespanMonths)
         } else 0L
-        val totalDepreciation = monthlyDepreciationPerScooter * totalScooters * periodMonths
+        val totalDepreciation = (monthlyDepreciationPerScooter * totalScooters * periodMonths).toLong()
         
         // Net profit = revenue - expenses - depreciation
         val netProfit = revenue - expenses - totalDepreciation
@@ -109,10 +117,55 @@ object ManagementReportCalculator {
             ) && it.startsAt < until && it.endsAt > from
         }.mapNotNull { it.scooterId }.distinct().size
         
+        // Calculate MRR
+        val mrr = calculateMrr(System.currentTimeMillis(), periods)
+        
         return ManagementReport(
             from, until, revenue, expenses, netProfit,
-            receivables, advances, rentedScooters, totalScooters, totalDepreciation
+            receivables, advances, rentedScooters, totalScooters, totalDepreciation, mrr
         )
+    }
+
+    /**
+     * Calculate Monthly Recurring Revenue (MRR) based on active rental periods.
+     * 
+     * MRR = sum of monthly equivalent rates for all active/scheduled periods
+     * that intersect the next 30 days from [now].
+     * 
+     * Each period contributes proportionally based on:
+     * - Its actual charge rate (chargeMinor / period days)
+     * - How many days it overlaps with the 30-day MRR window
+     */
+    fun calculateMrr(now: Long, periods: List<RentPeriod>): Long {
+        val mrrWindowEnd = now + 30 * DAY_MS
+        
+        return periods
+            .filter { period ->
+                // Include active, partially paid, scheduled periods
+                period.status in setOf(
+                    RentPeriod.STATUS_ACTIVE,
+                    RentPeriod.STATUS_PARTIALLY_PAID,
+                    RentPeriod.STATUS_SCHEDULED,
+                    RentPeriod.STATUS_OVERDUE
+                ) &&
+                // Period must intersect MRR window [now, now+30d]
+                period.startsAt < mrrWindowEnd && period.endsAt > now &&
+                // Exclude non-billable periods
+                !period.isNonBillable
+            }
+            .sumOf { period ->
+                // Calculate daily rate for this period
+                val periodDays = ((period.endsAt - period.startsAt).toDouble() / DAY_MS).coerceAtLeast(1.0)
+                val dailyRateMinor = period.chargeMinor / periodDays
+                
+                // Calculate overlap with MRR window
+                val overlapStart = maxOf(period.startsAt, now)
+                val overlapEnd = minOf(period.endsAt, mrrWindowEnd)
+                val overlapDays = ((overlapEnd - overlapStart).toDouble() / DAY_MS).coerceAtLeast(0.0)
+                
+                // Contribution = daily rate * overlap days, scaled to 30 days
+                (dailyRateMinor * MONTH_DAYS).toLong()
+            }
     }
 
     fun scooterProfitability(
@@ -122,7 +175,6 @@ object ManagementReportCalculator {
         periods: List<RentPeriod>
     ): List<ScooterProfitability> {
         require(until > from) { "Range end must be after start" }
-        val dayMs = 24L * 60 * 60 * 1000
         
         val inRangeOps = operations.filter {
             it.status == BusinessOperation.STATUS_ACTIVE && it.occurredAt in from until until
@@ -156,7 +208,7 @@ object ManagementReportCalculator {
             }.sumOf { period ->
                 val overlapStart = maxOf(period.startsAt, from)
                 val overlapEnd = minOf(period.endsAt, until)
-                if (overlapEnd > overlapStart) (overlapEnd - overlapStart) / dayMs
+                if (overlapEnd > overlapStart) (overlapEnd - overlapStart) / DAY_MS
                 else 0L
             }
             

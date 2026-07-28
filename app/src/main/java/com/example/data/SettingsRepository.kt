@@ -47,6 +47,23 @@ class SettingsRepository(context: Context) {
         BusinessOperation.fromMinor(PartialPeriodPricing.calculate(days, dailyPriceMinor))
 
     /**
+     * Calculate price for rental days using custom weekly/monthly rates.
+     * Uses PRO_RATA mode by default (exact daily rate from weekly).
+     * 
+     * @param days Number of rental days
+     * @param weekly Weekly rate in UZS
+     * @param monthly Monthly rate in UZS
+     * @return Total price in UZS
+     */
+    fun priceForRentalDays(days: Int, weekly: Double, monthly: Double): Double {
+        val weeklyMinor = BusinessOperation.toMinor(weekly)
+        val monthlyMinor = BusinessOperation.toMinor(monthly)
+        return BusinessOperation.fromMinor(
+            PartialPeriodPricing.calculate(days, weeklyMinor, monthlyMinor, PARTIAL_PERIOD_PRO_RATA)
+        )
+    }
+
+    /**
      * Стоимость одного скутера в долларах США. Используется на странице
      * «Отчёты» для расчёта ROI — окупаемости вложений.
      */
@@ -143,21 +160,17 @@ class SettingsRepository(context: Context) {
 
 Call center: {call}."""
 
-        // Legacy constants for backward compatibility
+        // Legacy constants for backward compatibility with tests
         @Deprecated("Use DEFAULT_DAILY_PRICE * 7")
         const val DEFAULT_WEEKLY_PRICE = 420_000.0
         @Deprecated("Use DEFAULT_DAILY_PRICE * 30")
         const val DEFAULT_MONTHLY_PRICE = 1_800_000.0
-        @Deprecated("Removed - daily pricing only")
+        
+        /** Pro-rata pricing: exact daily rate from weekly price */
         const val PARTIAL_PERIOD_PRO_RATA = "PRO_RATA"
-        @Deprecated("Removed - daily pricing only")
+        /** Round up to next full week */
         const val PARTIAL_PERIOD_ROUND_UP = "ROUND_UP"
-        @Deprecated("Removed - daily pricing only")
+        /** Use monthly daily rate (30 days per month) */
         const val PARTIAL_PERIOD_MONTHLY = "MONTHLY"
     }
 }
-
-    /** Legacy method - backwards compatible version */
-    @Suppress("DEPRECATION")
-    fun priceForRentalDays(days: Int, weekly: Double, monthly: Double): Double =
-        priceForRentalDays(days)

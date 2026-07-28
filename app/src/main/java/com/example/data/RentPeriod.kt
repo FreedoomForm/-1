@@ -26,6 +26,8 @@ data class RentPeriod(
     val endsAt: Long,
     val chargeMinor: Long,
     val paidMinor: Long = 0,
+    /** Discount applied to this period (reduces effective charge) */
+    val discountMinor: Long = 0,
     val status: String = STATUS_SCHEDULED,
     /** Non-null while scooter repair pauses this billable period. */
     val suspendedAt: Long? = null,
@@ -64,11 +66,18 @@ data class RentPeriod(
         val ACTIVE_STATUSES = setOf(STATUS_ACTIVE, STATUS_PARTIALLY_PAID, STATUS_OVERDUE, STATUS_REPAIR_BREAK)
     }
 
-    val outstandingMinor: Long get() = (chargeMinor - paidMinor).coerceAtLeast(0)
+    /** Effective charge after discount */
+    val effectiveChargeMinor: Long get() = (chargeMinor - discountMinor).coerceAtLeast(0)
+    
+    /** Outstanding amount = effective charge - paid */
+    val outstandingMinor: Long get() = (effectiveChargeMinor - paidMinor).coerceAtLeast(0)
     
     /** True if this period is a repair break where no payment is required */
     val isRepairBreak: Boolean get() = status == STATUS_REPAIR_BREAK
     
     /** True if this is a non-billable period (repair, suspended, cancelled) */
     val isNonBillable: Boolean get() = status in NON_BILLABLE_STATUSES
+    
+    /** True if period is fully paid (including discounts) */
+    val isFullyPaid: Boolean get() = paidMinor >= effectiveChargeMinor
 }

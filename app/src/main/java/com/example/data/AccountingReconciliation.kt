@@ -36,6 +36,9 @@ object AccountingReconciliation {
     /**
      * Renter balance = unapplied advance − active/open receivables. Scheduled
      * periods do not become debt until PaymentCheckWorker activates them.
+     * 
+     * Non-billable periods (REPAIR_BREAK, SUSPENDED_REPAIR, CANCELLED) are
+     * excluded from debt calculation as they have zero or no charge.
      */
     fun expectedRenterBalances(
         periods: List<RentPeriod>,
@@ -51,12 +54,20 @@ object AccountingReconciliation {
                 val unapplied = (operation.amountMinor - (allocatedByOperation[operation.id] ?: 0L)).coerceAtLeast(0)
                 advanceByRenter[renterId] = (advanceByRenter[renterId] ?: 0L) + unapplied
             }
+        
+        // Statuses that contribute to debt (active receivables)
+        val debtStatuses = setOf(
+            RentPeriod.STATUS_ACTIVE, 
+            RentPeriod.STATUS_PARTIALLY_PAID,
+            RentPeriod.STATUS_OVERDUE, 
+            RentPeriod.STATUS_CLOSED_WITH_DEBT
+        )
+        
         return periods.groupBy { it.renterId }.mapValues { (renterId, renterPeriods) ->
             val debt = renterPeriods
-                .filter { it.status in setOf(
-                    RentPeriod.STATUS_ACTIVE, RentPeriod.STATUS_PARTIALLY_PAID,
-                    RentPeriod.STATUS_OVERDUE, RentPeriod.STATUS_CLOSED_WITH_DEBT
-                ) }
+                .filter { period -> 
+                    period.status in debtStatuses && !period.isNonBillable
+                }
                 .sumOf { it.outstandingMinor }
             (advanceByRenter[renterId] ?: 0L) - debt
         } + advanceByRenter.filterKeys { it !in periods.map { p -> p.renterId }.toSet() }
