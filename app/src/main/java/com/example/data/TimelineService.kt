@@ -109,7 +109,7 @@ class TimelineService(private val db: AppDatabase) {
             val idLong = entityId.toLongOrNull() ?: return@let false
             val type = event.entityType?.uppercase() ?: ""
             when (type) {
-                "RENTER" -> { db.renterDao().deleteById(idLong.toInt()); true }
+                "RENTER" -> { db.renterDao().deleteRenter(idLong.toInt()); true }
                 "SCOOTER" -> { db.scooterDao().deleteScooterById(idLong.toInt()); true }
                 else -> false
             }
