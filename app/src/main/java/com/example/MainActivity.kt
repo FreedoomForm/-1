@@ -622,34 +622,39 @@ fun MainScreen(
 
     val scooters by scooterViewModel.scootersList.collectAsStateWithLifecycle()
 
-    // Авто-проверка обновлений при запуске
-    // Показываем уведомление ТОЛЬКО если есть реальное обновление
+    // Авто-проверка обновлений при запуске. Интернет на Android нередко
+    // становится доступным через несколько секунд после splash/permissions,
+    // поэтому повторяем только ошибки, а уведомление показываем исключительно
+    // после подтверждённого более нового versionCode.
     LaunchedEffect(Unit) {
-        try {
-            val checker = UpdateChecker(localContext)
-            val (result, info) = checker.checkForUpdate()
-            when (result) {
-                UpdateCheckResult.UPDATE_AVAILABLE -> {
-                    updateInfo = info
-                    isUpToDate = false
-                    Log.d("MainScreen", "Update available: v${info?.versionName}")
+        val checker = UpdateChecker(localContext)
+        repeat(3) { attempt ->
+            try {
+                val (result, info) = checker.checkForUpdate()
+                when (result) {
+                    UpdateCheckResult.UPDATE_AVAILABLE -> {
+                        updateInfo = info
+                        isUpToDate = false
+                        Log.d("MainScreen", "Update available: v${info?.versionName}")
+                        return@LaunchedEffect
+                    }
+                    UpdateCheckResult.UP_TO_DATE -> {
+                        updateInfo = null
+                        isUpToDate = true
+                        return@LaunchedEffect
+                    }
+                    UpdateCheckResult.ERROR -> {
+                        Log.w("MainScreen", "Update check attempt ${attempt + 1} failed")
+                        if (attempt < 2) kotlinx.coroutines.delay((attempt + 1) * 5_000L)
+                    }
                 }
-                UpdateCheckResult.UP_TO_DATE -> {
-                    updateInfo = null
-                    isUpToDate = true
-                    Log.d("MainScreen", "App is up to date")
-                }
-                UpdateCheckResult.ERROR -> {
-                    // Ошибка API = НЕ показываем уведомление
-                    updateInfo = null
-                    isUpToDate = false
-                    Log.d("MainScreen", "Update check failed — not showing notification")
-                }
+            } catch (e: Exception) {
+                Log.w("MainScreen", "Auto-update check failed", e)
+                if (attempt < 2) kotlinx.coroutines.delay((attempt + 1) * 5_000L)
             }
-        } catch (e: Exception) {
-            Log.w("MainScreen", "Auto-update check failed", e)
-            // Ошибка = не показываем уведомление
         }
+        updateInfo = null
+        isUpToDate = false
     }
 
     val renters by viewModel.rentersList.collectAsStateWithLifecycle()
