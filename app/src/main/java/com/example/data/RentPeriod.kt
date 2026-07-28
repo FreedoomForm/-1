@@ -1,5 +1,6 @@
 package com.example.data
 
+import androidx.room.ColumnInfo
 import androidx.room.Entity
 import androidx.room.Index
 import androidx.room.PrimaryKey
@@ -27,6 +28,7 @@ data class RentPeriod(
     val chargeMinor: Long,
     val paidMinor: Long = 0,
     /** Discount applied to this period (reduces effective charge) */
+    @ColumnInfo(defaultValue = "0")
     val discountMinor: Long = 0,
     val status: String = STATUS_SCHEDULED,
     /** Non-null while scooter repair pauses this billable period. */
