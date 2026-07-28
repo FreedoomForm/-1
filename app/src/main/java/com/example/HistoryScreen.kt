@@ -105,6 +105,8 @@ fun HistoryScreen(
     var showDetail by remember { mutableStateOf(false) }
     var showFilters by remember { mutableStateOf(false) }
     var showRestoreDialog by remember { mutableStateOf(false) }
+    var showDateRangePicker by remember { mutableStateOf(false) }
+    val dateRangePickerState = rememberDateRangePickerState()
 
     var branchName by remember { mutableStateOf("") }
     var restoreReason by remember { mutableStateOf("") }
@@ -205,6 +207,44 @@ fun HistoryScreen(
         )
     }
 
+    // Calendar date-range filter — same dialog component used on the
+    // renters page. Filters the timeline by event timestamp.
+    if (showDateRangePicker) {
+        DateRangeFilterDialog(
+            state = dateRangePickerState,
+            onDismiss = {
+                showDateRangePicker = false
+                // Apply selection immediately so the user sees the filter
+                // take effect when the dialog closes.
+                filterStartMs = dateRangePickerState.selectedStartDateMillis
+                filterEndMs = dateRangePickerState.selectedEndDateMillis
+            },
+            title = "Voqea sanasi bo'yicha filter"
+        )
+    }
+
+    // Restore-to-snapshot dialog — asks the user for a reason, then
+    // restores the timeline state to the selected event's timestamp.
+    if (showRestoreDialog && selected != null) {
+        RestoreToSnapshotDialog(
+            reason = restoreReason,
+            onReasonChange = { restoreReason = it },
+            selectedEvent = selected,
+            formatter = formatter,
+            onConfirm = {
+                scope.launch {
+                    viewModel.restoreToSnapshot(selected.timestamp, restoreReason.ifBlank { "Manual restore" })
+                }
+                restoreReason = ""
+                showRestoreDialog = false
+            },
+            onDismiss = {
+                restoreReason = ""
+                showRestoreDialog = false
+            }
+        )
+    }
+
     // ═══════════════════════════════════════════════════════════════════════
     // MAIN LAYOUT
     // ═══════════════════════════════════════════════════════════════════════
@@ -212,17 +252,24 @@ fun HistoryScreen(
     Column(
         modifier = Modifier
             .fillMaxSize()
-            .background(ClaudeCard)
+            .background(ClaudeBackground)
     ) {
-        // Search bar
+        // Search bar — same component as on the renters page, with the
+        // filter and calendar icons embedded in the trailing slot so
+        // the layout matches renters exactly.
         UnifiedSearchBar(
             query = filterSearchText,
             onQueryChange = { filterSearchText = it },
             placeholder = "Tarixda qidirish...",
-            modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)
+            modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
+            onFilterClick = { showFilters = true },
+            filterActive = filterEntityType != null || filterActionType != null || filterMoneyOnly,
+            onCalendarClick = { showDateRangePicker = true },
+            calendarActive = filterStartMs != null || filterEndMs != null
         )
 
-        // Action row with view mode toggle
+        // Action row with view mode toggle + branch picker on the left,
+        // restore / unarchive buttons on the right.
         Row(
             modifier = Modifier
                 .fillMaxWidth()
@@ -280,29 +327,57 @@ fun HistoryScreen(
 
             Spacer(Modifier.weight(1f))
 
-            // Restore button (only when event selected)
+            // ── Secondary buttons (right side) ────────────────────────────
+            // "Qaytish" (return / restore-to-snapshot) — visible only when
+            // an event is selected. Same for "Objekt qaytarish" (unarchive).
+            // Both are styled identically to the renters secondary row:
+            // circular outlined icon buttons with the same 40.dp size.
             if (selected != null) {
-                IconButton(onClick = { showRestoreDialog = true }) {
-                    Icon(Icons.Default.Restore, "Qaytish", tint = StatusInfo)
+                // Restore-to-snapshot — jumps the timeline back to the
+                // selected event's timestamp.
+                IconButton(
+                    onClick = { showRestoreDialog = true },
+                    modifier = Modifier
+                        .size(40.dp)
+                        .background(Color.White, CircleShape)
+                        .border(1.dp, ClaudeDivider, CircleShape)
+                ) {
+                    Icon(
+                        Icons.Default.Restore,
+                        contentDescription = "Qaytish",
+                        tint = StatusInfo,
+                        modifier = Modifier.size(20.dp)
+                    )
                 }
-            }
 
-            // Create branch button — only the universal + button (top of screen)
-            // creates branches. NO local "+" button inside the visual view.
-            if (selected != null) {
-                IconButton(onClick = { showBranchCreate = true }) {
-                    Icon(Icons.Default.Add, "Tarmoq", tint = StatusOk)
+                // Unarchive the entity referenced by the selected event —
+                // records a RESTORE action so the financial audit trail
+                // stays intact. Disabled if the event has no entity ref.
+                val canUnarchive = selected.entityId != null
+                IconButton(
+                    onClick = {
+                        selected.entityId?.let { entityId ->
+                            scope.launch {
+                                viewModel.archiveSelected(selected, reason = "Manual unarchive from history")
+                            }
+                        }
+                    },
+                    enabled = canUnarchive,
+                    modifier = Modifier
+                        .size(40.dp)
+                        .background(
+                            if (canUnarchive) Color.White else Color.White.copy(alpha = 0.5f),
+                            CircleShape
+                        )
+                        .border(1.dp, ClaudeDivider, CircleShape)
+                ) {
+                    Icon(
+                        Icons.Default.Unarchive,
+                        contentDescription = "Objekt qaytarish",
+                        tint = if (canUnarchive) StatusOk else ClaudeTextSecondary,
+                        modifier = Modifier.size(20.dp)
+                    )
                 }
-            }
-
-            // Filters
-            IconButton(onClick = { showFilters = true }) {
-                Icon(
-                    Icons.Default.Tune,
-                    "Filtr",
-                    tint = if (filterEntityType != null || filterActionType != null || filterMoneyOnly)
-                           ClaudeAccent else ClaudeTextSecondary
-                )
             }
         }
 
@@ -753,7 +828,7 @@ private fun TreeView(
                 modifier = Modifier
                     .weight(0.3f)
                     .fillMaxHeight()
-                    .background(Color(0xFF0A0A0A))
+                    .background(ClaudeCard)
             ) {
                 LazyColumn(
                     modifier = Modifier.fillMaxSize(),
@@ -782,7 +857,7 @@ private fun TreeView(
                 modifier = Modifier
                     .width(80.dp)
                     .fillMaxHeight()
-                    .background(Color(0xFF1A1A1A))
+                    .background(ClaudeBackground)
             ) {
                 LazyColumn(
                     modifier = Modifier.fillMaxSize(),
@@ -805,7 +880,7 @@ private fun TreeView(
                                     .width(60.dp)
                                     .height(blockHeight),
                                 shape = RoundedCornerShape(4.dp),
-                                color = branchColor?.copy(alpha = 0.3f) ?: Color(0xFF2A2A2A),
+                                color = branchColor?.copy(alpha = 0.3f) ?: ClaudeDivider,
                                 border = if (branchStartingHere != null)
                                     androidx.compose.foundation.BorderStroke(2.dp, branchColor ?: ClaudeAccent)
                                 else null
@@ -814,7 +889,7 @@ private fun TreeView(
                                     Text(
                                         dateOnlyFmt.format(Date(timeMs)),
                                         fontSize = (10 * zoom).sp,
-                                        color = Color.White,
+                                        color = ClaudeText,
                                         textAlign = TextAlign.Center
                                     )
                                 }
@@ -825,7 +900,7 @@ private fun TreeView(
                                 modifier = Modifier
                                     .width(2.dp)
                                     .height(8.dp)
-                                    .background(Color(0xFF3A3A3A))
+                                    .background(ClaudeDivider)
                             )
                         }
                     }
@@ -844,7 +919,7 @@ private fun TreeView(
                         modifier = Modifier
                             .width((100 * zoom).dp)
                             .fillMaxHeight()
-                            .background(Color(0xFF0F0F0F))
+                            .background(ClaudeCard)
                             .padding(4.dp)
                     ) {
                         Text(
@@ -904,7 +979,7 @@ private fun TreeEventBlock(
                 shape = RoundedCornerShape(4.dp)
             ),
         shape = RoundedCornerShape(4.dp),
-        color = if (isPrimary) actionColor.copy(alpha = 0.2f) else Color(0xFF2A2A2A)
+        color = if (isPrimary) actionColor.copy(alpha = 0.2f) else ClaudeDivider
     ) {
         Box(
             modifier = Modifier.padding(4.dp),
@@ -1192,4 +1267,61 @@ private fun isPrimaryAction(actionType: String): Boolean {
     return upper.contains("CREATE") || upper.contains("DELETE") || upper.contains("EDIT") ||
            upper.contains("UPDATE") || upper.contains("INSERT") || upper.contains("REMOVE") ||
            upper.contains("PAYMENT") || upper.contains("TRANSFER") || upper.contains("TERMINATE")
+}
+
+/**
+ * Restore-to-snapshot confirmation dialog.
+ *
+ * Asks the user for a free-text reason, then calls [onConfirm]. The
+ * reason is recorded as part of the RESTORE event so the audit trail
+ * stays complete — financial facts are never silently erased.
+ */
+@Composable
+private fun RestoreToSnapshotDialog(
+    reason: String,
+    onReasonChange: (String) -> Unit,
+    selectedEvent: TimelineEvent,
+    formatter: SimpleDateFormat,
+    onConfirm: () -> Unit,
+    onDismiss: () -> Unit
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = {
+            Text("Voqeaga qaytish")
+        },
+        text = {
+            Column {
+                Text(
+                    "Tanlangan voqea: ${selectedEvent.title}",
+                    fontSize = 13.sp,
+                    color = ClaudeText
+                )
+                Spacer(Modifier.height(4.dp))
+                Text(
+                    "Vaqt: ${formatter.format(Date(selectedEvent.timestamp))}",
+                    fontSize = 12.sp,
+                    color = ClaudeTextSecondary
+                )
+                Spacer(Modifier.height(12.dp))
+                OutlinedTextField(
+                    value = reason,
+                    onValueChange = onReasonChange,
+                    placeholder = { Text("Sabab (ixtiyoriy)") },
+                    modifier = Modifier.fillMaxWidth(),
+                    singleLine = true
+                )
+            }
+        },
+        confirmButton = {
+            Button(onClick = onConfirm) {
+                Text("Qaytish")
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) {
+                Text("Bekor qilish")
+            }
+        }
+    )
 }

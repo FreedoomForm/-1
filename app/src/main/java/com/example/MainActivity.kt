@@ -580,6 +580,12 @@ fun MainScreen(
     // Collapsed dock shows four main pages; pulling it up reveals the
     // identical secondary icon row without overlaying page content.
     var bottomNavExpanded by remember { mutableStateOf(false) }
+    // When the launcher overlay is open, force-collapse the bottom nav
+    // secondary row so the same 4 icons (reports / history / trash /
+    // settings) are NOT shown twice on screen at the same time.
+    LaunchedEffect(showLauncher) {
+        if (showLauncher) bottomNavExpanded = false
+    }
     // Pull-down shade state for quick stats and actions
     var shadeExpanded by remember { mutableStateOf(false) }
     var renterSortState by remember { mutableStateOf(TableSortState()) }
