@@ -3397,19 +3397,24 @@ fun SettingsScreen(
     showTopBar: Boolean = true
 ) {
     var template by remember { mutableStateOf(currentTemplate) }
-    var weekly by remember {
-        mutableStateOf(if (currentWeeklyPrice > 0) currentWeeklyPrice.toString() else "")
+    // Daily price is the single source of truth
+    var dailyPrice by remember {
+        mutableStateOf(
+            settingsRepo.dailyPrice.let {
+                if (it > 0) it.toString() else com.example.data.SettingsRepository.DEFAULT_DAILY_PRICE.toString()
+            }
+        )
     }
-    var monthly by remember {
-        mutableStateOf(if (currentMonthlyPrice > 0) currentMonthlyPrice.toString() else "")
-    }
+    // Computed values for display
+    val computedWeekly = (dailyPrice.toDoubleOrNull() ?: 0.0) * 7
+    val computedMonthly = (dailyPrice.toDoubleOrNull() ?: 0.0) * 30
     // SMS avto-yuborish rejimi — darhol saqlanadi (Save bosishni kutmaydi).
     var smsAutoSend by remember { mutableStateOf(currentSmsAutoSend) }
     val settingsContext = LocalContext.current
     val settingsRepo = remember { com.example.data.SettingsRepository(settingsContext) }
     var paymeLink by remember { mutableStateOf(settingsRepo.paymeLink) }
     var callCenter by remember { mutableStateOf(settingsRepo.callCenter) }
-    var partialPeriodMode by remember { mutableStateOf(settingsRepo.partialPeriodPricingMode) }
+    // Partial period mode removed - using simple daily pricing
     // ── Поля для страницы Отчёты: стоимость скутера и курс USD ──────────
     var scooterPriceUsd by remember {
         mutableStateOf(settingsRepo.scooterPriceUsd.let {
@@ -3424,7 +3429,7 @@ fun SettingsScreen(
 
     // ── Автосохранение — поля сохраняются автоматически при изменении,
     // отдельные кнопки «Saqla» больше не нужны (форма живая).
-    LaunchedEffect(template, weekly, monthly, paymeLink, callCenter, scooterPriceUsd, usdToUzsRate, partialPeriodMode) {
+    LaunchedEffect(template, weekly, monthly, paymeLink, callCenter, scooterPriceUsd, usdToUzsRate) {
         val wPrice = weekly.toDoubleOrNull() ?: 0.0
         val mPrice = monthly.toDoubleOrNull() ?: 0.0
         settingsRepo.paymeLink = paymeLink.trim().ifBlank {
@@ -3438,7 +3443,6 @@ fun SettingsScreen(
             ?: com.example.data.SettingsRepository.DEFAULT_SCOOTER_PRICE_USD
         settingsRepo.usdToUzsRate = usdToUzsRate.toDoubleOrNull()
             ?: com.example.data.SettingsRepository.DEFAULT_USD_TO_UZS_RATE
-        settingsRepo.partialPeriodPricingMode = partialPeriodMode
         onSave(template, wPrice, mPrice, paymeLink, callCenter)
     }
 
@@ -3503,38 +3507,45 @@ fun SettingsScreen(
                 // кнопку «Tekshirish» ниже (updateInfo/isUpToDate).
 
                 Column {
-                    Text("Tariflar", style = MaterialTheme.typography.labelMedium, color = ClaudeText)
+                    Text("Ijara narxi", style = MaterialTheme.typography.labelMedium, color = ClaudeText)
                     Spacer(modifier = Modifier.height(8.dp))
                     OutlinedTextField(
-                        value = weekly,
-                        onValueChange = { weekly = it },
-                        label = { Text("Haftalik tarif narxi") },
+                        value = dailyPrice,
+                        onValueChange = { 
+                            dailyPrice = it
+                            // Auto-save daily price
+                            it.toDoubleOrNull()?.let { price ->
+                                settingsRepo.dailyPrice = price
+                            }
+                        },
+                        label = { Text("Kunlik ijara narxi (UZS)") },
                         keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
                         modifier = Modifier.fillMaxWidth(),
                         shape = RoundedCornerShape(8.dp)
                     )
                     Spacer(modifier = Modifier.height(8.dp))
-                    OutlinedTextField(
-                        value = monthly,
-                        onValueChange = { monthly = it },
-                        label = { Text("Oylik tarif narxi") },
-                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                    // Show computed prices
+                    Surface(
                         modifier = Modifier.fillMaxWidth(),
+                        color = ClaudeAccentBg,
                         shape = RoundedCornerShape(8.dp)
-                    )
-                    Spacer(modifier = Modifier.height(12.dp))
-                    Text("To'liq bo'lmagan davr narxi", style = MaterialTheme.typography.labelMedium, color = ClaudeText)
-                    listOf(
-                        com.example.data.SettingsRepository.PARTIAL_PERIOD_PRO_RATA to "Kunlar bo'yicha proporsional",
-                        com.example.data.SettingsRepository.PARTIAL_PERIOD_ROUND_UP to "Haftagacha yaxlitlash",
-                        com.example.data.SettingsRepository.PARTIAL_PERIOD_MONTHLY to "Oylik tarif bo'yicha"
-                    ).forEach { (mode, label) ->
-                        Row(
-                            modifier = Modifier.fillMaxWidth().clickable { partialPeriodMode = mode },
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            RadioButton(selected = partialPeriodMode == mode, onClick = { partialPeriodMode = mode })
-                            Text(label, style = MaterialTheme.typography.bodyMedium)
+                    ) {
+                        Column(modifier = Modifier.padding(12.dp)) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween
+                            ) {
+                                Text("Haftalik (7 kun):", style = MaterialTheme.typography.bodyMedium, color = ClaudeTextSecondary)
+                                Text("${computedWeekly.toLong()} UZS", style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Bold, color = ClaudeText)
+                            }
+                            Spacer(modifier = Modifier.height(4.dp))
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween
+                            ) {
+                                Text("Oylik (30 kun):", style = MaterialTheme.typography.bodyMedium, color = ClaudeTextSecondary)
+                                Text("${computedMonthly.toLong()} UZS", style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Bold, color = ClaudeText)
+                            }
                         }
                     }
                     Spacer(modifier = Modifier.height(8.dp))

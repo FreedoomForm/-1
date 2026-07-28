@@ -1076,3 +1076,87 @@ class RenterViewModel(application: Application) : AndroidViewModel(application) 
         private const val TAG = "RenterViewModel"
     }
 }
+    /**
+     * Create a repair break period for a renter.
+     * During this period, the renter keeps the scooter but doesn't pay.
+     * This is used when the scooter needs repairs while still assigned to the renter.
+     * 
+     * @param renterId The renter ID
+     * @param startMs Start of repair period (milliseconds)
+     * @param endMs End of repair period (milliseconds)
+     * @param reason Optional reason for the repair break
+     */
+    fun createRepairBreakPeriod(
+        renterId: Int,
+        startMs: Long,
+        endMs: Long,
+        reason: String = "Ta'mir davri"
+    ) {
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                val db = com.example.data.AppDatabase.getDatabase(getApplication())
+                val renter = db.renterDao().getRenterById(renterId) ?: return@launch
+                
+                // Create a repair break period with zero charge
+                val repairPeriod = com.example.data.RentPeriod(
+                    renterId = renterId,
+                    scooterId = renter.scooterId,
+                    startsAt = startMs,
+                    endsAt = endMs,
+                    chargeMinor = 0, // No charge during repair
+                    paidMinor = 0,
+                    status = com.example.data.RentPeriod.STATUS_REPAIR_BREAK,
+                    suspensionReason = reason,
+                    createdAt = System.currentTimeMillis(),
+                    updatedAt = System.currentTimeMillis()
+                )
+                
+                db.rentPeriodDao().insert(repairPeriod)
+                
+                // Create a contract history entry for documentation
+                val scooter = renter.scooterId?.let { db.scooterDao().getScooterById(it) }
+                db.contractHistoryDao().insert(
+                    com.example.data.ContractHistoryEntry(
+                        renterId = renterId,
+                        timestamp = System.currentTimeMillis(),
+                        type = "REPAIR_BREAK",
+                        amount = 0.0,
+                        notes = reason,
+                        renterName = renter.name,
+                        renterPhone = renter.phoneNumber,
+                        scooterName = renter.scooterName,
+                        weekStart = startMs,
+                        weekEnd = endMs,
+                        weeklyPrice = 0.0,
+                        passportData = renter.passportData,
+                        address = renter.address,
+                        pinfl = renter.pinfl,
+                        vinNumber = scooter?.vinNumber ?: "",
+                        engineNumber = scooter?.engineNumber ?: "",
+                        scooterSerialNumber = scooter?.scooterSerialNumber ?: "",
+                        batteryId1 = scooter?.batteryId1 ?: "",
+                        batteryId2 = scooter?.batteryId2 ?: "",
+                        additionalInfo = scooter?.additionalInfo ?: "",
+                        isPaid = true // No payment needed
+                    )
+                )
+                
+                // Record in timeline
+                try {
+                    com.example.data.TimelineService(db).recordCriticalAction(
+                        actionType = "REPAIR_BREAK_CREATE",
+                        screen = "RENTERS",
+                        title = "Ta'mir davri: ${renter.name}",
+                        entityType = "RENTER",
+                        entityId = renterId.toString(),
+                        payloadJson = "{\"renterId\":$renterId,\"startMs\":$startMs,\"endMs\":$endMs,\"reason\":\"$reason\"}"
+                    )
+                } catch (_: Exception) {}
+                
+                Log.d(TAG, "Created repair break period for renter #$renterId: $startMs - $endMs")
+            } catch (e: Exception) {
+                Log.e(TAG, "Failed to create repair break period", e)
+            }
+        }
+    }
+}

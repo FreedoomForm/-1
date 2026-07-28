@@ -193,7 +193,9 @@ fun ContractCalendar(
      */
     onEditDayContract: ((Long) -> Unit)? = null,
     /** Доп. callback при тапе на день (опционально, для просмотра деталей). */
-    onDayClick: (Long) -> Unit = {}
+    onDayClick: (Long) -> Unit = {},
+    /** Callback for creating a repair period via long-tap on date range. */
+    onCreateRepairPeriod: ((startMs: Long, endMs: Long) -> Unit)? = null
 ) {
     val cal = remember { Calendar.getInstance() }
     var viewYear by remember { mutableStateOf(cal.get(Calendar.YEAR)) }
