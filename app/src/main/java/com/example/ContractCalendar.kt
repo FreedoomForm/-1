@@ -213,6 +213,9 @@ fun ContractCalendar(
     // для однодневного периода). После выбора end группа создаётся и активной
     // становится следующая "новая" (activeGroupId = null).
     var pendingStartMs by remember { mutableStateOf<Long?>(null) }
+    
+    // State for repair period creation via long-tap
+    var repairPendingStartMs by remember { mutableStateOf<Long?>(null) }
 
     // ── Текущий статус для новых групп (To'langan / To'lanmagan) ───────
     // По умолчанию "To'langan" (оплаченный). Пользователь может переключить
@@ -494,13 +497,27 @@ fun ContractCalendar(
                                         onDayClick(ms)
                                     }
                                 },
-                                onDayLongClick = onEditDayContract?.let { cb ->
-                                    { ms ->
-                                        // Срабатывает только если день в существующем контракте.
-                                        val inExisting = groups.firstOrNull { g ->
-                                            ms >= g.startMs && ms <= g.endMs
+                                onDayLongClick = { ms ->
+                                    // Long-tap can either edit existing contract or create repair period
+                                    val inExisting = groups.firstOrNull { g ->
+                                        ms >= g.startMs && ms <= g.endMs
+                                    }
+                                    
+                                    if (inExisting != null && onEditDayContract != null) {
+                                        // Edit existing contract
+                                        onEditDayContract.invoke(ms)
+                                    } else if (onCreateRepairPeriod != null) {
+                                        // Create repair period
+                                        if (repairPendingStartMs == null) {
+                                            // First long-tap: set start date
+                                            repairPendingStartMs = ms
+                                        } else {
+                                            // Second long-tap: set end date and create
+                                            val startMs = minOf(repairPendingStartMs!!, ms)
+                                            val endMs = maxOf(repairPendingStartMs!!, ms) + (24L * 60 * 60 * 1000) // Include end day
+                                            onCreateRepairPeriod.invoke(startMs, endMs)
+                                            repairPendingStartMs = null
                                         }
-                                        if (inExisting != null) cb.invoke(ms)
                                     }
                                 }
                             )

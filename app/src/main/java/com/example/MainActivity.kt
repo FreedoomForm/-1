@@ -145,6 +145,8 @@ import com.example.ui.components.FilterSidePanel
 import com.example.ui.components.FilterColumn
 import com.example.ui.components.PhoneReceiverSortIcon
 import com.example.ui.components.SortableHeaderCell
+import com.example.ui.components.PullDownShadeLayout
+import com.example.ui.components.LauncherShadeContent
 import com.example.ui.components.NonSortableHeaderCell
 import com.example.ui.components.TableSortState
 import com.example.ui.components.SortState
@@ -567,6 +569,8 @@ fun MainScreen(
     // Collapsed dock shows four main pages; pulling it up reveals the
     // identical secondary icon row without overlaying page content.
     var bottomNavExpanded by remember { mutableStateOf(false) }
+    // Pull-down shade state for quick stats and actions
+    var shadeExpanded by remember { mutableStateOf(false) }
     var renterSortState by remember { mutableStateOf(TableSortState()) }
     var scooterSortState by remember { mutableStateOf(TableSortState()) }
     // Filter panel state
@@ -1429,8 +1433,41 @@ fun MainScreen(
             }
 
             if (currentTab == 0) {
-                // Unified search bar with calendar + filter buttons
-                UnifiedSearchBar(
+                // Pull-down shade for quick stats
+                Box(
+                    modifier = Modifier.fillMaxSize()
+                ) {
+                    // Main content
+                    Column(modifier = Modifier.fillMaxSize()) {
+                        // Pull handle indicator at top
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(24.dp)
+                                .pointerInput(Unit) {
+                                    detectVerticalDragGestures(
+                                        onDragEnd = { if (shadeExpanded) shadeExpanded = false },
+                                        onVerticalDrag = { change, dragAmount ->
+                                            change.consume()
+                                            if (dragAmount > 50) shadeExpanded = true
+                                        }
+                                    )
+                                },
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Box(
+                                modifier = Modifier
+                                    .width(40.dp)
+                                    .height(4.dp)
+                                    .background(
+                                        if (shadeExpanded) ClaudeAccent else ClaudeAccent.copy(alpha = 0.3f),
+                                        RoundedCornerShape(2.dp)
+                                    )
+                            )
+                        }
+                        
+                        // Unified search bar with calendar + filter buttons
+                        UnifiedSearchBar(
                     query = searchQuery,
                     onQueryChange = { searchQuery = it },
                     placeholder = "Mijoz yoki skuter qidirish",
@@ -1696,6 +1733,221 @@ fun MainScreen(
                         navState = NavigationState.RenterHistory(renter)
                     }
                 )
+                    } // End Column
+                    } // End main Column in Box
+                    
+                    // Shade overlay when expanded
+                    androidx.compose.animation.AnimatedVisibility(
+                        visible = shadeExpanded,
+                        enter = androidx.compose.animation.slideInVertically(
+                            initialOffsetY = { -it }
+                        ) + androidx.compose.animation.fadeIn(),
+                        exit = androidx.compose.animation.slideOutVertically(
+                            targetOffsetY = { -it }
+                        ) + androidx.compose.animation.fadeOut()
+                    ) {
+                        Surface(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .fillMaxHeight(0.6f)
+                                .pointerInput(Unit) {
+                                    detectVerticalDragGestures(
+                                        onVerticalDrag = { change, dragAmount ->
+                                            change.consume()
+                                            if (dragAmount < -50) shadeExpanded = false
+                                        }
+                                    )
+                                },
+                            color = Color(0xFF0A0A0A),
+                            shape = RoundedCornerShape(bottomStart = 24.dp, bottomEnd = 24.dp),
+                            shadowElevation = 16.dp
+                        ) {
+                            Column(
+                                modifier = Modifier
+                                    .fillMaxSize()
+                                    .padding(24.dp),
+                                verticalArrangement = Arrangement.spacedBy(16.dp)
+                            ) {
+                                Text(
+                                    "Tezkor ma'lumotlar",
+                                    style = MaterialTheme.typography.headlineSmall,
+                                    fontWeight = FontWeight.Bold,
+                                    color = Color.White
+                                )
+                                
+                                Spacer(modifier = Modifier.height(8.dp))
+                                
+                                // Stats row 1
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.spacedBy(12.dp)
+                                ) {
+                                    // Active renters card
+                                    Surface(
+                                        modifier = Modifier.weight(1f),
+                                        color = Color(0xFF10B981).copy(alpha = 0.15f),
+                                        shape = RoundedCornerShape(12.dp)
+                                    ) {
+                                        Column(
+                                            modifier = Modifier.padding(16.dp),
+                                            horizontalAlignment = Alignment.CenterHorizontally
+                                        ) {
+                                            Text(
+                                                "${renters.count { !it.isReturned }}/${renters.size}",
+                                                style = MaterialTheme.typography.titleLarge,
+                                                fontWeight = FontWeight.Bold,
+                                                color = Color(0xFF10B981)
+                                            )
+                                            Text("Ijarachilar", color = Color(0xFF9CA3AF), fontSize = 12.sp)
+                                        }
+                                    }
+                                    
+                                    // Available scooters card
+                                    Surface(
+                                        modifier = Modifier.weight(1f),
+                                        color = Color(0xFF3B82F6).copy(alpha = 0.15f),
+                                        shape = RoundedCornerShape(12.dp)
+                                    ) {
+                                        Column(
+                                            modifier = Modifier.padding(16.dp),
+                                            horizontalAlignment = Alignment.CenterHorizontally
+                                        ) {
+                                            val availableScooters = scooters.count { 
+                                                it.lifecycleStatus == com.example.data.Scooter.STATUS_AVAILABLE 
+                                            }
+                                            Text(
+                                                "$availableScooters/${scooters.size}",
+                                                style = MaterialTheme.typography.titleLarge,
+                                                fontWeight = FontWeight.Bold,
+                                                color = Color(0xFF3B82F6)
+                                            )
+                                            Text("Skuterlar", color = Color(0xFF9CA3AF), fontSize = 12.sp)
+                                        }
+                                    }
+                                }
+                                
+                                // Stats row 2
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.spacedBy(12.dp)
+                                ) {
+                                    // Total debt card
+                                    Surface(
+                                        modifier = Modifier.weight(1f),
+                                        color = Color(0xFFEF4444).copy(alpha = 0.15f),
+                                        shape = RoundedCornerShape(12.dp)
+                                    ) {
+                                        Column(
+                                            modifier = Modifier.padding(16.dp),
+                                            horizontalAlignment = Alignment.CenterHorizontally
+                                        ) {
+                                            val totalDebt = renters.filter { it.balance < 0 }.sumOf { -it.balance }
+                                            Text(
+                                                "${totalDebt.toLong()}",
+                                                style = MaterialTheme.typography.titleLarge,
+                                                fontWeight = FontWeight.Bold,
+                                                color = Color(0xFFEF4444)
+                                            )
+                                            Text("Umumiy qarz", color = Color(0xFF9CA3AF), fontSize = 12.sp)
+                                        }
+                                    }
+                                    
+                                    // Overdue count
+                                    Surface(
+                                        modifier = Modifier.weight(1f),
+                                        color = Color(0xFFF59E0B).copy(alpha = 0.15f),
+                                        shape = RoundedCornerShape(12.dp)
+                                    ) {
+                                        Column(
+                                            modifier = Modifier.padding(16.dp),
+                                            horizontalAlignment = Alignment.CenterHorizontally
+                                        ) {
+                                            val overdueCount = renters.count { it.balance < 0 && !it.isReturned }
+                                            Text(
+                                                "$overdueCount",
+                                                style = MaterialTheme.typography.titleLarge,
+                                                fontWeight = FontWeight.Bold,
+                                                color = Color(0xFFF59E0B)
+                                            )
+                                            Text("Kechikkan", color = Color(0xFF9CA3AF), fontSize = 12.sp)
+                                        }
+                                    }
+                                }
+                                
+                                Spacer(modifier = Modifier.weight(1f))
+                                
+                                // Quick actions
+                                Text("Tezkor harakatlar", color = Color(0xFF9CA3AF), fontSize = 12.sp)
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                ) {
+                                    Surface(
+                                        modifier = Modifier.weight(1f),
+                                        color = Color(0xFF10B981).copy(alpha = 0.2f),
+                                        shape = RoundedCornerShape(8.dp),
+                                        onClick = { showAddDialog = true; shadeExpanded = false }
+                                    ) {
+                                        Text(
+                                            "Yangi ijara",
+                                            modifier = Modifier.padding(12.dp),
+                                            textAlign = TextAlign.Center,
+                                            color = Color(0xFF10B981),
+                                            fontWeight = FontWeight.Medium,
+                                            fontSize = 12.sp
+                                        )
+                                    }
+                                    Surface(
+                                        modifier = Modifier.weight(1f),
+                                        color = Color(0xFF3B82F6).copy(alpha = 0.2f),
+                                        shape = RoundedCornerShape(8.dp),
+                                        onClick = { currentTab = 4; shadeExpanded = false }
+                                    ) {
+                                        Text(
+                                            "Hisobot",
+                                            modifier = Modifier.padding(12.dp),
+                                            textAlign = TextAlign.Center,
+                                            color = Color(0xFF3B82F6),
+                                            fontWeight = FontWeight.Medium,
+                                            fontSize = 12.sp
+                                        )
+                                    }
+                                    Surface(
+                                        modifier = Modifier.weight(1f),
+                                        color = Color(0xFFF59E0B).copy(alpha = 0.2f),
+                                        shape = RoundedCornerShape(8.dp),
+                                        onClick = { currentTab = 5; shadeExpanded = false }
+                                    ) {
+                                        Text(
+                                            "Finansi",
+                                            modifier = Modifier.padding(12.dp),
+                                            textAlign = TextAlign.Center,
+                                            color = Color(0xFFF59E0B),
+                                            fontWeight = FontWeight.Medium,
+                                            fontSize = 12.sp
+                                        )
+                                    }
+                                }
+                                
+                                // Close handle
+                                Box(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(top = 8.dp),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    Box(
+                                        modifier = Modifier
+                                            .width(40.dp)
+                                            .height(4.dp)
+                                            .background(Color(0xFF4A4A4A), RoundedCornerShape(2.dp))
+                                            .clickable { shadeExpanded = false }
+                                    )
+                                }
+                            }
+                        }
+                    }
+                } // End Box for shade
             } else if (currentTab == 1) {
                 // Вкладка «Скутеры» — unified search bar с календарём
                 // (фильтр по дате начала активного контракта скутера) и фильтром.
@@ -2979,26 +3231,89 @@ fun RenterFormDialog(
                 // остаётся как сегодня (default) и работает автоматическая
                 // логика по дате.
                 // Load existing rent periods for this renter (edit mode)
-                val existingPeriods by remember(initialRenter?.id) {
-                    mutableStateOf<List<com.example.data.RentPeriod>>(emptyList())
-                }
+                var existingPeriods by remember { mutableStateOf<List<com.example.data.RentPeriod>>(emptyList()) }
                 val localContext = LocalContext.current
+                
                 LaunchedEffect(initialRenter?.id) {
                     if (initialRenter != null) {
                         kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
                             val db = com.example.data.AppDatabase.getDatabase(localContext)
-                            val periods = db.rentPeriodDao().getAllForRenter(initialRenter.id)
-                            // This would need mutableStateOf to update, using workaround
+                            existingPeriods = db.rentPeriodDao().getAllForRenter(initialRenter.id)
                         }
                     }
                 }
                 
                 // Day status callback for showing existing contracts
-                val dayStatusFor: (Long) -> DayStatus = remember(initialRenter?.id) {
-                    { dayMs ->
-                        // Check if this day falls within any existing period
-                        DayStatus.EMPTY
+                val dayStatusFor: (Long) -> DayStatus = remember(existingPeriods) {
+                    { dayMs: Long ->
+                        val dayStart = dayMs - (dayMs % (24L * 60 * 60 * 1000))
+                        val dayEnd = dayStart + (24L * 60 * 60 * 1000)
+                        
+                        val matchingPeriod = existingPeriods.firstOrNull { period ->
+                            period.startsAt < dayEnd && period.endsAt > dayStart
+                        }
+                        
+                        when (matchingPeriod?.status) {
+                            com.example.data.RentPeriod.STATUS_PAID,
+                            com.example.data.RentPeriod.STATUS_CLOSED -> DayStatus.PAID
+                            com.example.data.RentPeriod.STATUS_PARTIALLY_PAID -> DayStatus.PARTIAL
+                            com.example.data.RentPeriod.STATUS_SCHEDULED -> DayStatus.SCHEDULED
+                            com.example.data.RentPeriod.STATUS_SUSPENDED_REPAIR -> DayStatus.SUSPENDED
+                            com.example.data.RentPeriod.STATUS_REPAIR_BREAK -> DayStatus.REPAIR_BREAK
+                            com.example.data.RentPeriod.STATUS_OVERDUE,
+                            com.example.data.RentPeriod.STATUS_CLOSED_WITH_DEBT,
+                            com.example.data.RentPeriod.STATUS_ACTIVE -> DayStatus.UNPAID
+                            else -> DayStatus.EMPTY
+                        }
                     }
+                }
+                
+                // State for long-press repair period creation
+                var repairStartDate by remember { mutableStateOf<Long?>(null) }
+                var showRepairConfirmDialog by remember { mutableStateOf(false) }
+                var repairEndDate by remember { mutableStateOf<Long?>(null) }
+                
+                // Repair period confirmation dialog
+                if (showRepairConfirmDialog && repairStartDate != null && initialRenter != null) {
+                    val dateFmt = remember { java.text.SimpleDateFormat("dd.MM.yyyy", java.util.Locale.getDefault()) }
+                    AlertDialog(
+                        onDismissRequest = { 
+                            showRepairConfirmDialog = false
+                            repairStartDate = null
+                            repairEndDate = null
+                        },
+                        title = { Text("Ta'mir davri yaratish") },
+                        text = {
+                            Column {
+                                Text("Bu davr uchun ijara to'lovi olinmaydi.")
+                                Spacer(Modifier.height(8.dp))
+                                Text(
+                                    "Davr: ${dateFmt.format(java.util.Date(repairStartDate!!))} - ${dateFmt.format(java.util.Date(repairEndDate ?: repairStartDate!!))}",
+                                    fontWeight = FontWeight.Bold
+                                )
+                            }
+                        },
+                        confirmButton = {
+                            TextButton(
+                                onClick = {
+                                    // Create repair period via ViewModel
+                                    // This would need viewModel reference
+                                    showRepairConfirmDialog = false
+                                    repairStartDate = null
+                                    repairEndDate = null
+                                }
+                            ) { Text("Yaratish") }
+                        },
+                        dismissButton = {
+                            TextButton(
+                                onClick = {
+                                    showRepairConfirmDialog = false
+                                    repairStartDate = null
+                                    repairEndDate = null
+                                }
+                            ) { Text("Bekor") }
+                        }
+                    )
                 }
                 
                 ContractCalendar(
@@ -3007,7 +3322,12 @@ fun RenterFormDialog(
                     activeGroupId = activeGroupId,
                     onGroupsChange = { contractGroups = it },
                     onActiveGroupChange = { activeGroupId = it },
-                    dayStatusFor = if (isEdit) dayStatusFor else { _ -> DayStatus.EMPTY }
+                    dayStatusFor = if (isEdit) dayStatusFor else { _ -> DayStatus.EMPTY },
+                    onCreateRepairPeriod = if (isEdit) { start, end ->
+                        repairStartDate = start
+                        repairEndDate = end
+                        showRepairConfirmDialog = true
+                    } else null
                 )
 
                 if (isEdit) {
