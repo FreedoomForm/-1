@@ -90,6 +90,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.input.KeyboardType
@@ -161,6 +162,7 @@ import com.example.ui.components.DangerOutlinedButton
 import com.example.ui.components.TextActionButton
 import com.example.ui.components.SortableHeaderCellFixed
 import com.example.ui.components.NonSortableHeaderCellFixed
+import com.example.ui.components.rememberLauncherCurtainState
 import com.example.worker.NotificationHelper
 import android.util.Log
 import com.example.worker.PaymentCheckWorker
@@ -251,14 +253,17 @@ class MainActivity : ComponentActivity() {
                 // ── §9A: Splash screen with loading animation ────────────────
                 // Shows logo + progress indicator while data prepares, then
                 // smoothly transitions to MainScreen. MainScreen's first frame
-                // shows the Mijozlar page with the 4 primary icons in the
-                // bottom nav (collapsed). User can pull the bottom nav up
-                // to reveal the secondary icons row.
+                // shows the launcher curtain overlaying the Mijozlar page.
+                // The curtain is a free-drag panel: where the user releases,
+                // it stays. No snap points. Tapping any tile dismisses the
+                // curtain and opens the corresponding tab. The 4 primary
+                // icons are always visible in the bottom nav below the
+                // curtain; the curtain exposes the 4 secondary shortcuts
+                // (reports / history / trash / settings).
                 var showSplash by remember { mutableStateOf(true) }
-                // After splash the user lands directly on the Mijozlar tab.
-                // Pulling the bottom nav up (or tapping the "Skuter Ijarasi"
-                // title) reveals the secondary icons row — that row replaces
-                // the old launcher overlay.
+                // Launcher is deliberately shown after every cold start. It
+                // replaces the old behavior that jumped straight to renters.
+                var showLauncher by remember { mutableStateOf(true) }
                 var launcherTab by remember { mutableStateOf(0) }
 
                 // Авто-запрос SMS + POST_NOTIFICATIONS (Android 13+) + READ_PHONE_STATE при первом старте.
@@ -274,8 +279,28 @@ class MainActivity : ComponentActivity() {
                 if (showSplash) {
                     SplashScreen(onFinished = { showSplash = false })
                 } else {
+                    val launcherState = rememberLauncherCurtainState()
                     MainScreen(
-                        initialTab = launcherTab
+                        initialTab = launcherTab,
+                        onShowLauncher = { showLauncher = true },
+                        showLauncher = showLauncher,
+                        launcherState = launcherState,
+                        onLauncherPageClick = { page ->
+                            launcherTab = when (page) {
+                                "renters"   -> 0
+                                "scooters"  -> 1
+                                "contracts" -> 2
+                                "finansi"   -> 5
+                                "reports"   -> 4
+                                "history"   -> 7
+                                "trash"     -> 8
+                                "settings"  -> 6
+                                else        -> 0
+                            }
+                            // Reset curtain so next time launcher opens at top.
+                            launcherState.offsetPx = 0f
+                            showLauncher = false
+                        }
                     )
                 }
             }
@@ -477,7 +502,11 @@ fun MainScreen(
     transactionViewModel: TransactionViewModel = viewModel(),
     finansiViewModel: com.example.ui.FinansiViewModel = viewModel(),
     trashViewModel: com.example.ui.TrashViewModel = viewModel(),
-    historyTimelineViewModel: com.example.ui.HistoryViewModel = viewModel()
+    historyTimelineViewModel: com.example.ui.HistoryViewModel = viewModel(),
+    onShowLauncher: () -> Unit = {},
+    showLauncher: Boolean = false,
+    launcherState: com.example.ui.components.LauncherCurtainState = com.example.ui.components.rememberLauncherCurtainState(),
+    onLauncherPageClick: (String) -> Unit = {}
 ) {
     var currentTab by remember { mutableStateOf(initialTab) }
     var showAddDialog by remember { mutableStateOf(false) }
@@ -548,9 +577,9 @@ fun MainScreen(
     var navState by remember { mutableStateOf<NavigationState>(NavigationState.MainView) }
 
 
-    // Collapsed dock shows four main pages; pulling it up reveals the
-    // identical secondary icon row without overlaying page content.
-    var bottomNavExpanded by remember { mutableStateOf(false) }
+    // The bottom nav is now a single static row of 4 primary icons —
+    // no expand state needed. Secondary shortcuts live in the launcher
+    // curtain (LauncherScreen), opened by tapping the title.
     // Pull-down shade state for quick stats and actions
     var shadeExpanded by remember { mutableStateOf(false) }
     var renterSortState by remember { mutableStateOf(TableSortState()) }
@@ -1021,15 +1050,14 @@ fun MainScreen(
         topBar = {
             TopAppBar(
                 title = {
-                    // ── §9.A: Title is tappable — toggles the bottom nav.
-                    // Tapping "Skuter Ijarasi" expands/collapses the bottom
-                    // nav panel — a shortcut for revealing the secondary
-                    // icons row (Reports / History / Trash / Settings)
-                    // instead of having to swipe up on the bottom nav.
+                    // ── §9.A: Title is tappable — opens the launcher curtain.
+                    // Tapping "Skuter Ijarasi" reveals the LauncherScreen
+                    // overlay (free-drag curtain) with the 4 secondary
+                    // shortcuts: Reports / History / Trash / Settings.
                     Text(
                         "Skuter Ijarasi",
                         style = MaterialTheme.typography.headlineMedium.copy(fontWeight = FontWeight.Bold),
-                        modifier = Modifier.clickable { bottomNavExpanded = !bottomNavExpanded }
+                        modifier = Modifier.clickable { onShowLauncher() }
                     )
                 },
                 colors = TopAppBarDefaults.topAppBarColors(
@@ -1274,11 +1302,7 @@ fun MainScreen(
                         "reports" -> 4; "history" -> 7; "trash" -> 8; "settings" -> 6
                         else -> 0
                     }
-                    // Keep the second row open only while user is browsing it.
-                    if (page in setOf("reports", "history", "trash", "settings")) bottomNavExpanded = true
-                },
-                expanded = bottomNavExpanded,
-                onExpandedChange = { bottomNavExpanded = it }
+                }
             )
         }
     ) { innerPadding ->
@@ -2665,6 +2689,25 @@ fun MainScreen(
                     Toast.makeText(localContext, result.message, Toast.LENGTH_LONG).show()
                 }
             }
+        }
+
+        // ── §9.B: Launcher curtain rendered INSIDE the content Box. ─────
+        // Because the bottom bar from Scaffold lives on top of the content
+        // area, the launcher will visually slide UNDER the bottom nav when
+        // dragged down — exactly the spec'd behavior. The launcher is a
+        // free-drag panel: where the user releases, it stays. No snap
+        // points. See LauncherScreen for the full behavior contract.
+        if (showLauncher) {
+            val density = LocalDensity.current
+            // Approximate bottom nav height in px — used by the launcher
+            // to decide when to flip the hint arrow ("Pastga torting" ↔
+            // "Yukoriga torting") and to clamp the off-screen safe area.
+            val bottomNavHeightPx = with(density) { 72.dp.toPx() }
+            com.example.ui.components.LauncherScreen(
+                state = launcherState,
+                onPageClick = onLauncherPageClick,
+                bottomNavHeightPx = bottomNavHeightPx
+            )
         }
 
         }   // ← end of content Box
