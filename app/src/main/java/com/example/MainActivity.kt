@@ -12,8 +12,7 @@ import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
-import androidx.compose.foundation.gesture.detectVerticalDragGestures
-import androidx.compose.foundation.gesture.pointerInput
+import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -89,6 +88,7 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.AnnotatedString
@@ -3780,6 +3780,10 @@ fun SettingsScreen(
     showTopBar: Boolean = true
 ) {
     var template by remember { mutableStateOf(currentTemplate) }
+    // SMS avto-yuborish rejimi — darhol saqlanadi (Save bosishni kutmaydi).
+    var smsAutoSend by remember { mutableStateOf(currentSmsAutoSend) }
+    val settingsContext = LocalContext.current
+    val settingsRepo = remember { com.example.data.SettingsRepository(settingsContext) }
     // Daily price is the single source of truth
     var dailyPrice by remember {
         mutableStateOf(
@@ -3791,10 +3795,6 @@ fun SettingsScreen(
     // Computed values for display
     val computedWeekly = (dailyPrice.toDoubleOrNull() ?: 0.0) * 7
     val computedMonthly = (dailyPrice.toDoubleOrNull() ?: 0.0) * 30
-    // SMS avto-yuborish rejimi — darhol saqlanadi (Save bosishni kutmaydi).
-    var smsAutoSend by remember { mutableStateOf(currentSmsAutoSend) }
-    val settingsContext = LocalContext.current
-    val settingsRepo = remember { com.example.data.SettingsRepository(settingsContext) }
     var paymeLink by remember { mutableStateOf(settingsRepo.paymeLink) }
     var callCenter by remember { mutableStateOf(settingsRepo.callCenter) }
     // Partial period mode removed - using simple daily pricing
