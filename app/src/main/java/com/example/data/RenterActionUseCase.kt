@@ -369,6 +369,11 @@ class RenterActionUseCase(
      * Это гарантирует что у активного арендатора всегда есть «текущий»
      * контракт, который можно оплатить через FIFO (pay oldest unpaid).
      */
+    /**
+     * Auto-create ALL missing unpaid contracts for an active renter.
+     * If the renter's last contract ended more than one week ago,
+     * this creates multiple contracts to cover the entire missed period.
+     */
     suspend fun autoCreateUnpaidForRenter(
         renter: Renter,
         weeklyPriceOverride: Double? = null
@@ -388,64 +393,82 @@ class RenterActionUseCase(
         val effectivePrice = if (weeklyPrice > 0) weeklyPrice else SettingsRepository.DEFAULT_WEEKLY_PRICE
 
         val scooter: Scooter? = renter.scooterId?.let { fetchScooterById(it) }
-        val newStart = latestEnd
-        val newEnd = latestEnd + weekMs
-
-        val newContract = ContractHistoryEntry(
-            renterId = renter.id, timestamp = now,
-            type = ContractHistoryEntry.TYPE_AUTO_RENEW, amount = effectivePrice,
-            notes = "Avtomatik yaratildi (faol mijoz, eski kontrakt tugadi)",
-            renterName = renter.name, renterPhone = renter.phoneNumber,
-            scooterName = renter.scooterName,
-            weekStart = newStart, weekEnd = newEnd,
-            weeklyPrice = effectivePrice,
-            passportData = renter.passportData,
-            address = renter.address,
-            pinfl = renter.pinfl,
-            vinNumber = scooter?.vinNumber ?: "",
-            engineNumber = scooter?.engineNumber ?: "",
-            scooterSerialNumber = scooter?.scooterSerialNumber ?: "",
-            batteryId1 = scooter?.batteryId1 ?: "",
-            batteryId2 = scooter?.batteryId2 ?: "",
-            additionalInfo = scooter?.additionalInfo ?: "",
-            isPaid = false
-        )
-        val newContractId = historyRepository.insert(newContract)
-        // Создаём связанный RentPeriod со статусом OVERDUE (неоплаченный, период начался).
-        AppDatabase.getDatabase(context).rentPeriodDao().insert(RentPeriod(
-            contractHistoryId = newContractId.toInt(),
-            renterId = renter.id,
-            scooterId = renter.scooterId,
-            startsAt = newStart,
-            endsAt = newEnd,
-            chargeMinor = BusinessOperation.toMinor(effectivePrice),
-            paidMinor = 0L,
-            status = RentPeriod.STATUS_OVERDUE,
-            createdAt = now,
-            updatedAt = now
-        ))
-        AppDatabase.getDatabase(context).auditEventDao().insert(AuditEvent(
-            occurredAt = now,
-            action = AuditEvent.ACTION_RENT_RENEWED,
-            entityType = "RENTER",
-            entityId = renter.id.toString(),
-            reason = "Auto-create unpaid contract at end of last contract",
-            beforeSnapshot = "latestEnd=$latestEnd",
-            afterSnapshot = "newContractId=$newContractId; weekStart=$newStart; weekEnd=$newEnd"
-        ))
-        // §9.0: таймкод критического действия — CONTRACT_CREATE (auto).
-        try {
-            com.example.data.TimelineService(
-                AppDatabase.getDatabase(context)
-            ).recordCriticalAction(
-                actionType = "CONTRACT_CREATE_AUTO",
-                screen = "RENTERS",
-                title = "Auto-kontrakt: ${renter.name}",
-                entityType = "CONTRACT",
-                entityId = newContractId.toString(),
-                payloadJson = "{\"renterId\":${renter.id},\"amount\":$effectivePrice,\"auto\":true,\"weekStart\":$newStart,\"weekEnd\":$newEnd}"
-            )
-        } catch (_: Exception) {}
+        val db = AppDatabase.getDatabase(context)
+        
+        // Calculate how many weeks are missing
+        val missedMs = now - latestEnd
+        val missedWeeks = ((missedMs + weekMs - 1) / weekMs).toInt().coerceIn(1, 52) // Max 1 year
+        
+        var periodStart = latestEnd
+        var createdContracts = 0
+        
+        for (i in 0 until missedWeeks) {
+            val periodEnd = periodStart + weekMs
+            if (periodEnd <= now || i == 0) { // Always create at least the first one
+                val newContract = ContractHistoryEntry(
+                    renterId = renter.id, timestamp = now,
+                    type = ContractHistoryEntry.TYPE_AUTO_RENEW, amount = effectivePrice,
+                    notes = "Avtomatik yaratildi (${i + 1}/${missedWeeks} hafta)",
+                    renterName = renter.name, renterPhone = renter.phoneNumber,
+                    scooterName = renter.scooterName,
+                    weekStart = periodStart, weekEnd = periodEnd,
+                    weeklyPrice = effectivePrice,
+                    passportData = renter.passportData,
+                    address = renter.address,
+                    pinfl = renter.pinfl,
+                    vinNumber = scooter?.vinNumber ?: "",
+                    engineNumber = scooter?.engineNumber ?: "",
+                    scooterSerialNumber = scooter?.scooterSerialNumber ?: "",
+                    batteryId1 = scooter?.batteryId1 ?: "",
+                    batteryId2 = scooter?.batteryId2 ?: "",
+                    additionalInfo = scooter?.additionalInfo ?: "",
+                    isPaid = false
+                )
+                val newContractId = historyRepository.insert(newContract)
+                
+                // Create RentPeriod
+                db.rentPeriodDao().insert(RentPeriod(
+                    contractHistoryId = newContractId.toInt(),
+                    renterId = renter.id,
+                    scooterId = renter.scooterId,
+                    startsAt = periodStart,
+                    endsAt = periodEnd,
+                    chargeMinor = BusinessOperation.toMinor(effectivePrice),
+                    paidMinor = 0L,
+                    status = if (periodEnd <= now) RentPeriod.STATUS_OVERDUE else RentPeriod.STATUS_ACTIVE,
+                    createdAt = now,
+                    updatedAt = now
+                ))
+                
+                createdContracts++
+                periodStart = periodEnd
+            } else {
+                break // Don't create future periods
+            }
+        }
+        
+        if (createdContracts > 0) {
+            db.auditEventDao().insert(AuditEvent(
+                occurredAt = now,
+                action = AuditEvent.ACTION_RENT_RENEWED,
+                entityType = "RENTER",
+                entityId = renter.id.toString(),
+                reason = "Auto-create $createdContracts unpaid contract(s)",
+                beforeSnapshot = "latestEnd=$latestEnd",
+                afterSnapshot = "createdContracts=$createdContracts; missedWeeks=$missedWeeks"
+            ))
+            
+            try {
+                TimelineService(db).recordCriticalAction(
+                    actionType = "CONTRACT_CREATE_AUTO_BATCH",
+                    screen = "RENTERS",
+                    title = "Auto-kontraktlar: ${renter.name} ($createdContracts ta)",
+                    entityType = "RENTER",
+                    entityId = renter.id.toString(),
+                    payloadJson = "{\"renterId\":${renter.id},\"createdContracts\":$createdContracts,\"missedWeeks\":$missedWeeks}"
+                )
+            } catch (_: Exception) {}
+        }
     }
 
     /**
@@ -468,103 +491,54 @@ class RenterActionUseCase(
      * @param renter снимок арендатора на момент вызова.
      * @param weeklyPrice недельная цена (берётся из settings).
      */
+
+    /**
+     * Расторжение контракта.
+     * 
+     * @param forgiveDebt If true, all outstanding debt is forgiven and marked as CLOSED.
+     *                    If false, debt remains collectible as CLOSED_WITH_DEBT.
+     */
     suspend fun terminate(renter: Renter, weeklyPrice: Double, forgiveDebt: Boolean = false) {
         val effectivePrice = if (weeklyPrice > 0) weeklyPrice else SettingsRepository.DEFAULT_WEEKLY_PRICE
         val now = System.currentTimeMillis()
         val scooter: Scooter? = renter.scooterId?.let { fetchScooterById(it) }
+        val db = AppDatabase.getDatabase(context)
 
-        // ── Шаг 1: решение по балансу ────────────────────────────────────
-        // Ending a rental is not a payment. The previous implementation
-        // fabricated a weekly receipt, credited the cash card and erased part
-        // of the debt merely because the operator pressed "terminate".
-        // Outstanding receivables remain collectible as CLOSED_WITH_DEBT.
-        val unpaid: ContractHistoryEntry? = null
-        val periodDaoBeforeClose = AppDatabase.getDatabase(context).rentPeriodDao()
-        val closeableDebtPeriods = periodDaoBeforeClose.openForRenter(renter.id)
+        // ── Step 1: Handle outstanding debt periods ──────────────────────────
+        val periodDao = db.rentPeriodDao()
+        val closeableDebtPeriods = periodDao.openForRenter(renter.id)
         val forgivenMinor = if (forgiveDebt) closeableDebtPeriods.sumOf { it.outstandingMinor } else 0L
-        if (forgiveDebt) {
-            closeableDebtPeriods.forEach { period ->
-                periodDaoBeforeClose.update(period.copy(
-                    paidMinor = period.chargeMinor,
-                    status = RentPeriod.STATUS_CLOSED,
-                    updatedAt = now
-                ))
+        
+        // Mark periods as closed (with or without debt)
+        closeableDebtPeriods.forEach { period ->
+            val newStatus = when {
+                forgiveDebt -> RentPeriod.STATUS_CLOSED
+                period.outstandingMinor > 0 -> RentPeriod.STATUS_CLOSED_WITH_DEBT
+                else -> RentPeriod.STATUS_CLOSED
+            }
+            val newPaidMinor = if (forgiveDebt) period.chargeMinor else period.paidMinor
+            periodDao.update(period.copy(
+                paidMinor = newPaidMinor,
+                status = newStatus,
+                updatedAt = now
+            ))
+            
+            // Also update legacy contract history isPaid flag
+            if (forgiveDebt && period.contractHistoryId != null) {
+                db.contractHistoryDao().getById(period.contractHistoryId)?.let { contract ->
+                    historyRepository.update(contract.copy(isPaid = true))
+                }
             }
         }
-        val finalBalance = if (forgiveDebt) renter.balance.coerceAtLeast(0.0) else renter.balance
-
-        var paidContractId: Int? = null
-        if (unpaid != null) {
-            historyRepository.update(unpaid.copy(isPaid = true))
-            AppDatabase.getDatabase(context).rentPeriodDao().byContractHistoryId(unpaid.id)?.let { period ->
-                AppDatabase.getDatabase(context).rentPeriodDao().update(period.copy(
-                    paidMinor = period.chargeMinor,
-                    status = RentPeriod.STATUS_PAID,
-                    updatedAt = now
-                ))
-            }
-            paidContractId = unpaid.id
-
-            val paymentEntry = ContractHistoryEntry(
-                renterId = renter.id, timestamp = now,
-                type = ContractHistoryEntry.TYPE_PAYMENT, amount = effectivePrice,
-                notes = "Tugatish vaqtida to'lov (qarz yopildi)",
-                renterName = renter.name, renterPhone = renter.phoneNumber,
-                scooterName = renter.scooterName,
-                weekStart = unpaid.weekStart, weekEnd = unpaid.weekEnd,
-                weeklyPrice = effectivePrice,
-                passportData = renter.passportData,
-                address = renter.address,
-                pinfl = renter.pinfl,
-                vinNumber = scooter?.vinNumber ?: "",
-                engineNumber = scooter?.engineNumber ?: "",
-                scooterSerialNumber = scooter?.scooterSerialNumber ?: "",
-                batteryId1 = scooter?.batteryId1 ?: "",
-                batteryId2 = scooter?.batteryId2 ?: "",
-                additionalInfo = scooter?.additionalInfo ?: ""
-            )
-            historyRepository.insert(paymentEntry)
-
-            // Transaction PAYMENT в таблице транзакций
-            val dateFmt = java.text.SimpleDateFormat("dd.MM.yyyy", java.util.Locale.getDefault())
-            val wsStr = unpaid.weekStart?.let { dateFmt.format(java.util.Date(it)) } ?: ""
-            val weStr = unpaid.weekEnd?.let { dateFmt.format(java.util.Date(it)) } ?: ""
-            val contractLabel = "#${unpaid.id}  $wsStr → $weStr"
-            try {
-                transactionRepository.insert(
-                    Transaction(
-                        contractId = unpaid.id,
-                        renterId = renter.id,
-                        scooterId = renter.scooterId,
-                        timestamp = now,
-                        type = Transaction.TYPE_PAYMENT,
-                        amount = effectivePrice,
-                        notes = "Tugatish vaqtida to'lov",
-                        renterName = renter.name,
-                        renterPhone = renter.phoneNumber,
-                        scooterName = renter.scooterName ?: "",
-                        contractLabel = contractLabel
-                    )
-                )
-            } catch (e: Exception) {
-                Log.w(TAG, "Failed to insert payment transaction: ${e.message}")
-            }
-
-            // Авто-зачисление на «Glavnaya» карту при погашении долга
-            try {
-                virtualCardRepository.depositContractIncome(
-                    amount = effectivePrice,
-                    note = "To'lov: ${renter.name} (tugatish vaqtida)",
-                    contractId = unpaid.id,
-                    renterId = renter.id,
-                    scooterId = renter.scooterId
-                )
-            } catch (e: Exception) {
-                Log.w(TAG, "depositContractIncome failed: ${e.message}")
-            }
+        
+        // Calculate final balance
+        val finalBalance = if (forgiveDebt) {
+            renter.balance.coerceAtLeast(0.0)
+        } else {
+            renter.balance
         }
 
-        // ── Шаг 2: переводим арендатора в пассивное состояние ─────────────
+        // ── Step 2: Update renter to returned state ──────────────────────────
         val updated = renter.copy(
             isReturned = true,
             balance = finalBalance,
@@ -573,8 +547,10 @@ class RenterActionUseCase(
             isOverdueSmsSent = false
         )
         renterRepository.update(updated)
+        
+        // Record debt forgiveness operation if applicable
         if (forgivenMinor > 0) {
-            AppDatabase.getDatabase(context).businessOperationDao().insert(BusinessOperation(
+            db.businessOperationDao().insert(BusinessOperation(
                 occurredAt = now,
                 type = BusinessOperation.TYPE_DEBT_FORGIVEN,
                 direction = BusinessOperation.DIRECTION_LIABILITY,
@@ -584,21 +560,20 @@ class RenterActionUseCase(
                 note = "Debt forgiven on rental termination"
             ))
         }
-        // Release the scooter immediately and preserve completed/scheduled
-        // period states; otherwise a returned renter would still block a new
-        // booking through overlap validation.
-        val currentDb = AppDatabase.getDatabase(context)
-        val periodDao = currentDb.rentPeriodDao()
+        
+        // Close/cancel remaining periods and release scooter
         periodDao.closeOpenForRenter(renter.id, now)
         periodDao.cancelScheduledForRenter(renter.id, now)
-        renter.scooterId?.let { currentDb.scooterDao().updateLifecycleStatus(it, Scooter.STATUS_AVAILABLE) }
+        renter.scooterId?.let { db.scooterDao().updateLifecycleStatus(it, Scooter.STATUS_AVAILABLE) }
 
-        // ── Шаг 3: создаём запись TERMINATED в истории контрактов ──────────
+        // ── Step 3: Create TERMINATED history entry ──────────────────────────
         val entry = ContractHistoryEntry(
             renterId = renter.id, timestamp = now,
-            type = ContractHistoryEntry.TYPE_TERMINATED, amount = effectivePrice,
+            type = ContractHistoryEntry.TYPE_TERMINATED, 
+            amount = 0.0, // Termination is not a payment
             notes = when {
-                forgiveDebt && forgivenMinor > 0 -> "Kontrakt tugatildi (qarz kechirildi)"
+                forgiveDebt && forgivenMinor > 0 -> "Kontrakt tugatildi (qarz kechirildi: ${BusinessOperation.fromMinor(forgivenMinor)} UZS)"
+                closeableDebtPeriods.any { it.outstandingMinor > 0 } -> "Kontrakt tugatildi (qarz mavjud)"
                 else -> "Kontrakt tugatildi"
             }, 
             renterName = renter.name, renterPhone = renter.phoneNumber,
@@ -617,7 +592,9 @@ class RenterActionUseCase(
             additionalInfo = scooter?.additionalInfo ?: ""
         )
         historyRepository.insert(entry)
-        AppDatabase.getDatabase(context).auditEventDao().insert(AuditEvent(
+        
+        // Audit event
+        db.auditEventDao().insert(AuditEvent(
             occurredAt = now,
             action = AuditEvent.ACTION_RENT_TERMINATED,
             entityType = "RENTER",
@@ -627,17 +604,17 @@ class RenterActionUseCase(
             afterSnapshot = "balance=$finalBalance; returned=true; forgivenMinor=$forgivenMinor"
         ))
 
-        // ── Шаг 4: Transaction TERMINATED в таблице транзакций ─────────────
+        // ── Step 4: Create Transaction TERMINATED ────────────────────────────
         try {
             transactionRepository.insert(
                 Transaction(
-                    contractId = paidContractId,
+                    contractId = null,
                     renterId = renter.id,
                     scooterId = renter.scooterId,
                     timestamp = now,
                     type = Transaction.TYPE_TERMINATED,
-                    amount = effectivePrice,
-                    notes = "Kontrakt tugatildi",
+                    amount = 0.0,
+                    notes = entry.notes,
                     renterName = renter.name,
                     renterPhone = renter.phoneNumber,
                     scooterName = renter.scooterName ?: "",
@@ -648,21 +625,20 @@ class RenterActionUseCase(
             Log.w(TAG, "Failed to insert terminated transaction: ${e.message}")
         }
 
-        // Обновляем нативные виджеты Android
-        try { WidgetUpdater.updateAll(context) } catch (_: Exception) {}
-
-        // §9.0: таймкод критического действия — RENT_TERMINATED.
+        // ── Step 5: Timeline recording ───────────────────────────────────────
         try {
-            com.example.data.TimelineService(
-                AppDatabase.getDatabase(context)
-            ).recordCriticalAction(
-                actionType = "RENT_TERMINATED",
+            TimelineService(db).recordCriticalAction(
+                actionType = "RENTAL_TERMINATED",
                 screen = "RENTERS",
                 title = "Tugatildi: ${renter.name}",
                 entityType = "RENTER",
                 entityId = renter.id.toString(),
-                payloadJson = "{\"renterId\":${renter.id},\"finalBalance\":$finalBalance,\"forgiven\":$forgiveDebt}"
+                payloadJson = "{\"renterId\":${renter.id},\"forgivenMinor\":$forgivenMinor,\"forgiveDebt\":$forgiveDebt}"
             )
         } catch (_: Exception) {}
+
+        // Update widget
+        try {
+            com.example.widget.WidgetUpdater.updateAll(context)
+        } catch (_: Exception) {}
     }
-}

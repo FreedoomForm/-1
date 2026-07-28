@@ -11,56 +11,60 @@ class SettingsRepository(context: Context) {
         get() = prefs.getString("sms_template", DEFAULT_TEMPLATE) ?: DEFAULT_TEMPLATE
         set(value) = prefs.edit().putString("sms_template", value).apply()
 
-    /** Exact UZS setting. Legacy float is read once only when the new key is absent. */
-    var weeklyPrice: Double
-        get() = prefs.getString("weekly_price_minor", null)?.toLongOrNull()?.let(BusinessOperation::fromMinor)
-            ?: prefs.getFloat("weekly_price", 0f).toDouble()
+    /**
+     * Daily rental price in UZS. This is the single source of truth for pricing.
+     * Weekly price = dailyPrice × 7
+     * Monthly price = dailyPrice × 30
+     */
+    var dailyPrice: Double
+        get() = prefs.getString("daily_price_minor", null)?.toLongOrNull()?.let(BusinessOperation::fromMinor)
+            ?: run {
+                // Migration from old weekly price
+                val oldWeekly = prefs.getString("weekly_price_minor", null)?.toLongOrNull()?.let(BusinessOperation::fromMinor)
+                    ?: prefs.getFloat("weekly_price", 0f).toDouble()
+                if (oldWeekly > 0) oldWeekly / 7 else DEFAULT_DAILY_PRICE
+            }
         set(value) {
             val minor = BusinessOperation.toMinor(value)
-            prefs.edit().putString("weekly_price_minor", minor.toString()).apply()
+            prefs.edit().putString("daily_price_minor", minor.toString()).apply()
         }
 
-    var monthlyPrice: Double
-        get() = prefs.getString("monthly_price_minor", null)?.toLongOrNull()?.let(BusinessOperation::fromMinor)
-            ?: prefs.getFloat("monthly_price", 0f).toDouble()
-        set(value) {
-            val minor = BusinessOperation.toMinor(value)
-            prefs.edit().putString("monthly_price_minor", minor.toString()).apply()
-        }
+    val dailyPriceMinor: Long get() = BusinessOperation.toMinor(dailyPrice)
+    
+    /** Computed weekly price = daily × 7 */
+    val weeklyPrice: Double get() = dailyPrice * 7
+    val weeklyPriceMinor: Long get() = dailyPriceMinor * 7
+    
+    /** Computed monthly price = daily × 30 */
+    val monthlyPrice: Double get() = dailyPrice * 30
+    val monthlyPriceMinor: Long get() = dailyPriceMinor * 30
 
-    val weeklyPriceMinor: Long get() = BusinessOperation.toMinor(weeklyPrice)
-    val monthlyPriceMinor: Long get() = BusinessOperation.toMinor(monthlyPrice)
+    /**
+     * Calculate price for any number of rental days.
+     * Simply multiplies daily rate by number of days.
+     */
+    fun priceForRentalDays(days: Int): Double =
+        BusinessOperation.fromMinor(PartialPeriodPricing.calculate(days, dailyPriceMinor))
 
     /**
      * Стоимость одного скутера в долларах США. Используется на странице
-     * «Отчёты» для расчёта ROI — окупаемости вложений. По умолчанию $660
-     * (типичная цена прокатного электросамоката на рынке Узбекистана).
+     * «Отчёты» для расчёта ROI — окупаемости вложений.
      */
     var scooterPriceUsd: Double
         get() = prefs.getFloat("scooter_price_usd", DEFAULT_SCOOTER_PRICE_USD.toFloat()).toDouble()
         set(value) = prefs.edit().putFloat("scooter_price_usd", value.toFloat()).apply()
 
-    /** Курс USD→UZS для расчёта окупаемости. По умолчанию 12 600 сумов. */
+    /** Курс USD→UZS для расчёта окупаемости. */
     var usdToUzsRate: Double
         get() = prefs.getFloat("usd_to_uzs_rate", DEFAULT_USD_TO_UZS_RATE.toFloat()).toDouble()
         set(value) = prefs.edit().putFloat("usd_to_uzs_rate", value.toFloat()).apply()
 
-    /** Billing rule for a final partial rental period. */
-    var partialPeriodPricingMode: String
-        get() = prefs.getString("partial_period_pricing_mode", PARTIAL_PERIOD_PRO_RATA) ?: PARTIAL_PERIOD_PRO_RATA
-        set(value) = prefs.edit().putString("partial_period_pricing_mode", value).apply()
+    /** Expected scooter lifespan in months for depreciation calculation. */
+    var scooterLifespanMonths: Int
+        get() = prefs.getInt("scooter_lifespan_months", DEFAULT_SCOOTER_LIFESPAN_MONTHS)
+        set(value) = prefs.edit().putInt("scooter_lifespan_months", value.coerceIn(12, 120)).apply()
 
-    fun priceForRentalDays(days: Int, weekly: Double, monthly: Double): Double =
-        BusinessOperation.fromMinor(
-            PartialPeriodPricing.calculate(
-                days = days,
-                weeklyMinor = BusinessOperation.toMinor(weekly),
-                monthlyMinor = BusinessOperation.toMinor(monthly),
-                mode = partialPeriodPricingMode
-            )
-        )
-
-    /** Payme-ссылка для подстановки в SMS (по умолчанию — тестовая ссылка). */
+    /** Payme-ссылка для подстановки в SMS. */
     var paymeLink: String
         get() = prefs.getString("payme_link", DEFAULT_PAYME_LINK) ?: DEFAULT_PAYME_LINK
         set(value) = prefs.edit().putString("payme_link", value).apply()
@@ -77,12 +81,8 @@ class SettingsRepository(context: Context) {
 
     /**
      * SMS yuborish rejimi:
-     *  • true  — AVTO yuborish (standart). Kechikkan mijozga SmsWorker
-     *            (4 soatda bir) va kechikgan holda yaratilgan renter uchun
-     *            RenterViewModel tomonidan SMS darhol yuboriladi.
-     *  • false — FAQAT QO'LLANMA. SMS faqat foydalanuvchi "SMS" tugmasini
-     *            bosganda yuboriladi. SmsWorker va addRenter() avto-yuborish
-     *            o'chiriladi (notif/yozuvlar saqlanadi).
+     *  • true  — AVTO yuborish (standart).
+     *  • false — FAQAT QO'LLANMA.
      */
     var smsAutoSendEnabled: Boolean
         get() = prefs.getBoolean("sms_auto_send_enabled", true)
@@ -113,54 +113,51 @@ class SettingsRepository(context: Context) {
         get() = prefs.getInt("sms_reminder_cooldown_hours", 24).coerceIn(1, 168)
         set(value) = prefs.edit().putInt("sms_reminder_cooldown_hours", value.coerceIn(1, 168)).apply()
 
-    /**
-     * Avto-zaxira nusxa (auto-backup to Downloads/ScooterRent/).
-     * Yoqilgan bo'lsa, har bir ma'lumot o'zgarishidan so'ng ilova .xlsx
-     * nusxasini public Downloads/ScooterRent/ papkasiga yozadi. Fayl
-     * ilovani o'chirishdan keyin ham saqlanib qoladi va qayta o'rnatishda
-     * avtomatik tiklanadi.
-     *
-     * Standart: yoqilgan (true).
-     */
+    /** Auto-backup to Downloads/ScooterRent/. */
     var autoBackupEnabled: Boolean
         get() = prefs.getBoolean("auto_backup_enabled", true)
         set(value) = prefs.edit().putBoolean("auto_backup_enabled", value).apply()
 
-    /**
-     * Flag: ilova birinchi marta ishga tushganmi?
-     * Avto-tiklash (auto-restore) faqat birinchi ishga tushishda bajariladi.
-     * Bu flag true bo'lsa, avto-tiklash allaqachon bajarilgan degani.
-     */
+    /** Flag: ilova birinchi marta ishga tushganmi? */
     var autoRestoreAttempted: Boolean
         get() = prefs.getBoolean("auto_restore_attempted", false)
         set(value) = prefs.edit().putBoolean("auto_restore_attempted", value).apply()
 
     companion object {
-        const val DEFAULT_WEEKLY_PRICE = 420_000.0
-        const val DEFAULT_MONTHLY_PRICE = 1_680_000.0
-        const val PARTIAL_PERIOD_PRO_RATA = "PRO_RATA"
-        const val PARTIAL_PERIOD_ROUND_UP = "ROUND_UP"
-        const val PARTIAL_PERIOD_MONTHLY = "MONTHLY"
+        /** Default daily price: 60,000 UZS (420,000 / 7) */
+        const val DEFAULT_DAILY_PRICE = 60_000.0
         const val DEFAULT_SCOOTER_PRICE_USD = 660.0
         const val DEFAULT_USD_TO_UZS_RATE = 12_600.0
+        const val DEFAULT_SCOOTER_LIFESPAN_MONTHS = 36
 
         const val DEFAULT_PAYME_LINK = "https://transfer.paycom.uz/680a40043fc0407a2e48e8fe"
         const val DEFAULT_CALL_CENTER = "71 200 55 56"
 
         /**
          * SMS-шаблон по умолчанию.
-         *
-         * Доступные подстановки:
-         *   {name}  — имя арендатора (с маленькой буквы, как в примере пользователя)
-         *   {days}  — количество дней просрочки
-         *   {debt}  — сумма долга без копеек
-         *   {payme} — ссылка на оплату Payme
-         *   {call}  — номер call-центра
+         * Подстановки: {name}, {days}, {debt}, {payme}, {call}
          */
-        const val DEFAULT_TEMPLATE = """Assalomu alaykum {name}, sizning skuter ijarangiz {days} kunga kechikdi. Iltimos, to'lovni o'z vaqtida kiriting. Umumiy qarz: {debt}.
+        const val DEFAULT_TEMPLATE = """Assalomu alaykum {name}, sizning skuter ijarangiz {days} kunga kechikdi. Iltimos, to'lovni o'z vaqtida kiriting. Umumiy qarz: {debt} UZS.
 
 {payme}
 
 Call center: {call}."""
+
+        // Legacy constants for backward compatibility
+        @Deprecated("Use DEFAULT_DAILY_PRICE * 7")
+        const val DEFAULT_WEEKLY_PRICE = 420_000.0
+        @Deprecated("Use DEFAULT_DAILY_PRICE * 30")
+        const val DEFAULT_MONTHLY_PRICE = 1_800_000.0
+        @Deprecated("Removed - daily pricing only")
+        const val PARTIAL_PERIOD_PRO_RATA = "PRO_RATA"
+        @Deprecated("Removed - daily pricing only")
+        const val PARTIAL_PERIOD_ROUND_UP = "ROUND_UP"
+        @Deprecated("Removed - daily pricing only")
+        const val PARTIAL_PERIOD_MONTHLY = "MONTHLY"
     }
 }
+
+    /** Legacy method - backwards compatible version */
+    @Suppress("DEPRECATION")
+    fun priceForRentalDays(days: Int, weekly: Double, monthly: Double): Double =
+        priceForRentalDays(days)

@@ -222,16 +222,6 @@ class PaymentCheckWorker(
             createdAt = now,
             updatedAt = now
         ))
-        db.businessOperationDao().insert(BusinessOperation(
-            occurredAt = now,
-            type = BusinessOperation.TYPE_ADJUSTMENT,
-            direction = BusinessOperation.DIRECTION_LIABILITY,
-            amountMinor = BusinessOperation.toMinor(weeklyPrice),
-            renterId = renter.id,
-            scooterId = renter.scooterId,
-            contractId = contractId.toInt(),
-            note = "Automatic weekly rent accrual"
-        ))
         Log.d(TAG, "Auto-renewed renter #${renter.id} for 1 week, balance ${renter.balance} → $newBalance")
         return newBalance
     }

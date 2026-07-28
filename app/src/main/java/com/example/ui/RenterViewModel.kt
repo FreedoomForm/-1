@@ -438,7 +438,7 @@ class RenterViewModel(application: Application) : AndroidViewModel(application) 
                                         scooterId = savedRenter.scooterId,
                                         timestamp = now,
                                         type = com.example.data.Transaction.TYPE_PAYMENT,
-                                        amount = effectiveWeeklyPrice,
+                                        amount = periodAmount,
                                         notes = notes,
                                         renterName = savedRenter.name,
                                         renterPhone = savedRenter.phoneNumber,
@@ -452,7 +452,7 @@ class RenterViewModel(application: Application) : AndroidViewModel(application) 
 
                             try {
                                 virtualCardRepository.depositContractIncome(
-                                    amount = effectiveWeeklyPrice,
+                                    amount = periodAmount,
                                     note = "To'lov: ${savedRenter.name} — #$contractId",
                                     contractId = contractId,
                                     renterId = savedRenter.id,

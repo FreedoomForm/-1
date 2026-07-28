@@ -1,19 +1,33 @@
 package com.example.data
 
-/** Exact, testable tariff policy for the final non-weekly rental period. */
+/**
+ * Simplified pricing: daily rate only.
+ * The owner sets a single daily price, and the total is calculated as days × dailyRate.
+ * No complex rounding modes needed anymore.
+ */
 object PartialPeriodPricing {
-    fun calculate(days: Int, weeklyMinor: Long, monthlyMinor: Long, mode: String): Long {
+    /**
+     * Calculate rental price based on daily rate.
+     * 
+     * @param days Number of rental days (must be positive)
+     * @param dailyRateMinor Daily rental rate in minor currency units (tiyin)
+     * @return Total price in minor currency units
+     */
+    fun calculate(days: Int, dailyRateMinor: Long): Long {
         require(days > 0) { "days must be positive" }
-        return when (mode) {
-            SettingsRepository.PARTIAL_PERIOD_ROUND_UP -> {
-                val weeks = (days + 6) / 7
-                weeklyMinor * weeks
-            }
-            SettingsRepository.PARTIAL_PERIOD_MONTHLY -> {
-                // Round once, at the smallest money unit.
-                (monthlyMinor * days + 15) / 30
-            }
-            else -> (weeklyMinor * days + 3) / 7
-        }
+        return dailyRateMinor * days
+    }
+
+    /**
+     * Legacy compatibility: calculate from weekly/monthly rates.
+     * Converts to effective daily rate and multiplies by days.
+     * Uses half-up rounding for fair pricing.
+     */
+    @Deprecated("Use calculate(days, dailyRateMinor) instead")
+    fun calculateLegacy(days: Int, weeklyMinor: Long, monthlyMinor: Long, mode: String): Long {
+        require(days > 0) { "days must be positive" }
+        // Convert weekly to daily rate (rounded half-up)
+        val dailyFromWeekly = (weeklyMinor + 3) / 7
+        return dailyFromWeekly * days
     }
 }

@@ -106,6 +106,8 @@ data class ContractGroup(
 
 /** Статус дня в режиме просмотра (страница деталей арендатора). */
 enum class DayStatus {
+    /** Ремонтный период - арендатор не платит, но скутер у него. Оранжевый фон. */
+    REPAIR_BREAK,
     /** Оплаченный день — зелёный фон. */
     PAID,
     /** Неоплаченный день (контракт есть, но isPaid=false) — красный фон. */
@@ -126,6 +128,7 @@ fun RentPeriod.toCalendarDayStatus(): DayStatus = when (status) {
     RentPeriod.STATUS_PARTIALLY_PAID -> DayStatus.PARTIAL
     RentPeriod.STATUS_SCHEDULED -> DayStatus.SCHEDULED
     RentPeriod.STATUS_SUSPENDED_REPAIR -> DayStatus.SUSPENDED
+    RentPeriod.STATUS_REPAIR_BREAK -> DayStatus.REPAIR_BREAK
     RentPeriod.STATUS_OVERDUE, RentPeriod.STATUS_CLOSED_WITH_DEBT -> DayStatus.UNPAID
     else -> DayStatus.EMPTY
 }
@@ -669,6 +672,7 @@ private fun RowScope.DayCell(
             DayStatus.PARTIAL -> { bgColor = ClaudeAccentBg; fgColor = ClaudeAccent }
             DayStatus.SCHEDULED -> { bgColor = Color(0xFFFFF3D6); fgColor = Color(0xFF9A6700) }
             DayStatus.SUSPENDED -> { bgColor = StatusReservedBg; fgColor = StatusReserved }
+            DayStatus.REPAIR_BREAK -> { bgColor = Color(0xFFFFF7ED); fgColor = Color(0xFFF97316) }
             DayStatus.EMPTY -> {
                 bgColor = if (isCurrentMonth) ClaudeCard else ClaudeBackground
                 fgColor = if (isCurrentMonth) ClaudeText else ClaudeTextSecondary

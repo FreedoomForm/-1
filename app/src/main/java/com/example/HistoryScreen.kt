@@ -1,118 +1,78 @@
 package com.example
 
+import androidx.compose.animation.animateColorAsState
 import androidx.compose.foundation.background
-import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.border
-import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.PaddingValues
-import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.gestures.detectTransformGestures
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.AccountTree
-import androidx.compose.material.icons.filled.Add
-import androidx.compose.material.icons.filled.Assessment
-import androidx.compose.material.icons.filled.CalendarMonth
-import androidx.compose.material.icons.filled.History
-import androidx.compose.material.icons.filled.Info
-import androidx.compose.material.icons.filled.Pause
-import androidx.compose.material.icons.filled.PlayArrow
-import androidx.compose.material.icons.filled.SkipNext
-import androidx.compose.material.icons.filled.SkipPrevious
-import androidx.compose.material.icons.filled.TableView
-import androidx.compose.material.icons.filled.Tune
-import androidx.compose.material.icons.filled.Visibility
-import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.AssistChip
-import androidx.compose.material3.DatePicker
-import androidx.compose.material3.DatePickerDialog
-import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.FilterChip
-import androidx.compose.material3.HorizontalDivider
-import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.Slider
-import androidx.compose.material3.Surface
-import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
-import androidx.compose.material3.rememberDatePickerState
-import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
-import androidx.compose.runtime.setValue
+import androidx.compose.material.icons.filled.*
+import androidx.compose.material3.*
+import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
+import com.example.data.TimelineBranch
 import com.example.data.TimelineEvent
 import com.example.ui.HistoryViewModel
-import com.example.ui.components.DangerOutlinedButton
-import com.example.ui.components.PrimaryButton
-import com.example.ui.components.SecondaryButton
-import com.example.ui.components.UnifiedButton
-import com.example.ui.components.UnifiedButtonVariant
-import com.example.ui.components.UnifiedSearchBar
-import com.example.ui.theme.ClaudeAccent
-import com.example.ui.theme.ClaudeAccentBg
-import com.example.ui.theme.ClaudeCard
-import com.example.ui.theme.ClaudeDivider
-import com.example.ui.theme.ClaudeText
-import com.example.ui.theme.ClaudeTextSecondary
-import com.example.ui.theme.StatusArchived
-import com.example.ui.theme.StatusInfo
-import com.example.ui.theme.StatusOk
-import com.example.ui.theme.StatusOverdue
+import com.example.ui.components.*
+import com.example.ui.theme.*
 import kotlinx.coroutines.launch
 import java.text.SimpleDateFormat
-import java.util.Date
-import java.util.Locale
+import java.util.*
 
 /**
- * Branch-aware history — redesigned to follow the Renters page dress code.
- *
- * Layout (matches RenterTable):
- *   ┌─────────────────────────────────────────────────┐
- *   │ [🔍 Qidirish ............................] [⚙][📅]│ ← UnifiedSearchBar
- *   ├─────────────────────────────────────────────────┤
- *   │ [Ko'rinish]  [Main ▾]  [Qaytish]  [+]  [Filtr]   │ ← action row
- *   ├─────────────────────────────────────────────────┤
- *   │ Tarix — N ta voqea          M ta tanlandi       │ ← header surface
- *   ├─────────────────────────────────────────────────┤
- *   │ ▌ ✓ № ●  Title          [Detail]                │ ← row (bordered card)
- *   │ ▌    ●  Action • Screen                         │
- *   │ ...                                              │
- *   └─────────────────────────────────────────────────┘
- *
- * Unique features preserved:
- *   • Visual timeline mode (toggle with «Ko'rinish» / «Jadval»)
- *   • Branch picker (Main / Custom branches)
- *   • «Qaytish» — safe restore to selected time code
- *   • «+» — create new branch from selected time code
- *   • Filters: entity type / action type / money only / period / search
- *   • Visual timeline with media-player controls (◀ ⏸ ▶)
- *   • Detail dialog with payload-parsed fields (amount/actor/reason/storno)
+ * History screen with three view modes:
+ * 1. TABLE - Classic list view
+ * 2. VISUAL - Video player style timeline
+ * 3. TREE - Branch tree visualization
  */
+enum class HistoryViewMode(val icon: ImageVector, val label: String, val color: Color) {
+    TABLE(Icons.Default.TableView, "Jadval", Color(0xFF6B7280)),
+    VISUAL(Icons.Default.PlayArrow, "Video", Color(0xFF3B82F6)),
+    TREE(Icons.Default.AccountTree, "Daraxt", Color(0xFF10B981))
+}
+
+/** Primary action colors */
+object ActionColors {
+    val CREATE = Color(0xFF10B981) // Green
+    val DELETE = Color(0xFFEF4444) // Red
+    val EDIT = Color(0xFF3B82F6)   // Blue
+    val SECONDARY = Color(0xFF6B7280) // Gray
+}
+
+/** Branch colors for tree view */
+val BRANCH_COLORS = listOf(
+    Color(0xFF3B82F6), // Blue
+    Color(0xFF10B981), // Green
+    Color(0xFFF59E0B), // Amber
+    Color(0xFFEF4444), // Red
+    Color(0xFF8B5CF6), // Purple
+    Color(0xFFEC4899), // Pink
+    Color(0xFF14B8A6), // Teal
+    Color(0xFFF97316)  // Orange
+)
+
 @OptIn(ExperimentalMaterial3Api::class, androidx.compose.foundation.ExperimentalFoundationApi::class)
 @Composable
 fun HistoryScreen(
@@ -125,23 +85,29 @@ fun HistoryScreen(
     val events by viewModel.events.collectAsStateWithLifecycle()
     val branches by viewModel.branches.collectAsStateWithLifecycle()
     val activeBranchId by viewModel.activeBranchId.collectAsStateWithLifecycle()
+    val scope = rememberCoroutineScope()
+    
     val formatter = remember { SimpleDateFormat("dd.MM.yyyy HH:mm", Locale.getDefault()) }
     val dateOnlyFmt = remember { SimpleDateFormat("dd.MM.yyyy", Locale.getDefault()) }
+    val timeOnlyFmt = remember { SimpleDateFormat("HH:mm", Locale.getDefault()) }
 
-    var visualMode by remember { mutableStateOf(false) }
+    // View mode state
+    var viewMode by remember { mutableStateOf(HistoryViewMode.TABLE) }
+    
+    // Dialog states
     var showBranchPicker by remember { mutableStateOf(false) }
     var showBranchCreate by remember { mutableStateOf(false) }
-    var showEdit by remember { mutableStateOf(false) }
     var showDetail by remember { mutableStateOf(false) }
     var showFilters by remember { mutableStateOf(false) }
-    var showPeriodPicker by remember { mutableStateOf(false) }
     var showRestoreDialog by remember { mutableStateOf(false) }
-    var restoreReason by remember { mutableStateOf("") }
+    
+    // Form states
     var branchName by remember { mutableStateOf("") }
-    var correctionNote by remember { mutableStateOf("") }
+    var restoreReason by remember { mutableStateOf("") }
     var timelinePosition by remember { mutableStateOf(0f) }
-
-    // ── Filters (§9B) ────────────────────────────────────────────────────────
+    var treeZoom by remember { mutableStateOf(1f) }
+    
+    // Filter states
     var filterEntityType by remember { mutableStateOf<String?>(null) }
     var filterActionType by remember { mutableStateOf<String?>(null) }
     var filterMoneyOnly by remember { mutableStateOf(false) }
@@ -149,708 +115,720 @@ fun HistoryScreen(
     var filterEndMs by remember { mutableStateOf<Long?>(null) }
     var filterSearchText by remember { mutableStateOf("") }
 
+    // Branch slider states for visual mode
+    var branchSliders by remember { mutableStateOf<List<Pair<Long, Color>>>(emptyList()) }
+    
     LaunchedEffect(createTrigger) { if (createTrigger > 0) showBranchCreate = true }
-    LaunchedEffect(editTrigger) { if (editTrigger > 0 && selectedEventId != null) showEdit = true }
-
+    
     val chronological = remember(events) { events.sortedBy { it.timestamp } }
     val selected = selectedEventId?.let { id -> events.firstOrNull { it.id == id } }
-
-    // ── Apply filters ────────────────────────────────────────────────────────
-    val moneyActionTypes = remember {
-        setOf("PAY", "PAYMENT", "TRANSFER", "DEPOSIT", "WITHDRAW", "STORNO",
-              "REPAIR_COST", "RENT_INCOME", "REFUND", "DEPOSIT_HELD", "DEPOSIT_RETURNED")
+    
+    // Categorize events
+    val primaryActionTypes = remember {
+        setOf("CREATE", "DELETE", "EDIT", "UPDATE", "INSERT", "REMOVE", 
+              "PAYMENT", "TRANSFER", "TERMINATE", "RENEW", "STORNO")
     }
+    
+    // Filter events
     val filteredEvents = remember(chronological, filterEntityType, filterActionType, filterMoneyOnly, filterStartMs, filterEndMs, filterSearchText) {
         chronological.filter { ev ->
             (filterEntityType == null || ev.entityType == filterEntityType) &&
-            (filterActionType == null || ev.actionType.equals(filterActionType, ignoreCase = true)) &&
-            (!filterMoneyOnly || ev.actionType.uppercase() in moneyActionTypes || ev.actionType.uppercase().contains("PAY")) &&
+            (filterActionType == null || ev.actionType.contains(filterActionType!!, ignoreCase = true)) &&
             (filterStartMs?.let { ev.timestamp >= it } ?: true) &&
             (filterEndMs?.let { ev.timestamp <= it } ?: true) &&
             (filterSearchText.isBlank() ||
              ev.title.contains(filterSearchText, ignoreCase = true) ||
              ev.screen.contains(filterSearchText, ignoreCase = true) ||
-             ev.actionType.contains(filterSearchText, ignoreCase = true) ||
-             (ev.entityType?.contains(filterSearchText, ignoreCase = true) == true))
+             ev.actionType.contains(filterSearchText, ignoreCase = true))
         }
     }
 
+    // ═══════════════════════════════════════════════════════════════════════
+    // DIALOGS
+    // ═══════════════════════════════════════════════════════════════════════
+    
     if (showBranchPicker) {
-        AlertDialog(
-            onDismissRequest = { showBranchPicker = false },
-            title = { Text("Tarix tarmog'i") },
-            text = {
-                Column {
-                    branches.forEach { branch ->
-                        TextButton(onClick = { viewModel.selectBranch(branch.id); onSelectedEventChange(null); showBranchPicker = false }) {
-                            Text(if (branch.id == activeBranchId) "✓ ${branch.name}" else branch.name)
-                        }
+        BranchPickerDialog(
+            branches = branches,
+            activeBranchId = activeBranchId,
+            onSelect = { branch -> 
+                viewModel.selectBranch(branch.id)
+                onSelectedEventChange(null)
+                showBranchPicker = false
+            },
+            onDismiss = { showBranchPicker = false }
+        )
+    }
+    
+    if (showBranchCreate && selected != null) {
+        CreateBranchDialog(
+            branchName = branchName,
+            onBranchNameChange = { branchName = it },
+            selectedEvent = selected,
+            branches = branches,
+            onConfirm = {
+                if (branchName.isNotBlank()) {
+                    val newColor = BRANCH_COLORS[branches.size % BRANCH_COLORS.size]
+                    scope.launch {
+                        viewModel.createBranch(branchName, selected.timestamp)
+                        // Add slider for visual mode
+                        branchSliders = branchSliders + (selected.timestamp to newColor)
                     }
+                    branchName = ""
+                    showBranchCreate = false
                 }
             },
-            confirmButton = { TextButton(onClick = { showBranchPicker = false }) { Text("Yopish") } }
+            onDismiss = { showBranchCreate = false }
         )
     }
-    if (showBranchCreate) {
-        AlertDialog(
-            onDismissRequest = { showBranchCreate = false },
-            title = { Text("Yangi tarix tarmog'i") },
-            text = {
-                Column {
-                    Text("Tarmoq tanlangan taymkoddan boshlanadi.")
-                    OutlinedTextField(branchName, { branchName = it }, label = { Text("Tarmoq nomi") })
-                }
-            },
-            confirmButton = { TextButton(onClick = {
-                val timestamp = selected?.timestamp ?: chronological.lastOrNull()?.timestamp ?: System.currentTimeMillis()
-                viewModel.createBranch(timestamp, branchName)
-                branchName = ""; showBranchCreate = false; onSelectedEventChange(null)
-            }) { Text("Yaratish") } },
-            dismissButton = { TextButton(onClick = { showBranchCreate = false }) { Text("Bekor qilish") } }
-        )
-    }
-    if (showEdit && selected != null) {
-        AlertDialog(
-            onDismissRequest = { showEdit = false },
-            title = { Text("Tarixga tuzatish") },
-            text = { OutlinedTextField(correctionNote, { correctionNote = it }, label = { Text("Tuzatish izohi") }) },
-            confirmButton = { TextButton(onClick = {
-                viewModel.correctSelected(selected, correctionNote)
-                correctionNote = ""; showEdit = false
-            }) { Text("Tuzatish kiritish") } },
-            dismissButton = { TextButton(onClick = { showEdit = false }) { Text("Bekor qilish") } }
-        )
-    }
-
-    // ── Detail dialog (§9B: safe detail of each record) ──────────────────────
+    
     if (showDetail && selected != null) {
-        val ev = selected
-        val payloadAmount = remember(ev.payloadJson) {
-            try {
-                val o = org.json.JSONObject(ev.payloadJson)
-                if (o.has("amount")) o.optDouble("amount", 0.0) else null
-            } catch (_: Exception) { null }
-        }
-        val payloadActor = remember(ev.payloadJson) {
-            try {
-                val o = org.json.JSONObject(ev.payloadJson)
-                o.optString("actor", "").ifBlank { null }
-            } catch (_: Exception) { null }
-        }
-        val payloadReason = remember(ev.payloadJson) {
-            try {
-                val o = org.json.JSONObject(ev.payloadJson)
-                o.optString("reason", "").ifBlank { null }
-            } catch (_: Exception) { null }
-        }
-        val payloadStornoOf = remember(ev.payloadJson) {
-            try {
-                val o = org.json.JSONObject(ev.payloadJson)
-                if (o.has("stornoOf")) o.optLong("stornoOf") else null
-            } catch (_: Exception) { null }
-        }
-        AlertDialog(
-            onDismissRequest = { showDetail = false },
-            title = { Text("Voqea tafsiloti") },
-            text = {
-                Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                    DetailRow("Sarlavha", ev.title)
-                    DetailRow("Ekran", ev.screen)
-                    DetailRow("Harakat turi", ev.actionType)
-                    DetailRow("Vaqt", formatter.format(Date(ev.timestamp)))
-                    ev.entityType?.let { DetailRow("Bog'langan obyekt", "$it #${ev.entityId ?: "—"}") }
-                    payloadAmount?.let { DetailRow("Summa", "${it.toLong()} so'm") }
-                    payloadActor?.let { DetailRow("Autor", it) }
-                    payloadReason?.let { DetailRow("Sabab", it) }
-                    payloadStornoOf?.let { DetailRow("Storno of", "#$it") }
-                    DetailRow("Asosiy voqea", if (ev.isMajor) "ha" else "yo'q")
-                    DetailRow("Arxivlangan", if (ev.isArchived) "ha" else "yo'q")
-                    Spacer(Modifier.height(4.dp))
-                    Text("Payload:", style = MaterialTheme.typography.labelMedium, color = ClaudeTextSecondary, fontWeight = FontWeight.SemiBold)
-                    Text(
-                        ev.payloadJson.take(800) + if (ev.payloadJson.length > 800) "…" else "",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = ClaudeTextSecondary
-                    )
-                }
-            },
-            confirmButton = {
-                Row {
-                    TextButton(onClick = {
-                        viewModel.archiveSelected(ev, "Arxivlandi tafsilotdan")
-                        showDetail = false
-                    }) { Text("Arxivlash") }
-                    TextButton(onClick = { showDetail = false }) { Text("Yopish") }
-                }
-            }
+        EventDetailDialog(
+            event = selected,
+            formatter = formatter,
+            onDismiss = { showDetail = false }
         )
     }
 
-    // ── Restore dialog (§9.0: safe restore with reason) ──────────────────────
-    if (showRestoreDialog && selected != null) {
-        val coroutineScope = rememberCoroutineScope()
-        AlertDialog(
-            onDismissRequest = { showRestoreDialog = false; restoreReason = "" },
-            title = { Text("Holatni qaytarish") },
-            text = {
-                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Text(
-                        "Tanlangan: ${selected.title}",
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = ClaudeText
-                    )
-                    Text(
-                        "Vaqt: ${formatter.format(Date(selected.timestamp))}",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = ClaudeTextSecondary
-                    )
-                    Spacer(Modifier.height(4.dp))
-                    Text(
-                        "Diqqat: moliyaviy faktlar o'chirilmaydi. Qaytarish auditable " +
-                        "RESTORE voqeasi sifatida yoziladi. Moliyaviy holatni " +
-                        "ko'rib chiqish va kerak bo'lsa storno yaratish kerak.",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = ClaudeTextSecondary
-                    )
-                    OutlinedTextField(
-                        value = restoreReason,
-                        onValueChange = { restoreReason = it },
-                        label = { Text("Qaytarish sababi (majburiy)") },
-                        modifier = Modifier.fillMaxWidth()
-                    )
-                }
-            },
-            confirmButton = {
-                TextButton(
-                    enabled = restoreReason.isNotBlank(),
-                    onClick = {
-                        coroutineScope.launch {
-                            val id = viewModel.restoreToSnapshot(selected.timestamp, restoreReason)
-                            if (id != null) {
-                                onSelectedEventChange(id)
-                            }
-                        }
-                        restoreReason = ""
-                        showRestoreDialog = false
-                    }
-                ) { Text("Qaytarish", color = ClaudeAccent, fontWeight = FontWeight.Bold) }
-            },
-            dismissButton = {
-                TextButton(onClick = { showRestoreDialog = false; restoreReason = "" }) {
-                    Text("Bekor qilish")
-                }
-            }
-        )
-    }
-
-    // ── Filters dialog (§9B) ─────────────────────────────────────────────────
     if (showFilters) {
-        AlertDialog(
-            onDismissRequest = { showFilters = false },
-            title = { Text("Filtrlar") },
-            text = {
-                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Text("Ob'ekt turi:", style = MaterialTheme.typography.labelMedium, color = ClaudeTextSecondary)
-                    val entityTypes = listOf(null to "Hammasi", "RENTER" to "Arendator", "SCOOTER" to "Skuter",
-                        "CONTRACT" to "Kontrakt", "CARD" to "Karta", "PAYMENT" to "To'lov",
-                        "REPAIR" to "Ta'mir", "RESTORE" to "Qayta tiklash")
-                    entityTypes.chunked(2).forEach { row ->
-                        Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                            row.forEach { (value, label) ->
-                                FilterChip(
-                                    selected = filterEntityType == value,
-                                    onClick = { filterEntityType = if (filterEntityType == value) null else value },
-                                    label = { Text(label, style = MaterialTheme.typography.labelSmall) }
-                                )
-                            }
-                        }
-                    }
-
-                    Spacer(Modifier.height(4.dp))
-                    Text("Harakat turi:", style = MaterialTheme.typography.labelMedium, color = ClaudeTextSecondary)
-                    val actionTypes = listOf(null to "Hammasi", "CREATE" to "Yaratish", "UPDATE" to "O'zgartirish",
-                        "DELETE" to "O'chirish", "PAY" to "To'lov", "REPAIR" to "Ta'mir",
-                        "RESTORE" to "Qayta tiklash", "CORRECTION" to "Tuzatish")
-                    actionTypes.chunked(2).forEach { row ->
-                        Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                            row.forEach { (value, label) ->
-                                FilterChip(
-                                    selected = filterActionType?.equals(value, ignoreCase = true) == true,
-                                    onClick = {
-                                        filterActionType = if (filterActionType?.equals(value, ignoreCase = true) == true) null else value
-                                    },
-                                    label = { Text(label, style = MaterialTheme.typography.labelSmall) }
-                                )
-                            }
-                        }
-                    }
-
-                    Spacer(Modifier.height(4.dp))
-                    FilterChip(
-                        selected = filterMoneyOnly,
-                        onClick = { filterMoneyOnly = !filterMoneyOnly },
-                        label = { Text("Faqat pul harakatlari") }
-                    )
-
-                    Spacer(Modifier.height(4.dp))
-                    OutlinedTextField(
-                        value = filterSearchText,
-                        onValueChange = { filterSearchText = it },
-                        label = { Text("Qidiruv matni") },
-                        modifier = Modifier.fillMaxWidth()
-                    )
-
-                    Spacer(Modifier.height(4.dp))
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        TextButton(onClick = { showPeriodPicker = true }) {
-                            Icon(Icons.Default.CalendarMonth, contentDescription = null)
-                            Spacer(Modifier.width(4.dp))
-                            Text(if (filterStartMs != null || filterEndMs != null) {
-                                "${filterStartMs?.let { dateOnlyFmt.format(Date(it)) } ?: "—"} — ${filterEndMs?.let { dateOnlyFmt.format(Date(it)) } ?: "—"}"
-                            } else "Davr tanlash")
-                        }
-                        Spacer(Modifier.width(8.dp))
-                        if (filterStartMs != null || filterEndMs != null) {
-                            TextButton(onClick = { filterStartMs = null; filterEndMs = null }) {
-                                Text("Tozalash")
-                            }
-                        }
-                    }
-                }
+        FiltersDialog(
+            filterEntityType = filterEntityType,
+            filterActionType = filterActionType,
+            filterMoneyOnly = filterMoneyOnly,
+            onEntityTypeChange = { filterEntityType = it },
+            onActionTypeChange = { filterActionType = it },
+            onMoneyOnlyChange = { filterMoneyOnly = it },
+            onClear = {
+                filterEntityType = null
+                filterActionType = null
+                filterMoneyOnly = false
+                filterStartMs = null
+                filterEndMs = null
             },
-            confirmButton = {
-                Row {
-                    TextButton(onClick = {
-                        filterEntityType = null
-                        filterActionType = null
-                        filterMoneyOnly = false
-                        filterStartMs = null
-                        filterEndMs = null
-                        filterSearchText = ""
-                    }) { Text("Tozalash") }
-                    TextButton(onClick = { showFilters = false }) { Text("Tayyor") }
-                }
-            }
+            onDismiss = { showFilters = false }
         )
     }
 
-    // ── Date range picker dialog ─────────────────────────────────────────────
-    if (showPeriodPicker) {
-        val dateState = rememberDatePickerState()
-        DatePickerDialog(
-            onDismissRequest = { showPeriodPicker = false },
-            confirmButton = {
-                TextButton(onClick = {
-                    val sel = dateState.selectedDateMillis
-                    if (sel != null) {
-                        if (filterStartMs == null) filterStartMs = sel
-                        else if (filterEndMs == null && sel > filterStartMs!!) filterEndMs = sel + 86_400_000L
-                        else { filterStartMs = sel; filterEndMs = null }
-                    }
-                    showPeriodPicker = false
-                }) { Text("OK") }
-            },
-            dismissButton = {
-                TextButton(onClick = { showPeriodPicker = false }) { Text("Bekor") }
-            }
-        ) {
-            DatePicker(state = dateState)
-        }
-    }
-
-    val activeFilterCount = listOf(filterEntityType, filterActionType,
-        if (filterMoneyOnly) "1" else null,
-        filterStartMs?.toString(), filterEndMs?.toString(),
-        if (filterSearchText.isNotBlank()) "1" else null
-    ).count { it != null }
-
-    Column(modifier = Modifier.fillMaxSize()) {
-        // ── Unified search bar (matches Renters page) ──────────────────────
+    // ═══════════════════════════════════════════════════════════════════════
+    // MAIN LAYOUT
+    // ═══════════════════════════════════════════════════════════════════════
+    
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(ClaudeCard)
+    ) {
+        // Search bar
         UnifiedSearchBar(
             query = filterSearchText,
             onQueryChange = { filterSearchText = it },
-            placeholder = "Tarixda qidirish — sarlavha, ekran, harakat yoki obyekt",
-            onFilterClick = { showFilters = true },
-            filterActive = activeFilterCount > 0
+            placeholder = "Tarixda qidirish...",
+            modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)
         )
-
-        // ── Action row — 5 UnifiedButtons (matches Renters page dress code) ─
-        // Вид / branch picker / Вернуться / Создать ветку / Фильтр.
-        // All buttons always visible; some disabled when no selection.
+        
+        // Action row with view mode toggle
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 16.dp, vertical = 8.dp),
-            horizontalArrangement = Arrangement.spacedBy(6.dp),
+                .padding(horizontal = 16.dp, vertical = 4.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            // «Вид» — toggle table ↔ visual timeline
-            UnifiedButton(
-                label = if (visualMode) "Jadval" else "Ko'rinish",
-                icon = if (visualMode) Icons.Default.TableView else Icons.Default.Visibility,
-                onClick = { visualMode = !visualMode },
-                variant = if (visualMode) UnifiedButtonVariant.PRIMARY else UnifiedButtonVariant.SECONDARY,
-                modifier = Modifier.weight(1.0f)
-            )
-            // Branch picker — shows current branch name; opens picker dialog
-            UnifiedButton(
-                label = branches.firstOrNull { it.id == activeBranchId }?.name ?: "Main",
-                icon = Icons.Default.AccountTree,
-                onClick = { showBranchPicker = true },
-                variant = UnifiedButtonVariant.SECONDARY,
-                modifier = Modifier.weight(1.0f)
-            )
-            // «Вернуться» — restore to selected time code
-            PrimaryButton(
-                label = "Qaytish",
-                icon = Icons.Default.History,
-                enabled = selected != null,
+            // View mode button (changes icon and color based on mode)
+            val buttonColor by animateColorAsState(viewMode.color, label = "viewModeColor")
+            
+            FilledTonalButton(
                 onClick = {
-                    if (selected != null) showRestoreDialog = true
+                    viewMode = when (viewMode) {
+                        HistoryViewMode.TABLE -> HistoryViewMode.VISUAL
+                        HistoryViewMode.VISUAL -> HistoryViewMode.TREE
+                        HistoryViewMode.TREE -> HistoryViewMode.TABLE
+                    }
                 },
-                modifier = Modifier.weight(0.9f)
-            )
-            // «+» — create new branch from selected time code
-            UnifiedButton(
-                label = "+ Tarmoq",
-                icon = Icons.Default.Add,
-                onClick = { showBranchCreate = true },
-                variant = UnifiedButtonVariant.SECONDARY,
-                modifier = Modifier.weight(1.0f)
-            )
-        }
-
-        // ── Active filter chips strip ────────────────────────────────────────
-        if (filterEntityType != null || filterActionType != null || filterMoneyOnly ||
-            filterStartMs != null || filterEndMs != null || filterSearchText.isNotBlank()) {
-            Row(
-                Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 2.dp),
-                horizontalArrangement = Arrangement.spacedBy(4.dp)
+                colors = ButtonDefaults.filledTonalButtonColors(
+                    containerColor = buttonColor.copy(alpha = 0.15f),
+                    contentColor = buttonColor
+                )
             ) {
-                filterEntityType?.let { et ->
-                    AssistChip(
-                        onClick = { filterEntityType = null },
-                        label = { Text(et, style = MaterialTheme.typography.labelSmall) }
-                    )
-                }
-                filterActionType?.let { at ->
-                    AssistChip(
-                        onClick = { filterActionType = null },
-                        label = { Text(at, style = MaterialTheme.typography.labelSmall) }
-                    )
-                }
-                if (filterMoneyOnly) {
-                    AssistChip(
-                        onClick = { filterMoneyOnly = false },
-                        label = { Text("Faqat pul", style = MaterialTheme.typography.labelSmall) }
-                    )
-                }
-                if (filterStartMs != null || filterEndMs != null) {
-                    AssistChip(
-                        onClick = { filterStartMs = null; filterEndMs = null },
-                        label = { Text("Davr", style = MaterialTheme.typography.labelSmall) }
-                    )
-                }
-                if (filterSearchText.isNotBlank()) {
-                    AssistChip(
-                        onClick = { filterSearchText = "" },
-                        label = { Text("«$filterSearchText»", style = MaterialTheme.typography.labelSmall) }
-                    )
+                Icon(viewMode.icon, null, modifier = Modifier.size(18.dp))
+                Spacer(Modifier.width(4.dp))
+                Text(viewMode.label, fontSize = 12.sp)
+            }
+            
+            // Branch picker
+            AssistChip(
+                onClick = { showBranchPicker = true },
+                label = { 
+                    val activeBranch = branches.find { it.id == activeBranchId }
+                    Text(activeBranch?.name ?: "Main", fontSize = 12.sp) 
+                },
+                leadingIcon = { Icon(Icons.Default.AccountTree, null, Modifier.size(16.dp)) }
+            )
+            
+            Spacer(Modifier.weight(1f))
+            
+            // Restore button (only when event selected)
+            if (selected != null) {
+                IconButton(onClick = { showRestoreDialog = true }) {
+                    Icon(Icons.Default.Restore, "Qaytish", tint = StatusInfo)
                 }
             }
+            
+            // Create branch button (only when event selected)
+            if (selected != null) {
+                IconButton(onClick = { showBranchCreate = true }) {
+                    Icon(Icons.Default.Add, "Tarmoq", tint = StatusOk)
+                }
+            }
+            
+            // Filters
+            IconButton(onClick = { showFilters = true }) {
+                Icon(
+                    Icons.Default.Tune, 
+                    "Filtr",
+                    tint = if (filterEntityType != null || filterActionType != null || filterMoneyOnly) 
+                           ClaudeAccent else ClaudeTextSecondary
+                )
+            }
         }
-
-        // ── Header surface (count + selection count) ───────────────────────
-        Surface(color = ClaudeCard, modifier = Modifier.fillMaxWidth()) {
+        
+        // Header
+        Surface(
+            modifier = Modifier.fillMaxWidth(),
+            color = ClaudeAccentBg,
+            shape = RoundedCornerShape(topStart = 8.dp, topEnd = 8.dp)
+        ) {
             Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 16.dp, vertical = 8.dp),
+                modifier = Modifier.padding(horizontal = 16.dp, vertical = 10.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Text(
                     "Tarix — ${filteredEvents.size} ta voqea",
-                    style = MaterialTheme.typography.titleSmall,
-                    color = ClaudeText,
+                    style = MaterialTheme.typography.labelMedium,
                     fontWeight = FontWeight.SemiBold,
-                    modifier = Modifier.weight(1f)
+                    color = ClaudeText
                 )
+                Spacer(Modifier.weight(1f))
                 if (selected != null) {
                     Text(
-                        "1 tanlandi",
-                        style = MaterialTheme.typography.labelMedium,
-                        color = ClaudeAccent,
-                        fontWeight = FontWeight.Bold
+                        "Tanlandi: ${formatter.format(Date(selected.timestamp))}",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = ClaudeAccent
                     )
                 }
             }
         }
-        HorizontalDivider(color = ClaudeDivider)
+        
+        // Content based on view mode
+        when (viewMode) {
+            HistoryViewMode.TABLE -> TableView(
+                events = filteredEvents,
+                selectedEventId = selectedEventId,
+                onEventClick = { onSelectedEventChange(it.id) },
+                onEventLongClick = { onSelectedEventChange(it.id); showDetail = true },
+                formatter = formatter
+            )
+            
+            HistoryViewMode.VISUAL -> VisualTimelineView(
+                events = filteredEvents,
+                selectedEventId = selectedEventId,
+                branches = branches,
+                branchSliders = branchSliders,
+                timelinePosition = timelinePosition,
+                onPositionChange = { timelinePosition = it },
+                onEventClick = { onSelectedEventChange(it.id) },
+                formatter = formatter,
+                timeOnlyFmt = timeOnlyFmt
+            )
+            
+            HistoryViewMode.TREE -> TreeView(
+                events = filteredEvents,
+                branches = branches,
+                activeBranchId = activeBranchId,
+                selectedEventId = selectedEventId,
+                zoom = treeZoom,
+                onZoomChange = { treeZoom = it },
+                onEventClick = { onSelectedEventChange(it.id) },
+                onCreateBranch = { event -> 
+                    onSelectedEventChange(event.id)
+                    showBranchCreate = true
+                },
+                formatter = formatter,
+                dateOnlyFmt = dateOnlyFmt
+            )
+        }
+    }
+}
 
-        if (filteredEvents.isEmpty()) {
-            Box(
+// ═══════════════════════════════════════════════════════════════════════════
+// TABLE VIEW
+// ═══════════════════════════════════════════════════════════════════════════
+
+@OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
+@Composable
+private fun TableView(
+    events: List<TimelineEvent>,
+    selectedEventId: Long?,
+    onEventClick: (TimelineEvent) -> Unit,
+    onEventLongClick: (TimelineEvent) -> Unit,
+    formatter: SimpleDateFormat
+) {
+    LazyColumn(
+        modifier = Modifier.fillMaxSize(),
+        contentPadding = PaddingValues(16.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
+        items(events.reversed(), key = { it.id }) { event ->
+            val isSelected = event.id == selectedEventId
+            val actionColor = getActionColor(event.actionType)
+            
+            Surface(
                 modifier = Modifier
-                    .fillMaxSize()
-                    .padding(32.dp),
-                contentAlignment = Alignment.Center
-            ) {
-                Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                    Icon(
-                        Icons.Default.Info,
-                        contentDescription = null,
-                        tint = StatusArchived,
-                        modifier = Modifier.size(48.dp)
+                    .fillMaxWidth()
+                    .combinedClickable(
+                        onClick = { onEventClick(event) },
+                        onLongClick = { onEventLongClick(event) }
                     )
-                    Spacer(Modifier.height(8.dp))
-                    if (chronological.isEmpty()) {
-                        Text(
-                            "Bu tarmoqda hali harakat yo'q",
-                            style = MaterialTheme.typography.titleMedium,
-                            color = ClaudeText,
-                            fontWeight = FontWeight.SemiBold
-                        )
-                        Text(
-                            "+ bilan tanlangan taymkoddan yangi tarmoq yarating.",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = ClaudeTextSecondary
-                        )
-                    } else {
-                        Text(
-                            "Filtr bo'yicha hech narsa topilmadi",
-                            style = MaterialTheme.typography.titleMedium,
-                            color = ClaudeText,
-                            fontWeight = FontWeight.SemiBold
-                        )
-                        Text(
-                            "Filtrlarni tozalang yoki kengaytiring.",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = ClaudeTextSecondary
-                        )
-                    }
-                }
-            }
-            return@Column
-        }
-
-        if (visualMode) {
-            // ── Visual timeline mode (media-player style) ──────────────────
-            // Kept exactly as before — this is the unique feature of History.
-            val index = timelinePosition.toInt().coerceIn(0, filteredEvents.lastIndex)
-            val event = filteredEvents[index]
-            var isPlaying by remember { mutableStateOf(false) }
-            LaunchedEffect(isPlaying, index, filteredEvents.size) {
-                if (isPlaying && index < filteredEvents.lastIndex) {
-                    kotlinx.coroutines.delay(800L)
-                    timelinePosition = (index + 1).toFloat()
-                    onSelectedEventChange(filteredEvents[index + 1].id)
-                } else if (isPlaying && index >= filteredEvents.lastIndex) {
-                    isPlaying = false
-                }
-            }
-            Column(Modifier.fillMaxSize().padding(16.dp), verticalArrangement = Arrangement.SpaceBetween) {
-                Surface(
-                    modifier = Modifier.fillMaxWidth(),
-                    shape = RoundedCornerShape(12.dp),
-                    color = ClaudeCard,
-                    border = androidx.compose.foundation.BorderStroke(2.dp, ClaudeAccent)
+                    .border(
+                        width = if (isSelected) 2.dp else 1.dp,
+                        color = if (isSelected) ClaudeAccent else ClaudeDivider,
+                        shape = RoundedCornerShape(8.dp)
+                    ),
+                shape = RoundedCornerShape(8.dp),
+                color = if (isSelected) ClaudeAccentBg else ClaudeCard
+            ) {
+                Row(
+                    modifier = Modifier.padding(12.dp),
+                    verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Column(Modifier.padding(20.dp)) {
+                    // Status line
+                    Box(
+                        modifier = Modifier
+                            .width(4.dp)
+                            .height(40.dp)
+                            .background(actionColor, RoundedCornerShape(2.dp))
+                    )
+                    
+                    Spacer(Modifier.width(12.dp))
+                    
+                    Column(modifier = Modifier.weight(1f)) {
                         Text(
                             event.title,
-                            style = MaterialTheme.typography.titleLarge,
-                            fontWeight = FontWeight.Bold,
-                            color = ClaudeText
-                        )
-                        Text(
-                            event.screen,
-                            style = MaterialTheme.typography.labelMedium,
-                            color = ClaudeTextSecondary
-                        )
-                        Text(
-                            formatter.format(Date(event.timestamp)),
                             style = MaterialTheme.typography.bodyMedium,
-                            color = ClaudeText
+                            fontWeight = FontWeight.Medium,
+                            color = ClaudeText,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
                         )
-                        event.entityType?.let {
+                        Row {
                             Text(
-                                "$it #${event.entityId ?: "—"}",
-                                style = MaterialTheme.typography.bodySmall,
+                                event.actionType,
+                                style = MaterialTheme.typography.labelSmall,
+                                color = actionColor
+                            )
+                            Text(
+                                " • ${event.screen}",
+                                style = MaterialTheme.typography.labelSmall,
                                 color = ClaudeTextSecondary
                             )
                         }
-                        Spacer(Modifier.height(8.dp))
-                        Text(
-                            "Payload: ${event.payloadJson}",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = ClaudeTextSecondary
-                        )
                     }
-                }
-                Column {
+                    
                     Text(
-                        "${index + 1} / ${filteredEvents.size}",
+                        formatter.format(Date(event.timestamp)),
                         style = MaterialTheme.typography.labelSmall,
                         color = ClaudeTextSecondary
                     )
-                    Slider(
-                        value = timelinePosition,
-                        onValueChange = { value ->
-                            timelinePosition = value
-                            isPlaying = false
-                            onSelectedEventChange(filteredEvents[value.toInt().coerceIn(0, filteredEvents.lastIndex)].id)
-                        },
-                        valueRange = 0f..filteredEvents.lastIndex.toFloat(),
-                        steps = (filteredEvents.size - 2).coerceAtLeast(0)
-                    )
-                    // ── Media-player-style controls (§9.1) ──────────────────
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.Center,
-                        verticalAlignment = Alignment.CenterVertically
+                }
+            }
+        }
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// VISUAL TIMELINE VIEW
+// ═══════════════════════════════════════════════════════════════════════════
+
+@Composable
+private fun VisualTimelineView(
+    events: List<TimelineEvent>,
+    selectedEventId: Long?,
+    branches: List<TimelineBranch>,
+    branchSliders: List<Pair<Long, Color>>,
+    timelinePosition: Float,
+    onPositionChange: (Float) -> Unit,
+    onEventClick: (TimelineEvent) -> Unit,
+    formatter: SimpleDateFormat,
+    timeOnlyFmt: SimpleDateFormat
+) {
+    if (events.isEmpty()) {
+        Box(
+            modifier = Modifier.fillMaxSize(),
+            contentAlignment = Alignment.Center
+        ) {
+            Text("Voqealar topilmadi", color = ClaudeTextSecondary)
+        }
+        return
+    }
+    
+    val minTime = events.minOfOrNull { it.timestamp } ?: 0L
+    val maxTime = events.maxOfOrNull { it.timestamp } ?: System.currentTimeMillis()
+    val range = (maxTime - minTime).coerceAtLeast(1L)
+    
+    // Find event at current position
+    val currentTime = minTime + (timelinePosition * range).toLong()
+    val currentEvent = events.minByOrNull { kotlin.math.abs(it.timestamp - currentTime) }
+    
+    Column(modifier = Modifier.fillMaxSize()) {
+        // Event display area
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .weight(1f)
+                .padding(16.dp),
+            contentAlignment = Alignment.Center
+        ) {
+            if (currentEvent != null) {
+                val actionColor = getActionColor(currentEvent.actionType)
+                
+                Surface(
+                    modifier = Modifier.fillMaxWidth(0.9f),
+                    shape = RoundedCornerShape(16.dp),
+                    color = actionColor.copy(alpha = 0.1f),
+                    border = androidx.compose.foundation.BorderStroke(2.dp, actionColor)
+                ) {
+                    Column(
+                        modifier = Modifier.padding(24.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally
                     ) {
-                        IconButton(
-                            onClick = {
-                                isPlaying = false
-                                val newIndex = (index - 1).coerceAtLeast(0)
-                                timelinePosition = newIndex.toFloat()
-                                onSelectedEventChange(filteredEvents[newIndex].id)
-                            },
-                            enabled = index > 0
+                        // Time badge
+                        Surface(
+                            shape = RoundedCornerShape(20.dp),
+                            color = actionColor
                         ) {
-                            Icon(Icons.Default.SkipPrevious, contentDescription = "Oldingi", tint = ClaudeAccent)
-                        }
-                        Spacer(Modifier.width(16.dp))
-                        IconButton(onClick = { isPlaying = !isPlaying }) {
-                            Icon(
-                                imageVector = if (isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
-                                contentDescription = if (isPlaying) "Pauza" else "Ijro",
-                                tint = ClaudeAccent,
-                                modifier = Modifier.size(36.dp)
+                            Text(
+                                formatter.format(Date(currentEvent.timestamp)),
+                                modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
+                                color = Color.White,
+                                fontWeight = FontWeight.Bold
                             )
                         }
-                        Spacer(Modifier.width(16.dp))
-                        IconButton(
-                            onClick = {
-                                isPlaying = false
-                                val newIndex = (index + 1).coerceAtMost(filteredEvents.lastIndex)
-                                timelinePosition = newIndex.toFloat()
-                                onSelectedEventChange(filteredEvents[newIndex].id)
-                            },
-                            enabled = index < filteredEvents.lastIndex
-                        ) {
-                            Icon(Icons.Default.SkipNext, contentDescription = "Keyingi", tint = ClaudeAccent)
+                        
+                        Spacer(Modifier.height(16.dp))
+                        
+                        Text(
+                            currentEvent.title,
+                            style = MaterialTheme.typography.headlineSmall,
+                            fontWeight = FontWeight.Bold,
+                            color = ClaudeText,
+                            textAlign = TextAlign.Center
+                        )
+                        
+                        Spacer(Modifier.height(8.dp))
+                        
+                        Row {
+                            Surface(
+                                shape = RoundedCornerShape(4.dp),
+                                color = actionColor.copy(alpha = 0.2f)
+                            ) {
+                                Text(
+                                    currentEvent.actionType,
+                                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+                                    style = MaterialTheme.typography.labelMedium,
+                                    color = actionColor
+                                )
+                            }
+                            Spacer(Modifier.width(8.dp))
+                            Text(
+                                currentEvent.screen,
+                                style = MaterialTheme.typography.labelMedium,
+                                color = ClaudeTextSecondary
+                            )
+                        }
+                        
+                        currentEvent.entityType?.let { entityType ->
+                            Spacer(Modifier.height(4.dp))
+                            Text(
+                                entityType,
+                                style = MaterialTheme.typography.labelSmall,
+                                color = ClaudeTextSecondary
+                            )
                         }
                     }
                 }
             }
-        } else {
-            // ── Table list — same row design as Renters page ──────────────
-            // Border 1.5dp default → 2dp selected, border color = action color.
-            LazyColumn(
-                modifier = Modifier.fillMaxSize(),
-                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp),
-                verticalArrangement = Arrangement.spacedBy(4.dp)
-            ) {
-                itemsIndexed(
-                    filteredEvents.sortedByDescending { it.timestamp },
-                    key = { _, it -> it.id }
-                ) { idx, event ->
-                    val isSelected = selectedEventId == event.id
-                    // ── Status color (§11 unified language) ────────────────
-                    val statusColor = when {
-                        event.isArchived -> StatusArchived
-                        event.actionType.equals("PAY", ignoreCase = true) ||
-                            event.actionType.contains("PAYMENT", ignoreCase = true) -> StatusOk
-                        event.actionType.contains("DELETE", ignoreCase = true) ||
-                            event.actionType.contains("STORNO", ignoreCase = true) -> StatusOverdue
-                        event.actionType.contains("CORRECTION", ignoreCase = true) -> StatusInfo
-                        else -> ClaudeAccent
-                    }
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(horizontal = 8.dp, vertical = 4.dp)
-                    ) {
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .border(
-                                    width = if (isSelected) 2.dp else 1.5.dp,
-                                    color = statusColor,
-                                    shape = RoundedCornerShape(8.dp)
-                                )
-                                .background(
-                                    if (isSelected) ClaudeAccentBg else Color.White
-                                )
-                                .combinedClickable(
-                                    onClick = {
-                                        val newId = if (selectedEventId == event.id) null else event.id
-                                        onSelectedEventChange(newId)
-                                    },
-                                    onLongClick = {
-                                        onSelectedEventChange(event.id)
-                                    }
-                                )
-                                .padding(horizontal = 12.dp, vertical = 10.dp),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            // ── № column ─────────────────────────────────────
-                            Text(
-                                "${idx + 1}",
-                                modifier = Modifier.width(40.dp).padding(end = 4.dp),
-                                style = MaterialTheme.typography.bodySmall,
-                                color = ClaudeTextSecondary,
-                                fontWeight = FontWeight.Medium,
-                                maxLines = 1
-                            )
-                            // ── Status dot ──────────────────────────────────
+        }
+        
+        // Timeline controls
+        Surface(
+            modifier = Modifier.fillMaxWidth(),
+            color = Color(0xFF1A1A1A),
+            shape = RoundedCornerShape(topStart = 16.dp, topEnd = 16.dp)
+        ) {
+            Column(modifier = Modifier.padding(16.dp)) {
+                // Time markers with timecodes
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    // Show timecodes for primary events
+                    events.filter { isPrimaryAction(it.actionType) }
+                        .take(10)
+                        .forEach { event ->
+                            val pos = ((event.timestamp - minTime).toFloat() / range).coerceIn(0f, 1f)
+                            val color = getActionColor(event.actionType)
                             Box(
                                 modifier = Modifier
-                                    .size(10.dp)
-                                    .background(statusColor, CircleShape)
+                                    .offset(x = (pos * 300).dp)
+                                    .size(8.dp)
+                                    .background(color, CircleShape)
+                                    .clickable { onEventClick(event) }
                             )
-                            Spacer(Modifier.width(8.dp))
-                            // ── Title + meta column ──────────────────────────
-                            Column(modifier = Modifier.weight(1f)) {
-                                Text(
-                                    text = if (isSelected) "✓ ${event.title}" else event.title,
-                                    style = MaterialTheme.typography.bodyMedium,
-                                    color = ClaudeText,
-                                    fontWeight = FontWeight.SemiBold,
-                                    maxLines = 2,
-                                    overflow = TextOverflow.Ellipsis
-                                )
-                                Text(
-                                    "${event.actionType} • ${event.screen}",
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = ClaudeTextSecondary,
-                                    maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis
-                                )
-                                Text(
-                                    formatter.format(Date(event.timestamp)),
-                                    style = MaterialTheme.typography.labelSmall,
-                                    color = ClaudeTextSecondary,
-                                    maxLines = 1
-                                )
+                        }
+                }
+                
+                Spacer(Modifier.height(8.dp))
+                
+                // Main slider
+                Slider(
+                    value = timelinePosition,
+                    onValueChange = onPositionChange,
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = SliderDefaults.colors(
+                        thumbColor = ClaudeAccent,
+                        activeTrackColor = ClaudeAccent,
+                        inactiveTrackColor = Color(0xFF3A3A3A)
+                    )
+                )
+                
+                // Branch sliders (stacked below)
+                branchSliders.forEachIndexed { index, (startTime, color) ->
+                    val startPos = ((startTime - minTime).toFloat() / range).coerceIn(0f, 1f)
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(4.dp)
+                            .padding(top = 2.dp)
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth(1f - startPos)
+                                .align(Alignment.CenterEnd)
+                                .height(4.dp)
+                                .background(color, RoundedCornerShape(2.dp))
+                        )
+                    }
+                }
+                
+                Spacer(Modifier.height(8.dp))
+                
+                // Playback controls
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.Center,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    IconButton(onClick = { onPositionChange(0f) }) {
+                        Icon(Icons.Default.SkipPrevious, "Boshiga", tint = Color.White)
+                    }
+                    IconButton(onClick = { 
+                        onPositionChange((timelinePosition - 0.1f).coerceAtLeast(0f))
+                    }) {
+                        Icon(Icons.Default.FastRewind, "Orqaga", tint = Color.White)
+                    }
+                    
+                    Text(
+                        timeOnlyFmt.format(Date(currentTime)),
+                        color = Color.White,
+                        fontWeight = FontWeight.Bold,
+                        modifier = Modifier.padding(horizontal = 16.dp)
+                    )
+                    
+                    IconButton(onClick = { 
+                        onPositionChange((timelinePosition + 0.1f).coerceAtMost(1f))
+                    }) {
+                        Icon(Icons.Default.FastForward, "Oldinga", tint = Color.White)
+                    }
+                    IconButton(onClick = { onPositionChange(1f) }) {
+                        Icon(Icons.Default.SkipNext, "Oxiriga", tint = Color.White)
+                    }
+                }
+            }
+        }
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// TREE VIEW
+// ═══════════════════════════════════════════════════════════════════════════
+
+@Composable
+private fun TreeView(
+    events: List<TimelineEvent>,
+    branches: List<TimelineBranch>,
+    activeBranchId: Long,
+    selectedEventId: Long?,
+    zoom: Float,
+    onZoomChange: (Float) -> Unit,
+    onEventClick: (TimelineEvent) -> Unit,
+    onCreateBranch: (TimelineEvent) -> Unit,
+    formatter: SimpleDateFormat,
+    dateOnlyFmt: SimpleDateFormat
+) {
+    val density = LocalDensity.current
+    val scrollState = rememberScrollState()
+    
+    // Group events by time blocks (hour/day based on zoom)
+    val blockSizeMs = when {
+        zoom < 0.5f -> 24L * 60 * 60 * 1000  // Day
+        zoom < 1.5f -> 60L * 60 * 1000       // Hour
+        else -> 15L * 60 * 1000              // 15 minutes
+    }
+    
+    val groupedEvents = remember(events, blockSizeMs) {
+        events.groupBy { (it.timestamp / blockSizeMs) * blockSizeMs }
+            .toSortedMap()
+    }
+    
+    // Entity type columns
+    val entityColumns = listOf("RENTER", "CONTRACT", "TRANSACTION", "CARD", "SCOOTER")
+    
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .pointerInput(Unit) {
+                detectTransformGestures { _, _, zoomChange, _ ->
+                    onZoomChange((zoom * zoomChange).coerceIn(0.3f, 3f))
+                }
+            }
+    ) {
+        Row(modifier = Modifier.fillMaxSize()) {
+            // Left side - branches (events from alternate branches)
+            Box(
+                modifier = Modifier
+                    .weight(0.3f)
+                    .fillMaxHeight()
+                    .background(Color(0xFF0A0A0A))
+            ) {
+                LazyColumn(
+                    modifier = Modifier.fillMaxSize(),
+                    contentPadding = PaddingValues(8.dp)
+                ) {
+                    // Show events from non-main branches on left side
+                    val leftEvents = events.filter { event ->
+                        branches.any { branch -> 
+                            branch.id != activeBranchId && 
+                            event.timestamp >= branch.createdAt 
+                        }
+                    }
+                    items(leftEvents) { event ->
+                        TreeEventBlock(
+                            event = event,
+                            isSelected = event.id == selectedEventId,
+                            zoom = zoom,
+                            onClick = { onEventClick(event) },
+                            onLongClick = { onCreateBranch(event) }
+                        )
+                    }
+                }
+            }
+            
+            // Center - Timeline trunk
+            Box(
+                modifier = Modifier
+                    .width(80.dp)
+                    .fillMaxHeight()
+                    .background(Color(0xFF1A1A1A))
+            ) {
+                // Time blocks
+                LazyColumn(
+                    modifier = Modifier.fillMaxSize(),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    contentPadding = PaddingValues(vertical = 16.dp)
+                ) {
+                    groupedEvents.forEach { (timeMs, _) ->
+                        item {
+                            val blockHeight = (40 * zoom).dp
+                            val isCurrentBranchStart = branches.any { 
+                                it.createdAt in timeMs until (timeMs + blockSizeMs) 
                             }
-                            Spacer(Modifier.width(8.dp))
-                            // ── Major event indicator (●) ────────────────────
-                            Text(
-                                if (event.isMajor) "●" else "·",
-                                style = MaterialTheme.typography.titleMedium,
-                                color = if (event.isMajor) statusColor else ClaudeTextSecondary
+                            val branchColor = branches.find { 
+                                it.createdAt in timeMs until (timeMs + blockSizeMs)
+                            }?.let { branch ->
+                                BRANCH_COLORS[branches.indexOf(branch) % BRANCH_COLORS.size]
+                            }
+                            
+                            Surface(
+                                modifier = Modifier
+                                    .padding(vertical = 2.dp)
+                                    .width(60.dp)
+                                    .height(blockHeight),
+                                shape = RoundedCornerShape(4.dp),
+                                color = branchColor?.copy(alpha = 0.3f) ?: Color(0xFF2A2A2A),
+                                border = if (isCurrentBranchStart) 
+                                    androidx.compose.foundation.BorderStroke(2.dp, branchColor ?: ClaudeAccent)
+                                else null
+                            ) {
+                                Box(contentAlignment = Alignment.Center) {
+                                    Text(
+                                        dateOnlyFmt.format(Date(timeMs)),
+                                        fontSize = (10 * zoom).sp,
+                                        color = Color.White,
+                                        textAlign = TextAlign.Center
+                                    )
+                                }
+                            }
+                            
+                            // Connection line
+                            Box(
+                                modifier = Modifier
+                                    .width(2.dp)
+                                    .height(8.dp)
+                                    .background(Color(0xFF3A3A3A))
                             )
-                            Spacer(Modifier.width(4.dp))
-                            // ── Detail (info) button ─────────────────────────
-                            IconButton(onClick = {
-                                onSelectedEventChange(event.id)
-                                showDetail = true
-                            }) {
-                                Icon(
-                                    Icons.Default.Info,
-                                    contentDescription = "Tafsilot",
-                                    tint = ClaudeAccent
+                        }
+                    }
+                }
+            }
+            
+            // Right side - Main branch events by entity type
+            Row(
+                modifier = Modifier
+                    .weight(0.7f)
+                    .fillMaxHeight()
+                    .horizontalScroll(scrollState)
+            ) {
+                entityColumns.forEach { entityType ->
+                    Column(
+                        modifier = Modifier
+                            .width((100 * zoom).dp)
+                            .fillMaxHeight()
+                            .background(Color(0xFF0F0F0F))
+                            .padding(4.dp)
+                    ) {
+                        // Column header
+                        Text(
+                            entityType,
+                            fontSize = 10.sp,
+                            color = ClaudeTextSecondary,
+                            modifier = Modifier.padding(4.dp)
+                        )
+                        
+                        LazyColumn(
+                            modifier = Modifier.fillMaxSize(),
+                            contentPadding = PaddingValues(4.dp),
+                            verticalArrangement = Arrangement.spacedBy(4.dp)
+                        ) {
+                            val columnEvents = events.filter { 
+                                it.entityType?.uppercase() == entityType 
+                            }
+                            items(columnEvents) { event ->
+                                TreeEventBlock(
+                                    event = event,
+                                    isSelected = event.id == selectedEventId,
+                                    zoom = zoom,
+                                    onClick = { onEventClick(event) },
+                                    onLongClick = { onCreateBranch(event) }
                                 )
                             }
                         }
@@ -861,10 +839,316 @@ fun HistoryScreen(
     }
 }
 
+@OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
+@Composable
+private fun TreeEventBlock(
+    event: TimelineEvent,
+    isSelected: Boolean,
+    zoom: Float,
+    onClick: () -> Unit,
+    onLongClick: () -> Unit
+) {
+    val actionColor = getActionColor(event.actionType)
+    val isPrimary = isPrimaryAction(event.actionType)
+    
+    Surface(
+        modifier = Modifier
+            .fillMaxWidth()
+            .combinedClickable(
+                onClick = onClick,
+                onLongClick = onLongClick
+            )
+            .border(
+                width = if (isSelected) 2.dp else 0.dp,
+                color = if (isSelected) ClaudeAccent else Color.Transparent,
+                shape = RoundedCornerShape(4.dp)
+            ),
+        shape = RoundedCornerShape(4.dp),
+        color = if (isPrimary) actionColor.copy(alpha = 0.2f) else Color(0xFF2A2A2A)
+    ) {
+        Box(
+            modifier = Modifier.padding(4.dp),
+            contentAlignment = Alignment.Center
+        ) {
+            Text(
+                event.actionType.take(3),
+                fontSize = (10 * zoom).sp,
+                color = if (isPrimary) actionColor else ActionColors.SECONDARY,
+                fontWeight = if (isPrimary) FontWeight.Bold else FontWeight.Normal
+            )
+        }
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// DIALOGS
+// ═══════════════════════════════════════════════════════════════════════════
+
+@Composable
+private fun BranchPickerDialog(
+    branches: List<TimelineBranch>,
+    activeBranchId: Long,
+    onSelect: (TimelineBranch) -> Unit,
+    onDismiss: () -> Unit
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Tarix tarmog'ini tanlang") },
+        text = {
+            LazyColumn {
+                itemsIndexed(branches) { index, branch ->
+                    val branchColor = BRANCH_COLORS[index % BRANCH_COLORS.size]
+                    val isActive = branch.id == activeBranchId
+                    
+                    Surface(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(vertical = 4.dp)
+                            .clickable { onSelect(branch) },
+                        shape = RoundedCornerShape(8.dp),
+                        color = branchColor.copy(alpha = if (isActive) 0.3f else 0.1f),
+                        border = if (isActive) 
+                            androidx.compose.foundation.BorderStroke(2.dp, branchColor) 
+                        else null
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(12.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            if (isActive) {
+                                Icon(
+                                    Icons.Default.Check, 
+                                    null, 
+                                    tint = branchColor,
+                                    modifier = Modifier.size(20.dp)
+                                )
+                                Spacer(Modifier.width(8.dp))
+                            }
+                            Text(
+                                branch.name,
+                                color = if (isActive) branchColor else ClaudeText,
+                                fontWeight = if (isActive) FontWeight.Bold else FontWeight.Normal
+                            )
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = onDismiss) { Text("Yopish") }
+        }
+    )
+}
+
+@Composable
+private fun CreateBranchDialog(
+    branchName: String,
+    onBranchNameChange: (String) -> Unit,
+    selectedEvent: TimelineEvent,
+    branches: List<TimelineBranch>,
+    onConfirm: () -> Unit,
+    onDismiss: () -> Unit
+) {
+    val newColor = BRANCH_COLORS[branches.size % BRANCH_COLORS.size]
+    
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Yangi tarmoq yaratish") },
+        text = {
+            Column {
+                // Color preview
+                Surface(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(8.dp),
+                    color = newColor,
+                    shape = RoundedCornerShape(4.dp)
+                ) {}
+                
+                Spacer(Modifier.height(16.dp))
+                
+                Text(
+                    "Tarmoq boshlanish nuqtasi:",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = ClaudeTextSecondary
+                )
+                Text(
+                    selectedEvent.title,
+                    style = MaterialTheme.typography.bodyMedium,
+                    fontWeight = FontWeight.Medium
+                )
+                
+                Spacer(Modifier.height(16.dp))
+                
+                OutlinedTextField(
+                    value = branchName,
+                    onValueChange = onBranchNameChange,
+                    label = { Text("Tarmoq nomi") },
+                    modifier = Modifier.fillMaxWidth(),
+                    singleLine = true
+                )
+            }
+        },
+        confirmButton = {
+            TextButton(
+                onClick = onConfirm,
+                enabled = branchName.isNotBlank()
+            ) { 
+                Text("Yaratish") 
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) { Text("Bekor") }
+        }
+    )
+}
+
+@Composable
+private fun EventDetailDialog(
+    event: TimelineEvent,
+    formatter: SimpleDateFormat,
+    onDismiss: () -> Unit
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(event.title) },
+        text = {
+            Column {
+                DetailRow("Vaqt", formatter.format(Date(event.timestamp)))
+                DetailRow("Harakat", event.actionType)
+                DetailRow("Sahifa", event.screen)
+                event.entityType?.let { DetailRow("Ob'ekt turi", it) }
+                event.entityId?.let { DetailRow("Ob'ekt ID", it) }
+                event.payloadJson?.let { payload ->
+                    if (payload.isNotBlank() && payload != "null") {
+                        Spacer(Modifier.height(8.dp))
+                        Text("Ma'lumotlar:", style = MaterialTheme.typography.labelSmall, color = ClaudeTextSecondary)
+                        Surface(
+                            modifier = Modifier.fillMaxWidth(),
+                            color = Color(0xFF1A1A1A),
+                            shape = RoundedCornerShape(4.dp)
+                        ) {
+                            Text(
+                                payload,
+                                modifier = Modifier.padding(8.dp),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = ClaudeText,
+                                fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace
+                            )
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = onDismiss) { Text("Yopish") }
+        }
+    )
+}
+
+@Composable
+private fun FiltersDialog(
+    filterEntityType: String?,
+    filterActionType: String?,
+    filterMoneyOnly: Boolean,
+    onEntityTypeChange: (String?) -> Unit,
+    onActionTypeChange: (String?) -> Unit,
+    onMoneyOnlyChange: (Boolean) -> Unit,
+    onClear: () -> Unit,
+    onDismiss: () -> Unit
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Filtrlar") },
+        text = {
+            Column {
+                Text("Ob'ekt turi:", style = MaterialTheme.typography.labelSmall)
+                Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                    listOf("RENTER", "CONTRACT", "CARD", "SCOOTER").forEach { type ->
+                        FilterChip(
+                            selected = filterEntityType == type,
+                            onClick = { 
+                                onEntityTypeChange(if (filterEntityType == type) null else type) 
+                            },
+                            label = { Text(type, fontSize = 10.sp) }
+                        )
+                    }
+                }
+                
+                Spacer(Modifier.height(12.dp))
+                
+                Text("Harakat turi:", style = MaterialTheme.typography.labelSmall)
+                Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                    listOf("CREATE", "EDIT", "DELETE").forEach { type ->
+                        FilterChip(
+                            selected = filterActionType == type,
+                            onClick = { 
+                                onActionTypeChange(if (filterActionType == type) null else type) 
+                            },
+                            label = { Text(type, fontSize = 10.sp) }
+                        )
+                    }
+                }
+                
+                Spacer(Modifier.height(12.dp))
+                
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Checkbox(
+                        checked = filterMoneyOnly,
+                        onCheckedChange = onMoneyOnlyChange
+                    )
+                    Text("Faqat pul operatsiyalari")
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = onDismiss) { Text("Qo'llash") }
+        },
+        dismissButton = {
+            TextButton(onClick = onClear) { Text("Tozalash") }
+        }
+    )
+}
+
 @Composable
 private fun DetailRow(label: String, value: String) {
-    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-        Text(label, style = MaterialTheme.typography.labelMedium, color = ClaudeTextSecondary)
-        Text(value, style = MaterialTheme.typography.bodyMedium, color = ClaudeText, fontWeight = FontWeight.SemiBold)
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 2.dp)
+    ) {
+        Text(
+            "$label: ",
+            style = MaterialTheme.typography.labelSmall,
+            color = ClaudeTextSecondary
+        )
+        Text(
+            value,
+            style = MaterialTheme.typography.bodySmall,
+            color = ClaudeText
+        )
     }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// UTILITY FUNCTIONS
+// ═══════════════════════════════════════════════════════════════════════════
+
+private fun getActionColor(actionType: String): Color {
+    val upper = actionType.uppercase()
+    return when {
+        upper.contains("CREATE") || upper.contains("INSERT") || upper.contains("ADD") -> ActionColors.CREATE
+        upper.contains("DELETE") || upper.contains("REMOVE") -> ActionColors.DELETE
+        upper.contains("EDIT") || upper.contains("UPDATE") || upper.contains("MODIFY") -> ActionColors.EDIT
+        upper.contains("PAYMENT") || upper.contains("PAY") -> ActionColors.CREATE
+        upper.contains("TERMINATE") || upper.contains("CANCEL") -> ActionColors.DELETE
+        else -> ActionColors.SECONDARY
+    }
+}
+
+private fun isPrimaryAction(actionType: String): Boolean {
+    val upper = actionType.uppercase()
+    return upper.contains("CREATE") || upper.contains("DELETE") || upper.contains("EDIT") ||
+           upper.contains("UPDATE") || upper.contains("INSERT") || upper.contains("REMOVE") ||
+           upper.contains("PAYMENT") || upper.contains("TRANSFER") || upper.contains("TERMINATE")
 }
