@@ -153,68 +153,78 @@ fun LauncherScreen(
     val scope = rememberCoroutineScope()
     val density = LocalDensity.current
 
-    // Collapse progress: 0f = fully expanded (grid visible), 1f = collapsed (only dock).
+    // ── Continuous curtain progress ────────────────────────────────────
+    // 0f   = fully expanded (grid + title + dots visible)
+    // 0.5f = half-collapsed (grid partially slid down, dock still visible)
+    // 1f   = fully collapsed (only dock visible)
+    //
+    // User can drag anywhere on the upper region to move the curtain. On
+    // release, the curtain snaps to the nearest of {0, 0.5, 1}. The dock
+    // stays anchored at the bottom — it never moves.
     val collapseProgress = remember { Animatable(0f) }
+    var dragProgress by remember { mutableStateOf<Float?>(null) }  // non-null while dragging
     var gridHeightPx by remember { mutableStateOf(1) }
 
-    fun collapse() {
+    val effectiveProgress = dragProgress ?: collapseProgress.value
+
+    fun snapTo(target: Float) {
         scope.launch {
-            collapseProgress.animateTo(1f, tween(280))
-            // The former implementation only hid the grid inside the full
-            // launcher surface, leaving its wallpaper on top of MainScreen.
-            // After the curtain animation, reveal the actual working page.
-            onCollapseToMain()
-        }
-    }
-    fun expand() {
-        scope.launch {
-            collapseProgress.animateTo(0f, tween(280))
+            collapseProgress.animateTo(target, tween(280))
+            if (target >= 0.95f) onCollapseToMain()
         }
     }
 
     Box(
         modifier = Modifier
             .fillMaxSize()
-            // Same neutral background as working pages. Its alpha follows
-            // curtain collapse so the already-composed renters page appears
-            // progressively behind the moving launcher icons.
-            .background(ClaudeBackground.copy(alpha = 1f - collapseProgress.value))
+            .background(ClaudeBackground.copy(alpha = 1f - effectiveProgress))
     ) {
 
         // ── Upper region: title + grid + page dots ───────────────────────
-        // This entire region slides DOWN off-screen as collapseProgress → 1.
-        // translate Y by gridHeightPx * collapseProgress + a bit extra so it
-        // fully disappears under the dock.
         Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .fillMaxHeight(0.82f)  // leave 18% for dock at bottom
+                .fillMaxHeight(0.82f)
                 .onGloballyPositioned { coords ->
                     gridHeightPx = coords.size.height.coerceAtLeast(1)
                 }
                 .offset {
-                    val shift = (gridHeightPx * collapseProgress.value).toInt() +
+                    val shift = (gridHeightPx * effectiveProgress).toInt() +
                         (with(density) { 80.dp.toPx() }).toInt()
                     IntOffset(0, shift)
                 }
-                // Swipe down anywhere on the grid → collapse.
                 .pointerInput(Unit) {
                     detectVerticalDragGestures(
+                        onDragStart = { dragProgress = effectiveProgress },
+                        onDragEnd = {
+                            val p = dragProgress
+                            dragProgress = null
+                            if (p != null) {
+                                // Snap to nearest of {0, 0.5, 1}
+                                val target = when {
+                                    p < 0.25f -> 0f
+                                    p < 0.75f -> 0.5f
+                                    else -> 1f
+                                }
+                                snapTo(target)
+                            }
+                        },
+                        onDragCancel = {
+                            dragProgress = null
+                        },
                         onVerticalDrag = { change, dragAmount ->
                             change.consume()
-                            // dragAmount > 0 = finger moving down → collapse
-                            if (dragAmount > 6f && collapseProgress.value < 0.5f) {
-                                collapse()
-                            } else if (dragAmount < -6f && collapseProgress.value > 0.5f) {
-                                expand()
-                            }
+                            val delta = dragAmount / gridHeightPx.coerceAtLeast(1)
+                            val newProgress = (effectiveProgress + delta).coerceIn(0f, 1f)
+                            dragProgress = newProgress
+                            // Live-update animatable so non-drag state is in sync
+                            scope.launch { collapseProgress.snapTo(newProgress) }
                         }
                     )
                 }
                 .padding(top = 56.dp, start = 16.dp, end = 16.dp),
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
-            // ── Title at top (like MIUI clock + date) ─────────────────────
             Text(
                 "Scooter Rent",
                 style = MaterialTheme.typography.headlineMedium,
@@ -232,8 +242,6 @@ fun LauncherScreen(
 
             Spacer(Modifier.height(40.dp))
 
-            // ── Grid of all pages (4 columns × 2 rows = 8 items) ─────────
-            // Using Column{Row,Row} for a stable 4×2 layout (pages.count = 8).
             val rows = pages.chunked(4)
             rows.forEach { rowPages ->
                 Row(
@@ -253,7 +261,6 @@ fun LauncherScreen(
 
             Spacer(Modifier.weight(1f))
 
-            // ── Page indicator dots (always 1 active = 4 dots, page 1 of 1) ──
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -276,24 +283,35 @@ fun LauncherScreen(
         }
 
         // ── Bottom dock (4 main pages, always visible) ───────────────────
-        // Same background as the launcher grid; only a subtle divider makes
-        // it a dock. This avoids a visually unrelated dark lower panel.
+        // Stays anchored at the bottom regardless of curtain progress.
         Box(
             modifier = Modifier
                 .align(Alignment.BottomCenter)
                 .fillMaxWidth()
                 .height(106.dp)
-                .background(ClaudeCard.copy(alpha = 1f - collapseProgress.value * 0.15f))
-                .pointerInput(collapseProgress.value) {
+                .background(ClaudeCard.copy(alpha = 1f - effectiveProgress * 0.15f))
+                .pointerInput(effectiveProgress) {
                     detectVerticalDragGestures(
+                        onDragStart = { dragProgress = effectiveProgress },
+                        onDragEnd = {
+                            val p = dragProgress
+                            dragProgress = null
+                            if (p != null) {
+                                val target = when {
+                                    p < 0.25f -> 0f
+                                    p < 0.75f -> 0.5f
+                                    else -> 1f
+                                }
+                                snapTo(target)
+                            }
+                        },
+                        onDragCancel = { dragProgress = null },
                         onVerticalDrag = { change, dragAmount ->
                             change.consume()
-                            // dragAmount < 0 = finger moving up → expand
-                            if (dragAmount < -6f && collapseProgress.value > 0.5f) {
-                                expand()
-                            } else if (dragAmount > 6f && collapseProgress.value < 0.5f) {
-                                collapse()
-                            }
+                            val delta = dragAmount / gridHeightPx.coerceAtLeast(1)
+                            val newProgress = (effectiveProgress + delta).coerceIn(0f, 1f)
+                            dragProgress = newProgress
+                            scope.launch { collapseProgress.snapTo(newProgress) }
                         }
                     )
                 }

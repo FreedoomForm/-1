@@ -3273,11 +3273,15 @@ fun RenterFormDialog(
                 var showRepairConfirmDialog by remember { mutableStateOf(false) }
                 var repairEndDate by remember { mutableStateOf<Long?>(null) }
                 
-                // Repair period confirmation dialog
+                // Repair period confirmation dialog.
+                // Creates a real RentPeriod with STATUS_REPAIR_BREAK — the renter
+                // keeps the scooter but pays no rental charge for this interval.
+                // Used when the scooter is in accident repair (renter fixes it
+                // themselves) or when we send our own scooters to the shop.
                 if (showRepairConfirmDialog && repairStartDate != null && initialRenter != null) {
                     val dateFmt = remember { java.text.SimpleDateFormat("dd.MM.yyyy", java.util.Locale.getDefault()) }
                     AlertDialog(
-                        onDismissRequest = { 
+                        onDismissRequest = {
                             showRepairConfirmDialog = false
                             repairStartDate = null
                             repairEndDate = null
@@ -3286,6 +3290,7 @@ fun RenterFormDialog(
                         text = {
                             Column {
                                 Text("Bu davr uchun ijara to'lovi olinmaydi.")
+                                Text("Skuter shu ijarachi-da qoladi, faqat to'lov to'xtatiladi.")
                                 Spacer(Modifier.height(8.dp))
                                 Text(
                                     "Davr: ${dateFmt.format(java.util.Date(repairStartDate!!))} - ${dateFmt.format(java.util.Date(repairEndDate ?: repairStartDate!!))}",
@@ -3296,8 +3301,39 @@ fun RenterFormDialog(
                         confirmButton = {
                             TextButton(
                                 onClick = {
-                                    // Create repair period via ViewModel
-                                    // This would need viewModel reference
+                                    val renterId = initialRenter!!.id
+                                    val scooterId = initialRenter.scooterId
+                                    val startMs = repairStartDate!!
+                                    val endMs = repairEndDate ?: (startMs + 24L * 60 * 60 * 1000)
+                                    val appCtx = localContext
+                                    kotlinx.coroutines.MainScope().launch {
+                                        kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                                            val db = com.example.data.AppDatabase.getDatabase(appCtx)
+                                            // Find the renter's currently active or scheduled period
+                                            // to use as the parent (so the repair break is linked).
+                                            val parent = db.rentPeriodDao()
+                                                .getAllForRenter(renterId)
+                                                .firstOrNull {
+                                                    it.status in com.example.data.RentPeriod.ACTIVE_STATUSES &&
+                                                    it.startsAt <= startMs && it.endsAt >= endMs
+                                                }
+                                            val repairPeriod = com.example.data.RentPeriod(
+                                                renterId = renterId,
+                                                scooterId = scooterId,
+                                                startsAt = startMs,
+                                                endsAt = endMs,
+                                                chargeMinor = 0L,
+                                                paidMinor = 0L,
+                                                status = com.example.data.RentPeriod.STATUS_REPAIR_BREAK,
+                                                parentPeriodId = parent?.id,
+                                                suspensionReason = "Ta'mir davri (foydalanuvchi tomonidan yaratilgan)"
+                                            )
+                                            db.rentPeriodDao().insert(repairPeriod)
+                                            // Refresh existingPeriods so the calendar shows the
+                                            // new repair-break block immediately (orange tint).
+                                            existingPeriods = db.rentPeriodDao().getAllForRenter(renterId)
+                                        }
+                                    }
                                     showRepairConfirmDialog = false
                                     repairStartDate = null
                                     repairEndDate = null
@@ -3773,9 +3809,9 @@ fun SettingsScreen(
 
     // ── Автосохранение — поля сохраняются автоматически при изменении,
     // отдельные кнопки «Saqla» больше не нужны (форма живая).
-    LaunchedEffect(template, weekly, monthly, paymeLink, callCenter, scooterPriceUsd, usdToUzsRate) {
-        val wPrice = weekly.toDoubleOrNull() ?: 0.0
-        val mPrice = monthly.toDoubleOrNull() ?: 0.0
+    LaunchedEffect(template, dailyPrice, paymeLink, callCenter, scooterPriceUsd, usdToUzsRate) {
+        val dPrice = dailyPrice.toDoubleOrNull()
+            ?: com.example.data.SettingsRepository.DEFAULT_DAILY_PRICE
         settingsRepo.paymeLink = paymeLink.trim().ifBlank {
             com.example.data.SettingsRepository.DEFAULT_PAYME_LINK
         }
@@ -3787,7 +3823,9 @@ fun SettingsScreen(
             ?: com.example.data.SettingsRepository.DEFAULT_SCOOTER_PRICE_USD
         settingsRepo.usdToUzsRate = usdToUzsRate.toDoubleOrNull()
             ?: com.example.data.SettingsRepository.DEFAULT_USD_TO_UZS_RATE
-        onSave(template, wPrice, mPrice, paymeLink, callCenter)
+        // Передаём daily × 7 / daily × 30 в onSave для совместимости со
+        // старым API (SettingsViewModel.updatePrices(weekly, monthly)).
+        onSave(template, dPrice * 7, dPrice * 30, paymeLink, callCenter)
     }
 
     // ── Storage Access Framework launchers для экспорта/импорта Excel ────
