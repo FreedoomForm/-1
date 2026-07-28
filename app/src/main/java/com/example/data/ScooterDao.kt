@@ -59,6 +59,9 @@ interface ScooterDao {
     @androidx.room.Delete
     suspend fun deleteScooter(scooter: Scooter)
 
+    @Query("DELETE FROM scooters WHERE id = :id")
+    suspend fun deleteScooterById(id: Int)
+
     @Query("DELETE FROM scooters")
     suspend fun deleteAll()
 }

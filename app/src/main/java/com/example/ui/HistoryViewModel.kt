@@ -60,6 +60,44 @@ class HistoryViewModel(application: Application) : AndroidViewModel(application)
     }
 
     /**
+     * Restores (un-archives) a single timeline event AND records a RESTORE
+     * audit event. Used by the "Вернуть объект" button next to the branch
+     * name on the history screen.
+     */
+    fun unarchiveSelected(event: TimelineEvent) {
+        viewModelScope.launch { service.unarchiveEvent(event) }
+    }
+
+    /**
+     * Permanently deletes the timeline event AND — if the event is a
+     * DELETE-type timecode referencing a renter or scooter — also deletes
+     * that referenced entity. Returns true if the entity was deleted
+     * (false if only the event was).
+     */
+    suspend fun permanentlyDeleteReferencedObject(event: TimelineEvent): Boolean =
+        service.permanentlyDeleteReferencedObject(event)
+
+    /**
+     * Renames an existing branch. Used by the universal ✎ button when a
+     * block from a non-main branch is selected on the history tree.
+     */
+    fun renameBranch(branchId: Long, newName: String) {
+        viewModelScope.launch { service.renameBranch(branchId, newName) }
+    }
+
+    /**
+     * Permanently deletes a non-main branch and all its events. Used by
+     * the universal 🗑 button when a block from a non-main branch is
+     * selected on the history tree.
+     */
+    fun deleteBranch(branchId: Long) {
+        viewModelScope.launch { service.deleteBranch(branchId) }
+    }
+
+    /** Snapshot lookup for "Вернуться в это время" — exposes the active branch id. */
+    fun activeBranchIdValue(): Long = _activeBranchId.value
+
+    /**
      * Safe restore: never erases financial facts. Records a RESTORE event
      * referencing the nearest snapshot before/at [timestamp]. The snapshot's
      * stateJson can be read by the UI to render a historical frame.

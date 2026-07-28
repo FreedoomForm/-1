@@ -21,8 +21,10 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalDensity
@@ -105,6 +107,7 @@ fun HistoryScreen(
     var showDetail by remember { mutableStateOf(false) }
     var showFilters by remember { mutableStateOf(false) }
     var showRestoreDialog by remember { mutableStateOf(false) }
+    var showUnarchiveConfirm by remember { mutableStateOf(false) }
     var showDateRangePicker by remember { mutableStateOf(false) }
     val dateRangePickerState = rememberDateRangePickerState()
 
@@ -112,9 +115,19 @@ fun HistoryScreen(
     var restoreReason by remember { mutableStateOf("") }
     var timelinePosition by remember { mutableStateOf(0f) }
     var treeZoom by remember { mutableStateOf(1f) }
+    // Universal visual zoom for TABLE and VISUAL modes (graphicsLayer scale).
+    // Driven by pinch gesture; resets to 1f on tap.
+    var universalZoom by remember { mutableStateOf(1f) }
+    var universalPanX by remember { mutableStateOf(0f) }
+    var universalPanY by remember { mutableStateOf(0f) }
 
+    // Multi-select action-type filter — all 3 ON by default so user sees
+    // every primary timecode. Each chip toggles membership; long-press
+    // solos that type (sets the set to just that one element).
+    var filterActionTypes by remember {
+        mutableStateOf(setOf("CREATE", "EDIT", "DELETE"))
+    }
     var filterEntityType by remember { mutableStateOf<String?>(null) }
-    var filterActionType by remember { mutableStateOf<String?>(null) }
     var filterMoneyOnly by remember { mutableStateOf(false) }
     var filterStartMs by remember { mutableStateOf<Long?>(null) }
     var filterEndMs by remember { mutableStateOf<Long?>(null) }
@@ -129,10 +142,32 @@ fun HistoryScreen(
     val chronological = remember(events) { events.sortedBy { it.timestamp } }
     val selected = selectedEventId?.let { id -> events.firstOrNull { it.id == id } }
 
-    val filteredEvents = remember(chronological, filterEntityType, filterActionType, filterMoneyOnly, filterStartMs, filterEndMs, filterSearchText) {
+    val filteredEvents = remember(chronological, filterActionTypes, filterEntityType, filterMoneyOnly, filterStartMs, filterEndMs, filterSearchText) {
         chronological.filter { ev ->
+            val upperAction = ev.actionType.uppercase()
+            // Multi-select action-type filter. A primary timecode matches a
+            // selected type when its actionType contains CREATE/EDIT/DELETE
+            // substring. Secondary actions (no CREATE/EDIT/DELETE in the
+            // actionType) are shown only if ALL three types are enabled
+            // (i.e. no filter applied). When the user has disabled at least
+            // one type, only matching primary timecodes are shown.
+            val typeMatch = when {
+                // All 3 ON → show everything (no type filter active)
+                filterActionTypes.size == 3 -> true
+                // None ON → show nothing (user disabled all)
+                filterActionTypes.isEmpty() -> false
+                // Otherwise: a primary action must match one of the enabled types
+                else -> {
+                    val isCreate = upperAction.contains("CREATE") || upperAction.contains("INSERT") || upperAction.contains("ADD") || upperAction.contains("PAYMENT")
+                    val isEdit = upperAction.contains("EDIT") || upperAction.contains("UPDATE") || upperAction.contains("MODIFY")
+                    val isDelete = upperAction.contains("DELETE") || upperAction.contains("REMOVE") || upperAction.contains("TERMINATE") || upperAction.contains("CANCEL")
+                    (isCreate && "CREATE" in filterActionTypes) ||
+                    (isEdit && "EDIT" in filterActionTypes) ||
+                    (isDelete && "DELETE" in filterActionTypes)
+                }
+            }
+            typeMatch &&
             (filterEntityType == null || ev.entityType == filterEntityType) &&
-            (filterActionType == null || ev.actionType.contains(filterActionType!!, ignoreCase = true)) &&
             (filterStartMs?.let { ev.timestamp >= it } ?: true) &&
             (filterEndMs?.let { ev.timestamp <= it } ?: true) &&
             (filterSearchText.isBlank() ||
@@ -188,22 +223,63 @@ fun HistoryScreen(
         )
     }
 
+    // ── Filter side panel (sliding in from the right — same UX as the
+    // renters page). Contains 3 toggle chips for the primary timecode
+    // types (CREATE/EDIT/DELETE) with long-press to solo one type, plus
+    // a date-range summary so user can see the active calendar filter.
     if (showFilters) {
-        FiltersDialog(
+        HistoryFilterSidePanel(
+            filterActionTypes = filterActionTypes,
+            onActionTypesChange = { filterActionTypes = it },
             filterEntityType = filterEntityType,
-            filterActionType = filterActionType,
-            filterMoneyOnly = filterMoneyOnly,
             onEntityTypeChange = { filterEntityType = it },
-            onActionTypeChange = { filterActionType = it },
-            onMoneyOnlyChange = { filterMoneyOnly = it },
-            onClear = {
-                filterEntityType = null
-                filterActionType = null
-                filterMoneyOnly = false
+            filterStartMs = filterStartMs,
+            filterEndMs = filterEndMs,
+            onClearDateRange = {
                 filterStartMs = null
                 filterEndMs = null
+                dateRangePickerState.setSelection(null, null)
             },
-            onDismiss = { showFilters = false }
+            onReset = {
+                filterActionTypes = setOf("CREATE", "EDIT", "DELETE")
+                filterEntityType = null
+                filterStartMs = null
+                filterEndMs = null
+                filterSearchText = ""
+                dateRangePickerState.setSelection(null, null)
+            },
+            onDismiss = { showFilters = false },
+            formatter = formatter
+        )
+    }
+
+    // ── Unarchive confirmation — used by the "Вернуть объект" button next
+    // to the branch name. Asks the user to confirm restoring the object
+    // referenced by the selected event.
+    if (showUnarchiveConfirm && selected != null) {
+        AlertDialog(
+            onDismissRequest = { showUnarchiveConfirm = false },
+            title = { Text("Ob'ektni qaytarish") },
+            text = {
+                Column {
+                    Text("Tanlangan voqea: ${selected.title}")
+                    Spacer(Modifier.height(4.dp))
+                    Text(
+                        "Bu amal voqeani arxivdan chiqaradi va audit izda RESTORE_OBJECT yozuvi qo'shadi.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = ClaudeTextSecondary
+                    )
+                }
+            },
+            confirmButton = {
+                Button(onClick = {
+                    scope.launch { viewModel.unarchiveSelected(selected) }
+                    showUnarchiveConfirm = false
+                }) { Text("Qaytarish") }
+            },
+            dismissButton = {
+                TextButton(onClick = { showUnarchiveConfirm = false }) { Text("Bekor") }
+            }
         )
     }
 
@@ -263,13 +339,17 @@ fun HistoryScreen(
             placeholder = "Tarixda qidirish...",
             modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
             onFilterClick = { showFilters = true },
-            filterActive = filterEntityType != null || filterActionType != null || filterMoneyOnly,
+            filterActive = filterActionTypes.size != 3 || filterEntityType != null,
             onCalendarClick = { showDateRangePicker = true },
             calendarActive = filterStartMs != null || filterEndMs != null
         )
 
         // Action row with view mode toggle + branch picker on the left,
-        // restore / unarchive buttons on the right.
+        // PLUS two secondary buttons next to the branch name:
+        //   • "Qaytish" (вернуться в это время) — opens RestoreToSnapshotDialog
+        //   • "Objekt qaytarish" (вернуть объект) — opens unarchive confirm
+        // These sit immediately after the branch-name chip so the user
+        // sees them as branch-level actions, not list-level actions.
         Row(
             modifier = Modifier
                 .fillMaxWidth()
@@ -325,46 +405,39 @@ fun HistoryScreen(
                 }
             }
 
-            Spacer(Modifier.weight(1f))
-
-            // ── Secondary buttons (right side) ────────────────────────────
-            // "Qaytish" (return / restore-to-snapshot) — visible only when
-            // an event is selected. Same for "Objekt qaytarish" (unarchive).
-            // Both are styled identically to the renters secondary row:
-            // circular outlined icon buttons with the same 40.dp size.
+            // ── Secondary buttons — IMMEDIATELY after branch name ──────
+            // Both visible only when an event is selected. They are the
+            // user's "вернуться в это время" and "вернуть объект" actions
+            // tied to the currently-selected timecode.
             if (selected != null) {
-                // Restore-to-snapshot — jumps the timeline back to the
-                // selected event's timestamp.
+                // "Qaytish" — вернуться в это время: creates a NEW BRANCH
+                // starting at the selected event's timestamp. This lets
+                // the user "fork" history at this point (e.g., to try a
+                // different action instead of a deletion).
                 IconButton(
-                    onClick = { showRestoreDialog = true },
+                    onClick = { showBranchCreate = true },
                     modifier = Modifier
-                        .size(40.dp)
+                        .size(36.dp)
                         .background(Color.White, CircleShape)
                         .border(1.dp, ClaudeDivider, CircleShape)
                 ) {
                     Icon(
                         Icons.Default.Restore,
-                        contentDescription = "Qaytish",
+                        contentDescription = "Bu vaqtga qaytish",
                         tint = StatusInfo,
-                        modifier = Modifier.size(20.dp)
+                        modifier = Modifier.size(18.dp)
                     )
                 }
 
-                // Unarchive the entity referenced by the selected event —
-                // records a RESTORE action so the financial audit trail
-                // stays intact. Disabled if the event has no entity ref.
+                // "Objekt qaytarish" — вернуть объект: unarchives the event
+                // AND records a RESTORE_OBJECT audit entry so the financial
+                // trail stays intact. Disabled if event has no entity ref.
                 val canUnarchive = selected.entityId != null
                 IconButton(
-                    onClick = {
-                        selected.entityId?.let { entityId ->
-                            scope.launch {
-                                viewModel.archiveSelected(selected, reason = "Manual unarchive from history")
-                            }
-                        }
-                    },
+                    onClick = { if (canUnarchive) showUnarchiveConfirm = true },
                     enabled = canUnarchive,
                     modifier = Modifier
-                        .size(40.dp)
+                        .size(36.dp)
                         .background(
                             if (canUnarchive) Color.White else Color.White.copy(alpha = 0.5f),
                             CircleShape
@@ -373,54 +446,115 @@ fun HistoryScreen(
                 ) {
                     Icon(
                         Icons.Default.Unarchive,
-                        contentDescription = "Objekt qaytarish",
+                        contentDescription = "Ob'ektni qaytarish",
                         tint = if (canUnarchive) StatusOk else ClaudeTextSecondary,
-                        modifier = Modifier.size(20.dp)
+                        modifier = Modifier.size(18.dp)
                     )
                 }
             }
+
+            Spacer(Modifier.weight(1f))
         }
 
         // (Header "Tarix — N ta voqea" + selection badge intentionally removed
         //  per user request — they were visual clutter above the list.)
 
-        // Content based on view mode
-        when (viewMode) {
-            HistoryViewMode.TABLE -> TableView(
-                events = filteredEvents,
-                selectedEventId = selectedEventId,
-                onEventClick = { onSelectedEventChange(it.id) },
-                onEventLongClick = { onSelectedEventChange(it.id); showDetail = true },
-                formatter = formatter
-            )
+        // Content area — wrapped in a pinch-to-zoom container so the user
+        // can scale the scene with two fingers in ANY view mode (TABLE,
+        // VISUAL, or TREE). TREE mode additionally uses the pinch value to
+        // drive block granularity (day/hour/15min); TABLE and VISUAL apply
+        // the zoom as a graphicsLayer scale (true visual zoom + pan).
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .clipToBounds()
+                .pointerInput(Unit) {
+                    detectTransformGestures { _, pan, zoomChange, _ ->
+                        universalZoom = (universalZoom * zoomChange).coerceIn(0.5f, 3f)
+                        universalPanX += pan.x
+                        universalPanY += pan.y
+                        // TREE mode also feeds the zoom into the layout-driving
+                        // treeZoom so block granularity + column widths change.
+                        if (viewMode == HistoryViewMode.TREE) {
+                            treeZoom = (treeZoom * zoomChange).coerceIn(0.3f, 3f)
+                        }
+                    }
+                }
+                .graphicsLayer(
+                    scaleX = if (viewMode == HistoryViewMode.TREE) 1f else universalZoom,
+                    scaleY = if (viewMode == HistoryViewMode.TREE) 1f else universalZoom,
+                    translationX = if (viewMode == HistoryViewMode.TREE) 0f else universalPanX,
+                    translationY = if (viewMode == HistoryViewMode.TREE) 0f else universalPanY
+                )
+        ) {
+            when (viewMode) {
+                HistoryViewMode.TABLE -> TableView(
+                    events = filteredEvents,
+                    selectedEventId = selectedEventId,
+                    onEventClick = { onSelectedEventChange(it.id) },
+                    onEventLongClick = { onSelectedEventChange(it.id); showDetail = true },
+                    formatter = formatter
+                )
 
-            HistoryViewMode.VISUAL -> VisualTimelineView(
-                events = filteredEvents,
-                selectedEventId = selectedEventId,
-                branches = branches,
-                branchSliders = branchSliders,
-                timelinePosition = timelinePosition,
-                onPositionChange = { timelinePosition = it },
-                onEventClick = { onSelectedEventChange(it.id) },
-                formatter = formatter,
-                timeOnlyFmt = timeOnlyFmt
-            )
+                HistoryViewMode.VISUAL -> VisualTimelineView(
+                    events = filteredEvents,
+                    selectedEventId = selectedEventId,
+                    branches = branches,
+                    branchSliders = branchSliders,
+                    timelinePosition = timelinePosition,
+                    onPositionChange = { timelinePosition = it },
+                    onEventClick = { onSelectedEventChange(it.id) },
+                    formatter = formatter,
+                    timeOnlyFmt = timeOnlyFmt
+                )
 
-            HistoryViewMode.TREE -> TreeView(
-                events = filteredEvents,
-                branches = branches,
-                activeBranchId = activeBranchId,
-                selectedEventId = selectedEventId,
-                zoom = treeZoom,
-                onZoomChange = { treeZoom = it },
-                onEventClick = { onSelectedEventChange(it.id) },
-                onCreateBranch = { event ->
-                    onSelectedEventChange(event.id)
-                    showBranchCreate = true
-                },
-                formatter = formatter,
-                dateOnlyFmt = dateOnlyFmt
-            )
+                HistoryViewMode.TREE -> TreeView(
+                    events = filteredEvents,
+                    branches = branches,
+                    activeBranchId = activeBranchId,
+                    selectedEventId = selectedEventId,
+                    zoom = treeZoom,
+                    onZoomChange = { treeZoom = it },
+                    onEventClick = { onSelectedEventChange(it.id) },
+                    onCreateBranch = { event ->
+                        onSelectedEventChange(event.id)
+                        showBranchCreate = true
+                    },
+                    formatter = formatter,
+                    dateOnlyFmt = dateOnlyFmt
+                )
+            }
+
+            // Zoom indicator chip — bottom-end. Shows current zoom %.
+            // Double-tap to reset.
+            val zoomPct = if (viewMode == HistoryViewMode.TREE) treeZoom else universalZoom
+            if (zoomPct != 1f) {
+                Surface(
+                    modifier = Modifier
+                        .align(Alignment.BottomEnd)
+                        .padding(16.dp)
+                        .combinedClickable(
+                            onClick = {},
+                            onLongClick = {
+                                universalZoom = 1f
+                                universalPanX = 0f
+                                universalPanY = 0f
+                                treeZoom = 1f
+                            }
+                        ),
+                    shape = RoundedCornerShape(12.dp),
+                    color = ClaudeCard,
+                    border = androidx.compose.foundation.BorderStroke(1.dp, ClaudeDivider)
+                ) {
+                    Text(
+                        "${(zoomPct * 100).toInt()}%",
+                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = ClaudeAccent,
+                        fontWeight = FontWeight.Bold
+                    )
+                }
+            }
         }
     }
 }
@@ -813,14 +947,14 @@ private fun TreeView(
 
     val entityColumns = listOf("RENTER", "CONTRACT", "TRANSACTION", "CARD", "SCOOTER")
 
+    // IMPORTANT: explicit ClaudeBackground on the outer Box. Without this
+    // the empty space around the LazyColumns shows through to whatever
+    // surface is behind (often the window background = black), which is
+    // why the user saw "the tree has a black background".
     Box(
         modifier = Modifier
             .fillMaxSize()
-            .pointerInput(Unit) {
-                detectTransformGestures { _, _, zoomChange, _ ->
-                    onZoomChange((zoom * zoomChange).coerceIn(0.3f, 3f))
-                }
-            }
+            .background(ClaudeBackground)
     ) {
         Row(modifier = Modifier.fillMaxSize()) {
             // ── LEFT SIDE — alternate branch events ─────────────────────
@@ -1162,25 +1296,264 @@ private fun EventDetailDialog(
     )
 }
 
+/**
+ * Right-side sliding filter panel for the History screen.
+ *
+ * Mirrors the visual style of the renters page FilterSidePanel (sliding
+ * from the right edge, cream paper background, 340dp wide) but the body
+ * contains toggle chips for the 3 primary timecode types instead of
+ * free-text fields.
+ *
+ * Behavior:
+ *   • Tap a type chip → toggles its membership in [filterActionTypes]
+ *   • Long-press a type chip → SOLOS that type (disables all others)
+ *   • The "Sana oralig'i" row shows the active date range (set via the
+ *     calendar icon on the search bar) and lets the user clear it from
+ *     here too.
+ *   • "Tozalash" resets everything; "Qo'llash" closes the panel.
+ */
+@OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
 @Composable
-private fun FiltersDialog(
+private fun HistoryFilterSidePanel(
+    filterActionTypes: Set<String>,
+    onActionTypesChange: (Set<String>) -> Unit,
     filterEntityType: String?,
-    filterActionType: String?,
-    filterMoneyOnly: Boolean,
     onEntityTypeChange: (String?) -> Unit,
-    onActionTypeChange: (String?) -> Unit,
-    onMoneyOnlyChange: (Boolean) -> Unit,
-    onClear: () -> Unit,
-    onDismiss: () -> Unit
+    filterStartMs: Long?,
+    filterEndMs: Long?,
+    onClearDateRange: () -> Unit,
+    onReset: () -> Unit,
+    onDismiss: () -> Unit,
+    formatter: SimpleDateFormat
 ) {
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text("Filtrlar") },
-        text = {
-            Column {
-                Text("Ob'ekt turi:", style = MaterialTheme.typography.labelSmall)
-                Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                    listOf("RENTER", "CONTRACT", "CARD", "SCOOTER").forEach { type ->
+    val allActionTypes = listOf(
+        Triple("CREATE", ActionColors.CREATE, "Yaratish"),
+        Triple("EDIT",   ActionColors.EDIT,   "Tahrirlash"),
+        Triple("DELETE", ActionColors.DELETE, "O'chirish")
+    )
+
+    val haptics = androidx.compose.ui.platform.LocalHapticFeedback.current
+
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(Color.Black.copy(alpha = 0.5f))
+            .clickable { onDismiss() }
+    ) {
+        Surface(
+            modifier = Modifier
+                .align(Alignment.CenterEnd)
+                .fillMaxHeight()
+                .width(340.dp)
+                .clickable { /* consume click — don't dismiss when clicking panel */ },
+            shape = androidx.compose.foundation.shape.RoundedCornerShape(
+                topStart = 16.dp, bottomStart = 16.dp
+            ),
+            color = ClaudeCard
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxHeight()
+                    .padding(16.dp)
+            ) {
+                // ── Header ─────────────────────────────────────────────────
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Icon(Icons.Default.Tune, contentDescription = null, tint = ClaudeAccent)
+                        Spacer(Modifier.width(8.dp))
+                        Text(
+                            "Filtrlash",
+                            style = MaterialTheme.typography.titleLarge,
+                            color = ClaudeText,
+                            fontWeight = FontWeight.Bold
+                        )
+                    }
+                    IconButton(onClick = onDismiss) {
+                        Icon(Icons.Default.Close, contentDescription = "Yopish", tint = ClaudeTextSecondary)
+                    }
+                }
+
+                Spacer(Modifier.height(4.dp))
+                Text(
+                    "Birlamchi taymkodlar turlari bo'yicha filtr",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = ClaudeTextSecondary
+                )
+                Spacer(Modifier.height(8.dp))
+                androidx.compose.material3.HorizontalDivider(color = ClaudeDivider)
+                Spacer(Modifier.height(12.dp))
+
+                // ── Primary timecode type toggles ─────────────────────────
+                Text(
+                    "Taymkod turi (uzun bosing — faqat shu tur)",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = ClaudeText,
+                    fontWeight = FontWeight.Medium
+                )
+                Spacer(Modifier.height(8.dp))
+
+                allActionTypes.forEach { (type, color, label) ->
+                    val isEnabled = type in filterActionTypes
+                    val isSolo = isEnabled && filterActionTypes.size == 1
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(vertical = 4.dp)
+                            .clip(androidx.compose.foundation.shape.RoundedCornerShape(8.dp))
+                            .combinedClickable(
+                                onClick = {
+                                    onActionTypesChange(
+                                        if (isEnabled) filterActionTypes - type
+                                        else filterActionTypes + type
+                                    )
+                                },
+                                onLongClick = {
+                                    haptics.performHapticFeedback(
+                                        androidx.compose.ui.hapticfeedback.HapticFeedbackType.LongPress
+                                    )
+                                    // SOLO: keep only this type
+                                    onActionTypesChange(setOf(type))
+                                }
+                            )
+                            .background(
+                                if (isEnabled) color.copy(alpha = 0.18f) else Color.White,
+                                androidx.compose.foundation.shape.RoundedCornerShape(8.dp)
+                            )
+                            .border(
+                                width = if (isEnabled) 2.dp else 1.dp,
+                                color = if (isEnabled) color else ClaudeDivider,
+                                shape = androidx.compose.foundation.shape.RoundedCornerShape(8.dp)
+                            )
+                            .padding(horizontal = 12.dp, vertical = 10.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .size(16.dp)
+                                .background(color, androidx.compose.foundation.shape.CircleShape)
+                        )
+                        Spacer(Modifier.width(10.dp))
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                label,
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = if (isEnabled) ClaudeText else ClaudeTextSecondary,
+                                fontWeight = FontWeight.Medium
+                            )
+                            Text(
+                                type,
+                                style = MaterialTheme.typography.labelSmall,
+                                color = if (isEnabled) color else ClaudeTextSecondary
+                            )
+                        }
+                        // Status indicator: green check when enabled,
+                        // "OFF" label when disabled, "SOLO" badge when alone.
+                        if (isSolo) {
+                            Surface(
+                                shape = androidx.compose.foundation.shape.RoundedCornerShape(4.dp),
+                                color = color
+                            ) {
+                                Text(
+                                    "SOLO",
+                                    modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = Color.White,
+                                    fontWeight = FontWeight.Bold
+                                )
+                            }
+                        } else if (isEnabled) {
+                            Icon(
+                                Icons.Default.Check,
+                                contentDescription = "Yoqilgan",
+                                tint = color,
+                                modifier = Modifier.size(20.dp)
+                            )
+                        } else {
+                            Text(
+                                "OFF",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = ClaudeTextSecondary,
+                                fontWeight = FontWeight.Bold
+                            )
+                        }
+                    }
+                }
+
+                Spacer(Modifier.height(16.dp))
+
+                // ── Date range summary ────────────────────────────────────
+                Text(
+                    "Sana oralig'i (kalendardan)",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = ClaudeText,
+                    fontWeight = FontWeight.Medium
+                )
+                Spacer(Modifier.height(6.dp))
+                val hasDateRange = filterStartMs != null || filterEndMs != null
+                Surface(
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = androidx.compose.foundation.shape.RoundedCornerShape(8.dp),
+                    color = if (hasDateRange) ClaudeAccentBg else Color.White,
+                    border = androidx.compose.foundation.BorderStroke(
+                        1.dp,
+                        if (hasDateRange) ClaudeAccent else ClaudeDivider
+                    )
+                ) {
+                    Row(
+                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Icon(
+                            Icons.Default.DateRange,
+                            contentDescription = null,
+                            tint = if (hasDateRange) ClaudeAccent else ClaudeTextSecondary,
+                            modifier = Modifier.size(18.dp)
+                        )
+                        Spacer(Modifier.width(8.dp))
+                        Column(modifier = Modifier.weight(1f)) {
+                            if (hasDateRange) {
+                                val startStr = filterStartMs?.let { formatter.format(Date(it)) } ?: "—"
+                                val endStr = filterEndMs?.let { formatter.format(Date(it)) } ?: "—"
+                                Text(
+                                    "$startStr → $endStr",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = ClaudeText
+                                )
+                            } else {
+                                Text(
+                                    "Tanlanmagan",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = ClaudeTextSecondary
+                                )
+                            }
+                        }
+                        if (hasDateRange) {
+                            TextButton(onClick = onClearDateRange) {
+                                Text("Tozalash", color = StatusOverdue)
+                            }
+                        }
+                    }
+                }
+
+                Spacer(Modifier.height(16.dp))
+
+                // ── Entity type (optional, single-select) ─────────────────
+                Text(
+                    "Ob'ekt turi (ixtiyoriy)",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = ClaudeText,
+                    fontWeight = FontWeight.Medium
+                )
+                Spacer(Modifier.height(6.dp))
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(4.dp),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    listOf("RENTER", "CONTRACT", "CARD", "SCOOTER", "TRANSACTION").forEach { type ->
                         FilterChip(
                             selected = filterEntityType == type,
                             onClick = {
@@ -1191,39 +1564,44 @@ private fun FiltersDialog(
                     }
                 }
 
-                Spacer(Modifier.height(12.dp))
+                Spacer(Modifier.weight(1f))
 
-                Text("Harakat turi:", style = MaterialTheme.typography.labelSmall)
-                Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                    listOf("CREATE", "EDIT", "DELETE").forEach { type ->
-                        FilterChip(
-                            selected = filterActionType == type,
-                            onClick = {
-                                onActionTypeChange(if (filterActionType == type) null else type)
-                            },
-                            label = { Text(type, fontSize = 10.sp) }
-                        )
-                    }
+                // ── Active filter count ────────────────────────────────────
+                val activeCount =
+                    (3 - filterActionTypes.size) +           // disabled types count as active
+                    (if (filterEntityType != null) 1 else 0) +
+                    (if (hasDateRange) 1 else 0)
+                if (activeCount > 0) {
+                    Text(
+                        "$activeCount ta filtr faol",
+                        modifier = Modifier.padding(bottom = 8.dp),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = ClaudeAccent,
+                        fontWeight = FontWeight.Medium
+                    )
                 }
 
-                Spacer(Modifier.height(12.dp))
-
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Checkbox(
-                        checked = filterMoneyOnly,
-                        onCheckedChange = onMoneyOnlyChange
+                // ── Buttons ───────────────────────────────────────────────
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    com.example.ui.components.SecondaryButton(
+                        label = "Tozalash",
+                        icon = Icons.Default.Clear,
+                        onClick = onReset,
+                        modifier = Modifier.weight(1f)
                     )
-                    Text("Faqat pul operatsiyalari")
+                    com.example.ui.components.PrimaryButton(
+                        label = "Qo'llash",
+                        icon = Icons.Default.Check,
+                        onClick = onDismiss,
+                        modifier = Modifier.weight(1f)
+                    )
                 }
             }
-        },
-        confirmButton = {
-            TextButton(onClick = onDismiss) { Text("Qo'llash") }
-        },
-        dismissButton = {
-            TextButton(onClick = onClear) { Text("Tozalash") }
         }
-    )
+    }
 }
 
 @Composable

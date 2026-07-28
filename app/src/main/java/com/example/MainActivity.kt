@@ -90,7 +90,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.input.KeyboardType
@@ -148,9 +147,6 @@ import com.example.ui.components.FilterSidePanel
 import com.example.ui.components.FilterColumn
 import com.example.ui.components.PhoneReceiverSortIcon
 import com.example.ui.components.SortableHeaderCell
-import com.example.ui.components.PullDownShadeLayout
-import com.example.ui.components.LauncherShadeContent
-import com.example.ui.components.rememberLauncherCurtainState
 import com.example.ui.components.NonSortableHeaderCell
 import com.example.ui.components.TableSortState
 import com.example.ui.components.SortState
@@ -259,9 +255,10 @@ class MainActivity : ComponentActivity() {
                 // bottom nav (collapsed). User can pull the bottom nav up
                 // to reveal the secondary icons row.
                 var showSplash by remember { mutableStateOf(true) }
-                // Launcher is deliberately shown after every cold start. It
-                // replaces the old behavior that jumped straight to renters.
-                var showLauncher by remember { mutableStateOf(true) }
+                // After splash the user lands directly on the Mijozlar tab.
+                // Pulling the bottom nav up (or tapping the "Skuter Ijarasi"
+                // title) reveals the secondary icons row — that row replaces
+                // the old launcher overlay.
                 var launcherTab by remember { mutableStateOf(0) }
 
                 // Авто-запрос SMS + POST_NOTIFICATIONS (Android 13+) + READ_PHONE_STATE при первом старте.
@@ -277,35 +274,8 @@ class MainActivity : ComponentActivity() {
                 if (showSplash) {
                     SplashScreen(onFinished = { showSplash = false })
                 } else {
-                    // Launcher is rendered INSIDE MainScreen's content area
-                    // so the bottom nav from Scaffold stays on top of it.
-                    // When the user drags the launcher down past the bottom
-                    // nav, the panel slides under it (visible only via the
-                    // "Yukoriga torting" hint chip that re-anchors above
-                    // the bottom nav). User taps a tile → launcher is
-                    // dismissed and the corresponding tab is opened.
-                    val launcherState = rememberLauncherCurtainState()
                     MainScreen(
-                        initialTab = launcherTab,
-                        onShowLauncher = { showLauncher = true },
-                        showLauncher = showLauncher,
-                        launcherState = launcherState,
-                        onLauncherPageClick = { page ->
-                            launcherTab = when (page) {
-                                "renters"   -> 0
-                                "scooters"  -> 1
-                                "contracts" -> 2
-                                "finansi"   -> 5
-                                "reports"   -> 4
-                                "history"   -> 7
-                                "trash"     -> 8
-                                "settings"  -> 6
-                                else        -> 0
-                            }
-                            // Reset curtain so next time launcher opens at top.
-                            launcherState.offsetPx = 0f
-                            showLauncher = false
-                        }
+                        initialTab = launcherTab
                     )
                 }
             }
@@ -499,10 +469,6 @@ fun SplashScreen(
 @Composable
 fun MainScreen(
     initialTab: Int = 0,
-    onShowLauncher: () -> Unit = {},
-    showLauncher: Boolean = false,
-    launcherState: com.example.ui.components.LauncherCurtainState = com.example.ui.components.rememberLauncherCurtainState(),
-    onLauncherPageClick: (String) -> Unit = {},
     viewModel: RenterViewModel = viewModel(),
     settingsViewModel: SettingsViewModel = viewModel(),
     scooterViewModel: ScooterViewModel = viewModel(),
@@ -563,6 +529,11 @@ fun MainScreen(
     var trashRestoreTrigger by remember { mutableStateOf(0) }
     var trashEditTrigger by remember { mutableStateOf(0) }
     var trashPurgeTrigger by remember { mutableStateOf(0) }
+    // History: rename-branch dialog state. Populated when user presses the
+    // universal ✎ on tab 7 with a non-main-branch event selected.
+    var showHistoryBranchRenameDialog by remember { mutableStateOf(false) }
+    var historyBranchRenameId by remember { mutableStateOf<Long?>(null) }
+    var historyBranchRenameText by remember { mutableStateOf("") }
     var contractEditTrigger by remember { mutableStateOf(0) }
     var contractDeleteTrigger by remember { mutableStateOf(0) }
     var transactionEditTrigger by remember { mutableStateOf(0) }
@@ -580,12 +551,6 @@ fun MainScreen(
     // Collapsed dock shows four main pages; pulling it up reveals the
     // identical secondary icon row without overlaying page content.
     var bottomNavExpanded by remember { mutableStateOf(false) }
-    // When the launcher overlay is open, force-collapse the bottom nav
-    // secondary row so the same 4 icons (reports / history / trash /
-    // settings) are NOT shown twice on screen at the same time.
-    LaunchedEffect(showLauncher) {
-        if (showLauncher) bottomNavExpanded = false
-    }
     // Pull-down shade state for quick stats and actions
     var shadeExpanded by remember { mutableStateOf(false) }
     var renterSortState by remember { mutableStateOf(TableSortState()) }
@@ -1056,14 +1021,15 @@ fun MainScreen(
         topBar = {
             TopAppBar(
                 title = {
-                    // ── §9.A: Title is tappable — expands the bottom nav.
-                    // Tapping "Skuter Ijarasi" pulls up the bottom nav panel
-                    // to reveal the secondary icons row (a shortcut instead
-                    // of having to swipe up on the bottom nav).
+                    // ── §9.A: Title is tappable — toggles the bottom nav.
+                    // Tapping "Skuter Ijarasi" expands/collapses the bottom
+                    // nav panel — a shortcut for revealing the secondary
+                    // icons row (Reports / History / Trash / Settings)
+                    // instead of having to swipe up on the bottom nav.
                     Text(
                         "Skuter Ijarasi",
                         style = MaterialTheme.typography.headlineMedium.copy(fontWeight = FontWeight.Bold),
-                        modifier = Modifier.clickable { onShowLauncher() }
+                        modifier = Modifier.clickable { bottomNavExpanded = !bottomNavExpanded }
                     )
                 },
                 colors = TopAppBarDefaults.topAppBarColors(
@@ -1200,7 +1166,29 @@ fun MainScreen(
                                     2 -> contractEditTrigger++
                                     3 -> transactionEditTrigger++
                                     5 -> cardEditTrigger++
-                                    7 -> historyEditTrigger++
+                                    7 -> {
+                                        // If selected event belongs to a non-main branch → open
+                                        // rename dialog. Otherwise no-op (events on the Main
+                                        // branch cannot be "renamed"; the universal ✎ only
+                                        // edits branch metadata on the history tab).
+                                        val ev = historyTimelineViewModel.events.value.firstOrNull {
+                                            it.id == selectedHistoryEventId
+                                        }
+                                        val branchId = ev?.branchId
+                                        val branches = historyTimelineViewModel.branches.value
+                                        val branch = branches.firstOrNull { it.id == branchId }
+                                        if (branch != null && !branch.isMain) {
+                                            historyBranchRenameId = branch.id
+                                            historyBranchRenameText = branch.name
+                                            showHistoryBranchRenameDialog = true
+                                        } else {
+                                            Toast.makeText(
+                                                localContext,
+                                                "Faqat Main'dan boshqa tarmoqni tahrirlash mumkin",
+                                                Toast.LENGTH_SHORT
+                                            ).show()
+                                        }
+                                    }
                                     8 -> trashEditTrigger++
                                 }
                             },
@@ -2496,8 +2484,21 @@ fun MainScreen(
                                     selectedScooters = emptySet()
                                 }
                                 7 -> selectedHistoryEventId?.let { id ->
-                                    historyTimelineViewModel.events.value.firstOrNull { it.id == id }?.let {
-                                        historyTimelineViewModel.archiveSelected(it)
+                                    historyTimelineViewModel.events.value.firstOrNull { it.id == id }?.let { ev ->
+                                        // Per user spec: if selected event is a DELETE-type
+                                        // timecode referencing an entity, permanently delete
+                                        // the referenced object (renter/scooter) AND the
+                                        // timeline event. Otherwise just archive the event.
+                                        val upper = ev.actionType.uppercase()
+                                        val isDeleteType = upper.contains("DELETE") || upper.contains("REMOVE") ||
+                                                           upper.contains("TERMINATE") || upper.contains("CANCEL")
+                                        if (isDeleteType && ev.entityId != null) {
+                                            coroutineScope.launch {
+                                                historyTimelineViewModel.permanentlyDeleteReferencedObject(ev)
+                                            }
+                                        } else {
+                                            historyTimelineViewModel.archiveSelected(ev)
+                                        }
                                     }
                                     selectedHistoryEventId = null
                                 }
@@ -2512,6 +2513,57 @@ fun MainScreen(
                         showUniversalDeleteConfirm = false
                         pendingDeleteTab = -1
                     }) { Text("Bekor qilish") }
+                }
+            )
+        }
+
+        // ── History: rename branch dialog (universal ✎ on tab 7) ─────────
+        // Lets the user rename a non-main branch that the selected event
+        // belongs to. The Main branch cannot be renamed via this dialog.
+        if (showHistoryBranchRenameDialog && historyBranchRenameId != null) {
+            AlertDialog(
+                onDismissRequest = {
+                    showHistoryBranchRenameDialog = false
+                    historyBranchRenameId = null
+                    historyBranchRenameText = ""
+                },
+                title = { Text("Tarmoqni qayta nomlash") },
+                text = {
+                    Column {
+                        Text(
+                            "Bu nom faqat tanlangan voqea tegishli bo'lgan tarmoqqa taalluqli.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = ClaudeTextSecondary
+                        )
+                        Spacer(Modifier.height(12.dp))
+                        OutlinedTextField(
+                            value = historyBranchRenameText,
+                            onValueChange = { historyBranchRenameText = it },
+                            label = { Text("Tarmoq nomi") },
+                            modifier = Modifier.fillMaxWidth(),
+                            singleLine = true
+                        )
+                    }
+                },
+                confirmButton = {
+                    TextButton(
+                        onClick = {
+                            historyBranchRenameId?.let { id ->
+                                historyTimelineViewModel.renameBranch(id, historyBranchRenameText)
+                            }
+                            showHistoryBranchRenameDialog = false
+                            historyBranchRenameId = null
+                            historyBranchRenameText = ""
+                        },
+                        enabled = historyBranchRenameText.isNotBlank()
+                    ) { Text("Saqlash") }
+                },
+                dismissButton = {
+                    TextButton(onClick = {
+                        showHistoryBranchRenameDialog = false
+                        historyBranchRenameId = null
+                        historyBranchRenameText = ""
+                    }) { Text("Bekor") }
                 }
             )
         }
@@ -2615,24 +2667,6 @@ fun MainScreen(
             }
         }
 
-        // ── §9.B: Launcher curtain rendered INSIDE the content Box. ─────
-        // Because the bottom bar from Scaffold lives on top of the content
-        // area, the launcher will visually slide UNDER the bottom nav when
-        // dragged down — exactly the spec'd behavior. The launcher is a
-        // free-drag panel: where the user releases, it stays. No snap
-        // points. See LauncherScreen for the full behavior contract.
-        if (showLauncher) {
-            val density = LocalDensity.current
-            // Approximate bottom nav height in px — used by the launcher
-            // to decide when to flip the hint arrow ("Pastga torting" ↔
-            // "Yukoriga torting") and to clamp the off-screen safe area.
-            val bottomNavHeightPx = with(density) { 118.dp.toPx() }
-            com.example.ui.components.LauncherScreen(
-                state = launcherState,
-                onPageClick = onLauncherPageClick,
-                bottomNavHeightPx = bottomNavHeightPx
-            )
-        }
         }   // ← end of content Box
     }   // ← end of Scaffold
 }

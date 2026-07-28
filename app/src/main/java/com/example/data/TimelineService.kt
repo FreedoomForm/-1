@@ -61,6 +61,105 @@ class TimelineService(private val db: AppDatabase) {
         db.timelineDao().nearestSnapshot(branchId, timestamp)
 
     /**
+     * Unarchives a single timeline event AND records a RESTORE audit event
+     * so the financial trail stays intact. Used by the "Вернуть объект"
+     * secondary button next to the branch name on the history screen.
+     */
+    suspend fun unarchiveEvent(event: TimelineEvent, actor: String = "owner"): Long? = db.withTransaction {
+        db.timelineDao().unarchiveEvent(event.id)
+        val restoreEventId = db.timelineDao().insertEvent(TimelineEvent(
+            branchId = event.branchId,
+            timestamp = System.currentTimeMillis(),
+            actionType = "RESTORE_OBJECT",
+            screen = "HISTORY",
+            title = "Restore object: ${event.title}",
+            entityType = event.entityType,
+            entityId = event.entityId,
+            payloadJson = JSONObject().apply {
+                put("sourceEventId", event.id)
+                put("actor", actor)
+            }.toString(),
+            isMajor = true
+        ))
+        db.auditEventDao().insert(AuditEvent(
+            occurredAt = System.currentTimeMillis(),
+            actor = actor,
+            action = AuditEvent.ACTION_RESTORE,
+            entityType = event.entityType ?: "TIMELINE_EVENT",
+            entityId = event.entityId ?: event.id.toString(),
+            reason = "Manual unarchive from history tree",
+            beforeSnapshot = "archived",
+            afterSnapshot = "restored"
+        ))
+        restoreEventId
+    }
+
+    /**
+     * Permanently deletes a timeline event AND — if the event references a
+     * business entity (renter, scooter, contract, card, transaction) whose
+     * actionType is a DELETE-type — attempts to permanently delete that
+     * entity too. Used by the universal 🗑 button when a deletion-group
+     * timecode is selected on the history screen.
+     *
+     * Returns true if the entity was deleted, false if only the event was.
+     */
+    suspend fun permanentlyDeleteReferencedObject(event: TimelineEvent, actor: String = "owner"): Boolean = db.withTransaction {
+        db.timelineDao().deleteEvent(event.id)
+        val deleted = event.entityId?.let { entityId ->
+            val idLong = entityId.toLongOrNull() ?: return@let false
+            val type = event.entityType?.uppercase() ?: ""
+            when (type) {
+                "RENTER" -> { db.renterDao().deleteById(idLong.toInt()); true }
+                "SCOOTER" -> { db.scooterDao().deleteScooterById(idLong.toInt()); true }
+                else -> false
+            }
+        } ?: false
+        db.auditEventDao().insert(AuditEvent(
+            occurredAt = System.currentTimeMillis(),
+            actor = actor,
+            action = "DELETE_TIMELINE_EVENT",
+            entityType = event.entityType ?: "TIMELINE_EVENT",
+            entityId = event.entityId ?: event.id.toString(),
+            reason = "Permanent delete from history tree",
+            beforeSnapshot = "event=${event.id}",
+            afterSnapshot = if (deleted) "event+entity deleted" else "event deleted only"
+        ))
+        deleted
+    }
+
+    /**
+     * Renames an existing branch. Used by the universal ✎ button when a
+     * block from a non-main branch is selected on the history tree.
+     */
+    suspend fun renameBranch(branchId: Long, newName: String) {
+        if (newName.isNotBlank()) db.timelineDao().renameBranch(branchId, newName)
+    }
+
+    /**
+     * Permanently deletes a branch and all its events. The Main branch
+     * (isMain = true) cannot be deleted — this method will throw.
+     * Used by the universal 🗑 button when a block from a non-main branch
+     * is selected on the history tree.
+     */
+    suspend fun deleteBranch(branchId: Long, actor: String = "owner") = db.withTransaction {
+        val branch = db.timelineDao().branchById(branchId) ?: return@withTransaction
+        require(!branch.isMain) { "Cannot delete the Main branch" }
+        // Cascade: delete the branch's events first, then the branch row.
+        db.timelineDao().deleteEventsByBranch(branchId)
+        db.timelineDao().deleteBranch(branchId)
+        db.auditEventDao().insert(AuditEvent(
+            occurredAt = System.currentTimeMillis(),
+            actor = actor,
+            action = "DELETE_TIMELINE_BRANCH",
+            entityType = "TIMELINE_BRANCH",
+            entityId = branchId.toString(),
+            reason = "Manual branch delete from history tree",
+            beforeSnapshot = "branch=$branchId",
+            afterSnapshot = "deleted"
+        ))
+    }
+
+    /**
      * Safe restore: never erases financial facts. Records a RESTORE event
      * referencing the nearest snapshot before/at [targetTimestamp]. The
      * actual business state is not mutated here — the consumer reads the
