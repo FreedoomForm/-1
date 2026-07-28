@@ -12,6 +12,8 @@ import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
+import androidx.compose.foundation.gesture.detectVerticalDragGestures
+import androidx.compose.foundation.gesture.pointerInput
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -1947,7 +1949,8 @@ fun MainScreen(
                             }
                         }
                     }
-                } // End Box for shade
+                // End if (currentTab == 0) content — Box for shade + AnimatedVisibility
+                // (closing brace is provided by the } else if below)
             } else if (currentTab == 1) {
                 // Вкладка «Скутеры» — unified search bar с календарём
                 // (фильтр по дате начала активного контракта скутера) и фильтром.

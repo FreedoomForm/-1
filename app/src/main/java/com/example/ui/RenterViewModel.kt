@@ -1072,15 +1072,11 @@ class RenterViewModel(application: Application) : AndroidViewModel(application) 
         actionUseCase.terminate(renter, weeklyPrice, forgiveDebt)
     }
 
-    companion object {
-        private const val TAG = "RenterViewModel"
-    }
-}
     /**
      * Create a repair break period for a renter.
      * During this period, the renter keeps the scooter but doesn't pay.
      * This is used when the scooter needs repairs while still assigned to the renter.
-     * 
+     *
      * @param renterId The renter ID
      * @param startMs Start of repair period (milliseconds)
      * @param endMs End of repair period (milliseconds)
@@ -1096,7 +1092,7 @@ class RenterViewModel(application: Application) : AndroidViewModel(application) 
             try {
                 val db = com.example.data.AppDatabase.getDatabase(getApplication())
                 val renter = db.renterDao().getRenterById(renterId) ?: return@launch
-                
+
                 // Create a repair break period with zero charge
                 val repairPeriod = com.example.data.RentPeriod(
                     renterId = renterId,
@@ -1110,9 +1106,9 @@ class RenterViewModel(application: Application) : AndroidViewModel(application) 
                     createdAt = System.currentTimeMillis(),
                     updatedAt = System.currentTimeMillis()
                 )
-                
+
                 db.rentPeriodDao().insert(repairPeriod)
-                
+
                 // Create a contract history entry for documentation
                 val scooter = renter.scooterId?.let { db.scooterDao().getScooterById(it) }
                 db.contractHistoryDao().insert(
@@ -1140,7 +1136,7 @@ class RenterViewModel(application: Application) : AndroidViewModel(application) 
                         isPaid = true // No payment needed
                     )
                 )
-                
+
                 // Record in timeline
                 try {
                     com.example.data.TimelineService(db).recordCriticalAction(
@@ -1152,11 +1148,15 @@ class RenterViewModel(application: Application) : AndroidViewModel(application) 
                         payloadJson = "{\"renterId\":$renterId,\"startMs\":$startMs,\"endMs\":$endMs,\"reason\":\"$reason\"}"
                     )
                 } catch (_: Exception) {}
-                
+
                 Log.d(TAG, "Created repair break period for renter #$renterId: $startMs - $endMs")
             } catch (e: Exception) {
                 Log.e(TAG, "Failed to create repair break period", e)
             }
         }
+    }
+
+    companion object {
+        private const val TAG = "RenterViewModel"
     }
 }

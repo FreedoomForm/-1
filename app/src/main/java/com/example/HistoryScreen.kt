@@ -167,7 +167,7 @@ fun HistoryScreen(
                 if (branchName.isNotBlank()) {
                     val newColor = BRANCH_COLORS[branches.size % BRANCH_COLORS.size]
                     scope.launch {
-                        viewModel.createBranch(branchName, selected.timestamp)
+                        viewModel.createBranch(selected.timestamp, branchName)
                         branchSliders = branchSliders + (selected.timestamp to newColor)
                     }
                     branchName = ""
