@@ -16,6 +16,30 @@ interface TimelineDao {
     @Query("SELECT * FROM timeline_branches WHERE isMain = 1 LIMIT 1")
     suspend fun mainBranch(): TimelineBranch?
 
+    /** Used by BackupManager to export every branch. */
+    @Query("SELECT * FROM timeline_branches ORDER BY id ASC")
+    suspend fun getAllBranchesOnce(): List<TimelineBranch>
+
+    /** Used by BackupManager to export every event (incl. archived). */
+    @Query("SELECT * FROM timeline_events ORDER BY id ASC")
+    suspend fun getAllEventsOnce(): List<TimelineEvent>
+
+    /** Used by BackupManager to export every snapshot. */
+    @Query("SELECT * FROM timeline_snapshots ORDER BY id ASC")
+    suspend fun getAllSnapshotsOnce(): List<TimelineSnapshot>
+
+    /** Used by BackupManager to truncate before re-import. */
+    @Query("DELETE FROM timeline_snapshots")
+    suspend fun deleteAllSnapshots()
+
+    /** Used by BackupManager to truncate before re-import. */
+    @Query("DELETE FROM timeline_events")
+    suspend fun deleteAllEvents()
+
+    /** Used by BackupManager to truncate before re-import. */
+    @Query("DELETE FROM timeline_branches")
+    suspend fun deleteAllBranches()
+
     @Insert
     suspend fun insertBranch(branch: TimelineBranch): Long
 

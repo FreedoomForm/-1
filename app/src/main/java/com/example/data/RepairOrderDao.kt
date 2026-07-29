@@ -11,6 +11,14 @@ interface RepairOrderDao {
     @Query("SELECT * FROM repair_orders WHERE scooterId = :scooterId ORDER BY openedAt DESC")
     fun forScooter(scooterId: Int): Flow<List<RepairOrder>>
 
+    /** Used by BackupManager to export every row regardless of foreign keys. */
+    @Query("SELECT * FROM repair_orders ORDER BY id ASC")
+    suspend fun getAllOnce(): List<RepairOrder>
+
+    /** Used by BackupManager to truncate before re-import. */
+    @Query("DELETE FROM repair_orders")
+    suspend fun deleteAll()
+
     @Query("SELECT * FROM repair_orders WHERE status = 'OPEN' ORDER BY openedAt ASC")
     suspend fun openOrders(): List<RepairOrder>
 

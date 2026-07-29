@@ -10,6 +10,10 @@ interface HandoverActDao {
     @Query("SELECT * FROM handover_acts ORDER BY timestamp DESC")
     fun all(): Flow<List<HandoverAct>>
 
+    /** Used by BackupManager to export every row regardless of foreign keys. */
+    @Query("SELECT * FROM handover_acts ORDER BY id ASC")
+    suspend fun getAllOnce(): List<HandoverAct>
+
     @Query("SELECT * FROM handover_acts WHERE renterId = :renterId ORDER BY timestamp DESC")
     fun forRenter(renterId: Int): Flow<List<HandoverAct>>
 

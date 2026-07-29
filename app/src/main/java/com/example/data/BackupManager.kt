@@ -82,7 +82,14 @@ object BackupManager {
     private const val SHEET_APP_USERS = "AppUsers"
     private const val SHEET_METADATA = "Metadata"
     private const val SHEET_SMS_DELIVERIES = "SmsDeliveries"
-    private const val BACKUP_SCHEMA_VERSION = 2
+    private const val SHEET_HANDOVER_ACTS = "HandoverActs"
+    private const val SHEET_REPAIR_ORDERS = "RepairOrders"
+    private const val SHEET_LEGACY_MONEY = "LegacyMoneyAmounts"
+    private const val SHEET_DELETED_ITEMS = "DeletedItems"
+    private const val SHEET_TIMELINE_BRANCHES = "TimelineBranches"
+    private const val SHEET_TIMELINE_EVENTS = "TimelineEvents"
+    private const val SHEET_TIMELINE_SNAPSHOTS = "TimelineSnapshots"
+    private const val BACKUP_SCHEMA_VERSION = 3
 
     /* =========================================================================
        ЭКСПОРТ
@@ -113,6 +120,17 @@ object BackupManager {
             val auditEvents = db.auditEventDao().getAllOnce()
             val appUsers = db.appUserDao().getAllOnce()
             val smsDeliveries = db.smsDeliveryDao().allOnce()
+            // §Batch 4: previously these 7 tables were silently dropped by
+            // backup — handover acts, repair orders, exact-Long money mirrors,
+            // the recycle bin, and the entire timeline tree. Each one holds
+            // data the user actively entered and expects to survive restore.
+            val handoverActs = db.handoverActDao().getAllOnce()
+            val repairOrders = db.repairOrderDao().getAllOnce()
+            val legacyMoney = db.legacyMoneyAmountDao().getAllOnce()
+            val deletedItems = db.deletedItemDao().getAllOnce()
+            val timelineBranches = db.timelineDao().getAllBranchesOnce()
+            val timelineEvents = db.timelineDao().getAllEventsOnce()
+            val timelineSnapshots = db.timelineDao().getAllSnapshotsOnce()
 
             // ── Двухфазная запись: сначала в temp-файл, потом копирование в SAF ──
             //
@@ -164,6 +182,13 @@ object BackupManager {
                     writeAuditEvents(wb, auditEvents)
                     writeAppUsers(wb, appUsers)
                     writeSmsDeliveries(wb, smsDeliveries)
+                    writeHandoverActs(wb, handoverActs)
+                    writeRepairOrders(wb, repairOrders)
+                    writeLegacyMoneyAmounts(wb, legacyMoney)
+                    writeDeletedItems(wb, deletedItems)
+                    writeTimelineBranches(wb, timelineBranches)
+                    writeTimelineEvents(wb, timelineEvents)
+                    writeTimelineSnapshots(wb, timelineSnapshots)
                     wb.finish()
                     // ⚠ КРИТИЧНО: flush буфера в FileOutputStream, иначе
                     // байты останутся в памяти и tempFile будет 0 байт.
@@ -203,8 +228,10 @@ object BackupManager {
             }
 
             val total = renters.size + scooters.size + contracts.size +
-                transactions.size + cards.size + cardTx.size + notifications.size
-            "Eksport tayyor: $total ta yozuv (${"${renters.size}r/${scooters.size}s/${contracts.size}c/${transactions.size}t/${cards.size}v/${cardTx.size}k/${notifications.size}n"})"
+                transactions.size + cards.size + cardTx.size + notifications.size +
+                handoverActs.size + repairOrders.size + legacyMoney.size +
+                deletedItems.size + timelineBranches.size + timelineEvents.size + timelineSnapshots.size
+            "Eksport tayyor: $total ta yozuv (${"${renters.size}r/${scooters.size}s/${contracts.size}c/${transactions.size}t/${cards.size}v/${cardTx.size}k/${notifications.size}n + ${handoverActs.size}h/${repairOrders.size}ro/${legacyMoney.size}lm/${deletedItems.size}di/${timelineBranches.size}tb/${timelineEvents.size}te/${timelineSnapshots.size}ts"})"
         } catch (e: Exception) {
             Log.e(TAG, "Export failed", e)
             "Xato: ${e.message ?: e.javaClass.simpleName}"
@@ -222,7 +249,7 @@ object BackupManager {
             "contracts", "transactions", "cards", "cardTransactions", "operations", "periods", "allocations"
         )
         headers.forEachIndexed { i, value -> ws.value(0, i, value) }
-        val values = listOf(BACKUP_SCHEMA_VERSION.toLong(), System.currentTimeMillis(), 26L, renters.toLong(), scooters.toLong(),
+        val values = listOf(BACKUP_SCHEMA_VERSION.toLong(), System.currentTimeMillis(), 33L, renters.toLong(), scooters.toLong(),
             contracts.toLong(), transactions.toLong(), cards.toLong(), cardTransactions.toLong(), operations.toLong(), periods.toLong(), allocations.toLong())
         values.forEachIndexed { i, value -> ws.value(1, i, value) }
     }
@@ -259,9 +286,13 @@ object BackupManager {
 
     private fun writeScooters(wb: Workbook, items: List<Scooter>) {
         val ws = wb.newWorksheet(SHEET_SCOOTERS)
+        // Headers include the 4 lifecycle/service fields added after the
+        // initial backup schema. Older backups (pre-Batch 4) lack these
+        // columns — readers fall back to defaults when cells are null.
         val headers = listOf(
             "id", "name", "documentedNumber", "vinNumber", "engineNumber",
-            "scooterSerialNumber", "batteryId1", "batteryId2", "additionalInfo"
+            "scooterSerialNumber", "batteryId1", "batteryId2", "additionalInfo",
+            "lifecycleStatus", "lastServiceAt", "nextServiceAt", "mileageKm"
         )
         headers.forEachIndexed { i, h -> ws.value(0, i, h) }
         items.forEachIndexed { rowIdx, s ->
@@ -275,6 +306,10 @@ object BackupManager {
             ws.value(r, 6, s.batteryId1)
             ws.value(r, 7, s.batteryId2)
             ws.value(r, 8, s.additionalInfo)
+            ws.value(r, 9, s.lifecycleStatus)
+            s.lastServiceAt?.let { ws.value(r, 10, it) }
+            s.nextServiceAt?.let { ws.value(r, 11, it) }
+            ws.value(r, 12, s.mileageKm)
         }
     }
 
@@ -443,6 +478,81 @@ object BackupManager {
         items.forEachIndexed { index,u -> val r=index+1; ws.value(r,0,u.id); ws.value(r,1,u.displayName); ws.value(r,2,u.role); ws.value(r,3,u.isActive); ws.value(r,4,u.createdAt) }
     }
 
+    private fun writeHandoverActs(wb: Workbook, items: List<HandoverAct>) {
+        val ws = wb.newWorksheet(SHEET_HANDOVER_ACTS)
+        listOf("id","timestamp","actType","renterId","scooterId","contractHistoryId","mileageKm","equipmentChecklist","conditionNotes","signedBy")
+            .forEachIndexed { i,v -> ws.value(0,i,v) }
+        items.forEachIndexed { index,a -> val r=index+1
+            ws.value(r,0,a.id); ws.value(r,1,a.timestamp); ws.value(r,2,a.actType); ws.value(r,3,a.renterId); ws.value(r,4,a.scooterId)
+            a.contractHistoryId?.let { ws.value(r,5,it) }
+            ws.value(r,6,a.mileageKm); ws.value(r,7,a.equipmentChecklist); ws.value(r,8,a.conditionNotes); ws.value(r,9,a.signedBy)
+        }
+    }
+
+    private fun writeRepairOrders(wb: Workbook, items: List<RepairOrder>) {
+        val ws = wb.newWorksheet(SHEET_REPAIR_ORDERS)
+        listOf("id","scooterId","renterId","scenario","status","openedAt","closedAt","diagnosis","performer","partsUsed","estimatedMinor","actualMinor","documentNote","pauseIntervalsJson","totalPauseMs","currentlyPaused","lastPausedAt")
+            .forEachIndexed { i,v -> ws.value(0,i,v) }
+        items.forEachIndexed { index,o -> val r=index+1
+            ws.value(r,0,o.id); ws.value(r,1,o.scooterId); o.renterId?.let { ws.value(r,2,it) }
+            ws.value(r,3,o.scenario); ws.value(r,4,o.status); ws.value(r,5,o.openedAt); o.closedAt?.let { ws.value(r,6,it) }
+            ws.value(r,7,o.diagnosis); o.performer?.let { ws.value(r,8,it) }; o.partsUsed?.let { ws.value(r,9,it) }
+            ws.value(r,10,o.estimatedMinor); ws.value(r,11,o.actualMinor); o.documentNote?.let { ws.value(r,12,it) }
+            ws.value(r,13,o.pauseIntervalsJson); ws.value(r,14,o.totalPauseMs); ws.value(r,15,o.currentlyPaused); o.lastPausedAt?.let { ws.value(r,16,it) }
+        }
+    }
+
+    private fun writeLegacyMoneyAmounts(wb: Workbook, items: List<LegacyMoneyAmount>) {
+        val ws = wb.newWorksheet(SHEET_LEGACY_MONEY)
+        listOf("id","entityType","entityId","field","amountMinor","migratedAt")
+            .forEachIndexed { i,v -> ws.value(0,i,v) }
+        items.forEachIndexed { index,m -> val r=index+1
+            ws.value(r,0,m.id); ws.value(r,1,m.entityType); ws.value(r,2,m.entityId); ws.value(r,3,m.field)
+            ws.value(r,4,m.amountMinor); ws.value(r,5,m.migratedAt)
+        }
+    }
+
+    private fun writeDeletedItems(wb: Workbook, items: List<DeletedItem>) {
+        val ws = wb.newWorksheet(SHEET_DELETED_ITEMS)
+        listOf("id","sourceType","sourceId","title","snapshotJson","deletedAt","deletedBy","reason")
+            .forEachIndexed { i,v -> ws.value(0,i,v) }
+        items.forEachIndexed { index,d -> val r=index+1
+            ws.value(r,0,d.id); ws.value(r,1,d.sourceType); ws.value(r,2,d.sourceId); ws.value(r,3,d.title)
+            ws.value(r,4,d.snapshotJson); ws.value(r,5,d.deletedAt); ws.value(r,6,d.deletedBy); d.reason?.let { ws.value(r,7,it) }
+        }
+    }
+
+    private fun writeTimelineBranches(wb: Workbook, items: List<TimelineBranch>) {
+        val ws = wb.newWorksheet(SHEET_TIMELINE_BRANCHES)
+        listOf("id","name","parentBranchId","forkEventId","createdAt","isMain")
+            .forEachIndexed { i,v -> ws.value(0,i,v) }
+        items.forEachIndexed { index,b -> val r=index+1
+            ws.value(r,0,b.id); ws.value(r,1,b.name); b.parentBranchId?.let { ws.value(r,2,it) }
+            b.forkEventId?.let { ws.value(r,3,it) }; ws.value(r,4,b.createdAt); ws.value(r,5,b.isMain)
+        }
+    }
+
+    private fun writeTimelineEvents(wb: Workbook, items: List<TimelineEvent>) {
+        val ws = wb.newWorksheet(SHEET_TIMELINE_EVENTS)
+        listOf("id","branchId","timestamp","actionType","screen","entityType","entityId","title","payloadJson","isMajor","isArchived")
+            .forEachIndexed { i,v -> ws.value(0,i,v) }
+        items.forEachIndexed { index,e -> val r=index+1
+            ws.value(r,0,e.id); ws.value(r,1,e.branchId); ws.value(r,2,e.timestamp); ws.value(r,3,e.actionType)
+            ws.value(r,4,e.screen); e.entityType?.let { ws.value(r,5,it) }; e.entityId?.let { ws.value(r,6,it) }
+            ws.value(r,7,e.title); ws.value(r,8,e.payloadJson); ws.value(r,9,e.isMajor); ws.value(r,10,e.isArchived)
+        }
+    }
+
+    private fun writeTimelineSnapshots(wb: Workbook, items: List<TimelineSnapshot>) {
+        val ws = wb.newWorksheet(SHEET_TIMELINE_SNAPSHOTS)
+        listOf("id","branchId","eventId","timestamp","stateJson")
+            .forEachIndexed { i,v -> ws.value(0,i,v) }
+        items.forEachIndexed { index,s -> val r=index+1
+            ws.value(r,0,s.id); ws.value(r,1,s.branchId); s.eventId?.let { ws.value(r,2,it) }
+            ws.value(r,3,s.timestamp); ws.value(r,4,s.stateJson)
+        }
+    }
+
     /* =========================================================================
        ИМПОРТ
        ========================================================================= */
@@ -504,6 +614,16 @@ object BackupManager {
                     db.renterDao().deleteAll()
                     db.scooterDao().deleteAll()
                     db.virtualCardDao().deleteAll()
+                    // §Batch 4: also truncate the 7 tables that were previously
+                    // not exported — without this, restore would mix imported
+                    // rows with stale local rows from before the backup.
+                    db.handoverActDao().clear()
+                    db.repairOrderDao().deleteAll()
+                    db.legacyMoneyAmountDao().deleteAll()
+                    db.deletedItemDao().deleteAll()
+                    db.timelineDao().deleteAllSnapshots()
+                    db.timelineDao().deleteAllEvents()
+                    db.timelineDao().deleteAllBranches()
 
                     // 2) Scooters
                     sheetMap[SHEET_SCOOTERS]?.let { sh ->
@@ -575,6 +695,33 @@ object BackupManager {
                         }
                         sheetMap[SHEET_SMS_DELIVERIES]?.let { sh ->
                             readSmsDeliveries(sh).forEach { db.smsDeliveryDao().insert(it) }
+                        }
+                        // §Batch 4: restore the 7 previously-dropped tables.
+                        // Order matters for FK sanity: handover acts and
+                        // repair orders reference renters/scooters/contracts
+                        // (already imported above). Timeline branches →
+                        // events → snapshots (events reference branches,
+                        // snapshots reference events).
+                        sheetMap[SHEET_HANDOVER_ACTS]?.let { sh ->
+                            readHandoverActs(sh).forEach { db.handoverActDao().insert(it) }
+                        }
+                        sheetMap[SHEET_REPAIR_ORDERS]?.let { sh ->
+                            readRepairOrders(sh).forEach { db.repairOrderDao().insert(it) }
+                        }
+                        sheetMap[SHEET_LEGACY_MONEY]?.let { sh ->
+                            readLegacyMoneyAmounts(sh).forEach { db.legacyMoneyAmountDao().insert(it) }
+                        }
+                        sheetMap[SHEET_DELETED_ITEMS]?.let { sh ->
+                            readDeletedItems(sh).forEach { db.deletedItemDao().insert(it) }
+                        }
+                        sheetMap[SHEET_TIMELINE_BRANCHES]?.let { sh ->
+                            readTimelineBranches(sh).forEach { db.timelineDao().insertBranch(it) }
+                        }
+                        sheetMap[SHEET_TIMELINE_EVENTS]?.let { sh ->
+                            readTimelineEvents(sh).forEach { db.timelineDao().insertEvent(it) }
+                        }
+                        sheetMap[SHEET_TIMELINE_SNAPSHOTS]?.let { sh ->
+                            readTimelineSnapshots(sh).forEach { db.timelineDao().insertSnapshot(it) }
                         }
                     } else {
                         LegacyProjectionRebuilder.rebuild(db)
@@ -688,7 +835,14 @@ object BackupManager {
                     scooterSerialNumber = row.getCell(5)?.asString() ?: "",
                     batteryId1 = row.getCell(6)?.asString() ?: "",
                     batteryId2 = row.getCell(7)?.asString() ?: "",
-                    additionalInfo = row.getCell(8)?.asString() ?: ""
+                    additionalInfo = row.getCell(8)?.asString() ?: "",
+                    // Cols 9-12 were added in Batch 4. Older .xlsx files have
+                    // only 9 columns — these cells will be null and defaults
+                    // kick in (AVAILABLE / null / null / 0).
+                    lifecycleStatus = row.getCell(9)?.asString() ?: Scooter.STATUS_AVAILABLE,
+                    lastServiceAt = row.getCell(10)?.asNumber()?.toLong(),
+                    nextServiceAt = row.getCell(11)?.asNumber()?.toLong(),
+                    mileageKm = row.getCell(12)?.asNumber()?.toLong() ?: 0L
                 )
             } catch (e: Exception) {
                 Log.w(TAG, "Skip scooter row: ${e.message}")
@@ -866,6 +1020,132 @@ object BackupManager {
                 Log.w(TAG, "Skip notification row: ${e.message}")
                 null
             }
+        }
+    }
+
+    private fun readHandoverActs(sheet: Sheet): List<HandoverAct> = sheet.read().drop(1).mapNotNull { row ->
+        try {
+            HandoverAct(
+                id = row.getCell(0)?.asNumber()?.toLong() ?: 0,
+                timestamp = row.getCell(1)?.asNumber()?.toLong() ?: System.currentTimeMillis(),
+                actType = row.getCell(2)?.asString() ?: HandoverAct.TYPE_HANDOVER,
+                renterId = row.getCell(3)?.asNumber()?.toInt() ?: 0,
+                scooterId = row.getCell(4)?.asNumber()?.toInt() ?: 0,
+                contractHistoryId = row.getCell(5)?.asNumber()?.toInt(),
+                mileageKm = row.getCell(6)?.asNumber()?.toLong() ?: 0L,
+                equipmentChecklist = row.getCell(7)?.asString() ?: "",
+                conditionNotes = row.getCell(8)?.asString() ?: "",
+                signedBy = row.getCell(9)?.asString() ?: "LOCAL_SYSTEM"
+            )
+        } catch (e: Exception) {
+            Log.w(TAG, "Skip handover act row: ${e.message}"); null
+        }
+    }
+
+    private fun readRepairOrders(sheet: Sheet): List<RepairOrder> = sheet.read().drop(1).mapNotNull { row ->
+        try {
+            RepairOrder(
+                id = row.getCell(0)?.asNumber()?.toLong() ?: 0,
+                scooterId = row.getCell(1)?.asNumber()?.toInt() ?: 0,
+                renterId = row.getCell(2)?.asNumber()?.toInt(),
+                scenario = row.getCell(3)?.asString() ?: RepairOrder.SCENARIO_OWNER_REPAIR,
+                status = row.getCell(4)?.asString() ?: RepairOrder.STATUS_OPEN,
+                openedAt = row.getCell(5)?.asNumber()?.toLong() ?: System.currentTimeMillis(),
+                closedAt = row.getCell(6)?.asNumber()?.toLong(),
+                diagnosis = row.getCell(7)?.asString() ?: "",
+                performer = row.getCell(8)?.asString(),
+                partsUsed = row.getCell(9)?.asString(),
+                estimatedMinor = row.getCell(10)?.asNumber()?.toLong() ?: 0L,
+                actualMinor = row.getCell(11)?.asNumber()?.toLong() ?: 0L,
+                documentNote = row.getCell(12)?.asString(),
+                pauseIntervalsJson = row.getCell(13)?.asString() ?: "[]",
+                totalPauseMs = row.getCell(14)?.asNumber()?.toLong() ?: 0L,
+                currentlyPaused = row.getCell(15)?.asBoolean() ?: false,
+                lastPausedAt = row.getCell(16)?.asNumber()?.toLong()
+            )
+        } catch (e: Exception) {
+            Log.w(TAG, "Skip repair order row: ${e.message}"); null
+        }
+    }
+
+    private fun readLegacyMoneyAmounts(sheet: Sheet): List<LegacyMoneyAmount> = sheet.read().drop(1).mapNotNull { row ->
+        try {
+            LegacyMoneyAmount(
+                id = row.getCell(0)?.asNumber()?.toLong() ?: 0,
+                entityType = row.getCell(1)?.asString() ?: "",
+                entityId = row.getCell(2)?.asNumber()?.toLong() ?: 0L,
+                field = row.getCell(3)?.asString() ?: "",
+                amountMinor = row.getCell(4)?.asNumber()?.toLong() ?: 0L,
+                migratedAt = row.getCell(5)?.asNumber()?.toLong() ?: System.currentTimeMillis()
+            )
+        } catch (e: Exception) {
+            Log.w(TAG, "Skip legacy money row: ${e.message}"); null
+        }
+    }
+
+    private fun readDeletedItems(sheet: Sheet): List<DeletedItem> = sheet.read().drop(1).mapNotNull { row ->
+        try {
+            DeletedItem(
+                id = row.getCell(0)?.asNumber()?.toLong() ?: 0,
+                sourceType = row.getCell(1)?.asString() ?: "",
+                sourceId = row.getCell(2)?.asString() ?: "",
+                title = row.getCell(3)?.asString() ?: "",
+                snapshotJson = row.getCell(4)?.asString() ?: "{}",
+                deletedAt = row.getCell(5)?.asNumber()?.toLong() ?: System.currentTimeMillis(),
+                deletedBy = row.getCell(6)?.asString() ?: "Owner",
+                reason = row.getCell(7)?.asString()
+            )
+        } catch (e: Exception) {
+            Log.w(TAG, "Skip deleted item row: ${e.message}"); null
+        }
+    }
+
+    private fun readTimelineBranches(sheet: Sheet): List<TimelineBranch> = sheet.read().drop(1).mapNotNull { row ->
+        try {
+            TimelineBranch(
+                id = row.getCell(0)?.asNumber()?.toLong() ?: 0,
+                name = row.getCell(1)?.asString() ?: "Main",
+                parentBranchId = row.getCell(2)?.asNumber()?.toLong(),
+                forkEventId = row.getCell(3)?.asNumber()?.toLong(),
+                createdAt = row.getCell(4)?.asNumber()?.toLong() ?: System.currentTimeMillis(),
+                isMain = row.getCell(5)?.asBoolean() ?: false
+            )
+        } catch (e: Exception) {
+            Log.w(TAG, "Skip timeline branch row: ${e.message}"); null
+        }
+    }
+
+    private fun readTimelineEvents(sheet: Sheet): List<TimelineEvent> = sheet.read().drop(1).mapNotNull { row ->
+        try {
+            TimelineEvent(
+                id = row.getCell(0)?.asNumber()?.toLong() ?: 0,
+                branchId = row.getCell(1)?.asNumber()?.toLong() ?: 0L,
+                timestamp = row.getCell(2)?.asNumber()?.toLong() ?: System.currentTimeMillis(),
+                actionType = row.getCell(3)?.asString() ?: "",
+                screen = row.getCell(4)?.asString() ?: "",
+                entityType = row.getCell(5)?.asString(),
+                entityId = row.getCell(6)?.asString(),
+                title = row.getCell(7)?.asString() ?: "",
+                payloadJson = row.getCell(8)?.asString() ?: "{}",
+                isMajor = row.getCell(9)?.asBoolean() ?: true,
+                isArchived = row.getCell(10)?.asBoolean() ?: false
+            )
+        } catch (e: Exception) {
+            Log.w(TAG, "Skip timeline event row: ${e.message}"); null
+        }
+    }
+
+    private fun readTimelineSnapshots(sheet: Sheet): List<TimelineSnapshot> = sheet.read().drop(1).mapNotNull { row ->
+        try {
+            TimelineSnapshot(
+                id = row.getCell(0)?.asNumber()?.toLong() ?: 0,
+                branchId = row.getCell(1)?.asNumber()?.toLong() ?: 0L,
+                eventId = row.getCell(2)?.asNumber()?.toLong(),
+                timestamp = row.getCell(3)?.asNumber()?.toLong() ?: System.currentTimeMillis(),
+                stateJson = row.getCell(4)?.asString() ?: "{}"
+            )
+        } catch (e: Exception) {
+            Log.w(TAG, "Skip timeline snapshot row: ${e.message}"); null
         }
     }
 }

@@ -10,6 +10,14 @@ interface DeletedItemDao {
     @Query("SELECT * FROM deleted_items ORDER BY deletedAt DESC, id DESC")
     fun all(): Flow<List<DeletedItem>>
 
+    /** Used by BackupManager to export the recycle bin verbatim. */
+    @Query("SELECT * FROM deleted_items ORDER BY id ASC")
+    suspend fun getAllOnce(): List<DeletedItem>
+
+    /** Used by BackupManager to truncate before re-import. */
+    @Query("DELETE FROM deleted_items")
+    suspend fun deleteAll()
+
     @Query("SELECT * FROM deleted_items WHERE id = :id LIMIT 1")
     suspend fun byId(id: Long): DeletedItem?
 
