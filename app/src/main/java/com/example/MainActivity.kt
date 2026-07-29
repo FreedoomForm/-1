@@ -90,6 +90,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.AnnotatedString
@@ -509,6 +510,14 @@ fun MainScreen(
     onLauncherPageClick: (String) -> Unit = {}
 ) {
     var currentTab by remember { mutableStateOf(initialTab) }
+    // Launcher tile taps update `initialTab` from the parent composable.
+    // Without this LaunchedEffect, those taps would be ignored because
+    // `remember { mutableStateOf(initialTab) }` only seeds the initial
+    // value once. This syncs currentTab whenever initialTab changes
+    // (e.g. when the user taps a launcher tile).
+    LaunchedEffect(initialTab) {
+        if (currentTab != initialTab) currentTab = initialTab
+    }
     var showAddDialog by remember { mutableStateOf(false) }
     var showAddScooterDialog by remember { mutableStateOf(false) }
     var renterToEdit by remember { mutableStateOf<Renter?>(null) }
@@ -1290,6 +1299,23 @@ fun MainScreen(
             )
         },
         bottomBar = {
+            // ── "Pull up" hint visibility ──────────────────────────────
+            // The hint chip appears above the bottom nav when the launcher
+            // curtain has been dragged down past the bottom nav's top edge.
+            // The launcher uses the same flipThresholdPx formula as
+            // LauncherScreen (contentHeightPx - bottomNavHeightPx - 8dp).
+            // We approximate by checking offsetPx > ( screenHeight - 2*navHeight ).
+            // Because LauncherScreen exposes its state.offsetPx directly, we
+            // can read it here to drive the hint chip.
+            val density = LocalDensity.current
+            val configuration = LocalConfiguration.current
+            val navHeightPx = with(density) { 86.dp.toPx() }   // matches ExpandableBottomNav height (14dp vertical + tile ~60dp + label)
+            val screenHeightPx = with(density) { configuration.screenHeightDp.dp.toPx() }
+            // Content area = screen - status bar(approx 24dp) - topbar(64dp) - bottomnav
+            val contentAreaHeightPx = screenHeightPx - with(density) { 88.dp.toPx() } - navHeightPx
+            val flipThresholdPx = contentAreaHeightPx - with(density) { 8.dp.toPx() }
+            val showPullUpHint = showLauncher && launcherState.offsetPx >= flipThresholdPx
+
             com.example.ui.components.ExpandableBottomNav(
                 selectedId = when (currentTab) {
                     0 -> "renters"; 1 -> "scooters"; 2 -> "contracts"; 5 -> "finansi"
@@ -1302,6 +1328,11 @@ fun MainScreen(
                         "reports" -> 4; "history" -> 7; "trash" -> 8; "settings" -> 6
                         else -> 0
                     }
+                },
+                showPullUpHint = showPullUpHint,
+                onPullUpClick = {
+                    // Pull the curtain back to the top.
+                    launcherState.offsetPx = 0f
                 }
             )
         }
@@ -1471,11 +1502,19 @@ fun MainScreen(
                 ) {
                     // Main content
                     Column(modifier = Modifier.fillMaxSize()) {
-                        // Pull handle indicator at top
+                        // ── Pull handle indicator REMOVED per user request ──
+                        // Previously a small 4dp × 40dp gray bar sat here
+                        // between the TopAppBar (universal buttons) and the
+                        // search bar. User found it visually noisy. The
+                        // pull-down shade can still be triggered by swiping
+                        // down anywhere in the renters page header area;
+                        // we keep the gesture detector on a 0-height Box so
+                        // the shadeExpanded logic still works but nothing
+                        // is rendered.
                         Box(
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .height(24.dp)
+                                .height(0.dp)
                                 .pointerInput(Unit) {
                                     detectVerticalDragGestures(
                                         onDragEnd = { if (shadeExpanded) shadeExpanded = false },
@@ -1484,19 +1523,8 @@ fun MainScreen(
                                             if (dragAmount > 50) shadeExpanded = true
                                         }
                                     )
-                                },
-                            contentAlignment = Alignment.Center
-                        ) {
-                            Box(
-                                modifier = Modifier
-                                    .width(40.dp)
-                                    .height(4.dp)
-                                    .background(
-                                        if (shadeExpanded) ClaudeAccent else ClaudeAccent.copy(alpha = 0.3f),
-                                        RoundedCornerShape(2.dp)
-                                    )
-                            )
-                        }
+                                }
+                        )
                         
                         // Unified search bar with calendar + filter buttons
                         UnifiedSearchBar(

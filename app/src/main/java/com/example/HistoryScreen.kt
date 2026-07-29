@@ -11,6 +11,7 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -145,22 +146,41 @@ fun HistoryScreen(
     val filteredEvents = remember(chronological, filterActionTypes, filterEntityType, filterMoneyOnly, filterStartMs, filterEndMs, filterSearchText) {
         chronological.filter { ev ->
             val upperAction = ev.actionType.uppercase()
-            // Multi-select action-type filter. A primary timecode matches a
-            // selected type when its actionType contains CREATE/EDIT/DELETE
-            // substring. Secondary actions (no CREATE/EDIT/DELETE in the
-            // actionType) are shown only if ALL three types are enabled
-            // (i.e. no filter applied). When the user has disabled at least
-            // one type, only matching primary timecodes are shown.
+            // ── Action-type filter (per user spec 2026-07-29) ──────────
+            // Primary actions are split into 3 color-coded categories:
+            //   CREATE (green) — anything containing CREATE/INSERT/ADD/PAYMENT
+            //   EDIT   (blue)  — anything containing EDIT/UPDATE/MODIFY
+            //   DELETE (red)   — anything containing DELETE/REMOVE/TERMINATE/CANCEL
+            // Secondary actions = everything else (gray). Per user spec:
+            //   "второстепенные блоки действий являются всеми остальными
+            //    действиями которые не являются первостепенными"
+            // Examples: search query typed, page navigated, button tapped,
+            // text typed in any input, etc.
+            //
+            // Filter behavior:
+            //   • Secondary actions are ALWAYS shown regardless of which
+            //     primary filter chips are toggled on/off. They are not
+            //     affected by the type filter — only by the time-range /
+            //     entity / search-text filters below.
+            //   • Primary actions are filtered by the enabled chips:
+            //       - All 3 ON → show all primary actions (no type filter)
+            //       - None ON  → hide all primary actions (but secondary
+            //                    actions still show)
+            //       - Otherwise → primary must match one of the enabled types
+            val isCreate = upperAction.contains("CREATE") || upperAction.contains("INSERT") || upperAction.contains("ADD") || upperAction.contains("PAYMENT")
+            val isEdit   = upperAction.contains("EDIT") || upperAction.contains("UPDATE") || upperAction.contains("MODIFY")
+            val isDelete = upperAction.contains("DELETE") || upperAction.contains("REMOVE") || upperAction.contains("TERMINATE") || upperAction.contains("CANCEL")
+            val isPrimary = isCreate || isEdit || isDelete
+
             val typeMatch = when {
+                // Secondary actions ALWAYS pass the type filter.
+                !isPrimary -> true
                 // All 3 ON → show everything (no type filter active)
                 filterActionTypes.size == 3 -> true
-                // None ON → show nothing (user disabled all)
+                // None ON → hide all primary actions
                 filterActionTypes.isEmpty() -> false
                 // Otherwise: a primary action must match one of the enabled types
                 else -> {
-                    val isCreate = upperAction.contains("CREATE") || upperAction.contains("INSERT") || upperAction.contains("ADD") || upperAction.contains("PAYMENT")
-                    val isEdit = upperAction.contains("EDIT") || upperAction.contains("UPDATE") || upperAction.contains("MODIFY")
-                    val isDelete = upperAction.contains("DELETE") || upperAction.contains("REMOVE") || upperAction.contains("TERMINATE") || upperAction.contains("CANCEL")
                     (isCreate && "CREATE" in filterActionTypes) ||
                     (isEdit && "EDIT" in filterActionTypes) ||
                     (isDelete && "DELETE" in filterActionTypes)
@@ -461,14 +481,14 @@ fun HistoryScreen(
 
         // Content area — wrapped in a pinch-to-zoom container so the user
         // can scale the scene with two fingers in ANY view mode (TABLE,
-        // VISUAL, or TREE). TREE mode additionally uses the pinch value to
-        // drive block granularity (day/hour/15min); TABLE and VISUAL apply
-        // the zoom as a graphicsLayer scale (true visual zoom + pan).
+        // VISUAL, or TREE). All three modes apply the pinch as a true
+        // graphicsLayer scale + pan (visual zoom). TREE mode additionally
+        // feeds the zoom into treeZoom so block granularity changes too.
         Box(
             modifier = Modifier
                 .fillMaxSize()
                 .clipToBounds()
-                .pointerInput(Unit) {
+                .pointerInput(viewMode) {
                     detectTransformGestures { _, pan, zoomChange, _ ->
                         universalZoom = (universalZoom * zoomChange).coerceIn(0.5f, 3f)
                         universalPanX += pan.x
@@ -481,10 +501,14 @@ fun HistoryScreen(
                     }
                 }
                 .graphicsLayer(
-                    scaleX = if (viewMode == HistoryViewMode.TREE) 1f else universalZoom,
-                    scaleY = if (viewMode == HistoryViewMode.TREE) 1f else universalZoom,
-                    translationX = if (viewMode == HistoryViewMode.TREE) 0f else universalPanX,
-                    translationY = if (viewMode == HistoryViewMode.TREE) 0f else universalPanY
+                    // Apply universalZoom to ALL view modes (including TREE)
+                    // so the user gets true visual pinch-to-zoom everywhere.
+                    // Previously TREE was forced to 1f, which is why the user
+                    // reported "I can't zoom the tree with my fingers".
+                    scaleX = universalZoom,
+                    scaleY = universalZoom,
+                    translationX = universalPanX,
+                    translationY = universalPanY
                 )
         ) {
             when (viewMode) {
@@ -690,9 +714,22 @@ private fun VisualTimelineView(
     formatter: SimpleDateFormat,
     timeOnlyFmt: SimpleDateFormat
 ) {
+    // ── Visual timeline view (rewritten per user spec 2026-07-29) ───────
+    // User: "там должно было рендериться окошко которое показывает все
+    //         второстепенные и первостепенные действие то есть каждый шаг
+    //         пользователя в приложении"
+    // Previous implementation showed only ONE big card (the event nearest
+    // the slider) above a dark playback panel — which the user perceived
+    // as a useless "black box". The new layout is a vertical scrolling
+    // list of ALL events (primary AND secondary), each rendered as a
+    // color-coded chip with timestamp + title + actionType + screen.
+    // The slider + playback controls are kept at the bottom (now on
+    // ClaudeCard background instead of dark gray).
     if (events.isEmpty()) {
         Box(
-            modifier = Modifier.fillMaxSize(),
+            modifier = Modifier
+                .fillMaxSize()
+                .background(ClaudeBackground),
             contentAlignment = Alignment.Center
         ) {
             Text("Voqealar topilmadi", color = ClaudeTextSecondary)
@@ -703,178 +740,179 @@ private fun VisualTimelineView(
     val minTime = events.minOfOrNull { it.timestamp } ?: 0L
     val maxTime = events.maxOfOrNull { it.timestamp } ?: System.currentTimeMillis()
     val range = (maxTime - minTime).coerceAtLeast(1L)
-
     val currentTime = minTime + (timelinePosition * range).toLong()
-    val currentEvent = events.minByOrNull { kotlin.math.abs(it.timestamp - currentTime) }
 
-    // Primary-action timecodes (max 30 ticks for legibility).
-    val primaryTicks = remember(events, minTime, range) {
-        events
-            .filter { isPrimaryAction(it.actionType) }
-            .take(30)
-            .map { ev ->
-                val pos = ((ev.timestamp - minTime).toFloat() / range).coerceIn(0f, 1f)
-                Triple(ev, pos, getActionColor(ev.actionType))
-            }
-    }
+    val listState = rememberLazyListState()
 
-    Column(modifier = Modifier.fillMaxSize()) {
-        // ── Event display area ───────────────────────────────────────────
-        Box(
+    Column(modifier = Modifier
+        .fillMaxSize()
+        .background(ClaudeBackground)
+    ) {
+        // ── Header summary ───────────────────────────────────────────────
+        Surface(
             modifier = Modifier
                 .fillMaxWidth()
-                .weight(1f)
-                .padding(16.dp),
-            contentAlignment = Alignment.Center
+                .padding(horizontal = 12.dp, vertical = 6.dp),
+            shape = RoundedCornerShape(12.dp),
+            color = ClaudeCard
         ) {
-            if (currentEvent != null) {
-                val actionColor = getActionColor(currentEvent.actionType)
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 12.dp, vertical = 8.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    "Harakatlar tarixi",
+                    fontWeight = FontWeight.Bold,
+                    color = ClaudeText,
+                    style = MaterialTheme.typography.titleMedium
+                )
+                Spacer(Modifier.weight(1f))
+                Text(
+                    "${events.size} ta qadam",
+                    color = ClaudeTextSecondary,
+                    style = MaterialTheme.typography.bodySmall
+                )
+            }
+        }
+
+        // ── Scrolling list of ALL actions (primary + secondary) ─────────
+        // Each action is a chip colored by its type:
+        //   • CREATE  → green tint
+        //   • EDIT    → blue tint
+        //   • DELETE  → red tint
+        //   • Secondary (anything else) → gray tint
+        // This is the "window that shows all user steps" the user asked for.
+        LazyColumn(
+            state = listState,
+            modifier = Modifier
+                .fillMaxWidth()
+                .weight(1f),
+            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
+            verticalArrangement = Arrangement.spacedBy(6.dp)
+        ) {
+            items(events) { ev ->
+                val actionColor = getActionColor(ev.actionType)
+                val isPrimary = isPrimaryAction(ev.actionType)
+                val isSelected = ev.id == selectedEventId
 
                 Surface(
-                    modifier = Modifier.fillMaxWidth(0.9f),
-                    shape = RoundedCornerShape(16.dp),
-                    color = actionColor.copy(alpha = 0.1f),
-                    border = androidx.compose.foundation.BorderStroke(2.dp, actionColor)
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .combinedClickable(
+                            onClick = { onEventClick(ev) },
+                            onLongClick = { onEventClick(ev) }
+                        ),
+                    shape = RoundedCornerShape(10.dp),
+                    color = if (isSelected) actionColor.copy(alpha = 0.18f) else ClaudeCard,
+                    border = androidx.compose.foundation.BorderStroke(
+                        width = if (isSelected) 2.dp else 1.dp,
+                        color = if (isSelected) actionColor else ClaudeDivider
+                    )
                 ) {
-                    Column(
-                        modifier = Modifier.padding(24.dp),
-                        horizontalAlignment = Alignment.CenterHorizontally
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 12.dp, vertical = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically
                     ) {
-                        // Time badge — colored by action type (3-color system)
-                        Surface(
-                            shape = RoundedCornerShape(20.dp),
-                            color = actionColor
-                        ) {
-                            Text(
-                                formatter.format(Date(currentEvent.timestamp)),
-                                modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
-                                color = Color.White,
-                                fontWeight = FontWeight.Bold
-                            )
-                        }
-
-                        Spacer(Modifier.height(16.dp))
-
-                        Text(
-                            currentEvent.title,
-                            style = MaterialTheme.typography.headlineSmall,
-                            fontWeight = FontWeight.Bold,
-                            color = ClaudeText,
-                            textAlign = TextAlign.Center
+                        // Colored stripe at left edge indicates action type.
+                        Box(
+                            modifier = Modifier
+                                .size(width = 6.dp, height = 36.dp)
+                                .background(actionColor, RoundedCornerShape(3.dp))
                         )
+                        Spacer(Modifier.width(10.dp))
 
-                        Spacer(Modifier.height(8.dp))
-
-                        Row {
-                            Surface(
-                                shape = RoundedCornerShape(4.dp),
-                                color = actionColor.copy(alpha = 0.2f)
-                            ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = ev.title.ifBlank { ev.actionType },
+                                color = ClaudeText,
+                                fontWeight = if (isPrimary) FontWeight.SemiBold else FontWeight.Normal,
+                                fontSize = 13.sp,
+                                maxLines = 1,
+                                overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
+                            )
+                            Spacer(Modifier.height(2.dp))
+                            Row(verticalAlignment = Alignment.CenterVertically) {
                                 Text(
-                                    currentEvent.actionType,
-                                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
-                                    style = MaterialTheme.typography.labelMedium,
-                                    color = actionColor
+                                    text = ev.actionType,
+                                    color = actionColor,
+                                    fontSize = 10.sp,
+                                    fontWeight = FontWeight.Medium
                                 )
+                                if (ev.screen.isNotBlank()) {
+                                    Text(
+                                        text = " · ${ev.screen}",
+                                        color = ClaudeTextSecondary,
+                                        fontSize = 10.sp
+                                    )
+                                }
+                                if (!isPrimary) {
+                                    Text(
+                                        text = " · ikkilamchi",
+                                        color = ClaudeTextSecondary,
+                                        fontSize = 10.sp,
+                                        fontStyle = androidx.compose.ui.text.style.FontStyle.Italic
+                                    )
+                                }
                             }
-                            Spacer(Modifier.width(8.dp))
-                            Text(
-                                currentEvent.screen,
-                                style = MaterialTheme.typography.labelMedium,
-                                color = ClaudeTextSecondary
-                            )
                         }
 
-                        currentEvent.entityType?.let { entityType ->
-                            Spacer(Modifier.height(4.dp))
-                            Text(
-                                entityType,
-                                style = MaterialTheme.typography.labelSmall,
-                                color = ClaudeTextSecondary
-                            )
-                        }
+                        Spacer(Modifier.width(8.dp))
+                        Text(
+                            text = timeOnlyFmt.format(Date(ev.timestamp)),
+                            color = ClaudeTextSecondary,
+                            fontSize = 10.sp
+                        )
                     }
                 }
             }
         }
 
-        // ── Dark playback panel ──────────────────────────────────────────
+        // ── Playback slider + controls (bottom panel) ───────────────────
+        // Replaced the old dark gray (0xFF1A1A1A) panel with a ClaudeCard
+        // panel so it matches the cream theme. The slider lets the user
+        // scrub through time; the time label shows current scrub position.
         Surface(
             modifier = Modifier.fillMaxWidth(),
-            color = Color(0xFF1A1A1A),
-            shape = RoundedCornerShape(topStart = 16.dp, topEnd = 16.dp)
+            color = ClaudeCard,
+            shape = RoundedCornerShape(topStart = 16.dp, topEnd = 16.dp),
+            border = androidx.compose.foundation.BorderStroke(1.dp, ClaudeDivider)
         ) {
-            Column(modifier = Modifier.padding(16.dp)) {
-                // ── Slider with ON-TRACK timecodes + branch sliders ON TOP ──
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(48.dp)  // room for ticks above slider + branch sliders below
-                ) {
-                    // Branch sliders drawn FIRST (lowest layer) — thin colored bars
-                    // spanning from branch start to end of timeline.
-                    branchSliders.forEachIndexed { idx, (startTime, color) ->
-                        val startPos = ((startTime - minTime).toFloat() / range).coerceIn(0f, 1f)
-                        Box(
-                            modifier = Modifier
-                                .fillMaxWidth(1f - startPos)
-                                .align(Alignment.BottomStart)
-                                .padding(start = (startPos * 100f * 3.6f).dp.let { _ -> (startPos * 320f).dp.coerceAtMost(320.dp) })
-                                .height(3.dp)
-                                .background(color, RoundedCornerShape(2.dp))
-                        )
-                    }
-
-                    // Primary-action timecodes: dots positioned along the slider track.
-                    // Each tick is colored by its action type (3-color system).
-                    primaryTicks.forEach { (ev, pos, color) ->
-                        Box(
-                            modifier = Modifier
-                                .offset(x = (pos * 320f).dp.let { dp -> dp.coerceAtMost(320.dp) })
-                                .align(Alignment.TopStart)
-                                .padding(top = 6.dp)
-                                .size(10.dp)
-                                .background(color, CircleShape)
-                                .border(1.dp, Color.White, CircleShape)
-                                .clickable { onEventClick(ev) }
-                        )
-                    }
-
-                    // Main slider (drawn LAST → topmost layer for thumb interaction)
-                    Slider(
-                        value = timelinePosition,
-                        onValueChange = onPositionChange,
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .align(Alignment.CenterStart),
-                        colors = SliderDefaults.colors(
-                            thumbColor = ClaudeAccent,
-                            activeTrackColor = ClaudeAccent,
-                            inactiveTrackColor = Color(0xFF3A3A3A)
-                        )
+            Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp)) {
+                // Slider — accent-colored thumb + track
+                Slider(
+                    value = timelinePosition,
+                    onValueChange = onPositionChange,
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = SliderDefaults.colors(
+                        thumbColor = ClaudeAccent,
+                        activeTrackColor = ClaudeAccent,
+                        inactiveTrackColor = ClaudeDivider
                     )
-                }
+                )
 
-                Spacer(Modifier.height(8.dp))
+                Spacer(Modifier.height(4.dp))
 
-                // ── Playback controls ─────────────────────────────────────
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.Center,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     IconButton(onClick = { onPositionChange(0f) }) {
-                        Icon(Icons.Default.SkipPrevious, "Boshiga", tint = Color.White)
+                        Icon(Icons.Default.SkipPrevious, "Boshiga", tint = ClaudeAccent)
                     }
                     IconButton(onClick = {
                         onPositionChange((timelinePosition - 0.1f).coerceAtLeast(0f))
                     }) {
-                        Icon(Icons.Default.FastRewind, "Orqaga", tint = Color.White)
+                        Icon(Icons.Default.FastRewind, "Orqaga", tint = ClaudeAccent)
                     }
 
                     Text(
                         timeOnlyFmt.format(Date(currentTime)),
-                        color = Color.White,
+                        color = ClaudeText,
                         fontWeight = FontWeight.Bold,
                         modifier = Modifier.padding(horizontal = 16.dp)
                     )
@@ -882,10 +920,10 @@ private fun VisualTimelineView(
                     IconButton(onClick = {
                         onPositionChange((timelinePosition + 0.1f).coerceAtMost(1f))
                     }) {
-                        Icon(Icons.Default.FastForward, "Oldinga", tint = Color.White)
+                        Icon(Icons.Default.FastForward, "Oldinga", tint = ClaudeAccent)
                     }
                     IconButton(onClick = { onPositionChange(1f) }) {
-                        Icon(Icons.Default.SkipNext, "Oxiriga", tint = Color.White)
+                        Icon(Icons.Default.SkipNext, "Oxiriga", tint = ClaudeAccent)
                     }
                 }
             }
