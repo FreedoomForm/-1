@@ -1,8 +1,10 @@
 package com.example.data.ai
 
+import android.content.Context
 import android.util.Base64
 import android.util.Log
 import com.example.BuildConfig
+import com.example.data.SettingsRepository
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -29,8 +31,36 @@ import java.util.concurrent.TimeUnit
  * запускать их в `Dispatchers.IO` корутины.
  */
 class MistralApiService(
-    private val client: OkHttpClient = defaultClient
+    private val client: OkHttpClient = defaultClient,
+    /**
+     * Контекст приложения для чтения пользовательского API-ключа из
+     * SettingsRepository. Если null — используется только BuildConfig.
+     * Рекомендуется всегда передавать контекст при создании сервиса,
+     * чтобы сканер OCR работал с ключом, введённым в настройках.
+     */
+    private val context: Context? = null
 ) {
+
+    /**
+     * Возвращает активный Mistral API ключ.
+     *
+     * Приоритет:
+     *   1. Ключ из SettingsRepository (введён пользователем в Настройках)
+     *   2. Ключ из BuildConfig.MISTRAL_API_KEY (инъекция CI/окружения)
+     *   3. Пустая строка (Mistral отключён)
+     *
+     * Пользовательский ключ имеет приоритет над BuildConfig, потому что
+     * это позволяет оперативно обновлять ключ без пересборки APK —
+     * например, если истёк старый ключ или пользователь перешёл на свой
+     * собственный аккаунт Mistral.
+     */
+    private fun resolveApiKey(): String {
+        val userKey = context?.let { SettingsRepository(it).mistralApiKey }?.trim()
+        if (!userKey.isNullOrEmpty()) {
+            return userKey
+        }
+        return BuildConfig.MISTRAL_API_KEY.trim()
+    }
 
     /**
      * Шаг 1: распознать текст на фотографии документа.
@@ -42,8 +72,10 @@ class MistralApiService(
      * @return распознанный текст (Markdown) или пустая строка при ошибке
      */
     fun performOcr(imageFile: File): String {
-        if (BuildConfig.MISTRAL_API_KEY.isBlank()) {
-            Log.w(TAG, "Mistral OCR skipped: key is not configured")
+        val apiKey = resolveApiKey()
+        if (apiKey.isBlank()) {
+            Log.w(TAG, "Mistral OCR skipped: key is not configured. " +
+                "Enter Mistral API key in Settings → AI Skaner to enable OCR.")
             return ""
         }
         try {
@@ -73,7 +105,7 @@ class MistralApiService(
 
             val request = Request.Builder()
                 .url(ENDPOINT_OCR)
-                .addHeader("Authorization", "Bearer ${BuildConfig.MISTRAL_API_KEY}")
+                .addHeader("Authorization", "Bearer $apiKey")
                 .addHeader("Content-Type", "application/json")
                 .addHeader("Accept", "application/json")
                 .post(requestBody.toRequestBody("application/json".toMediaType()))
@@ -130,8 +162,10 @@ class MistralApiService(
      * @return "сырая" строка ответа модели (нужно парсить через [CommandExecutor])
      */
     fun generateCommand(ocrText: String, dbSnapshot: String = ""): String {
-        if (BuildConfig.MISTRAL_API_KEY.isBlank()) {
-            Log.w(TAG, "Mistral command generation skipped: key is not configured")
+        val apiKey = resolveApiKey()
+        if (apiKey.isBlank()) {
+            Log.w(TAG, "Mistral command generation skipped: key is not configured. " +
+                "Enter Mistral API key in Settings → AI Skaner.")
             return ""
         }
         try {
@@ -182,7 +216,7 @@ class MistralApiService(
 
             val request = Request.Builder()
                 .url(ENDPOINT_CHAT)
-                .addHeader("Authorization", "Bearer ${BuildConfig.MISTRAL_API_KEY}")
+                .addHeader("Authorization", "Bearer $apiKey")
                 .addHeader("Content-Type", "application/json")
                 .addHeader("Accept", "application/json")
                 .post(requestBody.toRequestBody("application/json".toMediaType()))

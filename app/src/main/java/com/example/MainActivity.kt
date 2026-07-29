@@ -78,6 +78,8 @@ import androidx.compose.material.icons.filled.Receipt
 import androidx.compose.material.icons.filled.ReceiptLong
 import androidx.compose.material.icons.filled.RequestQuote
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.Visibility
+import androidx.compose.material.icons.filled.VisibilityOff
 import androidx.compose.material.icons.outlined.Notifications
 import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.foundation.ExperimentalFoundationApi
@@ -97,6 +99,7 @@ import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.input.OffsetMapping
+import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.TransformedText
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
@@ -2714,7 +2717,14 @@ fun MainScreen(
             }
         }
 
-        // ── §9.B: Launcher curtain rendered INSIDE the content Box. ─────
+        // ── §9.B: Launcher curtain rendered as a SIBLING of the Column ──
+        // (NOT inside the Column). The Column above stacks the update banner
+        // + per-tab content, which would constrain the launcher's measured
+        // height to "whatever is left after the Column" — making it appear
+        // cropped. By rendering the launcher as a direct child of the
+        // content Box, it gets the FULL content area height (= screen −
+        // topbar − bottomnav) and overlays the entire page.
+        //
         // Because the bottom bar from Scaffold lives on top of the content
         // area, the launcher will visually slide UNDER the bottom nav when
         // dragged down — exactly the spec'd behavior. The launcher is a
@@ -2722,9 +2732,9 @@ fun MainScreen(
         // points. See LauncherScreen for the full behavior contract.
         if (showLauncher) {
             val density = LocalDensity.current
-            // Approximate bottom nav height in px — used by the launcher
-            // to decide when to flip the hint arrow ("Pastga torting" ↔
-            // "Yukoriga torting") and to clamp the off-screen safe area.
+            // Kept for source compatibility — LauncherScreen now uses
+            // BoxWithConstraints to get the real container height, so this
+            // value is no longer authoritative.
             val bottomNavHeightPx = with(density) { 72.dp.toPx() }
             com.example.ui.components.LauncherScreen(
                 state = launcherState,
@@ -4124,6 +4134,84 @@ fun SettingsScreen(
                         shape = RoundedCornerShape(8.dp),
                         singleLine = true
                     )
+                }
+
+                HorizontalDivider()
+
+                // ── Mistral AI API kaliti ──────────────────────────────────
+                // Foydalanuvchi o'z Mistral API kalitini shu yerda kiritadi.
+                // Kalit skaner OCR va AI komanda generatsiyasi uchun ishlatiladi.
+                // Standart kalit allaqachon kiritilgan — foydalanuvchi xohlasa
+                // o'zgartirishi mumkin.
+                val mistralContext = LocalContext.current
+                val mistralSettingsRepo = remember { com.example.data.SettingsRepository(mistralContext) }
+                var mistralApiKey by remember { mutableStateOf(mistralSettingsRepo.mistralApiKey) }
+                var mistralKeyVisible by remember { mutableStateOf(false) }
+
+                Column {
+                    Text(
+                        "AI Skaner (Mistral API)",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = ClaudeText
+                    )
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Text(
+                        "Skaner OCR ishlashi uchun Mistral AI API kaliti kerak. " +
+                            "Standart kalit allaqachon kiritilgan. O'z kalitingizni " +
+                            "ishlatmoqchi bo'lsangiz, uni shu yerda almashtiring. " +
+                            "Kalit olinadi: console.mistral.ai → API Keys",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = ClaudeTextSecondary
+                    )
+                    Spacer(modifier = Modifier.height(8.dp))
+                    OutlinedTextField(
+                        value = mistralApiKey,
+                        onValueChange = {
+                            mistralApiKey = it
+                            mistralSettingsRepo.mistralApiKey = it
+                        },
+                        label = { Text("Mistral API kaliti") },
+                        modifier = Modifier.fillMaxWidth(),
+                        shape = RoundedCornerShape(8.dp),
+                        singleLine = true,
+                        visualTransformation = if (mistralKeyVisible)
+                            VisualTransformation.None else PasswordVisualTransformation(),
+                        trailingIcon = {
+                            IconButton(onClick = { mistralKeyVisible = !mistralKeyVisible }) {
+                                Icon(
+                                    imageVector = if (mistralKeyVisible)
+                                        Icons.Default.VisibilityOff else Icons.Default.Visibility,
+                                    contentDescription = if (mistralKeyVisible)
+                                        "Yashirish" else "Ko'rsatish",
+                                    tint = ClaudeTextSecondary
+                                )
+                            }
+                        }
+                    )
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        SecondaryButton(
+                            label = "Standartga qaytarish",
+                            icon = Icons.Default.Refresh,
+                            onClick = {
+                                mistralApiKey = com.example.data.SettingsRepository.DEFAULT_MISTRAL_API_KEY
+                                mistralSettingsRepo.mistralApiKey = mistralApiKey
+                            },
+                            modifier = Modifier.weight(1f)
+                        )
+                        SecondaryButton(
+                            label = "Tozalash",
+                            icon = Icons.Default.Clear,
+                            onClick = {
+                                mistralApiKey = ""
+                                mistralSettingsRepo.mistralApiKey = ""
+                            },
+                            modifier = Modifier.weight(1f)
+                        )
+                    }
                 }
 
                 HorizontalDivider()

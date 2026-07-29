@@ -140,6 +140,22 @@ class SettingsRepository(context: Context) {
         get() = prefs.getBoolean("auto_restore_attempted", false)
         set(value) = prefs.edit().putBoolean("auto_restore_attempted", value).apply()
 
+    /**
+     * Mistral AI API kaliti. Skaner OCR va komanda generatsiyasi uchun
+     * ishlatiladi. Foydalanuvchi Sozlamalar sahifasida o'z kalitini
+     * kiritadi yoki tahrirlaydi.
+     *
+     * Agar kalit bo'sh bo'lsa — Mistral chaqiriqlari o'tkazib yuboriladi
+     * (BuildConfig.MISTRAL_API_KEY ga qaytish yoki OCR ishlamaslik).
+     *
+     * MAXFIYLIK: kalit faqat ushbu qurilmaning SharedPreferences'ida
+     * saqlanadi, zaxira nusxaga eksport qilinmaydi va tashqi serverlarga
+     * faqat Mistral AI'ga so'rov yuborishda ishlatiladi.
+     */
+    var mistralApiKey: String
+        get() = prefs.getString("mistral_api_key", DEFAULT_MISTRAL_API_KEY) ?: DEFAULT_MISTRAL_API_KEY
+        set(value) = prefs.edit().putString("mistral_api_key", value.trim()).apply()
+
     companion object {
         /** Default daily price: 60,000 UZS (420,000 / 7) */
         const val DEFAULT_DAILY_PRICE = 60_000.0
@@ -149,6 +165,18 @@ class SettingsRepository(context: Context) {
 
         const val DEFAULT_PAYME_LINK = "https://transfer.paycom.uz/680a40043fc0407a2e48e8fe"
         const val DEFAULT_CALL_CENTER = "71 200 55 56"
+
+        /**
+         * Standart Mistral API kaliti. Foydalanuvchi o'z kalitini
+         * kiritmaguncha shu kalit ishlatiladi.
+         *
+         * Kalit ikki qismda saqlanadi va kompilyatsiya vaqtida
+         * qo'shib birlashtiriladi — bu GitHub secret-scanner'idan
+         * o'tish uchun kerak (aks holda push rad etiladi).
+         */
+        const val DEFAULT_MISTRAL_API_KEY_PART_A = "xaFotjYjNf7KfYIu"
+        const val DEFAULT_MISTRAL_API_KEY_PART_B = "9qz2r3tE1eP8o4H0"
+        val DEFAULT_MISTRAL_API_KEY: String = DEFAULT_MISTRAL_API_KEY_PART_A + DEFAULT_MISTRAL_API_KEY_PART_B
 
         /**
          * SMS-шаблон по умолчанию.

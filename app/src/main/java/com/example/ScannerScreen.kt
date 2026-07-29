@@ -291,7 +291,7 @@ fun ScannerScreen(
 
         coroutineScope.launch {
             try {
-                val mistral = MistralApiService()
+                val mistral = MistralApiService(context = context)
                 val executor = CommandExecutor(context)
 
                 // Шаг 1: OCR для каждого фото, тексты склеиваем
