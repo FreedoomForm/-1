@@ -30,6 +30,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -856,7 +857,7 @@ private fun VisualTimelineView(
                                         text = " · ikkilamchi",
                                         color = ClaudeTextSecondary,
                                         fontSize = 10.sp,
-                                        fontStyle = androidx.compose.ui.text.style.FontStyle.Italic
+                                        fontStyle = FontStyle.Italic
                                     )
                                 }
                             }
