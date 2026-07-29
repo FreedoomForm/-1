@@ -17,6 +17,7 @@ import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -117,11 +118,18 @@ val DefaultLauncherPages: List<LauncherPage> = listOf(
  * the top of the content area (just below the top app bar). Positive
  * values move the panel DOWN.
  *
+ * Range:
+ *   0           → panel fully visible at the top of the content area.
+ *   containerH  → panel fully scrolled UNDER the bottom nav (no visible
+ *                 pixels above the nav). The external "pull up" hint
+ *                 chip on ExpandableBottomNav takes over as the grab
+ *                 handle.
+ *
  * [panelHiddenUnderNav] is updated by [LauncherScreen] every recomposition
- * based on the actual on-screen Box dimensions. It is true when the
- * panel's top edge has been dragged below the bottom nav's top edge —
- * i.e., the panel is no longer visible above the bottom nav and the
- * external "pull up" hint chip (on ExpandableBottomNav) should appear.
+ * based on the actual on-screen Box dimensions. True once the panel's
+ * visible portion above the bottom nav becomes smaller than the hint
+ * chip height — i.e., the user can no longer grab the panel directly
+ * and needs the external pull-up chip to bring it back.
  */
 class LauncherCurtainState {
     var offsetPx by mutableStateOf(0f)
@@ -147,10 +155,9 @@ fun LauncherScreen(
 
     // Use BoxWithConstraints to get the actual on-screen height of the
     // launcher's container (= Scaffold content area = screen − topbar −
-    // bottomnav). The previous calculation subtracted only bottomNavHeightPx
-    // from the full screen height, which incorrectly included the topbar —
-    // causing the panel to be draggable further down than the visible area
-    // and breaking the "panel hidden under nav" detection.
+    // bottomnav). This is the full vertical space the launcher is allowed
+    // to occupy; when offset == containerHeightPx the panel has fully
+    // scrolled off the bottom of this area (under the bottom nav).
     BoxWithConstraints(
         modifier = Modifier
             .fillMaxSize()
@@ -158,22 +165,35 @@ fun LauncherScreen(
     ) {
         val containerHeightPx = with(density) { maxHeight.toPx() }
 
-        // Chip height in px (used for clamping so the chip itself is never
-        // pushed under the bottom nav).
-        val chipHeightPx = with(density) { 36.dp.toPx() }
-
-        // Maximum downward offset = position where the panel's top edge
-        // sits exactly chipHeightPx above the bottom of the container
-        // (= top of the bottom nav). This guarantees the hint chip on the
-        // panel remains visible above the bottom nav.
-        val maxOffsetPx = (containerHeightPx - chipHeightPx).coerceAtLeast(0f)
+        // ── Drag clamp ────────────────────────────────────────────────
+        // Allow the panel to scroll the FULL container height — i.e.,
+        // completely under the bottom nav. Previously this was clamped
+        // to (containerHeight − chipHeight), which prevented the panel
+        // from ever reaching the "hidden under nav" state and broke
+        // the pull-up arrow visibility.
+        //
+        // The small extra 32.px below keeps a tiny sliver of the panel
+        // (the hint chip background) reachable at the very bottom so
+        // the user has SOMETHING to grab if they don't notice the
+        // external chip — but the external chip is the primary handle.
+        val maxOffsetPx = containerHeightPx.coerceAtLeast(0f)
 
         // ── Hint chip mode ────────────────────────────────────────────
-        // The flip threshold is when the panel's top edge crosses the
-        // bottom nav's top edge (= bottom of the container). A small
-        // hysteresis (8 dp) avoids flickering right at the boundary.
-        val flipThresholdPx = containerHeightPx - with(density) { 8.dp.toPx() }
-        val panelHiddenUnderNav = state.offsetPx >= flipThresholdPx
+        // Flip to "hidden" once the panel's top has scrolled down past
+        // ~70% of the container height. By that point the action tiles
+        // are no longer visible above the bottom nav, so the external
+        // "Yukoriga torting" chip on ExpandableBottomNav should take
+        // over as the grab handle.
+        //
+        // Hysteresis is intentionally wide (70% show → 25% hide) to
+        // avoid the chip flickering at the boundary while dragging.
+        val hideThresholdPx = containerHeightPx * 0.70f
+        val showThresholdPx = containerHeightPx * 0.25f
+        val panelHiddenUnderNav = if (state.panelHiddenUnderNav) {
+            state.offsetPx >= showThresholdPx
+        } else {
+            state.offsetPx >= hideThresholdPx
+        }
 
         // Publish the hidden flag to the shared state so the bottom nav's
         // external "pull up" chip can react to it without duplicating the
@@ -184,9 +204,17 @@ fun LauncherScreen(
         // Always rendered (even when hidden under the bottom nav) so
         // the user can drag it back up. The Scaffold's bottom bar
         // covers the part that goes under it.
+        //
+        // The Column uses fillMaxHeight() so the panel visually occupies
+        // the WHOLE content area — this avoids the "cropped" look the
+        // user reported, where the action tiles appeared cut off at the
+        // bottom of a wrap_content Column. With fillMaxHeight the panel
+        // is a full-screen surface that the action tiles sit at the top
+        // of, with the rest of the panel being empty cream background.
         Column(
             modifier = Modifier
                 .fillMaxWidth()
+                .fillMaxHeight()
                 .offset {
                     IntOffset(0, state.offsetPx.toInt().coerceAtLeast(0))
                 }

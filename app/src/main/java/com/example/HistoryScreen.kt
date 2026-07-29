@@ -716,31 +716,22 @@ private fun VisualTimelineView(
     formatter: SimpleDateFormat,
     timeOnlyFmt: SimpleDateFormat
 ) {
-    // ── Visual timeline view (restored to "video player" layout) ───────
-    // User explicitly asked to restore the previous visual layout:
-    //   "верни визуальный вид страницы истории на прежнее состояние"
-    //
-    // Layout (top → bottom):
-    //   1. Big event card showing the event closest to the current slider
-    //      position. Time badge uses the action color (green=CREATE /
-    //      red=DELETE / blue=EDIT). For secondary actions the badge uses
-    //      gray so the user can distinguish "primary timecode" vs
-    //      "secondary user step" at a glance.
-    //   2. Dark playback panel:
-    //        ─ Timecode ticks rendered ON the slider track itself (not as
-    //          a separate row above the slider). Each tick is a small
-    //          colored dot positioned by its timestamp. Only primary
-    //          actions get timecodes with one of the 3 colors; secondary
-    //          actions are skipped (they would clutter the slider).
-    //        ─ Main slider (ClaudeAccent thumb).
-    //        ─ Branch sliders drawn ON TOP of the main slider (each branch
-    //          adds a thin colored bar that starts at the branch creation
-    //          timestamp and extends to the end of the timeline). The
-    //          newest branch is drawn last (topmost).
-    //        ─ Playback controls (skip / rewind / time / forward / skip).
+    // ── Visual timeline view (rewritten per user spec 2026-07-29) ───────
+    // User: "там должно было рендериться окошко которое показывает все
+    //         второстепенные и первостепенные действие то есть каждый шаг
+    //         пользователя в приложении"
+    // Previous implementation showed only ONE big card (the event nearest
+    // the slider) above a dark playback panel — which the user perceived
+    // as a useless "black box". The new layout is a vertical scrolling
+    // list of ALL events (primary AND secondary), each rendered as a
+    // color-coded chip with timestamp + title + actionType + screen.
+    // The slider + playback controls are kept at the bottom (now on
+    // ClaudeCard background instead of dark gray).
     if (events.isEmpty()) {
         Box(
-            modifier = Modifier.fillMaxSize(),
+            modifier = Modifier
+                .fillMaxSize()
+                .background(ClaudeBackground),
             contentAlignment = Alignment.Center
         ) {
             Text("Voqealar topilmadi", color = ClaudeTextSecondary)
@@ -751,209 +742,179 @@ private fun VisualTimelineView(
     val minTime = events.minOfOrNull { it.timestamp } ?: 0L
     val maxTime = events.maxOfOrNull { it.timestamp } ?: System.currentTimeMillis()
     val range = (maxTime - minTime).coerceAtLeast(1L)
-
     val currentTime = minTime + (timelinePosition * range).toLong()
-    val currentEvent = events.minByOrNull { kotlin.math.abs(it.timestamp - currentTime) }
 
-    // Primary-action timecodes (max 30 ticks for legibility).
-    val primaryTicks = remember(events, minTime, range) {
-        events
-            .filter { isPrimaryAction(it.actionType) }
-            .take(30)
-            .map { ev ->
-                val pos = ((ev.timestamp - minTime).toFloat() / range).coerceIn(0f, 1f)
-                Triple(ev, pos, getActionColor(ev.actionType))
-            }
-    }
+    val listState = rememberLazyListState()
 
-    Column(modifier = Modifier.fillMaxSize()) {
-        // ── Event display area ───────────────────────────────────────────
-        Box(
+    Column(modifier = Modifier
+        .fillMaxSize()
+        .background(ClaudeBackground)
+    ) {
+        // ── Header summary ───────────────────────────────────────────────
+        Surface(
             modifier = Modifier
                 .fillMaxWidth()
-                .weight(1f)
-                .padding(16.dp),
-            contentAlignment = Alignment.Center
+                .padding(horizontal = 12.dp, vertical = 6.dp),
+            shape = RoundedCornerShape(12.dp),
+            color = ClaudeCard
         ) {
-            if (currentEvent != null) {
-                val actionColor = getActionColor(currentEvent.actionType)
-                val isPrimary = isPrimaryAction(currentEvent.actionType)
-
-                Surface(
-                    modifier = Modifier.fillMaxWidth(0.92f),
-                    shape = RoundedCornerShape(16.dp),
-                    color = actionColor.copy(alpha = 0.1f),
-                    border = androidx.compose.foundation.BorderStroke(2.dp, actionColor)
-                ) {
-                    Column(
-                        modifier = Modifier.padding(24.dp),
-                        horizontalAlignment = Alignment.CenterHorizontally
-                    ) {
-                        // Time badge — colored by action type (3-color system
-                        // for primary, gray for secondary).
-                        Surface(
-                            shape = RoundedCornerShape(20.dp),
-                            color = actionColor
-                        ) {
-                            Text(
-                                formatter.format(Date(currentEvent.timestamp)),
-                                modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
-                                color = Color.White,
-                                fontWeight = FontWeight.Bold
-                            )
-                        }
-
-                        Spacer(Modifier.height(16.dp))
-
-                        Text(
-                            currentEvent.title,
-                            style = MaterialTheme.typography.headlineSmall,
-                            fontWeight = FontWeight.Bold,
-                            color = ClaudeText,
-                            textAlign = TextAlign.Center
-                        )
-
-                        Spacer(Modifier.height(8.dp))
-
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Surface(
-                                shape = RoundedCornerShape(4.dp),
-                                color = actionColor.copy(alpha = 0.2f)
-                            ) {
-                                Text(
-                                    currentEvent.actionType,
-                                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
-                                    style = MaterialTheme.typography.labelMedium,
-                                    color = actionColor,
-                                    fontWeight = FontWeight.SemiBold
-                                )
-                            }
-                            if (currentEvent.screen.isNotBlank()) {
-                                Spacer(Modifier.width(8.dp))
-                                Text(
-                                    currentEvent.screen,
-                                    style = MaterialTheme.typography.labelMedium,
-                                    color = ClaudeTextSecondary
-                                )
-                            }
-                            if (!isPrimary) {
-                                Spacer(Modifier.width(8.dp))
-                                Text(
-                                    "· ikkilamchi",
-                                    style = MaterialTheme.typography.labelMedium,
-                                    color = ClaudeTextSecondary,
-                                    fontStyle = androidx.compose.ui.text.font.FontStyle.Italic
-                                )
-                            }
-                        }
-
-                        currentEvent.entityType?.let { entityType ->
-                            Spacer(Modifier.height(4.dp))
-                            Text(
-                                entityType,
-                                style = MaterialTheme.typography.labelSmall,
-                                color = ClaudeTextSecondary
-                            )
-                        }
-
-                        // Selection hint — tap the card to select this event.
-                        Spacer(Modifier.height(12.dp))
-                        Text(
-                            if (currentEvent.id == selectedEventId) "✓ Tanlangan" else "Tanlash uchun bosing",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = if (currentEvent.id == selectedEventId) actionColor else ClaudeTextSecondary,
-                            fontWeight = if (currentEvent.id == selectedEventId) FontWeight.Bold else FontWeight.Normal
-                        )
-                    }
-                }
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth(0.92f)
-                        .height(IntrinsicSize.Min)
-                        .clickable { onEventClick(currentEvent) }
-                ) {}
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 12.dp, vertical = 8.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    "Harakatlar tarixi",
+                    fontWeight = FontWeight.Bold,
+                    color = ClaudeText,
+                    style = MaterialTheme.typography.titleMedium
+                )
+                Spacer(Modifier.weight(1f))
+                Text(
+                    "${events.size} ta qadam",
+                    color = ClaudeTextSecondary,
+                    style = MaterialTheme.typography.bodySmall
+                )
             }
         }
 
-        // ── Dark playback panel ──────────────────────────────────────────
-        Surface(
-            modifier = Modifier.fillMaxWidth(),
-            color = Color(0xFF1A1A1A),
-            shape = RoundedCornerShape(topStart = 16.dp, topEnd = 16.dp)
+        // ── Scrolling list of ALL actions (primary + secondary) ─────────
+        // Each action is a chip colored by its type:
+        //   • CREATE  → green tint
+        //   • EDIT    → blue tint
+        //   • DELETE  → red tint
+        //   • Secondary (anything else) → gray tint
+        // This is the "window that shows all user steps" the user asked for.
+        LazyColumn(
+            state = listState,
+            modifier = Modifier
+                .fillMaxWidth()
+                .weight(1f),
+            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
+            verticalArrangement = Arrangement.spacedBy(6.dp)
         ) {
-            Column(modifier = Modifier.padding(16.dp)) {
-                // ── Slider with ON-TRACK timecodes + branch sliders ON TOP ──
-                Box(
+            items(events) { ev ->
+                val actionColor = getActionColor(ev.actionType)
+                val isPrimary = isPrimaryAction(ev.actionType)
+                val isSelected = ev.id == selectedEventId
+
+                Surface(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .height(48.dp)  // room for ticks above slider + branch sliders below
+                        .combinedClickable(
+                            onClick = { onEventClick(ev) },
+                            onLongClick = { onEventClick(ev) }
+                        ),
+                    shape = RoundedCornerShape(10.dp),
+                    color = if (isSelected) actionColor.copy(alpha = 0.18f) else ClaudeCard,
+                    border = androidx.compose.foundation.BorderStroke(
+                        width = if (isSelected) 2.dp else 1.dp,
+                        color = if (isSelected) actionColor else ClaudeDivider
+                    )
                 ) {
-                    // Branch sliders drawn FIRST (lowest layer) — thin colored bars
-                    // spanning from branch start to end of timeline.
-                    branchSliders.forEachIndexed { idx, (startTime, color) ->
-                        val startPos = ((startTime - minTime).toFloat() / range).coerceIn(0f, 1f)
-                        Box(
-                            modifier = Modifier
-                                .fillMaxWidth(1f - startPos)
-                                .align(Alignment.BottomStart)
-                                .padding(start = (startPos * 320f).dp.coerceAtMost(320.dp))
-                                .height(3.dp)
-                                .background(color, RoundedCornerShape(2.dp))
-                        )
-                    }
-
-                    // Primary-action timecodes: dots positioned along the slider track.
-                    // Each tick is colored by its action type (3-color system).
-                    primaryTicks.forEach { (ev, pos, color) ->
-                        Box(
-                            modifier = Modifier
-                                .offset(x = (pos * 320f).dp.coerceAtMost(320.dp))
-                                .align(Alignment.TopStart)
-                                .padding(top = 6.dp)
-                                .size(10.dp)
-                                .background(color, CircleShape)
-                                .border(1.dp, Color.White, CircleShape)
-                                .clickable { onEventClick(ev) }
-                        )
-                    }
-
-                    // Main slider (drawn LAST → topmost layer for thumb interaction)
-                    Slider(
-                        value = timelinePosition,
-                        onValueChange = onPositionChange,
+                    Row(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .align(Alignment.CenterStart),
-                        colors = SliderDefaults.colors(
-                            thumbColor = ClaudeAccent,
-                            activeTrackColor = ClaudeAccent,
-                            inactiveTrackColor = Color(0xFF3A3A3A)
+                            .padding(horizontal = 12.dp, vertical = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        // Colored stripe at left edge indicates action type.
+                        Box(
+                            modifier = Modifier
+                                .size(width = 6.dp, height = 36.dp)
+                                .background(actionColor, RoundedCornerShape(3.dp))
                         )
-                    )
+                        Spacer(Modifier.width(10.dp))
+
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = ev.title.ifBlank { ev.actionType },
+                                color = ClaudeText,
+                                fontWeight = if (isPrimary) FontWeight.SemiBold else FontWeight.Normal,
+                                fontSize = 13.sp,
+                                maxLines = 1,
+                                overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
+                            )
+                            Spacer(Modifier.height(2.dp))
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Text(
+                                    text = ev.actionType,
+                                    color = actionColor,
+                                    fontSize = 10.sp,
+                                    fontWeight = FontWeight.Medium
+                                )
+                                if (ev.screen.isNotBlank()) {
+                                    Text(
+                                        text = " · ${ev.screen}",
+                                        color = ClaudeTextSecondary,
+                                        fontSize = 10.sp
+                                    )
+                                }
+                                if (!isPrimary) {
+                                    Text(
+                                        text = " · ikkilamchi",
+                                        color = ClaudeTextSecondary,
+                                        fontSize = 10.sp,
+                                        fontStyle = androidx.compose.ui.text.style.FontStyle.Italic
+                                    )
+                                }
+                            }
+                        }
+
+                        Spacer(Modifier.width(8.dp))
+                        Text(
+                            text = timeOnlyFmt.format(Date(ev.timestamp)),
+                            color = ClaudeTextSecondary,
+                            fontSize = 10.sp
+                        )
+                    }
                 }
+            }
+        }
 
-                Spacer(Modifier.height(8.dp))
+        // ── Playback slider + controls (bottom panel) ───────────────────
+        // Replaced the old dark gray (0xFF1A1A1A) panel with a ClaudeCard
+        // panel so it matches the cream theme. The slider lets the user
+        // scrub through time; the time label shows current scrub position.
+        Surface(
+            modifier = Modifier.fillMaxWidth(),
+            color = ClaudeCard,
+            shape = RoundedCornerShape(topStart = 16.dp, topEnd = 16.dp),
+            border = androidx.compose.foundation.BorderStroke(1.dp, ClaudeDivider)
+        ) {
+            Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp)) {
+                // Slider — accent-colored thumb + track
+                Slider(
+                    value = timelinePosition,
+                    onValueChange = onPositionChange,
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = SliderDefaults.colors(
+                        thumbColor = ClaudeAccent,
+                        activeTrackColor = ClaudeAccent,
+                        inactiveTrackColor = ClaudeDivider
+                    )
+                )
 
-                // ── Playback controls ─────────────────────────────────────
+                Spacer(Modifier.height(4.dp))
+
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.Center,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     IconButton(onClick = { onPositionChange(0f) }) {
-                        Icon(Icons.Default.SkipPrevious, "Boshiga", tint = Color.White)
+                        Icon(Icons.Default.SkipPrevious, "Boshiga", tint = ClaudeAccent)
                     }
                     IconButton(onClick = {
                         onPositionChange((timelinePosition - 0.1f).coerceAtLeast(0f))
                     }) {
-                        Icon(Icons.Default.FastRewind, "Orqaga", tint = Color.White)
+                        Icon(Icons.Default.FastRewind, "Orqaga", tint = ClaudeAccent)
                     }
 
                     Text(
                         timeOnlyFmt.format(Date(currentTime)),
-                        color = Color.White,
+                        color = ClaudeText,
                         fontWeight = FontWeight.Bold,
                         modifier = Modifier.padding(horizontal = 16.dp)
                     )
@@ -961,10 +922,10 @@ private fun VisualTimelineView(
                     IconButton(onClick = {
                         onPositionChange((timelinePosition + 0.1f).coerceAtMost(1f))
                     }) {
-                        Icon(Icons.Default.FastForward, "Oldinga", tint = Color.White)
+                        Icon(Icons.Default.FastForward, "Oldinga", tint = ClaudeAccent)
                     }
                     IconButton(onClick = { onPositionChange(1f) }) {
-                        Icon(Icons.Default.SkipNext, "Oxiriga", tint = Color.White)
+                        Icon(Icons.Default.SkipNext, "Oxiriga", tint = ClaudeAccent)
                     }
                 }
             }
