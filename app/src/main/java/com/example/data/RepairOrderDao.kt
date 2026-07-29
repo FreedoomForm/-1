@@ -26,7 +26,7 @@ interface RepairOrderDao {
         UPDATE repair_orders
         SET status = 'COMPLETED',
             closedAt = :closedAt,
-            note = COALESCE(note || ' | ', '') || :reason
+            documentNote = COALESCE(documentNote || ' | ', '') || :reason
         WHERE scooterId = :scooterId AND status = 'OPEN'
     """)
     suspend fun closeOpenForScooter(scooterId: Int, reason: String, closedAt: Long = System.currentTimeMillis())
