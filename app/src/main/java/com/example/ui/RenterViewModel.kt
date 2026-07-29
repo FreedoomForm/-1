@@ -1065,8 +1065,11 @@ class RenterViewModel(application: Application) : AndroidViewModel(application) 
                         actor = operator.displayName
                     )
                 com.example.widget.WidgetUpdater.updateAll(getApplication())
+                _smsResults.emit(SmsResult(success = true, message = "To'lov qabul qilindi: $amount so'm"))
             } catch (e: Exception) {
                 Log.e(TAG, "Variable payment failed for renter #$renterId", e)
+                _smsResults.emit(SmsResult(success = false, message = "To'lov qabul qilinmadi: ${e.message ?: "noma'lum xato"}",
+                    exceptionClass = e.javaClass.simpleName, exceptionMessage = e.message))
             }
         }
     }
@@ -1103,7 +1106,24 @@ class RenterViewModel(application: Application) : AndroidViewModel(application) 
     fun terminateRenters(renterIds: Set<Int>, forgiveDebt: Boolean = false) {
         viewModelScope.launch {
             val weeklyPrice = SettingsRepository(getApplication()).weeklyPrice
-            renterIds.forEach { id -> repository.getById(id)?.let { applyTermination(it, weeklyPrice, forgiveDebt) } }
+            var successCount = 0
+            var failCount = 0
+            renterIds.forEach { id ->
+                try {
+                    repository.getById(id)?.let {
+                        applyTermination(it, weeklyPrice, forgiveDebt)
+                        successCount++
+                    } ?: failCount++
+                } catch (e: Exception) {
+                    Log.e(TAG, "terminateRenters failed for #$id", e)
+                    failCount++
+                }
+            }
+            val msg = buildString {
+                append("${successCount} ta kontrakt tugatildi")
+                if (failCount > 0) append(", $failCount ta xatolik")
+            }
+            _smsResults.emit(SmsResult(success = failCount == 0, message = msg))
         }
     }
 

@@ -146,8 +146,10 @@ class FinansiViewModel(application: Application) : AndroidViewModel(application)
                 com.example.data.TrashService(AppDatabase.getDatabase(getApplication()))
                     .snapshotCard(card, "Card archived by ${operator.displayName}")
                 WidgetUpdater.updateAll(getApplication())
+                _userMessage.emit(true to "Karta o'chirildi: ${card.name}")
             } catch (e: Exception) {
                 Log.e(TAG, "Failed to delete card", e)
+                _userMessage.emit(false to "Karta o'chirilmadi: ${e.message ?: "noma'lum xato"}")
             }
         }
     }
@@ -164,8 +166,10 @@ class FinansiViewModel(application: Application) : AndroidViewModel(application)
                     .requirePermission(AppDatabase.getDatabase(getApplication()), com.example.data.AccessPolicy.FINANCE_REVERSE)
                 repository.unarchiveCard(card, operator.displayName)
                 WidgetUpdater.updateAll(getApplication())
+                _userMessage.emit(true to "Karta qayta ochildi: ${card.name}")
             } catch (e: Exception) {
                 Log.e(TAG, "Failed to unarchive card", e)
+                _userMessage.emit(false to "Karta qayta ochilmadi: ${e.message ?: "noma'lum xato"}")
             }
         }
     }
@@ -181,8 +185,10 @@ class FinansiViewModel(application: Application) : AndroidViewModel(application)
                     .requirePermission(AppDatabase.getDatabase(getApplication()), com.example.data.AccessPolicy.FINANCE_REVERSE)
                 repository.closeCardWithBalanceTransfer(card, toCardId, note, operator.displayName)
                 WidgetUpdater.updateAll(getApplication())
+                _userMessage.emit(true to "Karta yopildi: ${card.name}")
             } catch (e: Exception) {
                 Log.e(TAG, "Failed to close card with balance transfer", e)
+                _userMessage.emit(false to "Karta yopilmadi: ${e.message ?: "noma'lum xato"}")
             }
         }
     }
@@ -208,24 +214,26 @@ class FinansiViewModel(application: Application) : AndroidViewModel(application)
                 val actualFrom = if (reversed) toCardId else fromCardId
                 val actualTo = if (reversed) fromCardId else toCardId
                 if (actualFrom == actualTo) {
-                    Log.w(TAG, "Cannot transfer: source and destination are the same card")
+                    _userMessage.emit(false to "Manba va maqsad bir xil karta")
                     return@launch
                 }
                 if (amount <= 0.0) {
-                    Log.w(TAG, "Cannot transfer: amount must be positive")
+                    _userMessage.emit(false to "Summa musbat bo'lishi kerak")
                     return@launch
                 }
                 // Внешний перевод (с участием Tashqidan / Tashqiga) требует описание.
                 val involvesExternal =
                     VirtualCard.isExternalId(actualFrom) || VirtualCard.isExternalId(actualTo)
                 if (involvesExternal && note.isNullOrBlank()) {
-                    Log.w(TAG, "Cannot transfer: external transfer requires a non-empty note")
+                    _userMessage.emit(false to "Tashqi transfer uchun izoh majburiy")
                     return@launch
                 }
                 repository.transfer(actualFrom, actualTo, amount, note)
                 WidgetUpdater.updateAll(getApplication())
+                _userMessage.emit(true to "O'tkazma amalga oshirildi")
             } catch (e: Exception) {
                 Log.e(TAG, "Transfer failed", e)
+                _userMessage.emit(false to "O'tkazma amalga oshmadi: ${e.message ?: "noma'lum xato"}")
             }
         }
     }
@@ -252,8 +260,10 @@ class FinansiViewModel(application: Application) : AndroidViewModel(application)
                     .requirePermission(AppDatabase.getDatabase(getApplication()), com.example.data.AccessPolicy.FINANCE_REVERSE)
                 repository.reverseTransaction(id, "Bekor qilindi: foydalanuvchi so'rovi", operator.displayName)
                 WidgetUpdater.updateAll(getApplication())
+                _userMessage.emit(true to "Tranzaksiya o'chirildi")
             } catch (e: Exception) {
                 Log.e(TAG, "Failed to delete transaction", e)
+                _userMessage.emit(false to "Tranzaksiya o'chirilmadi: ${e.message ?: "noma'lum xato"}")
             }
         }
     }

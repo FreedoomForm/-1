@@ -120,84 +120,100 @@ class TransactionViewModel(application: Application) : AndroidViewModel(applicat
         notes: String?
     ) {
         viewModelScope.launch(Dispatchers.IO) {
-            // Если есть contractId — попробуем подтянуть renter/scooter из БД
-            // для большей достоверности (на случай, если переданные значения
-            // пустые).
-            val contract = contractId?.let {
-                AppDatabase.getDatabase(getApplication())
-                    .contractHistoryDao().getById(it)
-            }
-            val renter = renterRepo.getById(renterId)
+            try {
+                // Если есть contractId — попробуем подтянуть renter/scooter из БД
+                // для большей достоверности (на случай, если переданные значения
+                // пустые).
+                val contract = contractId?.let {
+                    AppDatabase.getDatabase(getApplication())
+                        .contractHistoryDao().getById(it)
+                }
+                val renter = renterRepo.getById(renterId)
 
-            val finalRenterName = renterName.ifBlank { renter?.name ?: "" }
-            val finalRenterPhone = renterPhone.ifBlank { renter?.phoneNumber ?: "" }
-            val finalScooterName = scooterName.ifBlank { contract?.scooterName ?: renter?.scooterName ?: "" }
-            val finalContractLabel = contractLabel.ifBlank {
-                contract?.let { formatContractLabel(it) } ?: ""
-            }
+                val finalRenterName = renterName.ifBlank { renter?.name ?: "" }
+                val finalRenterPhone = renterPhone.ifBlank { renter?.phoneNumber ?: "" }
+                val finalScooterName = scooterName.ifBlank { contract?.scooterName ?: renter?.scooterName ?: "" }
+                val finalContractLabel = contractLabel.ifBlank {
+                    contract?.let { formatContractLabel(it) } ?: ""
+                }
 
-            val tx = Transaction(
-                contractId = contractId,
-                renterId = renterId,
-                scooterId = scooterId ?: renter?.scooterId,
-                timestamp = timestamp,
-                type = type,
-                amount = amount,
-                notes = notes?.ifBlank { null },
-                renterName = finalRenterName,
-                renterPhone = finalRenterPhone,
-                scooterName = finalScooterName,
-                contractLabel = finalContractLabel
-            )
-            val legacyId = repo.insert(tx)
-            // Manual entries are also appended to the universal journal. They
-            // do not change a card automatically: cash movement must be made
-            // through the card-transfer screen, avoiding invisible balances.
-            val (operationType, direction) = when (type) {
-                Transaction.TYPE_PAYMENT -> BusinessOperation.TYPE_RENT_PAYMENT to BusinessOperation.DIRECTION_INCOME
-                Transaction.TYPE_REPAIR -> BusinessOperation.TYPE_EXPENSE to BusinessOperation.DIRECTION_EXPENSE
-                Transaction.TYPE_PENALTY -> BusinessOperation.TYPE_PENALTY_PAYMENT to BusinessOperation.DIRECTION_INCOME
-                else -> BusinessOperation.TYPE_ADJUSTMENT to BusinessOperation.DIRECTION_LIABILITY
+                val tx = Transaction(
+                    contractId = contractId,
+                    renterId = renterId,
+                    scooterId = scooterId ?: renter?.scooterId,
+                    timestamp = timestamp,
+                    type = type,
+                    amount = amount,
+                    notes = notes?.ifBlank { null },
+                    renterName = finalRenterName,
+                    renterPhone = finalRenterPhone,
+                    scooterName = finalScooterName,
+                    contractLabel = finalContractLabel
+                )
+                val legacyId = repo.insert(tx)
+                if (legacyId <= 0L) {
+                    _userMessage.emit(false to "Tranzaksiya saqlanmadi (konflikt)")
+                    return@launch
+                }
+                // Manual entries are also appended to the universal journal. They
+                // do not change a card automatically: cash movement must be made
+                // through the card-transfer screen, avoiding invisible balances.
+                val (operationType, direction) = when (type) {
+                    Transaction.TYPE_PAYMENT -> BusinessOperation.TYPE_RENT_PAYMENT to BusinessOperation.DIRECTION_INCOME
+                    Transaction.TYPE_REPAIR -> BusinessOperation.TYPE_EXPENSE to BusinessOperation.DIRECTION_EXPENSE
+                    Transaction.TYPE_PENALTY -> BusinessOperation.TYPE_PENALTY_PAYMENT to BusinessOperation.DIRECTION_INCOME
+                    else -> BusinessOperation.TYPE_ADJUSTMENT to BusinessOperation.DIRECTION_LIABILITY
+                }
+                if (amount > 0.0 && amount.isFinite()) {
+                    database.businessOperationDao().insert(BusinessOperation(
+                        occurredAt = timestamp, type = operationType, direction = direction,
+                        amountMinor = BusinessOperation.toMinor(amount), renterId = renterId.takeIf { it > 0 },
+                        scooterId = scooterId, contractId = contractId,
+                        legacyTransactionId = legacyId.toInt(), note = notes?.ifBlank { null }
+                    ))
+                }
+                _userMessage.emit(true to "Tranzaksiya yaratildi")
+            } catch (e: Exception) {
+                Log.e("TransactionVM", "createTransaction failed", e)
+                _userMessage.emit(false to "Tranzaksiya yaratilmadi: ${e.message ?: "noma'lum xato"}")
             }
-            if (amount > 0.0 && amount.isFinite()) {
-                database.businessOperationDao().insert(BusinessOperation(
-                    occurredAt = timestamp, type = operationType, direction = direction,
-                    amountMinor = BusinessOperation.toMinor(amount), renterId = renterId.takeIf { it > 0 },
-                    scooterId = scooterId, contractId = contractId,
-                    legacyTransactionId = legacyId.toInt(), note = notes?.ifBlank { null }
-                ))
-            }
-            _userMessage.emit(true to "Tranzaksiya yaratildi")
         }
     }
 
     fun updateTransaction(transaction: Transaction) {
         viewModelScope.launch(Dispatchers.IO) {
-            // Если обновили renterId — подтянем свежие renterName/Phone.
-            val toSave = if (transaction.renterName.isBlank() || transaction.renterPhone.isBlank()) {
-                val renter = renterRepo.getById(transaction.renterId)
-                if (renter != null) transaction.copy(
-                    renterName = transaction.renterName.ifBlank { renter.name },
-                    renterPhone = transaction.renterPhone.ifBlank { renter.phoneNumber }
-                ) else transaction
-            } else transaction
-            repo.update(toSave)
-            // Sync the linked BusinessOperation row so reports reflect the
-            // edited amount/type. Previously updates left the original row
-            // in place → silent ledger/UI desync. Manual transactions store
-            // their link via legacyTransactionId (NOT cardTransactionId).
             try {
-                val db = AppDatabase.getDatabase(getApplication())
-                val bo = db.businessOperationDao().getByLegacyTransactionId(toSave.id)
-                    ?: db.businessOperationDao().getByCardTransactionId(toSave.id)
-                bo?.let {
-                    db.businessOperationDao().update(it.copy(
-                        amountMinor = BusinessOperation.toMinor(toSave.amount),
-                        note = toSave.notes ?: it.note
-                    ))
+                // Если обновили renterId — подтянем свежие renterName/Phone.
+                val toSave = if (transaction.renterName.isBlank() || transaction.renterPhone.isBlank()) {
+                    val renter = renterRepo.getById(transaction.renterId)
+                    if (renter != null) transaction.copy(
+                        renterName = transaction.renterName.ifBlank { renter.name },
+                        renterPhone = transaction.renterPhone.ifBlank { renter.phoneNumber }
+                    ) else transaction
+                } else transaction
+                repo.update(toSave)
+                // Sync the linked BusinessOperation row so reports reflect the
+                // edited amount/type. Manual transactions store their link via
+                // legacyTransactionId ONLY — never use getByCardTransactionId
+                // here, because Transaction.id and CardTransaction.id collide
+                // (both are autoGenerate starting from 1) and the fallback
+                // would reverse an UNRELATED operation.
+                try {
+                    val db = AppDatabase.getDatabase(getApplication())
+                    val bo = db.businessOperationDao().getByLegacyTransactionId(toSave.id)
+                    bo?.let {
+                        db.businessOperationDao().update(it.copy(
+                            amountMinor = BusinessOperation.toMinor(toSave.amount),
+                            note = toSave.notes ?: it.note
+                        ))
+                    }
+                } catch (e: Exception) {
+                    Log.w("TransactionVM", "Failed to sync BusinessOperation on update", e)
                 }
+                _userMessage.emit(true to "Tranzaksiya yangilandi")
             } catch (e: Exception) {
-                Log.w("TransactionVM", "Failed to sync BusinessOperation on update", e)
+                Log.e("TransactionVM", "updateTransaction failed", e)
+                _userMessage.emit(false to "Tranzaksiya yangilanmadi: ${e.message ?: "noma'lum xato"}")
             }
         }
     }
@@ -207,38 +223,60 @@ class TransactionViewModel(application: Application) : AndroidViewModel(applicat
      *  no longer count the deleted transaction. */
     fun deleteTransaction(id: Int) {
         viewModelScope.launch(Dispatchers.IO) {
-            val db = AppDatabase.getDatabase(getApplication())
-            val tx = repo.getById(id)
-            if (tx != null) {
-                TrashService(db).moveTransactionToTrash(tx, "User deleted transaction")
-                try {
-                    val bo = db.businessOperationDao().getByLegacyTransactionId(id)
-                        ?: db.businessOperationDao().getByCardTransactionId(id)
-                    bo?.let { db.businessOperationDao().markReversed(it.id) }
-                } catch (e: Exception) {
-                    Log.w("TransactionVM", "Failed to reverse BusinessOperation on delete", e)
+            try {
+                val db = AppDatabase.getDatabase(getApplication())
+                val tx = repo.getById(id)
+                if (tx != null) {
+                    // Reverse the BusinessOperation FIRST so the ledger is
+                    // marked REVERSED even if the row delete later fails.
+                    // legacyTransactionId is the ONLY correct link — never
+                    // use getByCardTransactionId (id collision would reverse
+                    // an unrelated operation).
+                    try {
+                        val bo = db.businessOperationDao().getByLegacyTransactionId(id)
+                        bo?.let { db.businessOperationDao().markReversed(it.id) }
+                    } catch (e: Exception) {
+                        Log.w("TransactionVM", "Failed to reverse BusinessOperation on delete", e)
+                    }
+                    TrashService(db).moveTransactionToTrash(tx, "User deleted transaction")
+                    _userMessage.emit(true to "Tranzaksiya o'chirildi")
+                } else {
+                    _userMessage.emit(false to "Tranzaksiya topilmadi")
                 }
-                _userMessage.emit(true to "Tranzaksiya o'chirildi")
-            } else {
-                _userMessage.emit(false to "Tranzaksiya topilmadi")
+            } catch (e: Exception) {
+                Log.e("TransactionVM", "deleteTransaction failed", e)
+                _userMessage.emit(false to "Tranzaksiya o'chirilmadi: ${e.message ?: "noma'lum xato"}")
             }
         }
     }
 
     fun deleteTransactions(ids: List<Int>) {
         viewModelScope.launch(Dispatchers.IO) {
+            var successCount = 0
+            var failCount = 0
             val db = AppDatabase.getDatabase(getApplication())
             ids.forEach { id ->
-                repo.getById(id)?.let {
-                    TrashService(db).moveTransactionToTrash(it, "Bulk deletion")
+                try {
+                    val tx = repo.getById(id) ?: run { failCount++; return@forEach }
+                    // Reverse ledger FIRST (legacyTransactionId only — see deleteTransaction).
                     try {
                         val bo = db.businessOperationDao().getByLegacyTransactionId(id)
-                            ?: db.businessOperationDao().getByCardTransactionId(id)
-                        bo?.let { b -> db.businessOperationDao().markReversed(b.id) }
-                    } catch (_: Exception) {}
+                        bo?.let { db.businessOperationDao().markReversed(it.id) }
+                    } catch (e: Exception) {
+                        Log.w("TransactionVM", "Failed to reverse BusinessOperation on bulk delete #$id", e)
+                    }
+                    TrashService(db).moveTransactionToTrash(tx, "Bulk deletion")
+                    successCount++
+                } catch (e: Exception) {
+                    Log.e("TransactionVM", "deleteTransactions failed for #$id", e)
+                    failCount++
                 }
             }
-            _userMessage.emit(true to "${ids.size} ta tranzaksiya o'chirildi")
+            val msg = buildString {
+                append("${successCount} ta tranzaksiya o'chirildi")
+                if (failCount > 0) append(", $failCount ta xatolik")
+            }
+            _userMessage.emit(failCount == 0 to msg)
         }
     }
 

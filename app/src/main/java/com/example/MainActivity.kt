@@ -934,13 +934,17 @@ fun MainScreen(
                     onSave = { updated ->
                         contractHistoryViewModel.updateContract(updated)
                         contractToEdit = null
-                        Toast.makeText(localContext, "Kontrakt yangilandi", Toast.LENGTH_SHORT).show()
+                        // Toast removed — ContractHistoryViewModel.updateContract emits
+                        // _userMessage(true to "Kontrakt yangilandi") on success and
+                        // (false to ...) on failure. The unconditional Toast here
+                        // would lie if the VM launch crashed silently.
                     },
                     onDelete = {
                         contractHistoryViewModel.deleteContract(entry.id)
                         contractToEdit = null
                         navState = NavigationState.MainView
-                        Toast.makeText(localContext, "Kontrakt o'chirildi", Toast.LENGTH_SHORT).show()
+                        // Toast removed — ContractHistoryViewModel.deleteContract
+                        // emits _userMessage on success/failure.
                     }
                 )
             }
@@ -2640,7 +2644,9 @@ fun MainScreen(
                 confirmButton = {
                     TextButton(onClick = {
                         viewModel.terminateRenters(selectedRenters, forgiveTerminationDebt)
-                        Toast.makeText(localContext, "Kontrakt tugatildi", Toast.LENGTH_SHORT).show()
+                        // Toast removed — RenterViewModel.terminateRenters now emits
+                        // SmsResult(success, "N ta kontrakt tugatildi") on completion.
+                        // The unconditional Toast here would lie if terminate threw.
                         selectedRenters = emptySet()
                         showTerminationDialog = false
                     }) { Text("Tugatish") }
@@ -2678,7 +2684,10 @@ fun MainScreen(
                             selectedRenters.forEach { renterId ->
                                 viewModel.acceptVariablePayment(renterId, amount, variablePaymentNote)
                             }
-                            Toast.makeText(localContext, "To'lov qabul qilindi", Toast.LENGTH_SHORT).show()
+                            // Toast removed — RenterViewModel.acceptVariablePayment now
+                            // emits SmsResult(success, "To'lov qabul qilindi: N so'm")
+                            // per renter. The unconditional Toast here would lie if
+                            // any payment failed silently.
                             selectedRenters = emptySet()
                             showVariablePaymentDialog = false
                         } else {
