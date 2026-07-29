@@ -833,12 +833,13 @@ fun VirtualCardFormDialog(
             Button(
                 onClick = {
                     val balance = balanceText.replace(" ", "").replace(",", ".").toDoubleOrNull() ?: 0.0
-                    // Все поля необязательны — сохраняем даже с пустым именем.
-                    // Раньше требовалось name.isNotBlank() — убрано.
                     onSave(name.trim(), balance, selectedColor, info.ifBlank { null })
                 },
-                // Кнопка всегда активна — ничего не блокирует сохранение.
-                enabled = true,
+                // Блокируем сохранение при конфликте дубликата имени.
+                // Раньше кнопка была всегда активна, и при повторном имени
+                // пользователь нажимал Save → диалог закрывался →
+                // FinansiViewModel молча блокировал создание.
+                enabled = !nameConflict,
                 shape = RoundedCornerShape(12.dp),
                 colors = ButtonDefaults.buttonColors(containerColor = ClaudeAccent)
             ) {

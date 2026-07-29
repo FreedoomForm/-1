@@ -3855,10 +3855,13 @@ fun RenterFormDialog(
             PrimaryButton(
                 label = "Saqla",
                 icon = Icons.Default.Save,
-                // Все поля необязательны — кнопка всегда активна.
-                // Раньше требовалось name+phone+passport+address+pinfl — убрано
-                // по требованию пользователя: ничего не должно блокировать сохранение.
-                enabled = true,
+                // Все поля необязательны, НО блокируем сохранение при
+                // конфликте дубликатов (name/phone). Раньше кнопка была
+                // всегда активна, и при повторном имени/телефоне пользователь
+                // нажимал Save → диалог закрывался → RenterViewModel
+                // молча блокировал создание (или показывал Toast, который
+                // пользователь не успевал прочитать).
+                enabled = !(nameConflict || phoneConflict),
                 onClick = {
                     // ── Если раскрыта inline-секция создания скутера — сначала ──
                     // сохраняем скутер. LaunchedEffect(scooters) ниже подхватит
@@ -5367,9 +5370,13 @@ fun ScooterFormDialog(
             PrimaryButton(
                 label = "Saqla",
                 icon = Icons.Default.Save,
-                // Все поля необязательны — кнопка всегда активна.
-                // Раньше требовалось name+docNum+vin+engine+serial+batt1+batt2 — убрано.
-                enabled = true,
+                // Все поля необязательны, НО блокируем сохранение при
+                // конфликте дубликатов (name/VIN/engine/serial). Раньше
+                // кнопка была всегда активна, и при повторном VIN пользователь
+                // нажимал Save → диалог закрывался → ScooterViewModel
+                // молча блокировал создание → пользователь не понимал,
+                // почему скутер не появился в списке.
+                enabled = !(scooterNameConflict || vinConflict || engineConflict || serialConflict),
                 onClick = {
                     onSave(
                         name,
