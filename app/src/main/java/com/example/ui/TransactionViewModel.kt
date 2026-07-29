@@ -276,7 +276,7 @@ class TransactionViewModel(application: Application) : AndroidViewModel(applicat
                 append("${successCount} ta tranzaksiya o'chirildi")
                 if (failCount > 0) append(", $failCount ta xatolik")
             }
-            _userMessage.emit(failCount == 0 to msg)
+            _userMessage.emit((failCount == 0) to msg)
         }
     }
 
