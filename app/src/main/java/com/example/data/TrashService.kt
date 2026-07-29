@@ -1,9 +1,25 @@
 package com.example.data
 
 import androidx.room.withTransaction
+import org.json.JSONArray
 import org.json.JSONObject
 
-/** Snapshot-based recoverable deletion for user-owned legacy projections. */
+/**
+ * Snapshot-based recoverable deletion for user-owned legacy projections.
+ *
+ * §9.2 Корзина: при перемещении объекта в корзину сохраняется не только
+ * снимок самой строки, но и связанных с ним зависимых строк
+ * (BusinessOperation, RentPeriod, HandoverAct, PaymentAllocation). При
+ * восстановлении зависимые строки вставляются заново с новыми id, а
+ * ссылки в них перемапируются на новый id восстановленного объекта —
+ * поэтому отчёты и финансовый журнал продолжают корректно учитывать
+ * восстановленный объект.
+ *
+ * Изначальные REVERSED-операции, помеченные во время move-to-trash,
+ * остаются в БД как неизменяемый аудит. Восстановление создаёт НОВЫЕ
+ * ACTIVE-операции, что соответствует принципу «исправление оформляется
+ * отдельной компенсирующей операцией, а не переписыванием факта» (§0.3).
+ */
 class TrashService(private val db: AppDatabase) {
     suspend fun archiveTimelineEvent(event: TimelineEvent, reason: String? = null): Long = db.withTransaction {
         val json = JSONObject().apply {
@@ -21,11 +37,22 @@ class TrashService(private val db: AppDatabase) {
     }
 
     suspend fun snapshotTransaction(transaction: Transaction, reason: String? = null): Long {
+        // Capture linked BusinessOperation rows so restore can rebuild
+        // the financial context. Without this, a restored transaction
+        // would be an orphan with no journal entry — reports would
+        // silently miss its amount.
+        val operations = try {
+            db.businessOperationDao().getAllByLegacyTransactionId(transaction.id)
+        } catch (_: Exception) { emptyList() }
+        val json = transaction.toJson()
+        json.put("businessOperations", JSONArray().apply {
+            operations.forEach { op -> put(op.toJson()) }
+        })
         val itemId = db.deletedItemDao().insert(DeletedItem(
             sourceType = DeletedItem.TYPE_TRANSACTION,
             sourceId = transaction.id.toString(),
             title = "${transaction.type}: ${transaction.renterName}",
-            snapshotJson = transaction.toJson().toString(),
+            snapshotJson = json.toString(),
             reason = reason
         ))
         audit("TRASH_MOVED", DeletedItem.TYPE_TRANSACTION, itemId.toString(), reason)
@@ -78,15 +105,15 @@ class TrashService(private val db: AppDatabase) {
         val itemId = snapshotTransaction(transaction, reason)
         // Reverse the linked BusinessOperation so reports stop counting the
         // deleted transaction. legacyTransactionId is the canonical link.
+        // We mark REVERSED here for audit; on restore we create NEW ACTIVE
+        // operations — we never silently un-reverse an audit fact.
         try {
             db.businessOperationDao().markReversedByLegacyTransactionId(transaction.id)
         } catch (_: Exception) {}
         // Clean up any PaymentAllocation rows that pointed at the reversed
         // operation — they would otherwise dangle against a REVERSED op.
         try {
-            db.businessOperationDao().getByLegacyTransactionId(transaction.id)?.let { bo ->
-                // getByLegacyTransactionId only returns ACTIVE — but the op might
-                // have been just flipped above, so also fetch by direct id lookup.
+            db.businessOperationDao().getAllByLegacyTransactionId(transaction.id).forEach { bo ->
                 if (bo.id > 0) db.paymentAllocationDao().deleteByOperation(bo.id)
             }
         } catch (_: Exception) {}
@@ -94,13 +121,53 @@ class TrashService(private val db: AppDatabase) {
         itemId
     }
 
-    /** Saves a contract snapshot before a business-specific cascade removes it. */
+    /** Saves a contract snapshot (plus its financial context) before a
+     *  business-specific cascade removes it. */
     suspend fun snapshotContract(contract: ContractHistoryEntry, reason: String? = null): Long {
+        val json = contract.toJson()
+        // Capture all dependent rows so restore can rebuild the full
+        // billing & financial history of the contract. Without this,
+        // a restored contract would be an empty shell with one RentPeriod
+        // and no journal entries — silently invisible to all reports.
+        val operations = try {
+            db.businessOperationDao().getAllByContract(contract.id)
+        } catch (_: Exception) { emptyList() }
+        val periods = try {
+            db.rentPeriodDao().getAllByContract(contract.id)
+        } catch (_: Exception) { emptyList() }
+        val handoverActs = try {
+            db.handoverActDao().forContract(contract.id)
+        } catch (_: Exception) { emptyList() }
+        val periodIds = periods.map { it.id }
+        val allocations = try {
+            if (periodIds.isNotEmpty()) db.paymentAllocationDao().forRentPeriods(periodIds)
+            else emptyList()
+        } catch (_: Exception) { emptyList() }
+
+        json.put("businessOperations", JSONArray().apply { operations.forEach { put(it.toJson()) } })
+        json.put("rentPeriods", JSONArray().apply { periods.forEach { put(it.toJson()) } })
+        json.put("handoverActs", JSONArray().apply { handoverActs.forEach { put(it.toJson()) } })
+        json.put("paymentAllocations", JSONArray().apply {
+            // Each allocation is stored together with the index of its
+            // original rentPeriod in the rentPeriods array, so on restore
+            // we can remap to the new period id without relying on the
+            // now-stale original id.
+            allocations.forEach { alloc ->
+                val periodIndex = periods.indexOfFirst { it.id == alloc.rentPeriodId }
+                put(JSONObject().apply {
+                    put("amountMinor", alloc.amountMinor)
+                    put("createdAt", alloc.createdAt)
+                    put("periodIndex", periodIndex) // -1 if not found — skipped on restore
+                    put("originalOperationId", alloc.operationId)
+                })
+            }
+        })
+
         val itemId = db.deletedItemDao().insert(DeletedItem(
             sourceType = DeletedItem.TYPE_CONTRACT,
             sourceId = contract.id.toString(),
             title = "Contract #${contract.id}: ${contract.renterName}",
-            snapshotJson = contract.toJson().toString(),
+            snapshotJson = json.toString(),
             reason = reason
         ))
         audit("TRASH_MOVED", DeletedItem.TYPE_CONTRACT, itemId.toString(), reason)
@@ -135,9 +202,33 @@ class TrashService(private val db: AppDatabase) {
             }
             DeletedItem.TYPE_RENTER -> db.renterDao().insert(item.snapshotJson.toRenter())
             DeletedItem.TYPE_SCOOTER -> db.scooterDao().insertScooter(item.snapshotJson.toScooter())
-            DeletedItem.TYPE_TRANSACTION -> db.transactionDao().insert(item.snapshotJson.toTransaction())
+            DeletedItem.TYPE_TRANSACTION -> {
+                val root = JSONObject(item.snapshotJson)
+                val newTxId = db.transactionDao().insert(root.toTransaction())
+                // Re-create BusinessOperation rows tied to the NEW transaction
+                // id. The old REVERSED ones stay as audit; we insert fresh
+                // ACTIVE rows so reports count the restored transaction.
+                try {
+                    val ops = root.optJSONArray("businessOperations")
+                    if (ops != null) {
+                        for (i in 0 until ops.length()) {
+                            val op = ops.optJSONObject(i) ?: continue
+                            // Only re-create ACTIVE-type snapshots. Already-REVERSED
+                            // entries were audit facts before trash and stay audit.
+                            val status = op.optString("status", BusinessOperation.STATUS_ACTIVE)
+                            if (status != BusinessOperation.STATUS_ACTIVE) continue
+                            db.businessOperationDao().insert(op.toBusinessOperation(
+                                legacyTransactionId = newTxId.toInt(),
+                                status = BusinessOperation.STATUS_ACTIVE
+                            ))
+                        }
+                    }
+                } catch (_: Exception) {}
+                newTxId
+            }
             DeletedItem.TYPE_CONTRACT -> {
-                val contract = item.snapshotJson.toContract()
+                val root = JSONObject(item.snapshotJson)
+                val contract = root.toContract()
                 val renter = db.renterDao().getRenterById(contract.renterId)
                     ?: error("Cannot restore contract: renter no longer exists")
                 val start = contract.weekStart ?: contract.timestamp
@@ -148,18 +239,110 @@ class TrashService(private val db: AppDatabase) {
                     }
                 }
                 val contractId = db.contractHistoryDao().insert(contract)
-                val status = when {
-                    contract.isPaid -> RentPeriod.STATUS_PAID
-                    end <= System.currentTimeMillis() -> RentPeriod.STATUS_OVERDUE
-                    else -> RentPeriod.STATUS_ACTIVE
-                }
-                db.rentPeriodDao().insert(RentPeriod(
-                    contractHistoryId = contractId.toInt(), renterId = contract.renterId,
-                    scooterId = renter.scooterId, startsAt = start, endsAt = end,
-                    chargeMinor = BusinessOperation.toMinor(kotlin.math.abs(contract.amount)),
-                    paidMinor = if (contract.isPaid) BusinessOperation.toMinor(kotlin.math.abs(contract.amount)) else 0,
-                    status = status
-                ))
+
+                // Re-insert all RentPeriod rows, mapping old period ids to new
+                // ids so PaymentAllocations can be re-linked correctly.
+                val periodIdMap = mutableMapOf<Long, Long>() // old id → new id
+                try {
+                    val periodsArray = root.optJSONArray("rentPeriods")
+                    if (periodsArray != null && periodsArray.length() > 0) {
+                        for (i in 0 until periodsArray.length()) {
+                            val p = periodsArray.optJSONObject(i) ?: continue
+                            val oldId = p.optLong("id", 0L)
+                            val restoredStatus = p.optString("status", RentPeriod.STATUS_ACTIVE)
+                            // Skip CANCELLED periods — they were cancelled for a
+                            // reason and restoring them would re-bill the renter.
+                            if (restoredStatus == RentPeriod.STATUS_CANCELLED) continue
+                            val newPeriodId = db.rentPeriodDao().insert(p.toRentPeriod(
+                                contractHistoryId = contractId.toInt(),
+                                renterId = contract.renterId,
+                                scooterId = renter.scooterId,
+                                status = restoredStatus
+                            ))
+                            if (oldId > 0L) periodIdMap[oldId] = newPeriodId
+                        }
+                    } else {
+                        // Legacy snapshot (pre-Batch 3) — has no rentPeriods array.
+                        // Preserve old behaviour: create a single period from the
+                        // contract's weekStart/weekEnd.
+                        val status = when {
+                            contract.isPaid -> RentPeriod.STATUS_PAID
+                            end <= System.currentTimeMillis() -> RentPeriod.STATUS_OVERDUE
+                            else -> RentPeriod.STATUS_ACTIVE
+                        }
+                        db.rentPeriodDao().insert(RentPeriod(
+                            contractHistoryId = contractId.toInt(), renterId = contract.renterId,
+                            scooterId = renter.scooterId, startsAt = start, endsAt = end,
+                            chargeMinor = BusinessOperation.toMinor(kotlin.math.abs(contract.amount)),
+                            paidMinor = if (contract.isPaid) BusinessOperation.toMinor(kotlin.math.abs(contract.amount)) else 0,
+                            status = status
+                        ))
+                    }
+                } catch (_: Exception) {}
+
+                // Re-insert all BusinessOperation rows tied to the new contractId.
+                // Build a map from old operation id → new operation id so
+                // PaymentAllocations can be re-linked. Only ACTIVE-status
+                // snapshots are re-created — already-REVERSED ones are audit.
+                val operationIdMap = mutableMapOf<Long, Long>() // old id → new id
+                try {
+                    val opsArray = root.optJSONArray("businessOperations")
+                    if (opsArray != null) {
+                        for (i in 0 until opsArray.length()) {
+                            val op = opsArray.optJSONObject(i) ?: continue
+                            val status = op.optString("status", BusinessOperation.STATUS_ACTIVE)
+                            if (status != BusinessOperation.STATUS_ACTIVE) continue
+                            val oldOpId = op.optLong("id", 0L)
+                            val newOpId = db.businessOperationDao().insert(op.toBusinessOperation(
+                                contractId = contractId.toInt(),
+                                status = BusinessOperation.STATUS_ACTIVE
+                            ))
+                            if (oldOpId > 0L) operationIdMap[oldOpId] = newOpId
+                        }
+                    }
+                } catch (_: Exception) {}
+
+                // Re-insert HandoverAct rows tied to the new contractId.
+                try {
+                    val actsArray = root.optJSONArray("handoverActs")
+                    if (actsArray != null) {
+                        for (i in 0 until actsArray.length()) {
+                            val a = actsArray.optJSONObject(i) ?: continue
+                            db.handoverActDao().insert(a.toHandoverAct(
+                                contractHistoryId = contractId.toInt()
+                            ))
+                        }
+                    }
+                } catch (_: Exception) {}
+
+                // Re-insert PaymentAllocation rows, remapping both operationId
+                // and rentPeriodId to their new ids. Allocations whose
+                // operation or period wasn't restored (e.g. was REVERSED or
+                // CANCELLED) are skipped — they would otherwise point to
+                // non-existent rows.
+                try {
+                    val allocsArray = root.optJSONArray("paymentAllocations")
+                    if (allocsArray != null) {
+                        for (i in 0 until allocsArray.length()) {
+                            val a = allocsArray.optJSONObject(i) ?: continue
+                            val oldOpId = a.optLong("originalOperationId", 0L)
+                            val newOpId = operationIdMap[oldOpId] ?: continue
+                            val periodIndex = a.optInt("periodIndex", -1)
+                            if (periodIndex < 0) continue
+                            val periodsArray = root.optJSONArray("rentPeriods") ?: continue
+                            val pSnap = periodsArray.optJSONObject(periodIndex) ?: continue
+                            val oldPeriodId = pSnap.optLong("id", 0L)
+                            val newPeriodId = periodIdMap[oldPeriodId] ?: continue
+                            db.paymentAllocationDao().insert(PaymentAllocationEntity(
+                                operationId = newOpId,
+                                rentPeriodId = newPeriodId,
+                                amountMinor = a.optLong("amountMinor", 0L),
+                                createdAt = a.optLong("createdAt", System.currentTimeMillis())
+                            ))
+                        }
+                    }
+                } catch (_: Exception) {}
+
                 contractId
             }
             else -> error("Restore for ${item.sourceType} is not implemented")
@@ -229,13 +412,13 @@ class TrashService(private val db: AppDatabase) {
         put("renterName", renterName); put("renterPhone", renterPhone); put("scooterName", scooterName); put("contractLabel", contractLabel)
     }
 
-    private fun String.toTransaction(): Transaction = JSONObject(this).let { o -> Transaction(
-        contractId = o.optInt("contractId").takeIf { !o.isNull("contractId") },
-        renterId = o.optInt("renterId"), scooterId = o.optInt("scooterId").takeIf { !o.isNull("scooterId") },
-        timestamp = o.optLong("timestamp"), type = o.optString("type"), amount = o.optDouble("amount"),
-        notes = o.optString("notes").takeIf { !o.isNull("notes") }, renterName = o.optString("renterName"),
-        renterPhone = o.optString("renterPhone"), scooterName = o.optString("scooterName"), contractLabel = o.optString("contractLabel")
-    ) }
+    private fun JSONObject.toTransaction(): Transaction = Transaction(
+        contractId = optInt("contractId").takeIf { !isNull("contractId") },
+        renterId = optInt("renterId"), scooterId = optInt("scooterId").takeIf { !isNull("scooterId") },
+        timestamp = optLong("timestamp"), type = optString("type"), amount = optDouble("amount"),
+        notes = optString("notes").takeIf { !isNull("notes") }, renterName = optString("renterName"),
+        renterPhone = optString("renterPhone"), scooterName = optString("scooterName"), contractLabel = optString("contractLabel")
+    )
 
     private fun ContractHistoryEntry.toJson() = JSONObject().apply {
         put("renterId", renterId); put("timestamp", timestamp); put("type", type); put("amount", amount); put("notes", notes)
@@ -265,13 +448,107 @@ class TrashService(private val db: AppDatabase) {
         mileageKm = o.optLong("mileageKm", 0L)
     ) }
 
-    private fun String.toContract(): ContractHistoryEntry = JSONObject(this).let { o -> ContractHistoryEntry(
-        renterId = o.optInt("renterId"), timestamp = o.optLong("timestamp"), type = o.optString("type"), amount = o.optDouble("amount"),
-        notes = o.optString("notes").takeIf { !o.isNull("notes") }, renterName = o.optString("renterName"), renterPhone = o.optString("renterPhone"),
-        scooterName = o.optString("scooterName").takeIf { !o.isNull("scooterName") }, weekStart = o.optLong("weekStart").takeIf { !o.isNull("weekStart") },
-        weekEnd = o.optLong("weekEnd").takeIf { !o.isNull("weekEnd") }, weeklyPrice = o.optDouble("weeklyPrice"), passportData = o.optString("passportData"),
-        address = o.optString("address"), pinfl = o.optString("pinfl"), vinNumber = o.optString("vinNumber"), engineNumber = o.optString("engineNumber"),
-        scooterSerialNumber = o.optString("scooterSerialNumber"), batteryId1 = o.optString("batteryId1"), batteryId2 = o.optString("batteryId2"),
-        additionalInfo = o.optString("additionalInfo"), isPaid = o.optBoolean("isPaid")
-    ) }
+    private fun JSONObject.toContract(): ContractHistoryEntry = ContractHistoryEntry(
+        renterId = optInt("renterId"), timestamp = optLong("timestamp"), type = optString("type"), amount = optDouble("amount"),
+        notes = optString("notes").takeIf { !isNull("notes") }, renterName = optString("renterName"), renterPhone = optString("renterPhone"),
+        scooterName = optString("scooterName").takeIf { !isNull("scooterName") }, weekStart = optLong("weekStart").takeIf { !isNull("weekStart") },
+        weekEnd = optLong("weekEnd").takeIf { !isNull("weekEnd") }, weeklyPrice = optDouble("weeklyPrice"), passportData = optString("passportData"),
+        address = optString("address"), pinfl = optString("pinfl"), vinNumber = optString("vinNumber"), engineNumber = optString("engineNumber"),
+        scooterSerialNumber = optString("scooterSerialNumber"), batteryId1 = optString("batteryId1"), batteryId2 = optString("batteryId2"),
+        additionalInfo = optString("additionalInfo"), isPaid = optBoolean("isPaid")
+    )
+
+    /** Serialise a BusinessOperation for snapshot storage. Drops the id field
+     *  since a restored row gets a new auto-generated id. */
+    private fun BusinessOperation.toJson(): JSONObject = JSONObject().apply {
+        put("id", id) // kept for reference, but toBusinessOperation ignores it
+        put("occurredAt", occurredAt); put("type", type); put("direction", direction)
+        put("amountMinor", amountMinor); put("renterId", renterId); put("scooterId", scooterId)
+        put("contractId", contractId); put("fromCardId", fromCardId); put("toCardId", toCardId)
+        put("cardTransactionId", cardTransactionId); put("legacyTransactionId", legacyTransactionId)
+        put("note", note); put("status", status); put("reversesOperationId", reversesOperationId)
+        put("createdAt", createdAt)
+    }
+
+    /** Deserialise a BusinessOperation from snapshot, allowing callers to
+     *  override foreign-key fields (contractId, legacyTransactionId) and
+     *  status so the restored row points to the newly-created parent. */
+    private fun JSONObject.toBusinessOperation(
+        contractId: Int? = optInt("contractId").takeIf { !isNull("contractId") && it > 0 },
+        legacyTransactionId: Int? = optInt("legacyTransactionId").takeIf { !isNull("legacyTransactionId") && it > 0 },
+        status: String = optString("status", BusinessOperation.STATUS_ACTIVE)
+    ): BusinessOperation = BusinessOperation(
+        occurredAt = optLong("occurredAt", System.currentTimeMillis()),
+        type = optString("type"),
+        direction = optString("direction"),
+        amountMinor = optLong("amountMinor", 0L),
+        renterId = optInt("renterId").takeIf { !isNull("renterId") && it > 0 },
+        scooterId = optInt("scooterId").takeIf { !isNull("scooterId") && it > 0 },
+        contractId = contractId,
+        fromCardId = optInt("fromCardId").takeIf { !isNull("fromCardId") && it > 0 },
+        toCardId = optInt("toCardId").takeIf { !isNull("toCardId") && it > 0 },
+        cardTransactionId = optInt("cardTransactionId").takeIf { !isNull("cardTransactionId") && it > 0 },
+        legacyTransactionId = legacyTransactionId,
+        note = optString("note").takeIf { !isNull("note") },
+        status = status,
+        reversesOperationId = optLong("reversesOperationId").takeIf { !isNull("reversesOperationId") && it > 0 },
+        createdAt = optLong("createdAt", System.currentTimeMillis())
+    )
+
+    /** Serialise a RentPeriod for snapshot storage. Keeps the id so the
+     *  restore logic can map old → new ids when re-linking PaymentAllocations. */
+    private fun RentPeriod.toJson(): JSONObject = JSONObject().apply {
+        put("id", id); put("startsAt", startsAt); put("endsAt", endsAt)
+        put("chargeMinor", chargeMinor); put("paidMinor", paidMinor); put("discountMinor", discountMinor)
+        put("status", status); put("suspendedAt", suspendedAt); put("suspensionReason", suspensionReason)
+        put("parentPeriodId", parentPeriodId); put("createdAt", createdAt); put("updatedAt", updatedAt)
+    }
+
+    /** Deserialise a RentPeriod from snapshot, letting the caller override
+     *  the foreign keys (contractHistoryId, renterId, scooterId) and status
+     *  so the restored row points to the newly-created parent contract. */
+    private fun JSONObject.toRentPeriod(
+        contractHistoryId: Int,
+        renterId: Int,
+        scooterId: Int?,
+        status: String = optString("status", RentPeriod.STATUS_ACTIVE)
+    ): RentPeriod = RentPeriod(
+        contractHistoryId = contractHistoryId,
+        renterId = renterId,
+        scooterId = scooterId,
+        startsAt = optLong("startsAt", System.currentTimeMillis()),
+        endsAt = optLong("endsAt", System.currentTimeMillis()),
+        chargeMinor = optLong("chargeMinor", 0L),
+        paidMinor = optLong("paidMinor", 0L),
+        discountMinor = optLong("discountMinor", 0L),
+        status = status,
+        suspendedAt = optLong("suspendedAt").takeIf { !isNull("suspendedAt") && it > 0 },
+        suspensionReason = optString("suspensionReason").takeIf { !isNull("suspensionReason") },
+        parentPeriodId = optLong("parentPeriodId").takeIf { !isNull("parentPeriodId") && it > 0 },
+        createdAt = optLong("createdAt", System.currentTimeMillis()),
+        updatedAt = System.currentTimeMillis()
+    )
+
+    /** Serialise a HandoverAct for snapshot storage. Drops the id since a
+     *  restored row gets a new auto-generated id. */
+    private fun HandoverAct.toJson(): JSONObject = JSONObject().apply {
+        put("id", id) // kept for reference, but toHandoverAct ignores it
+        put("timestamp", timestamp); put("actType", actType); put("renterId", renterId); put("scooterId", scooterId)
+        put("mileageKm", mileageKm); put("equipmentChecklist", equipmentChecklist)
+        put("conditionNotes", conditionNotes); put("signedBy", signedBy)
+    }
+
+    /** Deserialise a HandoverAct from snapshot, letting the caller override
+     *  the contractHistoryId so the restored row points to the new contract. */
+    private fun JSONObject.toHandoverAct(contractHistoryId: Int): HandoverAct = HandoverAct(
+        timestamp = optLong("timestamp", System.currentTimeMillis()),
+        actType = optString("actType", HandoverAct.TYPE_HANDOVER),
+        renterId = optInt("renterId"),
+        scooterId = optInt("scooterId"),
+        contractHistoryId = contractHistoryId,
+        mileageKm = optLong("mileageKm", 0L),
+        equipmentChecklist = optString("equipmentChecklist"),
+        conditionNotes = optString("conditionNotes"),
+        signedBy = optString("signedBy", "LOCAL_SYSTEM")
+    )
 }

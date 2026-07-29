@@ -37,6 +37,22 @@ interface BusinessOperationDao {
     @Query("SELECT * FROM business_operations WHERE legacyTransactionId = :legacyId AND status = 'ACTIVE' LIMIT 1")
     suspend fun getByLegacyTransactionId(legacyId: Int): BusinessOperation?
 
+    /**
+     * Returns ALL operations (ACTIVE and REVERSED) for a given legacy
+     * transaction id. Used by TrashService.snapshotTransaction so the
+     * full financial context can be restored from the recycle bin.
+     */
+    @Query("SELECT * FROM business_operations WHERE legacyTransactionId = :legacyId ORDER BY id ASC")
+    suspend fun getAllByLegacyTransactionId(legacyId: Int): List<BusinessOperation>
+
+    /**
+     * Returns ALL operations (ACTIVE and REVERSED) for a given contract.
+     * Used by TrashService.snapshotContract so the financial history of
+     * a contract can be rebuilt after restoration from the recycle bin.
+     */
+    @Query("SELECT * FROM business_operations WHERE contractId = :contractId ORDER BY id ASC")
+    suspend fun getAllByContract(contractId: Int): List<BusinessOperation>
+
     @Query("UPDATE business_operations SET cardTransactionId = :cardTransactionId WHERE id = :operationId")
     suspend fun markCardTransaction(operationId: Long, cardTransactionId: Int)
 

@@ -26,6 +26,15 @@ interface RentPeriodDao {
     @Query("SELECT * FROM rent_periods WHERE contractHistoryId = :contractHistoryId LIMIT 1")
     suspend fun byContractHistoryId(contractHistoryId: Int): RentPeriod?
 
+    /**
+     * Returns ALL rent periods tied to a given legacy contract_history row,
+     * regardless of status (includes CANCELLED and SUSPENDED_REPAIR). Used
+     * by TrashService.snapshotContract so the full billing history of a
+     * contract can be restored from the recycle bin.
+     */
+    @Query("SELECT * FROM rent_periods WHERE contractHistoryId = :contractHistoryId ORDER BY startsAt ASC, id ASC")
+    suspend fun getAllByContract(contractHistoryId: Int): List<RentPeriod>
+
     @Query("SELECT * FROM rent_periods WHERE renterId = :renterId AND status = 'SCHEDULED' AND startsAt <= :now ORDER BY startsAt ASC, id ASC")
     suspend fun scheduledDueForRenter(renterId: Int, now: Long): List<RentPeriod>
 
@@ -99,6 +108,14 @@ interface PaymentAllocationDao {
 
     @Query("DELETE FROM payment_allocations WHERE rentPeriodId IN (SELECT id FROM rent_periods WHERE contractHistoryId = :contractId)")
     suspend fun deleteByContractViaPeriod(contractId: Int)
+
+    /**
+     * Returns all PaymentAllocation rows pointing at the given rent period
+     * ids. Used by TrashService.snapshotContract so payment-to-period
+     * links can be re-established after a contract is restored from trash.
+     */
+    @Query("SELECT * FROM payment_allocations WHERE rentPeriodId IN (:rentPeriodIds) ORDER BY id ASC")
+    suspend fun forRentPeriods(rentPeriodIds: List<Long>): List<PaymentAllocationEntity>
 
     @Query("DELETE FROM payment_allocations")
     suspend fun clear()
