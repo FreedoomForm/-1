@@ -98,12 +98,6 @@ fun TransactionListScreen(
     val allScooters by scooterViewModel.scootersList.collectAsStateWithLifecycle()
     val allHistory by contractHistoryViewModel.history.collectAsStateWithLifecycle()
 
-    // Subscribe to VM user-message channel for success/error toasts.
-    LaunchedEffect(Unit) {
-        transactionViewModel.userMessage.collect { (success, msg) ->
-            Toast.makeText(context, msg, if (success) Toast.LENGTH_SHORT else Toast.LENGTH_LONG).show()
-        }
-    }
     // ── Карточные транзакции (переводы между виртуальными картами) ────────
     // Раньше были отдельной секцией ВНЕ LazyColumn, без поиска/фильтра и с
     // лимитом 20 строк. Теперь включаем их в общую ленту: пользователь видит
@@ -113,6 +107,13 @@ fun TransactionListScreen(
     val cards by finansiViewModel.cards.collectAsStateWithLifecycle()
     val cardById = remember(cards) { cards.associateBy { it.id } }
     val context = LocalContext.current
+
+    // Subscribe to VM user-message channel for success/error toasts.
+    LaunchedEffect(Unit) {
+        transactionViewModel.userMessage.collect { (success, msg) ->
+            Toast.makeText(context, msg, if (success) Toast.LENGTH_SHORT else Toast.LENGTH_LONG).show()
+        }
+    }
 
     var searchQuery by remember { mutableStateOf("") }
     var editingTx by remember { mutableStateOf<Transaction?>(null) }
