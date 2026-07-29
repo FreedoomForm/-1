@@ -102,6 +102,13 @@ class TimelineService(private val db: AppDatabase) {
      * timecode is selected on the history screen.
      *
      * Returns true if the entity was deleted, false if only the event was.
+     *
+     * NOTE: prior to v1.2.125 this method called renterDao().deleteRenter /
+     * scooterDao().deleteScooterById directly, leaving behind orphaned
+     * RentPeriod, PaymentAllocation, BusinessOperation, HandoverAct,
+     * SmsDelivery, NotificationHistory, RepairOrder, LegacyMoneyAmount rows.
+     * It now performs a full cascade cleanup matching RenterViewModel /
+     * ScooterViewModel.
      */
     suspend fun permanentlyDeleteReferencedObject(event: TimelineEvent, actor: String = "owner"): Boolean = db.withTransaction {
         db.timelineDao().deleteEvent(event.id)
@@ -109,8 +116,21 @@ class TimelineService(private val db: AppDatabase) {
             val idLong = entityId.toLongOrNull() ?: return@let false
             val type = event.entityType?.uppercase() ?: ""
             when (type) {
-                "RENTER" -> { db.renterDao().deleteRenter(idLong.toInt()); true }
-                "SCOOTER" -> { db.scooterDao().deleteScooterById(idLong.toInt()); true }
+                "RENTER" -> {
+                    val renterId = idLong.toInt()
+                    cascadeDeleteRenterOrphans(renterId)
+                    db.renterDao().deleteRenter(renterId)
+                    true
+                }
+                "SCOOTER" -> {
+                    val scooterId = idLong.toInt()
+                    // Look up scooter by id (we need the name to find contracts
+                    // that match by scooterName string).
+                    val scooter = db.scooterDao().getScooterById(scooterId)
+                    cascadeDeleteScooterOrphans(scooterId, scooter?.name)
+                    db.scooterDao().deleteScooterById(scooterId)
+                    true
+                }
                 else -> false
             }
         } ?: false
@@ -125,6 +145,120 @@ class TimelineService(private val db: AppDatabase) {
             afterSnapshot = if (deleted) "event+entity deleted" else "event deleted only"
         ))
         deleted
+    }
+
+    /**
+     * Cascade-cleans every dependent table that references a renter.
+     * Mirrors RenterViewModel.deleteRenter's cleanup steps (without the
+     * trash snapshots — this path is a hard permanent delete, not a soft
+     * trash move). Safe to call when the renter row still exists or has
+     * already been removed — each step is wrapped in try/catch.
+     */
+    private suspend fun cascadeDeleteRenterOrphans(renterId: Int) {
+        // 1. Reverse CardTransaction balances + linked BusinessOperations
+        //    for every contract this renter had.
+        val contracts = try { db.contractHistoryDao().getForRenter(renterId) } catch (_: Exception) { emptyList() }
+        for (contract in contracts) {
+            val cardTxs = try { db.cardTransactionDao().getForContractOnce(contract.id) } catch (_: Exception) { emptyList() }
+            for (cardTx in cardTxs) {
+                try { db.virtualCardDao().adjustBalance(cardTx.toCardId, -cardTx.amount) } catch (_: Exception) {}
+                try { db.businessOperationDao().markReversedByCardTransactionId(cardTx.id) } catch (_: Exception) {}
+            }
+            if (cardTxs.isNotEmpty()) {
+                try { db.cardTransactionDao().deleteForContract(contract.id) } catch (_: Exception) {}
+            }
+            // Reverse Transaction-linked BusinessOperations + delete Transaction rows
+            val txs = try { db.transactionDao().getForContractOnce(contract.id) } catch (_: Exception) { emptyList() }
+            txs.forEach { tx ->
+                try { db.businessOperationDao().markReversedByLegacyTransactionId(tx.id) } catch (_: Exception) {}
+            }
+            if (txs.isNotEmpty()) {
+                try { db.transactionDao().deleteForContract(contract.id) } catch (_: Exception) {}
+            }
+        }
+        // 2. Reverse all Transaction-linked BusinessOperations for this renter
+        //    (covers Transactions not tied to a specific contract).
+        val renterTxs = try { db.transactionDao().getForRenterOnce(renterId) } catch (_: Exception) { emptyList() }
+        renterTxs.forEach { tx ->
+            try { db.businessOperationDao().markReversedByLegacyTransactionId(tx.id) } catch (_: Exception) {}
+        }
+        if (renterTxs.isNotEmpty()) {
+            try { db.transactionDao().deleteByIds(renterTxs.map { it.id }) } catch (_: Exception) {}
+        }
+        // 3. Reverse any remaining BusinessOperations tied to this renter
+        try { db.businessOperationDao().markReversedByRenter(renterId) } catch (_: Exception) {}
+        // 4. Clean up PaymentAllocation + RentPeriod
+        try { db.paymentAllocationDao().deleteByRenterViaPeriod(renterId) } catch (_: Exception) {}
+        try { db.rentPeriodDao().deleteByRenter(renterId) } catch (_: Exception) {}
+        // 5. Clean up other dependent tables
+        try { db.handoverActDao().deleteByRenter(renterId) } catch (_: Exception) {}
+        try { db.smsDeliveryDao().deleteByRenter(renterId) } catch (_: Exception) {}
+        try { db.notificationHistoryDao().deleteByRenter(renterId) } catch (_: Exception) {}
+        try { db.repairOrderDao().deleteByRenter(renterId) } catch (_: Exception) {}
+        try { db.legacyMoneyAmountDao().deleteByEntity("RENTER", renterId.toLong()) } catch (_: Exception) {}
+        // 6. Delete the renter's contracts (after CardTransaction cleanup)
+        try { db.contractHistoryDao().deleteForRenter(renterId) } catch (_: Exception) {}
+    }
+
+    /**
+     * Cascade-cleans every dependent table that references a scooter.
+     * Mirrors ScooterViewModel.deleteScooter's cleanup steps.
+     */
+    private suspend fun cascadeDeleteScooterOrphans(scooterId: Int, scooterName: String?) {
+        // 1. For each contract matching scooterName: reverse CardTx balances,
+        //    delete CardTx, reverse Transaction-linked BusinessOperations,
+        //    delete Transaction, delete RentPeriod + allocations, reverse
+        //    BusinessOperations by contract, delete HandoverActs.
+        val contracts = if (scooterName != null) {
+            try { db.contractHistoryDao().getForScooterOnce(scooterName) } catch (_: Exception) { emptyList() }
+        } else emptyList()
+        for (contract in contracts) {
+            val cardTxs = try { db.cardTransactionDao().getForContractOnce(contract.id) } catch (_: Exception) { emptyList() }
+            for (cardTx in cardTxs) {
+                try { db.virtualCardDao().adjustBalance(cardTx.toCardId, -cardTx.amount) } catch (_: Exception) {}
+                try { db.businessOperationDao().markReversedByCardTransactionId(cardTx.id) } catch (_: Exception) {}
+            }
+            if (cardTxs.isNotEmpty()) {
+                try { db.cardTransactionDao().deleteForContract(contract.id) } catch (_: Exception) {}
+            }
+            val txs = try { db.transactionDao().getForContractOnce(contract.id) } catch (_: Exception) { emptyList() }
+            txs.forEach { tx ->
+                try { db.businessOperationDao().markReversedByLegacyTransactionId(tx.id) } catch (_: Exception) {}
+            }
+            if (txs.isNotEmpty()) {
+                try { db.transactionDao().deleteForContract(contract.id) } catch (_: Exception) {}
+            }
+            try { db.paymentAllocationDao().deleteByContractViaPeriod(contract.id) } catch (_: Exception) {}
+            try { db.rentPeriodDao().deleteByContract(contract.id) } catch (_: Exception) {}
+            try { db.businessOperationDao().markReversedByContract(contract.id) } catch (_: Exception) {}
+            try { db.handoverActDao().deleteByContract(contract.id) } catch (_: Exception) {}
+        }
+        if (contracts.isNotEmpty() && scooterName != null) {
+            try { db.contractHistoryDao().deleteForScooter(scooterName) } catch (_: Exception) {}
+        }
+        // 2. Delete Transaction rows for this scooter (by scooterId, not by name)
+        val txs = try { db.transactionDao().forScooterOnce(scooterId) } catch (_: Exception) { emptyList() }
+        txs.forEach { tx ->
+            try { db.businessOperationDao().markReversedByLegacyTransactionId(tx.id) } catch (_: Exception) {}
+        }
+        if (txs.isNotEmpty()) {
+            try { db.transactionDao().deleteByIds(txs.map { it.id }) } catch (_: Exception) {}
+        }
+        // 3. Reverse remaining BusinessOperations tied to this scooter
+        try { db.businessOperationDao().markReversedByScooter(scooterId) } catch (_: Exception) {}
+        // 4. Clean up PaymentAllocation + RentPeriod
+        try { db.paymentAllocationDao().deleteByScooterViaPeriod(scooterId) } catch (_: Exception) {}
+        try { db.rentPeriodDao().deleteByScooter(scooterId) } catch (_: Exception) {}
+        // 5. Clean up HandoverActs + RepairOrders + LegacyMoneyAmount
+        try { db.handoverActDao().deleteByScooter(scooterId) } catch (_: Exception) {}
+        try { db.repairOrderDao().closeOpenForScooter(scooterId, "Scooter permanently deleted") } catch (_: Exception) {}
+        try { db.repairOrderDao().deleteByScooter(scooterId) } catch (_: Exception) {}
+        try { db.legacyMoneyAmountDao().deleteByEntity("SCOOTER", scooterId.toLong()) } catch (_: Exception) {}
+        // 6. Clear scooterId/scooterName from active renters
+        val rentersWithScooter = try { db.renterDao().getActiveRenters().filter { it.scooterId == scooterId } } catch (_: Exception) { emptyList() }
+        rentersWithScooter.forEach { r ->
+            try { db.renterDao().updateRenter(r.copy(scooterId = null, scooterName = null)) } catch (_: Exception) {}
+        }
     }
 
     /**

@@ -453,6 +453,10 @@ class ContractHistoryViewModel(application: Application) : AndroidViewModel(appl
 
             // ── 4. Удаляем Transaction-записи ─────────────────────────────
             if (relatedTx.isNotEmpty()) {
+                // Reverse BusinessOperations linked via legacyTransactionId FIRST
+                relatedTx.forEach { tx ->
+                    try { AppDatabase.getDatabase(getApplication()).businessOperationDao().markReversedByLegacyTransactionId(tx.id) } catch (_: Exception) {}
+                }
                 transactionRepo.deleteForContract(contractId)
                 Log.d(TAG, "Deleted ${relatedTx.size} Transaction rows for contract #$contractId")
             }
@@ -468,6 +472,8 @@ class ContractHistoryViewModel(application: Application) : AndroidViewModel(appl
                         cardId = cardTx.toCardId,
                         delta = -cardTx.amount
                     )
+                    // Reverse the BusinessOperation linked to this CardTransaction
+                    try { AppDatabase.getDatabase(getApplication()).businessOperationDao().markReversedByCardTransactionId(cardTx.id) } catch (_: Exception) {}
                 } catch (e: Exception) {
                     Log.w(TAG, "Failed to reverse cardTx #${cardTx.id} balance: ${e.message}")
                 }
@@ -615,6 +621,17 @@ class ContractHistoryViewModel(application: Application) : AndroidViewModel(appl
             }
 
             // ── 9. Удаляем сам контракт ───────────────────────────────────
+            // Before hard-deleting the contract row, clean up dependent rows
+            // that reference this contract via contractHistoryId / contractId.
+            // (RentPeriod is hard-deleted here, unlike moveContractToTrash
+            // which only marks it CANCELLED — the contract VM path is the
+            // hard-delete path.)
+            val db = AppDatabase.getDatabase(getApplication())
+            try { db.paymentAllocationDao().deleteByContractViaPeriod(contractId) } catch (_: Exception) {}
+            try { db.rentPeriodDao().deleteByContract(contractId) } catch (_: Exception) {}
+            try { db.businessOperationDao().markReversedByContract(contractId) } catch (_: Exception) {}
+            try { db.handoverActDao().deleteByContract(contractId) } catch (_: Exception) {}
+
             repo.deleteById(contractId)
             Log.d(TAG, "Contract #$contractId deleted with cascade " +
                 "(tx=${relatedTx.size}, cardTx=${relatedCardTx.size})")

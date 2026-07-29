@@ -76,6 +76,20 @@ class TrashService(private val db: AppDatabase) {
 
     suspend fun moveTransactionToTrash(transaction: Transaction, reason: String? = null): Long = db.withTransaction {
         val itemId = snapshotTransaction(transaction, reason)
+        // Reverse the linked BusinessOperation so reports stop counting the
+        // deleted transaction. legacyTransactionId is the canonical link.
+        try {
+            db.businessOperationDao().markReversedByLegacyTransactionId(transaction.id)
+        } catch (_: Exception) {}
+        // Clean up any PaymentAllocation rows that pointed at the reversed
+        // operation — they would otherwise dangle against a REVERSED op.
+        try {
+            db.businessOperationDao().getByLegacyTransactionId(transaction.id)?.let { bo ->
+                // getByLegacyTransactionId only returns ACTIVE — but the op might
+                // have been just flipped above, so also fetch by direct id lookup.
+                if (bo.id > 0) db.paymentAllocationDao().deleteByOperation(bo.id)
+            }
+        } catch (_: Exception) {}
         db.transactionDao().deleteById(transaction.id)
         itemId
     }
@@ -96,7 +110,17 @@ class TrashService(private val db: AppDatabase) {
     suspend fun moveContractToTrash(contract: ContractHistoryEntry, reason: String? = null): Long = db.withTransaction {
         val itemId = snapshotContract(contract, reason)
         db.contractHistoryDao().deleteById(contract.id)
-        db.rentPeriodDao().byContractHistoryId(contract.id)?.let { db.rentPeriodDao().update(it.copy(status = RentPeriod.STATUS_CANCELLED)) }
+        // Cancel the linked RentPeriod (don't hard-delete — preserves billing
+        // history for reports) and clean up PaymentAllocation rows that
+        // referenced it. Reverse BusinessOperations tied to this contract.
+        try {
+            db.rentPeriodDao().byContractHistoryId(contract.id)?.let {
+                db.rentPeriodDao().update(it.copy(status = RentPeriod.STATUS_CANCELLED))
+            }
+        } catch (_: Exception) {}
+        try { db.paymentAllocationDao().deleteByContractViaPeriod(contract.id) } catch (_: Exception) {}
+        try { db.businessOperationDao().markReversedByContract(contract.id) } catch (_: Exception) {}
+        try { db.handoverActDao().deleteByContract(contract.id) } catch (_: Exception) {}
         itemId
     }
 

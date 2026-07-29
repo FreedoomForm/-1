@@ -40,6 +40,21 @@ interface BusinessOperationDao {
     @Query("UPDATE business_operations SET cardTransactionId = :cardTransactionId WHERE id = :operationId")
     suspend fun markCardTransaction(operationId: Long, cardTransactionId: Int)
 
+    @Query("UPDATE business_operations SET status = 'REVERSED' WHERE renterId = :renterId AND status = 'ACTIVE'")
+    suspend fun markReversedByRenter(renterId: Int): Int
+
+    @Query("UPDATE business_operations SET status = 'REVERSED' WHERE scooterId = :scooterId AND status = 'ACTIVE'")
+    suspend fun markReversedByScooter(scooterId: Int): Int
+
+    @Query("UPDATE business_operations SET status = 'REVERSED' WHERE contractId = :contractId AND status = 'ACTIVE'")
+    suspend fun markReversedByContract(contractId: Int): Int
+
+    @Query("UPDATE business_operations SET status = 'REVERSED' WHERE legacyTransactionId = :legacyId AND status = 'ACTIVE'")
+    suspend fun markReversedByLegacyTransactionId(legacyId: Int): Int
+
+    @Query("UPDATE business_operations SET status = 'REVERSED' WHERE cardTransactionId = :cardTxId AND status = 'ACTIVE'")
+    suspend fun markReversedByCardTransactionId(cardTxId: Int): Int
+
     @Query("DELETE FROM business_operations")
     suspend fun clear()
 }

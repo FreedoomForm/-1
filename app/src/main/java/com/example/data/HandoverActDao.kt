@@ -28,6 +28,15 @@ interface HandoverActDao {
     @Query("DELETE FROM handover_acts WHERE id = :id")
     suspend fun deleteById(id: Long)
 
+    @Query("DELETE FROM handover_acts WHERE renterId = :renterId")
+    suspend fun deleteByRenter(renterId: Int)
+
+    @Query("DELETE FROM handover_acts WHERE scooterId = :scooterId")
+    suspend fun deleteByScooter(scooterId: Int)
+
+    @Query("DELETE FROM handover_acts WHERE contractHistoryId = :contractId")
+    suspend fun deleteByContract(contractId: Int)
+
     @Query("DELETE FROM handover_acts")
     suspend fun clear()
 }

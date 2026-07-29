@@ -26,4 +26,7 @@ interface NotificationHistoryDao {
     /** Обновляет renterId при смене id арендатора. */
     @Query("UPDATE notification_history SET renterId = :newId WHERE renterId = :oldId")
     suspend fun updateRenterId(oldId: Int, newId: Int)
+
+    @Query("DELETE FROM notification_history WHERE renterId = :renterId")
+    suspend fun deleteByRenter(renterId: Int)
 }

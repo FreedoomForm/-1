@@ -18,6 +18,9 @@ interface SmsDeliveryDao {
     @Query("SELECT * FROM sms_deliveries WHERE renterId = :renterId AND status = 'SENT' ORDER BY timestamp DESC LIMIT 1")
     suspend fun latestSuccessfulForRenter(renterId: Int): SmsDelivery?
 
+    @Query("DELETE FROM sms_deliveries WHERE renterId = :renterId")
+    suspend fun deleteByRenter(renterId: Int)
+
     @Query("DELETE FROM sms_deliveries")
     suspend fun clear()
 }

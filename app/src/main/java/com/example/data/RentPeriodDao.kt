@@ -61,6 +61,15 @@ interface RentPeriodDao {
     @Query("UPDATE rent_periods SET status = 'CANCELLED', updatedAt = :timestamp WHERE renterId = :renterId AND status = 'SCHEDULED'")
     suspend fun cancelScheduledForRenter(renterId: Int, timestamp: Long): Int
 
+    @Query("DELETE FROM rent_periods WHERE renterId = :renterId")
+    suspend fun deleteByRenter(renterId: Int)
+
+    @Query("DELETE FROM rent_periods WHERE scooterId = :scooterId")
+    suspend fun deleteByScooter(scooterId: Int)
+
+    @Query("DELETE FROM rent_periods WHERE contractHistoryId = :contractId")
+    suspend fun deleteByContract(contractId: Int)
+
     @Query("DELETE FROM rent_periods")
     suspend fun clear()
 }
@@ -75,6 +84,21 @@ interface PaymentAllocationDao {
 
     @Query("SELECT * FROM payment_allocations WHERE operationId = :operationId ORDER BY id ASC")
     suspend fun forOperation(operationId: Long): List<PaymentAllocationEntity>
+
+    @Query("DELETE FROM payment_allocations WHERE operationId = :operationId")
+    suspend fun deleteByOperation(operationId: Long)
+
+    @Query("DELETE FROM payment_allocations WHERE rentPeriodId = :rentPeriodId")
+    suspend fun deleteByRentPeriod(rentPeriodId: Long)
+
+    @Query("DELETE FROM payment_allocations WHERE rentPeriodId IN (SELECT id FROM rent_periods WHERE renterId = :renterId)")
+    suspend fun deleteByRenterViaPeriod(renterId: Int)
+
+    @Query("DELETE FROM payment_allocations WHERE rentPeriodId IN (SELECT id FROM rent_periods WHERE scooterId = :scooterId)")
+    suspend fun deleteByScooterViaPeriod(scooterId: Int)
+
+    @Query("DELETE FROM payment_allocations WHERE rentPeriodId IN (SELECT id FROM rent_periods WHERE contractHistoryId = :contractId)")
+    suspend fun deleteByContractViaPeriod(contractId: Int)
 
     @Query("DELETE FROM payment_allocations")
     suspend fun clear()

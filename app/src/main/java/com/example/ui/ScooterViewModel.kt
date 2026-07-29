@@ -276,9 +276,43 @@ class ScooterViewModel(application: Application) : AndroidViewModel(application)
                 }
 
                 // 3. Удалить контракты с этим скутером (snapshot first)
+                //    Для каждого контракта также реверсим и удаляем его
+                //    CardTransaction и Transaction — без этого оставались бы
+                //    осиротевшие финансовые записи со ссылкой на удалённый
+                //    контракт (главная карта врал бы в балансе).
                 val contracts = db.contractHistoryDao().getForScooterOnce(scooter.name)
                 val trashSvc = TrashService(db)
                 contracts.forEach { trashSvc.snapshotContract(it, "Removed with scooter #${scooter.id}") }
+                for (contract in contracts) {
+                    // Reverse + delete CardTransactions tied to this contract
+                    val cardTxs = virtualCardRepository.getCardTxForContract(contract.id)
+                    for (cardTx in cardTxs) {
+                        try {
+                            virtualCardRepository.adjustCardBalance(cardTx.toCardId, -cardTx.amount)
+                            try { db.businessOperationDao().markReversedByCardTransactionId(cardTx.id) } catch (_: Exception) {}
+                        } catch (e: Exception) {
+                            Log.w(TAG, "deleteScooter: failed to reverse cardTx #${cardTx.id}: ${e.message}")
+                        }
+                    }
+                    if (cardTxs.isNotEmpty()) virtualCardRepository.deleteCardTxForContract(contract.id)
+
+                    // Snapshot + delete Transaction rows for this contract
+                    val contractTxs = db.transactionDao().getForContractOnce(contract.id)
+                    contractTxs.forEach { trashSvc.snapshotTransaction(it, "Removed with scooter #${scooter.id}") }
+                    if (contractTxs.isNotEmpty()) {
+                        contractTxs.forEach { tx ->
+                            try { db.businessOperationDao().markReversedByLegacyTransactionId(tx.id) } catch (_: Exception) {}
+                        }
+                        db.transactionDao().deleteForContract(contract.id)
+                    }
+
+                    // Per-contract: cancel RentPeriod, delete allocations,
+                    // reverse ops, delete handover acts.
+                    try { db.paymentAllocationDao().deleteByContractViaPeriod(contract.id) } catch (_: Exception) {}
+                    try { db.rentPeriodDao().deleteByContract(contract.id) } catch (_: Exception) {}
+                    try { db.businessOperationDao().markReversedByContract(contract.id) } catch (_: Exception) {}
+                    try { db.handoverActDao().deleteByContract(contract.id) } catch (_: Exception) {}
+                }
                 if (contracts.isNotEmpty()) {
                     db.contractHistoryDao().deleteForScooter(scooter.name)
                     Log.d(TAG, "deleteScooter: deleted ${contracts.size} contracts for scooter ${scooter.name}")
@@ -288,14 +322,30 @@ class ScooterViewModel(application: Application) : AndroidViewModel(application)
                 val txs = db.transactionDao().forScooterOnce(scooter.id)
                 txs.forEach { trashSvc.snapshotTransaction(it, "Removed with scooter #${scooter.id}") }
                 if (txs.isNotEmpty()) {
+                    txs.forEach { tx ->
+                        try { db.businessOperationDao().markReversedByLegacyTransactionId(tx.id) } catch (_: Exception) {}
+                    }
                     db.transactionDao().deleteByIds(txs.map { it.id })
                     Log.d(TAG, "deleteScooter: deleted ${txs.size} transactions for scooter #${scooter.id}")
                 }
 
-                // 5. Закрыть открытые repair orders
-                try {
-                    db.repairOrderDao().closeOpenForScooter(scooter.id, "Scooter deleted")
-                } catch (_: Exception) {}
+                // 4b. Reverse any remaining BusinessOperations tied to this scooter
+                // (e.g., REPAIR ops that were not linked to a Transaction row).
+                try { db.businessOperationDao().markReversedByScooter(scooter.id) } catch (_: Exception) {}
+
+                // 4c. Clean up orphaned PaymentAllocation + RentPeriod rows
+                // (rent-periods created directly via calendar without a contract).
+                try { db.paymentAllocationDao().deleteByScooterViaPeriod(scooter.id) } catch (_: Exception) {}
+                try { db.rentPeriodDao().deleteByScooter(scooter.id) } catch (_: Exception) {}
+
+                // 4d. Clean up HandoverActs + RepairOrders + LegacyMoneyAmount
+                try { db.handoverActDao().deleteByScooter(scooter.id) } catch (_: Exception) {}
+                // RepairOrder: close OPEN ones for history, then delete all rows
+                try { db.repairOrderDao().closeOpenForScooter(scooter.id, "Scooter deleted") } catch (_: Exception) {}
+                try { db.repairOrderDao().deleteByScooter(scooter.id) } catch (_: Exception) {}
+                try { db.legacyMoneyAmountDao().deleteByEntity("SCOOTER", scooter.id.toLong()) } catch (_: Exception) {}
+
+                // 5. (Skipped: RepairOrder cleanup is folded into 4d above.)
 
                 // 6. Timeline critical action
                 try {

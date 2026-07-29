@@ -957,19 +957,26 @@ class RenterViewModel(application: Application) : AndroidViewModel(application) 
         viewModelScope.launch {
             var deletedContractsCount = 0
             // ── Каскадное удаление арендатора ──────────────────────────────
-            // Полная цепочка:
-            //   1. Найти все контракты (ContractHistoryEntry) этого арендатора
-            //   2. Для каждого контракта:
-            //      a) Найти все CardTransaction с contractId = contract.id
-            //         (это TYPE_CONTRACT_INCOME — деньги, упавшие на Glavnaya)
-            //      b) Реверснуть баланс главной карты: adjustBalance(toCardId, -amount)
-            //      c) Удалить эти CardTransaction
-            //   3. Удалить все Transaction арендатора (renterId = id)
-            //   4. Удалить все ContractHistoryEntry арендатора (renterId = id)
-            //   5. Удалить самого арендатора
+            // Полная цепочка (см. PLAN_UNIVERSAL_ACCOUNTING §3–§6):
+            //   1. Snapshot арендатора в корзину
+            //   2. Для каждого контракта арендатора:
+            //      a) Snapshot контракта в корзину
+            //      b) Реверснуть CardTransaction-ы контракта и удалить их
+            //      c) Реверснуть BusinessOperation-ы, привязанные к этим
+            //         CardTransaction-ам, через markReversedByCardTransactionId
+            //   3. Реверснуть все BusinessOperation-ы арендатора:
+            //      a) По legacyTransactionId для каждой Transaction арендатора
+            //      b) По renterId для операций, не привязанных к Transaction
+            //   4. Удалить все Transaction арендатора (snapshot first)
+            //   5. Удалить RentPeriod арендатора (после PaymentAllocation)
+            //   6. Удалить PaymentAllocation через RentPeriod
+            //   7. Удалить HandoverAct, SmsDelivery, NotificationHistory,
+            //      RepairOrder, LegacyMoneyAmount для этого арендатора
+            //   8. Удалить все ContractHistoryEntry арендатора
+            //   9. Удалить самого арендатора
             //
-            // Без шагов 2-3 деньги «зависнут» на главной карте, а в списке
-            // транзакций останутся «осиротевшие» записи без арендатора.
+            // AuditEvent / TimelineEvent остаются как историческая аудиторская
+            // запись (by design — never delete audit trails).
             try {
                 val db = AppDatabase.getDatabase(getApplication())
                 repository.getById(id)?.let { renter ->
@@ -990,6 +997,10 @@ class RenterViewModel(application: Application) : AndroidViewModel(application) 
                                 cardId = cardTx.toCardId,
                                 delta = -cardTx.amount
                             )
+                            // Reverse the BusinessOperation linked to this CardTransaction
+                            try {
+                                db.businessOperationDao().markReversedByCardTransactionId(cardTx.id)
+                            } catch (_: Exception) {}
                         } catch (e: Exception) {
                             Log.w(TAG, "deleteRenter: failed to reverse cardTx #${cardTx.id}: ${e.message}")
                         }
@@ -1003,9 +1014,37 @@ class RenterViewModel(application: Application) : AndroidViewModel(application) 
                 val renterTransactions = transactionRepository.forRenterOnce(id)
                 renterTransactions.forEach { trashService.snapshotTransaction(it, "Removed with renter #$id") }
                 if (renterTransactions.isNotEmpty()) {
+                    // Reverse BusinessOperations linked via legacyTransactionId FIRST
+                    renterTransactions.forEach { tx ->
+                        try {
+                            db.businessOperationDao().markReversedByLegacyTransactionId(tx.id)
+                        } catch (_: Exception) {}
+                    }
                     transactionRepository.deleteByIds(renterTransactions.map { it.id })
                     Log.d(TAG, "deleteRenter: deleted ${renterTransactions.size} transactions for renter #$id")
                 }
+
+                // Reverse any remaining BusinessOperations tied to this renter
+                // (e.g., DEPOSIT_RECEIVED, DEBT_FORGIVEN, ADJUSTMENT not linked
+                // to a Transaction).
+                try {
+                    val reversed = db.businessOperationDao().markReversedByRenter(id)
+                    if (reversed > 0) Log.d(TAG, "deleteRenter: reversed $reversed ops by renterId=$id")
+                } catch (_: Exception) {}
+
+                // Clean up PaymentAllocation BEFORE deleting RentPeriod rows
+                // (the allocation table references rentPeriodId).
+                try { db.paymentAllocationDao().deleteByRenterViaPeriod(id) } catch (_: Exception) {}
+
+                // Delete RentPeriod rows for this renter.
+                try { db.rentPeriodDao().deleteByRenter(id) } catch (_: Exception) {}
+
+                // Clean up dependent rows that reference renterId directly.
+                try { db.handoverActDao().deleteByRenter(id) } catch (_: Exception) {}
+                try { db.smsDeliveryDao().deleteByRenter(id) } catch (_: Exception) {}
+                try { db.notificationHistoryDao().deleteByRenter(id) } catch (_: Exception) {}
+                try { db.repairOrderDao().deleteByRenter(id) } catch (_: Exception) {}
+                try { db.legacyMoneyAmountDao().deleteByEntity("RENTER", id.toLong()) } catch (_: Exception) {}
 
                 // Удаляем все контракты арендатора
                 historyRepository.deleteForRenter(id)

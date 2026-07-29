@@ -11,4 +11,7 @@ interface LegacyMoneyAmountDao {
 
     @Query("SELECT COUNT(*) FROM legacy_money_amounts")
     suspend fun count(): Int
+
+    @Query("DELETE FROM legacy_money_amounts WHERE entityType = :entityType AND entityId = :entityId")
+    suspend fun deleteByEntity(entityType: String, entityId: Long)
 }

@@ -52,4 +52,10 @@ interface RepairOrderDao {
     /** Count of repair orders for a scooter (all statuses). */
     @Query("SELECT COUNT(*) FROM repair_orders WHERE scooterId = :scooterId")
     suspend fun countForScooter(scooterId: Int): Int
+
+    @Query("DELETE FROM repair_orders WHERE scooterId = :scooterId")
+    suspend fun deleteByScooter(scooterId: Int)
+
+    @Query("DELETE FROM repair_orders WHERE renterId = :renterId")
+    suspend fun deleteByRenter(renterId: Int)
 }
