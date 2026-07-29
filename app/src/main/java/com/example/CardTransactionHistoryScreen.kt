@@ -79,6 +79,13 @@ fun CardTransactionHistoryScreen(
     val transactions by finansiViewModel.transactionsForCard(card.id)
         .collectAsStateWithLifecycle(initialValue = emptyList())
 
+    // Subscribe to VM user-message channel — replaces unconditional Toasts.
+    LaunchedEffect(Unit) {
+        finansiViewModel.userMessage.collect { (success, msg) ->
+            Toast.makeText(context, msg, if (success) Toast.LENGTH_SHORT else Toast.LENGTH_LONG).show()
+        }
+    }
+
     // Свежий объект карты (баланс мог измениться)
     val currentCard = allCards.firstOrNull { it.id == card.id } ?: card
 
@@ -447,7 +454,6 @@ fun CardTransactionHistoryScreen(
                     return@VerticalCardTransferDialog
                 }
                 finansiViewModel.transfer(fromCard.id, toCard.id, amount, note, reversed = false)
-                Toast.makeText(context, "Tranzaksiya yaratildi", Toast.LENGTH_SHORT).show()
                 showCreateDialog = false
             }
         )
@@ -479,7 +485,6 @@ fun CardTransactionHistoryScreen(
                         note = note
                     )
                 )
-                Toast.makeText(context, "Tranzaksiya yangilandi", Toast.LENGTH_SHORT).show()
                 editingTx = null
             }
         )

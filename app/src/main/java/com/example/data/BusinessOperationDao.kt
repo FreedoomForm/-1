@@ -25,11 +25,17 @@ interface BusinessOperationDao {
     @Query("UPDATE business_operations SET status = 'REVERSED' WHERE id = :id AND status = 'ACTIVE'")
     suspend fun markReversed(id: Long): Int
 
+    @androidx.room.Update
+    suspend fun update(operation: BusinessOperation)
+
     @Query("SELECT COUNT(*) FROM business_operations WHERE cardTransactionId = :cardTransactionId")
     suspend fun countForCardTransaction(cardTransactionId: Int): Int
 
     @Query("SELECT * FROM business_operations WHERE cardTransactionId = :cardTransactionId AND status = 'ACTIVE' LIMIT 1")
     suspend fun getByCardTransactionId(cardTransactionId: Int): BusinessOperation?
+
+    @Query("SELECT * FROM business_operations WHERE legacyTransactionId = :legacyId AND status = 'ACTIVE' LIMIT 1")
+    suspend fun getByLegacyTransactionId(legacyId: Int): BusinessOperation?
 
     @Query("UPDATE business_operations SET cardTransactionId = :cardTransactionId WHERE id = :operationId")
     suspend fun markCardTransaction(operationId: Long, cardTransactionId: Int)

@@ -11,8 +11,11 @@ import com.example.data.VirtualCardRepository
 import com.example.widget.WidgetUpdater
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 
@@ -31,6 +34,10 @@ class FinansiViewModel(application: Application) : AndroidViewModel(application)
 
     val cards: StateFlow<List<VirtualCard>>
     val transactions: StateFlow<List<CardTransaction>>
+
+    /** UI feedback channel — emit (success, message) tuples for toast display. */
+    private val _userMessage = MutableSharedFlow<Pair<Boolean, String>>(extraBufferCapacity = 4)
+    val userMessage: SharedFlow<Pair<Boolean, String>> = _userMessage.asSharedFlow()
 
     /** Поток транзакций для конкретной карты (используется экраном истории карты). */
     fun transactionsForCard(cardId: Int): Flow<List<CardTransaction>> =
@@ -59,6 +66,17 @@ class FinansiViewModel(application: Application) : AndroidViewModel(application)
     fun addCard(name: String, balance: Double, colorHex: String, info: String?) {
         viewModelScope.launch {
             try {
+                if (name.isBlank()) {
+                    _userMessage.emit(false to "Karta nomi bo'sh bo'lishi mumkin emas")
+                    return@launch
+                }
+                // Duplicate-name check (case-insensitive, exclude archived).
+                val dupCount = repository.getAllCardsOnce()
+                    .count { it.name.trim().equals(name.trim(), ignoreCase = true) }
+                if (dupCount > 0) {
+                    _userMessage.emit(false to "Bunday nomdagi karta allaqachon mavjud: ${name.trim()}")
+                    return@launch
+                }
                 repository.insertCard(
                     VirtualCard(
                         name = name,
@@ -69,8 +87,10 @@ class FinansiViewModel(application: Application) : AndroidViewModel(application)
                     )
                 )
                 WidgetUpdater.updateAll(getApplication())
+                _userMessage.emit(true to "Karta yaratildi: ${name.trim()}")
             } catch (e: Exception) {
                 Log.e(TAG, "Failed to add card", e)
+                _userMessage.emit(false to "Karta yaratilmadi: ${e.message ?: "noma'lum xato"}")
             }
         }
     }
@@ -79,23 +99,50 @@ class FinansiViewModel(application: Application) : AndroidViewModel(application)
     fun updateCard(card: VirtualCard) {
         viewModelScope.launch {
             try {
+                if (card.name.isBlank()) {
+                    _userMessage.emit(false to "Karta nomi bo'sh bo'lishi mumkin emas")
+                    return@launch
+                }
+                // Duplicate-name check excluding self.
+                val dupCount = repository.getAllCardsOnce()
+                    .count { it.id != card.id && it.name.trim().equals(card.name.trim(), ignoreCase = true) }
+                if (dupCount > 0) {
+                    _userMessage.emit(false to "Bunday nomdagi karta allaqachon mavjud: ${card.name.trim()}")
+                    return@launch
+                }
                 repository.updateCard(card)
                 WidgetUpdater.updateAll(getApplication())
+                _userMessage.emit(true to "Karta yangilandi: ${card.name.trim()}")
             } catch (e: Exception) {
                 Log.e(TAG, "Failed to update card", e)
+                _userMessage.emit(false to "Karta yangilanmadi: ${e.message ?: "noma'lum xato"}")
             }
         }
     }
 
-    /** Удаляет карту, если она не системная. Системные (isDefault=true) не трогает. */
+    /** Удаляет карту, если она не системная. Системные (isDefault=true) не трогает.
+     *  Если на карте есть ненулевой баланс — он автоматически переносится на
+     *  главную карту перед закрытием (раньше операция молча fail-илась). */
     fun deleteCard(card: VirtualCard) {
         viewModelScope.launch {
             try {
                 val operator = com.example.data.OperatorSessionRepository(getApplication())
                     .requirePermission(AppDatabase.getDatabase(getApplication()), com.example.data.AccessPolicy.FINANCE_REVERSE)
-                // A financial account is archived in-place and then receives
-                // a recycle-bin entry so the universal restore button can reopen it.
-                repository.archiveCard(card, operator.displayName)
+                val current = repository.getCard(card.id) ?: card
+                if (kotlin.math.abs(current.balance) >= 0.005) {
+                    // Auto-transfer balance to MAIN card before closing —
+                    // previously the repo threw "Transfer or reconcile..." and
+                    // the VM silently swallowed the exception, so the user
+                    // saw nothing happen.
+                    repository.closeCardWithBalanceTransfer(
+                        card = current,
+                        toCardId = com.example.data.VirtualCard.MAIN_CARD_ID,
+                        note = "Karta o'chirildi: balans avtomatik ko'chirildi",
+                        actor = operator.displayName
+                    )
+                } else {
+                    repository.archiveCard(card, operator.displayName)
+                }
                 com.example.data.TrashService(AppDatabase.getDatabase(getApplication()))
                     .snapshotCard(card, "Card archived by ${operator.displayName}")
                 WidgetUpdater.updateAll(getApplication())
@@ -222,8 +269,10 @@ class FinansiViewModel(application: Application) : AndroidViewModel(application)
             try {
                 repository.updateTransaction(tx)
                 WidgetUpdater.updateAll(getApplication())
+                _userMessage.emit(true to "Tranzaksiya yangilandi")
             } catch (e: Exception) {
                 Log.e(TAG, "Failed to update transaction", e)
+                _userMessage.emit(false to "Tranzaksiya yangilanmadi: ${e.message ?: "noma'lum xato"}")
             }
         }
     }

@@ -32,6 +32,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import android.widget.Toast
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
@@ -694,6 +695,7 @@ fun CardsGrid(
 @Composable
 fun VirtualCardFormDialog(
     initial: VirtualCard? = null,
+    existingCards: List<VirtualCard> = emptyList(),
     onDismiss: () -> Unit,
     onSave: (name: String, balance: Double, colorHex: String, info: String?) -> Unit
 ) {
@@ -707,6 +709,16 @@ fun VirtualCardFormDialog(
     }
     val isEdit = initial != null
     val isDefaultCard = initial?.isDefault == true
+
+    // ── Real-time duplicate-name check ────────────────────────────────
+    // Mirrors the hard block in FinansiViewModel.addCard/updateCard so the
+    // user sees the conflict BEFORE pressing Save.
+    val nameConflict = remember(name) {
+        val trimmed = name.trim()
+        trimmed.isNotBlank() && existingCards.any {
+            it.id != (initial?.id ?: 0) && it.name.trim().equals(trimmed, ignoreCase = true)
+        }
+    }
 
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -741,6 +753,10 @@ fun VirtualCardFormDialog(
                     modifier = Modifier.fillMaxWidth(),
                     shape = RoundedCornerShape(12.dp),
                     singleLine = true,
+                    isError = nameConflict,
+                    supportingText = if (nameConflict) {
+                        { Text("⚠ Bunday nomdagi karta mavjud", color = Color(0xFFC62828), fontSize = 12.sp) }
+                    } else null,
                     colors = OutlinedTextFieldDefaults.colors(
                         unfocusedBorderColor = ClaudeDivider,
                         focusedBorderColor = ClaudeAccent
@@ -931,6 +947,13 @@ fun FinansiPanel(
 ) {
     val cards by viewModel.cards.collectAsStateWithLifecycle()
     val context = LocalContext.current
+
+    // Subscribe to VM user-message channel for success/error toasts.
+    LaunchedEffect(Unit) {
+        viewModel.userMessage.collect { (success, msg) ->
+            Toast.makeText(context, msg, if (success) Toast.LENGTH_SHORT else Toast.LENGTH_LONG).show()
+        }
+    }
 
     // ── Порядок карт (как в Otcheti) — сохраняется в SharedPreferences ────
     // Хранится как строка id1,id2,id3,... — карты, которых нет в строке,
@@ -1193,6 +1216,7 @@ fun FinansiPanel(
     if (showCreateDialog || editingCard != null) {
         VirtualCardFormDialog(
             initial = editingCard,
+            existingCards = cards,
             onDismiss = {
                 showCreateDialog = false
                 editingCard = null

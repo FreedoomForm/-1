@@ -3202,6 +3202,24 @@ fun RenterFormDialog(
     var phone by remember {
         mutableStateOf(initialRenter?.phoneNumber?.filter { it.isDigit() }?.takeLast(9) ?: "")
     }
+
+    // ── Real-time duplicate detection ──────────────────────────────────
+    // As the user types, check if any OTHER renter (excluding the one being
+    // edited, if any) has the same name (case-insensitive) or the same phone.
+    // Show a red warning below the field so the user sees the conflict BEFORE
+    // pressing Save. This complements the hard block in RenterViewModel.addRenter.
+    val excludeId = initialRenter?.id ?: 0
+    val nameConflict = remember(name) {
+        name.trim().isNotBlank() && activeRenters.any {
+            it.id != excludeId && it.name.trim().equals(name.trim(), ignoreCase = true)
+        }
+    }
+    val phoneConflict = remember(phone) {
+        val p = phone.trim()
+        p.length >= 7 && activeRenters.any {
+            it.id != excludeId && it.phoneNumber.filter { c -> c.isDigit() }.takeLast(9) == p
+        }
+    }
     var debt by remember {
         // Показываем долг = -balance (если balance < 0), иначе debtAmount
         val displayDebt = if ((initialRenter?.balance ?: 0.0) < 0) -initialRenter!!.balance
@@ -3343,9 +3361,13 @@ fun RenterFormDialog(
                     label = { Text("To'liq ism (ФИШ)") },
                     modifier = Modifier.fillMaxWidth(),
                     shape = RoundedCornerShape(8.dp),
+                    isError = nameConflict,
+                    supportingText = if (nameConflict) {
+                        { Text("⚠ Bunday ismli arendator allaqachon mavjud", color = Color(0xFFC62828), fontSize = 12.sp) }
+                    } else null,
                     colors = OutlinedTextFieldDefaults.colors(
-                        unfocusedBorderColor = ClaudeDivider,
-                        focusedBorderColor = ClaudeTextSecondary
+                        unfocusedBorderColor = if (nameConflict) Color(0xFFC62828) else ClaudeDivider,
+                        focusedBorderColor = if (nameConflict) Color(0xFFC62828) else ClaudeTextSecondary
                     )
                 )
                 OutlinedTextField(
@@ -3357,6 +3379,10 @@ fun RenterFormDialog(
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Phone),
                     visualTransformation = UzPhoneVisualTransformation(),
                     modifier = Modifier.fillMaxWidth(),
+                    isError = phoneConflict,
+                    supportingText = if (phoneConflict) {
+                        { Text("⚠ Bu raqam boshqa arendatorga biriktirilgan", color = Color(0xFFC62828), fontSize = 12.sp) }
+                    } else null,
                     shape = RoundedCornerShape(8.dp)
                 )
 
@@ -5134,6 +5160,36 @@ fun ScooterFormDialog(
     var batteryId1 by remember { mutableStateOf(initialScooter?.batteryId1 ?: "") }
     var batteryId2 by remember { mutableStateOf(initialScooter?.batteryId2 ?: "") }
     var additionalInfo by remember { mutableStateOf(initialScooter?.additionalInfo ?: "") }
+
+    // ── Real-time duplicate detection for scooter name ───────────────
+    // Block creation if another scooter (excluding self) has the same name.
+    val scooterNameConflict = remember(name) {
+        val trimmed = name.trim()
+        trimmed.isNotBlank() && existingScooters.any {
+            it.id != (initialScooter?.id ?: 0) &&
+            it.name.trim().equals(trimmed, ignoreCase = true)
+        }
+    }
+    // Also check VIN/engine/serial duplicates live — matches the existing
+    // hard block in ScooterViewModel.addScooter/updateScooter.
+    val vinConflict = remember(vinNumber) {
+        val v = vinNumber.trim()
+        v.isNotBlank() && existingScooters.any {
+            it.id != (initialScooter?.id ?: 0) && it.vinNumber.trim().equals(v, ignoreCase = true)
+        }
+    }
+    val engineConflict = remember(engineNumber) {
+        val e = engineNumber.trim()
+        e.isNotBlank() && existingScooters.any {
+            it.id != (initialScooter?.id ?: 0) && it.engineNumber.trim().equals(e, ignoreCase = true)
+        }
+    }
+    val serialConflict = remember(scooterSerialNumber) {
+        val s = scooterSerialNumber.trim()
+        s.isNotBlank() && existingScooters.any {
+            it.id != (initialScooter?.id ?: 0) && it.scooterSerialNumber.trim().equals(s, ignoreCase = true)
+        }
+    }
     val serviceDateFormat = remember { SimpleDateFormat("yyyy-MM-dd", Locale.getDefault()) }
     var nextServiceDate by remember {
         mutableStateOf(initialScooter?.nextServiceAt?.let { serviceDateFormat.format(Date(it)) } ?: "")
@@ -5169,8 +5225,11 @@ fun ScooterFormDialog(
                     label = { Text("Skuter nomi (Skillmax- formatida)") },
                     modifier = Modifier.fillMaxWidth(),
                     shape = RoundedCornerShape(8.dp),
+                    isError = scooterNameConflict,
                     supportingText = {
-                        if (initialScooter == null) {
+                        if (scooterNameConflict) {
+                            Text("⚠ Bunday nomdagi skuter allaqachon mavjud", color = Color(0xFFC62828), fontSize = 12.sp)
+                        } else if (initialScooter == null) {
                             Text(
                                 "Avtomatik raqamlandi. Istalgan nom bilan almashtirishingiz mumkin.",
                                 style = MaterialTheme.typography.labelSmall,
@@ -5196,21 +5255,33 @@ fun ScooterFormDialog(
                     onValueChange = { vinNumber = it },
                     label = { Text("VIN номери") },
                     modifier = Modifier.fillMaxWidth(),
-                    shape = RoundedCornerShape(8.dp)
+                    shape = RoundedCornerShape(8.dp),
+                    isError = vinConflict,
+                    supportingText = if (vinConflict) {
+                        { Text("⚠ Bu VIN boshqa skuterga biriktirilgan", color = Color(0xFFC62828), fontSize = 12.sp) }
+                    } else null
                 )
                 OutlinedTextField(
                     value = engineNumber,
                     onValueChange = { engineNumber = it },
                     label = { Text("Двигатель номери") },
                     modifier = Modifier.fillMaxWidth(),
-                    shape = RoundedCornerShape(8.dp)
+                    shape = RoundedCornerShape(8.dp),
+                    isError = engineConflict,
+                    supportingText = if (engineConflict) {
+                        { Text("⚠ Bu dvigatel raqami mavjud", color = Color(0xFFC62828), fontSize = 12.sp) }
+                    } else null
                 )
                 OutlinedTextField(
                     value = scooterSerialNumber,
                     onValueChange = { scooterSerialNumber = it },
                     label = { Text("ID номери") },
                     modifier = Modifier.fillMaxWidth(),
-                    shape = RoundedCornerShape(8.dp)
+                    shape = RoundedCornerShape(8.dp),
+                    isError = serialConflict,
+                    supportingText = if (serialConflict) {
+                        { Text("⚠ Bu ID raqami mavjud", color = Color(0xFFC62828), fontSize = 12.sp) }
+                    } else null
                 )
                 Row(
                     modifier = Modifier.fillMaxWidth(),

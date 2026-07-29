@@ -56,9 +56,38 @@ class VirtualCardRepository(
     }
     suspend fun updateCard(card: VirtualCard) = atomic {
         val current = requireCard(card.id)
-        require(current.balance == card.balance) { "Balance can only change through an operation" }
         require(current.isArchived == card.isArchived) { "Use archiveCard to close an account" }
-        cardDao.updateCard(card)
+        // Balance delta is allowed — recorded as a TYPE_ADJUSTMENT operation
+        // (mirror of insertCard's opening-balance logic). Previously the repo
+        // threw "Balance can only change through an operation" which made the
+        // edit-card dialog silently fail whenever the user changed the balance
+        // field.
+        val delta = card.balance - current.balance
+        if (kotlin.math.abs(delta) >= 0.005) {
+            // Adjust the actual stored balance to match what the user entered.
+            cardDao.adjustBalance(card.id, delta)
+            appendOperation(BusinessOperation(
+                type = BusinessOperation.TYPE_ADJUSTMENT,
+                direction = if (delta > 0) BusinessOperation.DIRECTION_INCOME else BusinessOperation.DIRECTION_EXPENSE,
+                amountMinor = BusinessOperation.toMinor(kotlin.math.abs(delta)),
+                fromCardId = if (delta > 0) CardTransaction.EXTERNAL_SOURCE_ID else card.id,
+                toCardId = if (delta > 0) card.id else CardTransaction.EXTERNAL_SOURCE_ID,
+                note = "Manual balance edit: ${current.name}"
+            ))
+            database?.auditEventDao()?.insert(AuditEvent(
+                actor = "LOCAL_SYSTEM",
+                action = AuditEvent.ACTION_CARD_TRANSACTION_REVERSED,
+                entityType = "VIRTUAL_CARD",
+                entityId = card.id.toString(),
+                reason = "Balance edited via card form",
+                beforeSnapshot = "balance=${current.balance}",
+                afterSnapshot = "balance=${card.balance}; delta=$delta"
+            ))
+        }
+        // Persist the rest (name/colorHex/info/kind). Use a copy that keeps
+        // the freshly-adjusted balance to avoid overwriting it with the
+        // pre-adjustment value.
+        cardDao.updateCard(card.copy(balance = current.balance + delta))
     }
 
     /**
@@ -291,8 +320,42 @@ class VirtualCardRepository(
         }
     }
 
-    suspend fun updateTransaction(tx: CardTransaction) {
-        throw UnsupportedOperationException("Financial transactions are immutable; reverse and create a new one")
+    suspend fun updateTransaction(tx: CardTransaction) = atomic {
+        val current = txDao.getById(tx.id)
+            ?: throw IllegalArgumentException("Transaction #${tx.id} does not exist")
+        // If nothing changed financially — only note/type — just update the row.
+        val sameFromTo = current.fromCardId == tx.fromCardId &&
+                         current.toCardId == tx.toCardId &&
+                         kotlin.math.abs(current.amount - tx.amount) < 0.005
+        if (!sameFromTo) {
+            // Reverse the old movement (restore balances to pre-transaction state).
+            if (!VirtualCard.isExternalId(current.fromCardId)) cardDao.adjustBalance(current.fromCardId, current.amount)
+            if (!VirtualCard.isExternalId(current.toCardId)) cardDao.adjustBalance(current.toCardId, -current.amount)
+            // Apply the new movement.
+            if (!VirtualCard.isExternalId(tx.fromCardId)) cardDao.adjustBalance(tx.fromCardId, -tx.amount)
+            if (!VirtualCard.isExternalId(tx.toCardId)) cardDao.adjustBalance(tx.toCardId, tx.amount)
+            // Update the linked BusinessOperation row, if any.
+            database?.let { db ->
+                db.businessOperationDao().getByCardTransactionId(tx.id)?.let { original ->
+                    db.businessOperationDao().update(original.copy(
+                        amountMinor = BusinessOperation.toMinor(tx.amount),
+                        fromCardId = tx.fromCardId,
+                        toCardId = tx.toCardId,
+                        note = tx.note ?: original.note
+                    ))
+                }
+                db.auditEventDao().insert(AuditEvent(
+                    actor = "LOCAL_SYSTEM",
+                    action = AuditEvent.ACTION_CARD_TRANSACTION_REVERSED,
+                    entityType = "CARD_TRANSACTION",
+                    entityId = tx.id.toString(),
+                    reason = "Transaction edited via UI",
+                    beforeSnapshot = "from=${current.fromCardId};to=${current.toCardId};amount=${current.amount}",
+                    afterSnapshot = "from=${tx.fromCardId};to=${tx.toCardId};amount=${tx.amount}"
+                ))
+            }
+        }
+        txDao.updateTransaction(tx)
     }
     suspend fun countCards(): Int = cardDao.count()
 

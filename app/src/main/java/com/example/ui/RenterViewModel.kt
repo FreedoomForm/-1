@@ -140,6 +140,34 @@ class RenterViewModel(application: Application) : AndroidViewModel(application) 
         contractGroups: List<Triple<Long, Long, Boolean>> = emptyList()
     ) {
         viewModelScope.launch {
+            // ── Duplicate detection ───────────────────────────────────────
+            // Block creation if a renter with the same name (case-insensitive,
+            // trimmed) or the same phone already exists. Emits a SmsResult-shaped
+            // error so the UI shows a toast with the duplicate's identity.
+            val db = AppDatabase.getDatabase(getApplication())
+            val trimmedName = name.trim()
+            val trimmedPhone = phone.trim()
+            if (trimmedName.isBlank()) {
+                _smsResults.emit(SmsResult(false, "Ism bo'sh bo'lishi mumkin emas", errorCode = "EMPTY_NAME"))
+                return@launch
+            }
+            val dupNameCount = db.renterDao().duplicateNameCount(trimmedName, 0)
+            if (dupNameCount > 0) {
+                _smsResults.emit(SmsResult(false,
+                    "Bunday ismli arendator allaqachon mavjud: $trimmedName",
+                    errorCode = "DUPLICATE_NAME"))
+                return@launch
+            }
+            if (trimmedPhone.isNotBlank()) {
+                val dupPhoneCount = db.renterDao().duplicatePhoneCount(trimmedPhone, 0)
+                if (dupPhoneCount > 0) {
+                    _smsResults.emit(SmsResult(false,
+                        "Bu telefon raqami allaqachon ro'yxatdan o'tgan: $trimmedPhone",
+                        errorCode = "DUPLICATE_PHONE"))
+                    return@launch
+                }
+            }
+
             val now = System.currentTimeMillis()
             val dayMs = 24L * 60 * 60 * 1000
             val weekMs = 7L * dayMs
@@ -757,6 +785,31 @@ class RenterViewModel(application: Application) : AndroidViewModel(application) 
         pinfl: String = existing.pinfl
     ) {
         viewModelScope.launch(Dispatchers.IO) {
+            // ── Duplicate detection (excluding self) ─────────────────────
+            val db = AppDatabase.getDatabase(getApplication())
+            val trimmedName = newName.trim()
+            val trimmedPhone = newPhone.trim()
+            if (trimmedName.isBlank()) {
+                _smsResults.emit(SmsResult(false, "Ism bo'sh bo'lishi mumkin emas", errorCode = "EMPTY_NAME"))
+                return@launch
+            }
+            val dupNameCount = db.renterDao().duplicateNameCount(trimmedName, existing.id)
+            if (dupNameCount > 0) {
+                _smsResults.emit(SmsResult(false,
+                    "Bunday ismli arendator allaqachon mavjud: $trimmedName",
+                    errorCode = "DUPLICATE_NAME"))
+                return@launch
+            }
+            if (trimmedPhone.isNotBlank()) {
+                val dupPhoneCount = db.renterDao().duplicatePhoneCount(trimmedPhone, existing.id)
+                if (dupPhoneCount > 0) {
+                    _smsResults.emit(SmsResult(false,
+                        "Bu telefon raqami boshqa arendatorga biriktirilgan: $trimmedPhone",
+                        errorCode = "DUPLICATE_PHONE"))
+                    return@launch
+                }
+            }
+
             val effectivePrice = if (weeklyPrice > 0) weeklyPrice else SettingsRepository.DEFAULT_WEEKLY_PRICE
             val settingsRepo = SettingsRepository(getApplication())
             val realWeeklyPrice = if (settingsRepo.weeklyPrice > 0) settingsRepo.weeklyPrice else effectivePrice

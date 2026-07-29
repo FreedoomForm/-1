@@ -16,6 +16,7 @@ import com.example.data.TrashService
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -45,6 +46,10 @@ class TransactionViewModel(application: Application) : AndroidViewModel(applicat
     private val renterRepo: RenterRepository
     private lateinit var database: AppDatabase
     val transactions: StateFlow<List<Transaction>>
+
+    /** UI feedback channel — emit (success, message) tuples for toast display. */
+    private val _userMessage = kotlinx.coroutines.flow.MutableSharedFlow<Pair<Boolean, String>>(extraBufferCapacity = 4)
+    val userMessage: kotlinx.coroutines.flow.SharedFlow<Pair<Boolean, String>> = _userMessage.asSharedFlow()
 
     // Кэши StateFlow по renterId / scooterId / contractId — чтобы не создавать
     // новый flow на каждую рекомпозицию (аналогично ContractHistoryViewModel).
@@ -162,39 +167,78 @@ class TransactionViewModel(application: Application) : AndroidViewModel(applicat
                     legacyTransactionId = legacyId.toInt(), note = notes?.ifBlank { null }
                 ))
             }
+            _userMessage.emit(true to "Tranzaksiya yaratildi")
         }
     }
 
     fun updateTransaction(transaction: Transaction) {
         viewModelScope.launch(Dispatchers.IO) {
             // Если обновили renterId — подтянем свежие renterName/Phone.
-            if (transaction.renterName.isBlank() || transaction.renterPhone.isBlank()) {
+            val toSave = if (transaction.renterName.isBlank() || transaction.renterPhone.isBlank()) {
                 val renter = renterRepo.getById(transaction.renterId)
-                if (renter != null) {
-                    val updated = transaction.copy(
-                        renterName = transaction.renterName.ifBlank { renter.name },
-                        renterPhone = transaction.renterPhone.ifBlank { renter.phoneNumber }
-                    )
-                    repo.update(updated)
-                    return@launch
+                if (renter != null) transaction.copy(
+                    renterName = transaction.renterName.ifBlank { renter.name },
+                    renterPhone = transaction.renterPhone.ifBlank { renter.phoneNumber }
+                ) else transaction
+            } else transaction
+            repo.update(toSave)
+            // Sync the linked BusinessOperation row so reports reflect the
+            // edited amount/type. Previously updates left the original row
+            // in place → silent ledger/UI desync. Manual transactions store
+            // their link via legacyTransactionId (NOT cardTransactionId).
+            try {
+                val db = AppDatabase.getDatabase(getApplication())
+                val bo = db.businessOperationDao().getByLegacyTransactionId(toSave.id)
+                    ?: db.businessOperationDao().getByCardTransactionId(toSave.id)
+                bo?.let {
+                    db.businessOperationDao().update(it.copy(
+                        amountMinor = BusinessOperation.toMinor(toSave.amount),
+                        note = toSave.notes ?: it.note
+                    ))
                 }
+            } catch (e: Exception) {
+                Log.w("TransactionVM", "Failed to sync BusinessOperation on update", e)
             }
-            repo.update(transaction)
         }
     }
 
-    /** Moves a user-visible manual transaction to the recycle bin. */
+    /** Moves a user-visible manual transaction to the recycle bin.
+     *  Also marks the linked BusinessOperation as REVERSED so reports
+     *  no longer count the deleted transaction. */
     fun deleteTransaction(id: Int) {
         viewModelScope.launch(Dispatchers.IO) {
             val db = AppDatabase.getDatabase(getApplication())
-            repo.getById(id)?.let { TrashService(db).moveTransactionToTrash(it, "User deleted transaction") }
+            val tx = repo.getById(id)
+            if (tx != null) {
+                TrashService(db).moveTransactionToTrash(tx, "User deleted transaction")
+                try {
+                    val bo = db.businessOperationDao().getByLegacyTransactionId(id)
+                        ?: db.businessOperationDao().getByCardTransactionId(id)
+                    bo?.let { db.businessOperationDao().markReversed(it.id) }
+                } catch (e: Exception) {
+                    Log.w("TransactionVM", "Failed to reverse BusinessOperation on delete", e)
+                }
+                _userMessage.emit(true to "Tranzaksiya o'chirildi")
+            } else {
+                _userMessage.emit(false to "Tranzaksiya topilmadi")
+            }
         }
     }
 
     fun deleteTransactions(ids: List<Int>) {
         viewModelScope.launch(Dispatchers.IO) {
             val db = AppDatabase.getDatabase(getApplication())
-            ids.forEach { id -> repo.getById(id)?.let { TrashService(db).moveTransactionToTrash(it, "Bulk deletion") } }
+            ids.forEach { id ->
+                repo.getById(id)?.let {
+                    TrashService(db).moveTransactionToTrash(it, "Bulk deletion")
+                    try {
+                        val bo = db.businessOperationDao().getByLegacyTransactionId(id)
+                            ?: db.businessOperationDao().getByCardTransactionId(id)
+                        bo?.let { b -> db.businessOperationDao().markReversed(b.id) }
+                    } catch (_: Exception) {}
+                }
+            }
+            _userMessage.emit(true to "${ids.size} ta tranzaksiya o'chirildi")
         }
     }
 

@@ -107,6 +107,13 @@ fun ContractListScreen(
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
 
+    // Subscribe to VM user-message channel for success/error toasts.
+    LaunchedEffect(Unit) {
+        contractHistoryViewModel.userMessage.collect { (success, msg) ->
+            Toast.makeText(context, msg, if (success) Toast.LENGTH_SHORT else Toast.LENGTH_LONG).show()
+        }
+    }
+
     var searchQuery by remember { mutableStateOf("") }
     var editingContract by remember { mutableStateOf<ContractHistoryEntry?>(null) }
     var showDeleteConfirm by remember { mutableStateOf(false) }
@@ -579,12 +586,10 @@ fun ContractListScreen(
             onSave = { updated ->
                 contractHistoryViewModel.updateContract(updated)
                 editingContract = null
-                Toast.makeText(context, "Kontrakt yangilandi", Toast.LENGTH_SHORT).show()
             },
             onDelete = {
                 contractHistoryViewModel.deleteContract(entry.id)
                 editingContract = null
-                Toast.makeText(context, "Kontrakt o'chirildi", Toast.LENGTH_SHORT).show()
             }
         )
     }
@@ -601,7 +606,6 @@ fun ContractListScreen(
                     icon = Icons.Default.Delete,
                     onClick = {
                         contractHistoryViewModel.deleteContracts(selectedContracts.toList())
-                        Toast.makeText(context, "${selectedContracts.size} ta o'chirildi", Toast.LENGTH_SHORT).show()
                         onSelectedContractsChange(emptySet())
                         showDeleteConfirm = false
                     }
@@ -634,6 +638,7 @@ fun ContractListScreen(
                 .let { if (it > 0) it else SettingsRepository.DEFAULT_WEEKLY_PRICE },
             allRenters = allRenters,
             allScooters = allScooters,
+            allHistory = allHistory,
             onDismiss = { showCreateDialog = false },
             onCreateWithOverrides = { renterId, rName, rPhone, sId, sName,
                                        passport, addr, pin,
@@ -660,7 +665,6 @@ fun ContractListScreen(
                     overrideBatt2 = batt2,
                     overrideExtra = extra
                 )
-                Toast.makeText(context, "Kontrakt yaratildi", Toast.LENGTH_SHORT).show()
                 showCreateDialog = false
             }
         )
@@ -688,6 +692,7 @@ private fun CreateContractDialogForMain(
     defaultAmount: Double,
     allRenters: List<Renter>,
     allScooters: List<Scooter>,
+    allHistory: List<ContractHistoryEntry> = emptyList(),
     onDismiss: () -> Unit,
     onCreateWithOverrides: (
         renterId: Int, renterName: String, renterPhone: String,
@@ -723,6 +728,17 @@ private fun CreateContractDialogForMain(
     var scooterName by remember { mutableStateOf(defaultRenter.scooterName ?: "") }
     var vinNumber by remember { mutableStateOf("") }
     var engineNumber by remember { mutableStateOf("") }
+
+    // ── Real-time duplicate-period detection ──────────────────────────
+    // Block creation if a contract already exists for the same renter in the
+    // same [weekStart, weekEnd] window (same-period overlap → likely typo).
+    val periodConflict = remember(selectedRenterId, weekStart, weekEnd) {
+        selectedRenterId > 0 && allHistory.any { h ->
+            h.renterId == selectedRenterId &&
+            h.weekStart == weekStart &&
+            h.weekEnd == weekEnd
+        }
+    }
     var scooterSerialNumber by remember { mutableStateOf("") }
     var batteryId1 by remember { mutableStateOf("") }
     var batteryId2 by remember { mutableStateOf("") }
@@ -1036,15 +1052,28 @@ private fun CreateContractDialogForMain(
                     modifier = Modifier.fillMaxWidth(),
                     shape = RoundedCornerShape(8.dp)
                 )
+                if (periodConflict) {
+                    Surface(
+                        shape = RoundedCornerShape(8.dp),
+                        color = Color(0xFFFDECEA),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Text(
+                            "⚠ Bu arendator uchun shu davrda kontrakt allaqachon mavjud",
+                            color = Color(0xFFC62828),
+                            fontSize = 13.sp,
+                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp)
+                        )
+                    }
+                }
             }
         },
         confirmButton = {
             PrimaryButton(
                 label = "Yaratish",
                 icon = Icons.Default.Add,
-                // Все поля необязательны — кнопка всегда активна.
-                // Раньше требовалось renterName+renterPhone — убрано.
-                enabled = true,
+                // Disabled if the renter+period combo already exists.
+                enabled = !periodConflict,
                 onClick = {
                     val parsedAmount = amount.toDoubleOrNull() ?: defaultAmount
                     onCreateWithOverrides(
