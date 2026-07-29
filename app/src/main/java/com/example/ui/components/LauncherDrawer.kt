@@ -13,6 +13,7 @@ import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -115,9 +116,16 @@ val DefaultLauncherPages: List<LauncherPage> = listOf(
  * [offsetPx] is the Y translation of the panel in pixels, measured from
  * the top of the content area (just below the top app bar). Positive
  * values move the panel DOWN.
+ *
+ * [panelHiddenUnderNav] is updated by [LauncherScreen] every recomposition
+ * based on the actual on-screen Box dimensions. It is true when the
+ * panel's top edge has been dragged below the bottom nav's top edge —
+ * i.e., the panel is no longer visible above the bottom nav and the
+ * external "pull up" hint chip (on ExpandableBottomNav) should appear.
  */
 class LauncherCurtainState {
     var offsetPx by mutableStateOf(0f)
+    var panelHiddenUnderNav by mutableStateOf(false)
 }
 
 @Composable
@@ -129,47 +137,49 @@ fun LauncherScreen(
     state: LauncherCurtainState,
     pages: List<LauncherPage> = DefaultLauncherPages,
     onPageClick: (String) -> Unit,
-    /** Height of the bottom nav in pixels. Used to (a) flip the hint
-     *  chip mode and (b) clamp the maximum downward drag so the "pull
-     *  up" chip stays visible just above the bottom nav. */
+    /** Height of the bottom nav in pixels. Kept for source compatibility —
+     *  the actual clamp now uses BoxWithConstraints to get the real on-screen
+     *  content area height, so this parameter is no longer authoritative. */
+    @Suppress("UNUSED_PARAMETER")
     bottomNavHeightPx: Float
 ) {
     val density = LocalDensity.current
-    val configuration = LocalConfiguration.current
 
-    // Height of the content area (everything below the top app bar and
-    // above the bottom nav) in pixels.
-    val contentAreaHeightPx = with(density) {
-        configuration.screenHeightDp.dp.toPx()
-    } - bottomNavHeightPx
-
-    // Y position (within content area) of the bottom nav's top edge.
-    // When the panel's top edge moves past this Y, the panel is
-    // considered "hidden under the bottom nav" and the hint chip
-    // flips from "pull down" → "pull up".
-    val bottomNavTopInContentPx = contentAreaHeightPx
-
-    // Chip height in px (used for clamping so the chip itself is never
-    // pushed under the bottom nav).
-    val chipHeightPx = with(density) { 36.dp.toPx() }
-
-    // Maximum downward offset = position where the panel's top edge
-    // sits exactly chipHeightPx above the bottom nav. This guarantees
-    // the "pull up" chip remains fully visible & tappable.
-    val maxOffsetPx = (bottomNavTopInContentPx - chipHeightPx).coerceAtLeast(0f)
-
-    // ── Hint chip mode ────────────────────────────────────────────────
-    // The flip threshold is when the panel's top edge crosses the
-    // bottom nav's top edge. A small hysteresis (8 dp) avoids
-    // flickering right at the boundary.
-    val flipThresholdPx = bottomNavTopInContentPx - with(density) { 8.dp.toPx() }
-    val panelHiddenUnderNav = state.offsetPx >= flipThresholdPx
-
-    Box(
+    // Use BoxWithConstraints to get the actual on-screen height of the
+    // launcher's container (= Scaffold content area = screen − topbar −
+    // bottomnav). The previous calculation subtracted only bottomNavHeightPx
+    // from the full screen height, which incorrectly included the topbar —
+    // causing the panel to be draggable further down than the visible area
+    // and breaking the "panel hidden under nav" detection.
+    BoxWithConstraints(
         modifier = Modifier
             .fillMaxSize()
             .background(Color.Transparent)
     ) {
+        val containerHeightPx = with(density) { maxHeight.toPx() }
+
+        // Chip height in px (used for clamping so the chip itself is never
+        // pushed under the bottom nav).
+        val chipHeightPx = with(density) { 36.dp.toPx() }
+
+        // Maximum downward offset = position where the panel's top edge
+        // sits exactly chipHeightPx above the bottom of the container
+        // (= top of the bottom nav). This guarantees the hint chip on the
+        // panel remains visible above the bottom nav.
+        val maxOffsetPx = (containerHeightPx - chipHeightPx).coerceAtLeast(0f)
+
+        // ── Hint chip mode ────────────────────────────────────────────
+        // The flip threshold is when the panel's top edge crosses the
+        // bottom nav's top edge (= bottom of the container). A small
+        // hysteresis (8 dp) avoids flickering right at the boundary.
+        val flipThresholdPx = containerHeightPx - with(density) { 8.dp.toPx() }
+        val panelHiddenUnderNav = state.offsetPx >= flipThresholdPx
+
+        // Publish the hidden flag to the shared state so the bottom nav's
+        // external "pull up" chip can react to it without duplicating the
+        // (error-prone) screen-dimension math.
+        state.panelHiddenUnderNav = panelHiddenUnderNav
+
         // ── The panel itself ──────────────────────────────────────────
         // Always rendered (even when hidden under the bottom nav) so
         // the user can drag it back up. The Scaffold's bottom bar
@@ -195,16 +205,18 @@ fun LauncherScreen(
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
             // Hint chip — at the very top of the panel.
-            // When panelHiddenUnderNav = false: arrow DOWN, "Pastga torting".
-            // When panelHiddenUnderNav = true:  arrow UP,   "Yukoriga torting".
-            // The chip stays on the panel — when the panel slides under
-            // the bottom nav, the chip is the part that REMAINS visible
-            // just above the bottom nav (because of the maxOffsetPx
-            // clamp that keeps the chip area uncovered).
-            HintChip(
-                mode = if (panelHiddenUnderNav) HintMode.UP else HintMode.DOWN,
-                modifier = Modifier.padding(vertical = 6.dp)
-            )
+            //   • Panel visible: arrow DOWN, "Pastga torting".
+            //   • Panel hidden under nav: chip is HIDDEN — the external
+            //     "Yukoriga torting" chip on ExpandableBottomNav takes
+            //     over as the visible grab handle just above the bottom
+            //     nav. This avoids two identical chips appearing at the
+            //     same screen location.
+            if (!panelHiddenUnderNav) {
+                HintChip(
+                    mode = HintMode.DOWN,
+                    modifier = Modifier.padding(vertical = 6.dp)
+                )
+            }
 
             Spacer(Modifier.height(20.dp))
 

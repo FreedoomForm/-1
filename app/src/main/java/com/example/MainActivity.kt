@@ -1302,19 +1302,14 @@ fun MainScreen(
             // ── "Pull up" hint visibility ──────────────────────────────
             // The hint chip appears above the bottom nav when the launcher
             // curtain has been dragged down past the bottom nav's top edge.
-            // The launcher uses the same flipThresholdPx formula as
-            // LauncherScreen (contentHeightPx - bottomNavHeightPx - 8dp).
-            // We approximate by checking offsetPx > ( screenHeight - 2*navHeight ).
-            // Because LauncherScreen exposes its state.offsetPx directly, we
-            // can read it here to drive the hint chip.
-            val density = LocalDensity.current
-            val configuration = LocalConfiguration.current
-            val navHeightPx = with(density) { 86.dp.toPx() }   // matches ExpandableBottomNav height (14dp vertical + tile ~60dp + label)
-            val screenHeightPx = with(density) { configuration.screenHeightDp.dp.toPx() }
-            // Content area = screen - status bar(approx 24dp) - topbar(64dp) - bottomnav
-            val contentAreaHeightPx = screenHeightPx - with(density) { 88.dp.toPx() } - navHeightPx
-            val flipThresholdPx = contentAreaHeightPx - with(density) { 8.dp.toPx() }
-            val showPullUpHint = showLauncher && launcherState.offsetPx >= flipThresholdPx
+            // LauncherScreen now publishes `panelHiddenUnderNav` on its
+            // shared state — it computes the threshold from the ACTUAL
+            // on-screen Box dimensions (via BoxWithConstraints) instead
+            // of guessing screen + topbar + bottomnav heights here.
+            // Reading that single boolean keeps the two components in
+            // perfect sync — no more "the chip doesn't show even though
+            // the panel is hidden" bug.
+            val showPullUpHint = showLauncher && launcherState.panelHiddenUnderNav
 
             com.example.ui.components.ExpandableBottomNav(
                 selectedId = when (currentTab) {
