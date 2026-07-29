@@ -24,6 +24,9 @@ interface CardTransactionDao {
     @Query("SELECT * FROM card_transactions WHERE contractId = :contractId ORDER BY timestamp DESC")
     suspend fun getForContractOnce(contractId: Int): List<CardTransaction>
 
+    @Query("SELECT * FROM card_transactions WHERE id = :id LIMIT 1")
+    suspend fun getById(id: Int): CardTransaction?
+
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertTransaction(tx: CardTransaction): Long
 
@@ -32,6 +35,9 @@ interface CardTransactionDao {
 
     @Query("DELETE FROM card_transactions WHERE id = :id")
     suspend fun deleteTransaction(id: Int)
+
+    @Query("SELECT COUNT(*) FROM card_transactions WHERE fromCardId = :cardId OR toCardId = :cardId")
+    suspend fun countForCard(cardId: Int): Int
 
     @Query("DELETE FROM card_transactions WHERE contractId = :contractId")
     suspend fun deleteForContract(contractId: Int)

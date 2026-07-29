@@ -97,11 +97,14 @@ object DatabaseSnapshot {
             val activeRenters = renters.filter { !it.isReturned }
             val returnedRenters = renters.filter { it.isReturned }.take(MAX_RETURNED_RENTERS)
             val rentersArray = JSONArray()
+            val sharePersonalData = settings.aiPersonalDataSharingEnabled
             for (r in (activeRenters + returnedRenters)) {
                 rentersArray.put(JSONObject().apply {
                     put("id", r.id)
-                    put("name", r.name)
-                    put("phone", r.phoneNumber)
+                    // External AI receives only operational identifiers unless
+                    // the owner explicitly opts into PII sharing.
+                    put("name", if (sharePersonalData) r.name else "Renter #${r.id}")
+                    put("phone", if (sharePersonalData) r.phoneNumber else maskPhone(r.phoneNumber))
                     put("debt", round2(r.debtAmount))
                     put("balance", round2(r.balance))
                     put("isReturned", r.isReturned)
@@ -109,9 +112,9 @@ object DatabaseSnapshot {
                     put("scooterName", r.scooterName ?: JSONObject.NULL)
                     put("rentDurationDays", r.rentDurationDays)
                     put("rentStartDate", if (r.rentStartDateTimestamp > 0) dateFmt.format(Date(r.rentStartDateTimestamp)) else JSONObject.NULL)
-                    put("passportData", r.passportData.ifEmpty { JSONObject.NULL })
-                    put("pinfl", r.pinfl.ifEmpty { JSONObject.NULL })
-                    put("address", r.address.ifEmpty { JSONObject.NULL })
+                    put("passportData", if (sharePersonalData) r.passportData.ifEmpty { JSONObject.NULL } else JSONObject.NULL)
+                    put("pinfl", if (sharePersonalData) r.pinfl.ifEmpty { JSONObject.NULL } else JSONObject.NULL)
+                    put("address", if (sharePersonalData) r.address.ifEmpty { JSONObject.NULL } else JSONObject.NULL)
                     put("lastPaymentDate", r.lastPaymentTimestamp?.let { dateFmt.format(Date(it)) } ?: JSONObject.NULL)
                 })
             }
@@ -257,6 +260,11 @@ object DatabaseSnapshot {
                 put("snapshotTime", SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.US).format(Date()))
             }.toString(2)
         }
+    }
+
+    private fun maskPhone(phone: String): String {
+        val digits = phone.filter(Char::isDigit)
+        return if (digits.length <= 4) "••••" else "••••••${digits.takeLast(4)}"
     }
 
     /** Округление до 2 знаков — чтобы в JSON не было 0.30000000000000004. */

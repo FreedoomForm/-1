@@ -149,17 +149,13 @@ class ReportsSummaryWidgetProvider : AppWidgetProvider() {
             val monthAgo = now - monthMs
             val twoMonthsAgo = now - 2 * monthMs
 
-            val paymentsThisMonth = history
-                .filter { it.type == ContractHistoryEntry.TYPE_PAYMENT && it.timestamp >= monthAgo }
+            // Card income is the actual cash receipt. Contract history records
+            // may describe a paid initial period without a PAYMENT event.
+            val cardIncome = try { db.cardTransactionDao().getRecentTransactions(10_000) }
+                catch (_: Exception) { emptyList() }
+            val effectivePayments = cardIncome
+                .filter { it.type == com.example.data.CardTransaction.TYPE_CONTRACT_INCOME && it.timestamp >= monthAgo }
                 .sumOf { it.amount }
-
-            val effectivePayments = if (paymentsThisMonth > 0) paymentsThisMonth else {
-                try {
-                    db.cardTransactionDao().getRecentTransactions(100)
-                        .filter { it.type == com.example.data.CardTransaction.TYPE_CONTRACT_INCOME && it.timestamp >= monthAgo }
-                        .sumOf { it.amount }
-                } catch (_: Exception) { 0.0 }
-            }
 
             val activeRenters = renters.count { !it.isReturned }
             val overdueRenters = renters.count { !it.isReturned && it.balance < 0 }
@@ -179,11 +175,11 @@ class ReportsSummaryWidgetProvider : AppWidgetProvider() {
             val totalInvestment = scooters.size * scooterPriceUsd * usdRate
             val roiMultiple = if (totalInvestment > 0) effectivePayments / totalInvestment else 0.0
 
-            val paymentsThisMonthSum = history
-                .filter { it.type == ContractHistoryEntry.TYPE_PAYMENT && it.timestamp in monthAgo..now }
+            val paymentsThisMonthSum = cardIncome
+                .filter { it.type == com.example.data.CardTransaction.TYPE_CONTRACT_INCOME && it.timestamp in monthAgo..now }
                 .sumOf { it.amount }
-            val paymentsPrevMonth = history
-                .filter { it.type == ContractHistoryEntry.TYPE_PAYMENT && it.timestamp in twoMonthsAgo..monthAgo }
+            val paymentsPrevMonth = cardIncome
+                .filter { it.type == com.example.data.CardTransaction.TYPE_CONTRACT_INCOME && it.timestamp in twoMonthsAgo..monthAgo }
                 .sumOf { it.amount }
             val trendArrow = if (paymentsThisMonthSum >= paymentsPrevMonth) "▲" else "▼"
             val trendColor = if (paymentsThisMonthSum >= paymentsPrevMonth) 0xFF16A34A.toInt() else 0xFFDC2626.toInt()

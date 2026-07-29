@@ -53,35 +53,53 @@ class SmsWorker(
             var skippedCount = 0
 
             activeRenters.forEach { renter ->
-                val elapsedMillis = currentTime - renter.rentStartDateTimestamp
-                val elapsedDays = (elapsedMillis / (1000 * 60 * 60 * 24)).toInt()
-
-                if (renter.isOverdueSmsSent) {
+                if (!settingsRepo.canSendAutoSms(currentTime)) return@forEach
+                if (renter.isOverdueSmsSent || renter.balance >= 0.0) {
                     skippedCount++
                     return@forEach
                 }
+                // A reminder is tied to an actual overdue billable period,
+                // not to the original contract duration (which may be months old).
+                val overduePeriod = db.rentPeriodDao().openForRenter(renter.id)
+                    .firstOrNull { it.status == com.example.data.RentPeriod.STATUS_OVERDUE }
+                if (overduePeriod == null) {
+                    skippedCount++
+                    return@forEach
+                }
+                val cooldownMs = settingsRepo.smsReminderCooldownHours * 60L * 60 * 1000
+                val latestSent = db.smsDeliveryDao().latestSuccessfulForRenter(renter.id)
+                if (latestSent != null && currentTime - latestSent.timestamp < cooldownMs) {
+                    skippedCount++
+                    return@forEach
+                }
+                val daysOverdue = ((currentTime - overduePeriod.endsAt) / (24L * 60 * 60 * 1000)).toInt().coerceAtLeast(1)
+                val debt = maxOf(0.0, -renter.balance)
+                val message = settingsRepo.smsTemplate
+                    .replace("{name}", renter.name.trim().lowercase())
+                    .replace("{days}", daysOverdue.toString())
+                    .replace("{debt}", debt.toLong().toString())
+                    .replace("{payme}", settingsRepo.paymeLink)
+                    .replace("{call}", settingsRepo.callCenter)
 
-                if (elapsedDays > renter.rentDurationDays) {
-                    val daysOverdue = elapsedDays - renter.rentDurationDays
-                    // Долг = -balance (если balance < 0). debtAmount может рассинхронизироваться,
-                    // поэтому всегда вычисляем из balance — это источник истины.
-                    val debt = maxOf(0.0, -renter.balance)
-                    val message = settingsRepo.smsTemplate
-                        .replace("{name}", renter.name.trim().lowercase())
-                        .replace("{days}", maxOf(1, daysOverdue).toString())
-                        .replace("{debt}", debt.toLong().toString())
-                        .replace("{payme}", settingsRepo.paymeLink)
-                        .replace("{call}", settingsRepo.callCenter)
-
-                    val ok = sendSms(renter.phoneNumber, message)
-                    if (ok) {
-                        repository.update(renter.copy(isOverdueSmsSent = true))
-                        sentCount++
-                        Log.d(TAG, "SMS sent for renter #${renter.id} (${renter.name}), " +
-                            "$daysOverdue days overdue")
-                    } else {
-                        Log.w(TAG, "SMS failed for renter #${renter.id} (${renter.name})")
-                    }
+                val ok = sendSms(renter.phoneNumber, message)
+                if (ok) {
+                    repository.update(renter.copy(isOverdueSmsSent = true))
+                    settingsRepo.recordAutoSmsSent(currentTime)
+                    db.smsDeliveryDao().insert(com.example.data.SmsDelivery(
+                        renterId = renter.id, timestamp = currentTime,
+                        status = com.example.data.SmsDelivery.STATUS_SENT,
+                        messagePreview = message.take(160)
+                    ))
+                    sentCount++
+                    Log.d(TAG, "SMS sent for renter #${renter.id} (${renter.name}), $daysOverdue days overdue")
+                } else {
+                    db.smsDeliveryDao().insert(com.example.data.SmsDelivery(
+                        renterId = renter.id, timestamp = currentTime,
+                        status = com.example.data.SmsDelivery.STATUS_FAILED,
+                        messagePreview = message.take(160),
+                        error = "SmsManager send failed; worker will retry on next scheduled run"
+                    ))
+                    Log.w(TAG, "SMS failed for renter #${renter.id} (${renter.name})")
                 }
             }
 

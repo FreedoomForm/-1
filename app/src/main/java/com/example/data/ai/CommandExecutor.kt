@@ -488,7 +488,7 @@ class CommandExecutor(private val context: Context) {
 
                     try {
                         val cardRepo = VirtualCardRepository(
-                            db.virtualCardDao(), db.cardTransactionDao()
+                            db.virtualCardDao(), db.cardTransactionDao(), db
                         )
                         cardRepo.depositContractIncome(
                             amount = effectiveWeeklyPrice,
@@ -638,7 +638,7 @@ class CommandExecutor(private val context: Context) {
 
                 try {
                     val cardRepo = VirtualCardRepository(
-                        db.virtualCardDao(), db.cardTransactionDao()
+                        db.virtualCardDao(), db.cardTransactionDao(), db
                     )
                     cardRepo.depositContractIncome(
                         amount = amount,
@@ -769,7 +769,7 @@ class CommandExecutor(private val context: Context) {
 
                 try {
                     val cardRepo = VirtualCardRepository(
-                        db.virtualCardDao(), db.cardTransactionDao()
+                        db.virtualCardDao(), db.cardTransactionDao(), db
                     )
                     cardRepo.depositContractIncome(
                         amount = amount,
@@ -888,7 +888,7 @@ class CommandExecutor(private val context: Context) {
             }
 
             val cardRepo = VirtualCardRepository(
-                db.virtualCardDao(), db.cardTransactionDao()
+                db.virtualCardDao(), db.cardTransactionDao(), db
             )
             cardRepo.transfer(
                 fromCardId = fromCard.id,
@@ -1347,7 +1347,7 @@ class CommandExecutor(private val context: Context) {
             if (finalPayment > 0) {
                 try {
                     val cardRepo = VirtualCardRepository(
-                        db.virtualCardDao(), db.cardTransactionDao()
+                        db.virtualCardDao(), db.cardTransactionDao(), db
                     )
                     cardRepo.depositContractIncome(
                         amount = finalPayment,

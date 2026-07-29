@@ -68,9 +68,8 @@ class UpdateChecker(
             if (responseCode != 200) {
                 val errorBody = connection.errorStream?.bufferedReader()?.use { it.readText() } ?: ""
                 Log.e(TAG, "GitHub API returned HTTP $responseCode: $errorBody")
-                if (responseCode == 403 && errorBody.contains("rate limit", ignoreCase = true)) {
-                    Log.w(TAG, "GitHub API rate limit exceeded — update check skipped")
-                }
+                // Do not show a fake update on API/rate-limit errors. The UI
+                // must only display a banner after a verified newer release.
                 return@withContext Pair(UpdateCheckResult.ERROR, null)
             }
 

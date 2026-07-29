@@ -14,10 +14,27 @@ android {
     applicationId = "com.aistudio.scooterrent.xyzab"
     minSdk = 24
     targetSdk = 36
-    versionCode = 107
-    versionName = "1.2.107"
+    versionCode = 122
+    versionName = "1.2.122"
+
+    // Never commit an AI key. Release/CI injects it through an environment
+    // variable; an empty key simply disables external Mistral calls.
+    buildConfigField("String", "MISTRAL_API_KEY", "\"${System.getenv("MISTRAL_API_KEY") ?: ""}\"")
 
     testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+
+    // §12: Room schema export — required for migration tests.
+    // Schemas are written to app/schemas/<namespace>/<version>.json and
+    // committed to the repo so MigrationTestHelper can validate every step.
+    ksp {
+      arg("room.schemaLocation", "$projectDir/schemas")
+      arg("room.incremental", "true")
+    }
+  }
+
+  sourceSets {
+    // Make exported schemas available to androidTest sources.
+    getByName("androidTest").assets.srcDirs("$projectDir/schemas")
   }
 
   signingConfigs {
@@ -131,6 +148,7 @@ dependencies {
   androidTestImplementation(libs.androidx.espresso.core)
   androidTestImplementation(libs.androidx.junit)
   androidTestImplementation(libs.androidx.runner)
+  androidTestImplementation(libs.androidx.room.testing)
   debugImplementation(libs.androidx.compose.ui.test.manifest)
   debugImplementation(libs.androidx.compose.ui.tooling)
   "ksp"(libs.androidx.room.compiler)

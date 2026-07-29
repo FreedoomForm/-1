@@ -25,6 +25,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
+import com.example.data.CardTransaction
 import com.example.data.ContractHistoryEntry
 import com.example.data.Renter
 import com.example.data.Scooter
@@ -95,7 +96,8 @@ fun ReportsScreen(
     scooterViewModel: ScooterViewModel = viewModel(),
     contractHistoryViewModel: ContractHistoryViewModel = viewModel(),
     transactionViewModel: TransactionViewModel = viewModel(),
-    finansiViewModel: com.example.ui.FinansiViewModel = viewModel()
+    finansiViewModel: com.example.ui.FinansiViewModel = viewModel(),
+    businessOperationViewModel: com.example.ui.BusinessOperationViewModel = viewModel()
 ) {
     val context = LocalContext.current
 
@@ -105,6 +107,8 @@ fun ReportsScreen(
     val transactions by transactionViewModel.transactions.collectAsStateWithLifecycle()
     val virtualCards by finansiViewModel.cards.collectAsStateWithLifecycle()
     val cardTransactions by finansiViewModel.transactions.collectAsStateWithLifecycle()
+    val businessOperations by businessOperationViewModel.operations.collectAsStateWithLifecycle()
+    val rentPeriods by businessOperationViewModel.rentPeriods.collectAsStateWithLifecycle()
 
     val settings = remember { SettingsRepository(context) }
     val weeklyPrice = settings.weeklyPrice.let { if (it > 0) it else SettingsRepository.DEFAULT_WEEKLY_PRICE }
@@ -167,7 +171,28 @@ fun ReportsScreen(
         }
     }
 
-    val totalPayments = paymentsInRange.sumOf { it.amount }
+    // The immutable journal is authoritative for all new records. Card
+    // income is used only as a backwards-compatible fallback for databases
+    // whose historical projection has not yet been reconciled.
+    val operationsInRange = remember(businessOperations, startMillis, endMillis) {
+        businessOperations.filter { operation ->
+            (startMillis == null || operation.occurredAt >= startMillis) &&
+                (endMillis == null || operation.occurredAt <= endMillis)
+        }
+    }
+    val cashIncomeInRange = remember(cardTransactions, startMillis, endMillis) {
+        cardTransactions.filter { tx -> tx.type == CardTransaction.TYPE_CONTRACT_INCOME &&
+            (startMillis == null || tx.timestamp >= startMillis) &&
+            (endMillis == null || tx.timestamp <= endMillis) }
+    }
+    val journalIncome = operationsInRange.filter {
+        it.direction == com.example.data.BusinessOperation.DIRECTION_INCOME
+    }.sumOf { com.example.data.BusinessOperation.fromMinor(it.amountMinor) }
+    val totalPayments = if (journalIncome > 0.0) journalIncome else cashIncomeInRange.sumOf { it.amount }
+    val totalExpenses = operationsInRange
+        .filter { it.direction == com.example.data.BusinessOperation.DIRECTION_EXPENSE }
+        .sumOf { com.example.data.BusinessOperation.fromMinor(it.amountMinor) }
+    val netProfit = totalPayments - totalExpenses
     val totalContracts = contractsInRange.size
     val activeRenters = renters.count { !it.isReturned }
     val overdueRenters = renters.count { !it.isReturned && it.balance < 0 }
@@ -177,7 +202,7 @@ fun ReportsScreen(
 
     // ── Серии данных для графиков ─────────────────────────────────────
     // 8 недель: суммы платежей по неделям (для BarChart и Sparkline)
-    val weeklyPayments = remember(history) {
+    val weeklyPayments = remember(businessOperations, now) {
         val cal = Calendar.getInstance()
         val series = mutableListOf<Pair<String, Float>>()
         val spark = mutableListOf<Float>()
@@ -191,9 +216,9 @@ fun ReportsScreen(
             cal.set(Calendar.MILLISECOND, 0)
             val weekStart = cal.timeInMillis
             val weekEnd = weekStart + weekMs
-            val sum = history
-                .filter { it.type == ContractHistoryEntry.TYPE_PAYMENT && it.timestamp in weekStart until weekEnd }
-                .sumOf { it.amount }
+            val sum = businessOperations
+                .filter { it.direction == com.example.data.BusinessOperation.DIRECTION_INCOME && it.occurredAt in weekStart until weekEnd }
+                .sumOf { com.example.data.BusinessOperation.fromMinor(it.amountMinor) }
                 .toFloat()
             val label = SimpleDateFormat("dd.MM", Locale.getDefault()).format(Date(weekStart))
             series.add(label to sum)
@@ -243,19 +268,36 @@ fun ReportsScreen(
     // нормализованное к месяце. Раньше было просто totalPayments / investment,
     // что росло линейно со временем и не отражало реальную окупаемость.
     val totalInvestmentUzs = scooters.size * scooterPriceUsd * usdToUzs
-    val roiMultiple = if (totalInvestmentUzs > 0) totalPayments / totalInvestmentUzs else 0.0
+    val roiMultiple = if (totalInvestmentUzs > 0) netProfit / totalInvestmentUzs else 0.0
     val roiPercent = roiMultiple * 100
     // Дополнительная метрика: ROI в месяц (нормализованная).
     // Если период = 30 дней, monthlyRoi = roiMultiple. Если 60 дней,
     // monthlyRoi = roiMultiple / 2 (делим на кол-во месяцев в периоде).
     val periodMonths = (effectivePeriodDays.toDouble() / 30.0).coerceAtLeast(1.0)
     val roiMultiplePerMonth = if (totalInvestmentUzs > 0)
-        (totalPayments / periodMonths) / totalInvestmentUzs else 0.0
+        (netProfit / periodMonths) / totalInvestmentUzs else 0.0
     val roiPercentPerMonth = roiMultiplePerMonth * 100
 
-    // ── Ожидаемые доходы в следующем месяце ───────────────────────────
-    // Используем точное число недель в месяце (4.348), а не округление 4.
-    val expectedNextMonth = activeRenters * weeklyPrice * (365.25 / 7.0 / 12.0)
+    // ── Contracted revenue in the next 30 days ─────────────────────────
+    // Forecast is derived from actual billable periods and their own prices,
+    // not from a global rate multiplied by current renter count.
+    val nextMonthEnd = now + monthMs
+    val expectedNextMonth = remember(rentPeriods, now) {
+        rentPeriods
+            .filter { it.status in setOf(
+                com.example.data.RentPeriod.STATUS_SCHEDULED,
+                com.example.data.RentPeriod.STATUS_ACTIVE,
+                com.example.data.RentPeriod.STATUS_PARTIALLY_PAID,
+                com.example.data.RentPeriod.STATUS_PAID
+            ) }
+            .sumOf { period ->
+                val overlapStart = maxOf(now, period.startsAt)
+                val overlapEnd = minOf(nextMonthEnd, period.endsAt)
+                if (overlapEnd <= overlapStart || period.endsAt <= period.startsAt) 0.0
+                else com.example.data.BusinessOperation.fromMinor(period.chargeMinor) *
+                    (overlapEnd - overlapStart).toDouble() / (period.endsAt - period.startsAt).toDouble()
+            }
+    }
 
     // ── Новые метрики для бизнес-отчётности ───────────────────────────
     // ARPU = средний доход на одного активного арендатора (за период)
@@ -283,12 +325,11 @@ fun ReportsScreen(
         }
     }
     val ltv = arpu * avgWeeksPerRenter
-    // MRR = активные арендаторы × недельная ставка × (среднее число недель в месяце)
-    // В месяце в среднем 365.25 / 7 / 12 = 4.348 недель. Раньше было * 4,
-    // что занижало MRR на ~8%.
-    val weeksPerMonth = 365.25 / 7.0 / 12.0  // ≈ 4.348
-    val mrr = activeRenters * weeklyPrice * weeksPerMonth
-    // Целевой MRR = (всего скутеров × weeklyPrice × недель в месяце) — если бы все были в аренде
+    // MRR is the contracted 30-day revenue. It honours individual prices,
+    // future reservations and partial final periods.
+    val weeksPerMonth = 365.25 / 7.0 / 12.0
+    val mrr = expectedNextMonth
+    // Capacity target remains a scenario, clearly separated from the real MRR.
     val targetMrr = scooters.size * weeklyPrice * weeksPerMonth
     // OverdueRate (доля должников среди активных). Раньше называлось churnRate,
     // что неправильно: churn = доля ПОКИНУВШИХ систему, а не доля должников.
@@ -310,34 +351,38 @@ fun ReportsScreen(
         set(Calendar.HOUR_OF_DAY, 0); set(Calendar.MINUTE, 0)
         set(Calendar.SECOND, 0); set(Calendar.MILLISECOND, 0)
     }.timeInMillis
-    val paymentsThisMonth = history
-        .filter { it.type == ContractHistoryEntry.TYPE_PAYMENT && it.timestamp >= thisMonthStart }
-        .sumOf { it.amount }
-    val paymentsPrevMonth = history
-        .filter { it.type == ContractHistoryEntry.TYPE_PAYMENT && it.timestamp in prevMonthStart until thisMonthStart }
-        .sumOf { it.amount }
+    val paymentsThisMonth = businessOperations
+        .filter { it.direction == com.example.data.BusinessOperation.DIRECTION_INCOME && it.occurredAt >= thisMonthStart }
+        .sumOf { com.example.data.BusinessOperation.fromMinor(it.amountMinor) }
+    val paymentsPrevMonth = businessOperations
+        .filter { it.direction == com.example.data.BusinessOperation.DIRECTION_INCOME && it.occurredAt in prevMonthStart until thisMonthStart }
+        .sumOf { com.example.data.BusinessOperation.fromMinor(it.amountMinor) }
     val revenueDeltaPercent = if (paymentsPrevMonth > 0)
         ((paymentsThisMonth - paymentsPrevMonth) / paymentsPrevMonth * 100).toInt() else 0
 
     // ── Топ-5 арендаторов и скутеров ──────────────────────────────────
-    val topRenters = remember(paymentsInRange) {
-        paymentsInRange
-            .groupBy { it.renterName }
-            .map { (name, payments) -> name to payments.sumOf { it.amount } }
+    val topRenters = remember(operationsInRange, renters) {
+        val names = renters.associate { it.id to it.name }
+        operationsInRange
+            .filter { it.direction == com.example.data.BusinessOperation.DIRECTION_INCOME }
+            .groupBy { it.renterId }
+            .map { (id, ops) -> (id?.let { names[it] } ?: "—") to ops.sumOf { com.example.data.BusinessOperation.fromMinor(it.amountMinor) } }
             .sortedByDescending { it.second }
             .take(5)
     }
-    val topScooters = remember(paymentsInRange) {
-        paymentsInRange
-            .groupBy { it.scooterName ?: "—" }
-            .map { (name, payments) -> name to payments.sumOf { it.amount } }
+    val topScooters = remember(operationsInRange, scooters) {
+        val names = scooters.associate { it.id to it.name }
+        operationsInRange
+            .filter { it.direction == com.example.data.BusinessOperation.DIRECTION_INCOME }
+            .groupBy { it.scooterId }
+            .map { (id, ops) -> (id?.let { names[it] } ?: "—") to ops.sumOf { com.example.data.BusinessOperation.fromMinor(it.amountMinor) } }
             .sortedByDescending { it.second }
             .take(5)
     }
 
     // ── Тепловая карта простоев (4 нед × N скутеров) ──────────────────
     // Значение 0 = всегда занят, 1 = всегда простаивал.
-    val heatmapData = remember(scooters, renters, history) {
+    val heatmapData = remember(scooters, rentPeriods, now) {
         val cal = Calendar.getInstance()
         val weeksStarts = (0 until 4).map { idx ->
             cal.time = Date(now)
@@ -347,21 +392,19 @@ fun ReportsScreen(
             cal.set(Calendar.SECOND, 0); cal.set(Calendar.MILLISECOND, 0)
             cal.timeInMillis
         }
-        val scooterNames = scooters.take(6).map { it.name }  // топ-6 скутеров для краткости
-        val values = scooterNames.map { sName ->
+        val visibleScooters = scooters.take(6)
+        val values = visibleScooters.map { scooter ->
             weeksStarts.map { wStart ->
-                // Если скутер не был в аренде в эту неделю — простой
                 val wEnd = wStart + weekMs
-                val rented = renters.any { r ->
-                    r.scooterName == sName && !r.isReturned &&
-                        r.rentStartDateTimestamp < wEnd &&
-                        (r.rentStartDateTimestamp + r.rentDurationDays * dayMs) > wStart
+                val rented = rentPeriods.any { period ->
+                    period.scooterId == scooter.id && period.startsAt < wEnd && period.endsAt > wStart &&
+                        period.status !in setOf(com.example.data.RentPeriod.STATUS_CANCELLED, com.example.data.RentPeriod.STATUS_SCHEDULED)
                 }
                 if (rented) 0f else 1f
             }
         }
         val weekLabels = weeksStarts.map { SimpleDateFormat("dd.MM", Locale.getDefault()).format(Date(it)) }
-        Triple(scooterNames, weekLabels, values)
+        Triple(visibleScooters.map { it.name }, weekLabels, values)
     }
 
     // ── Список должников (для таблицы) ────────────────────────────────
@@ -528,6 +571,7 @@ fun ReportsScreen(
                     canMoveDown = index < visibleWidgets.size - 1,
                     data = ReportWidgetData(
                         totalPayments = totalPayments,
+                        netProfit = netProfit,
                         totalContracts = totalContracts,
                         activeRenters = activeRenters,
                         overdueRenters = overdueRenters,
@@ -586,6 +630,7 @@ fun ReportsScreen(
 /** Данные, передаваемые в каждый виджет отчёта. */
 data class ReportWidgetData(
     val totalPayments: Double,
+    val netProfit: Double,
     val totalContracts: Int,
     val activeRenters: Int,
     val overdueRenters: Int,
@@ -717,7 +762,7 @@ private fun Double.fmtMln(): String {
 /** 1. NET_PROFIT — KPI-карточка с дельтой и спарклайном по неделям. */
 @Composable
 private fun NetProfitWidget(d: ReportWidgetData) {
-    val netProfit = d.totalPayments
+    val netProfit = d.netProfit
     KpiCard(
         title = "Sof foyda",
         value = netProfit.toLong().fmtUzs(),

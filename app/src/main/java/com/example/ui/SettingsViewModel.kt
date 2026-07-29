@@ -19,15 +19,17 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
     private val _smsTemplate = MutableStateFlow(repository.smsTemplate)
     val smsTemplate: StateFlow<String> = _smsTemplate.asStateFlow()
 
-    private val _weeklyPrice = MutableStateFlow(
-        if (repository.weeklyPrice > 0) repository.weeklyPrice else SettingsRepository.DEFAULT_WEEKLY_PRICE
+    /** Daily rental price - the single source of truth */
+    private val _dailyPrice = MutableStateFlow(
+        if (repository.dailyPrice > 0) repository.dailyPrice else SettingsRepository.DEFAULT_DAILY_PRICE
     )
-    val weeklyPrice: StateFlow<Double> = _weeklyPrice.asStateFlow()
+    val dailyPrice: StateFlow<Double> = _dailyPrice.asStateFlow()
 
-    private val _monthlyPrice = MutableStateFlow(
-        if (repository.monthlyPrice > 0) repository.monthlyPrice else SettingsRepository.DEFAULT_MONTHLY_PRICE
-    )
-    val monthlyPrice: StateFlow<Double> = _monthlyPrice.asStateFlow()
+    /** Computed weekly price (daily × 7) - for backward compatibility */
+    val weeklyPrice: StateFlow<Double> = MutableStateFlow(repository.weeklyPrice).asStateFlow()
+    
+    /** Computed monthly price (daily × 30) - for backward compatibility */
+    val monthlyPrice: StateFlow<Double> = MutableStateFlow(repository.monthlyPrice).asStateFlow()
 
     /** SMS avto-yuborish rejimi: true = avto, false = faqat qo'llanma. */
     private val _smsAutoSendEnabled = MutableStateFlow(repository.smsAutoSendEnabled)
@@ -38,24 +40,30 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
         _smsTemplate.value = newTemplate
     }
 
+    /**
+     * Update the daily rental price.
+     * Weekly and monthly prices are computed automatically.
+     */
+    fun updateDailyPrice(daily: Double) {
+        val effectiveDaily = if (daily > 0) daily else SettingsRepository.DEFAULT_DAILY_PRICE
+        repository.dailyPrice = effectiveDaily
+        _dailyPrice.value = effectiveDaily
+    }
+
+    /**
+     * Legacy method for backward compatibility.
+     * Converts weekly price to daily and stores it.
+     */
+    @Deprecated("Use updateDailyPrice instead")
     fun updatePrices(weekly: Double, monthly: Double) {
-        val effectiveWeekly = if (weekly > 0) weekly else SettingsRepository.DEFAULT_WEEKLY_PRICE
-        val effectiveMonthly = if (monthly > 0) monthly else SettingsRepository.DEFAULT_MONTHLY_PRICE
-        repository.weeklyPrice = effectiveWeekly
-        repository.monthlyPrice = effectiveMonthly
-        _weeklyPrice.value = effectiveWeekly
-        _monthlyPrice.value = effectiveMonthly
+        val effectiveWeekly = if (weekly > 0) weekly else SettingsRepository.DEFAULT_DAILY_PRICE * 7
+        // Convert weekly to daily
+        val daily = effectiveWeekly / 7
+        updateDailyPrice(daily)
     }
 
     /**
      * SMS avto-yuborish rejimini almashtirish.
-     *
-     * Rejim o'zgarganda nafaqat SharedPreferences yangilanadi, balki
-     * WorkManager'dagi «OverdueSmsWork» ham boshqariladi:
-     *  • enabled = true  → ish qayta rejalashtiriladi (4 soatda bir).
-     *  • enabled = false → ish BEKOR QILINADI. SmsWorker.doWork() ichida
-     *    ham tekshiruv bor, lekin ish umuman ishlamasligi aniqroq —
-     *    hech qanday SMS yuborilmaydi.
      */
     fun updateSmsAutoSend(enabled: Boolean) {
         repository.smsAutoSendEnabled = enabled
@@ -63,8 +71,6 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
         try {
             val wm = WorkManager.getInstance(getApplication())
             if (enabled) {
-                // Re-jadval: 4 soatda bir. CANCEL_AND_REPLACE emas, KEEP —
-                // agar allaqachon rejalashtirilgan bo'lsa, o'z holida qoldiradi.
                 val req = PeriodicWorkRequestBuilder<SmsWorker>(4, TimeUnit.HOURS).build()
                 wm.enqueueUniquePeriodicWork(
                     "OverdueSmsWork",
@@ -73,7 +79,6 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
                 )
                 Log.d(TAG, "OverdueSmsWork re-scheduled (auto mode ON)")
             } else {
-                // Manual rejim — ishni butunlay bekor qilamiz.
                 wm.cancelUniqueWork("OverdueSmsWork")
                 Log.d(TAG, "OverdueSmsWork cancelled (manual mode OFF)")
             }

@@ -114,6 +114,37 @@ object NotificationHelper {
         }
     }
 
+    fun postServiceDueNotification(context: Context, scooterId: Int, scooterName: String) {
+        val title = "Skuterga servis kerak"
+        val body = "$scooterName uchun rejalashtirilgan servis muddati yetdi"
+        val openIntent = Intent(context, MainActivity::class.java).apply {
+            flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
+        }
+        val pending = PendingIntent.getActivity(
+            context, 900_000 + scooterId, openIntent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+        val notification = NotificationCompat.Builder(context, CHANNEL_ID)
+            .setSmallIcon(android.R.drawable.stat_notify_error)
+            .setContentTitle(title)
+            .setContentText(body)
+            .setStyle(NotificationCompat.BigTextStyle().bigText(body))
+            .setPriority(NotificationCompat.PRIORITY_DEFAULT)
+            .setAutoCancel(true)
+            .setContentIntent(pending)
+            .build()
+        try {
+            context.getSystemService<NotificationManager>()?.notify(900_000 + scooterId, notification)
+            historyScope.launch {
+                AppDatabase.getDatabase(context).notificationHistoryDao().insert(
+                    NotificationHistoryEntity(timestamp = System.currentTimeMillis(), renterId = null, title = title, message = body)
+                )
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to post service notification", e)
+        }
+    }
+
     private fun saveToHistory(context: Context, renterId: Int, title: String, message: String) {
         historyScope.launch {
             try {

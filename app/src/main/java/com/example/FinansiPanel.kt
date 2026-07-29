@@ -32,6 +32,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import android.widget.Toast
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
@@ -52,6 +53,11 @@ import com.example.ui.theme.ClaudeCard
 import com.example.ui.theme.ClaudeDivider
 import com.example.ui.theme.ClaudeText
 import com.example.ui.theme.ClaudeTextSecondary
+import com.example.ui.theme.StatusArchived
+import com.example.ui.theme.StatusArchivedBg
+import androidx.compose.material.icons.filled.KeyboardArrowRight
+import androidx.compose.material3.Surface
+import androidx.compose.ui.text.style.TextDecoration
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -542,8 +548,15 @@ fun CardsGrid(
     onMoveUp: (VirtualCard) -> Unit = {},
     onMoveDown: (VirtualCard) -> Unit = {},
     modifier: Modifier = Modifier,
-    header: @Composable (() -> Unit)? = null
+    header: @Composable (() -> Unit)? = null,
+    // ── Archived cards (§3: separate section) ─────────────────────────────
+    // Archived cards render below active cards in a collapsed grey section.
+    // Each has an "Unarchive" button. Hidden if empty.
+    archivedCards: List<VirtualCard> = emptyList(),
+    onUnarchive: (VirtualCard) -> Unit = {}
 ) {
+    var archivedExpanded by remember { mutableStateOf(false) }
+
     LazyVerticalGrid(
         columns = GridCells.Fixed(2),
         // Раньше тут был weight(1f) — CardsGrid занимал место под
@@ -582,6 +595,91 @@ fun CardsGrid(
                 onMoveDown = { onMoveDown(card) }
             )
         }
+
+        // ── Archived cards section (§3) ────────────────────────────────────
+        if (archivedCards.isNotEmpty()) {
+            item(span = { GridItemSpan(2) }) {
+                Spacer(modifier = Modifier.height(12.dp))
+                Surface(
+                    color = StatusArchivedBg,
+                    shape = RoundedCornerShape(12.dp),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Column(modifier = Modifier.padding(12.dp)) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth().clickable { archivedExpanded = !archivedExpanded },
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Icon(
+                                imageVector = if (archivedExpanded) Icons.Default.KeyboardArrowDown
+                                              else Icons.Default.KeyboardArrowRight,
+                                contentDescription = null,
+                                tint = StatusArchived,
+                                modifier = Modifier.size(20.dp)
+                            )
+                            Spacer(Modifier.width(8.dp))
+                            Text(
+                                "Arxiv kartalar (${archivedCards.size})",
+                                style = MaterialTheme.typography.titleSmall,
+                                color = StatusArchived,
+                                fontWeight = FontWeight.SemiBold,
+                                modifier = Modifier.weight(1f)
+                            )
+                        }
+                        if (archivedExpanded) {
+                            Spacer(Modifier.height(8.dp))
+                            archivedCards.forEach { card ->
+                                Surface(
+                                    color = Color.White.copy(alpha = 0.5f),
+                                    shape = RoundedCornerShape(8.dp),
+                                    modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp)
+                                ) {
+                                    Row(
+                                        modifier = Modifier.padding(10.dp),
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Box(
+                                            modifier = Modifier
+                                                .size(10.dp)
+                                                .background(StatusArchived, CircleShape)
+                                        )
+                                        Spacer(Modifier.width(8.dp))
+                                        Column(modifier = Modifier.weight(1f)) {
+                                            Text(
+                                                card.name,
+                                                style = MaterialTheme.typography.bodyMedium,
+                                                color = StatusArchived,
+                                                fontWeight = FontWeight.Medium,
+                                                textDecoration = androidx.compose.ui.text.style.TextDecoration.LineThrough
+                                            )
+                                            Text(
+                                                "Yopilgan • balans ${card.balance.toLong()} so'm",
+                                                style = MaterialTheme.typography.labelSmall,
+                                                color = StatusArchived
+                                            )
+                                        }
+                                        TextButton(
+                                            onClick = { onUnarchive(card) },
+                                            contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp)
+                                        ) {
+                                            Text("Qayta ochish", style = MaterialTheme.typography.labelSmall)
+                                        }
+                                    }
+                                }
+                            }
+                            Spacer(Modifier.height(4.dp))
+                            Text(
+                                "Arxivlang kartalarga yangi transfer mumkin emas. " +
+                                "Qayta ochishdan keyin ular aktiv kartalar ro'yxatiga qaytadi.",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = StatusArchived
+                            )
+                        }
+                    }
+                }
+            }
+        }
+
         // Bottom spacer — чтобы последний ряд не перекрывался FAB
         item(span = { GridItemSpan(2) }) {
             Spacer(modifier = Modifier.height(80.dp))
@@ -597,6 +695,7 @@ fun CardsGrid(
 @Composable
 fun VirtualCardFormDialog(
     initial: VirtualCard? = null,
+    existingCards: List<VirtualCard> = emptyList(),
     onDismiss: () -> Unit,
     onSave: (name: String, balance: Double, colorHex: String, info: String?) -> Unit
 ) {
@@ -610,6 +709,16 @@ fun VirtualCardFormDialog(
     }
     val isEdit = initial != null
     val isDefaultCard = initial?.isDefault == true
+
+    // ── Real-time duplicate-name check ────────────────────────────────
+    // Mirrors the hard block in FinansiViewModel.addCard/updateCard so the
+    // user sees the conflict BEFORE pressing Save.
+    val nameConflict = remember(name) {
+        val trimmed = name.trim()
+        trimmed.isNotBlank() && existingCards.any {
+            it.id != (initial?.id ?: 0) && it.name.trim().equals(trimmed, ignoreCase = true)
+        }
+    }
 
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -644,6 +753,10 @@ fun VirtualCardFormDialog(
                     modifier = Modifier.fillMaxWidth(),
                     shape = RoundedCornerShape(12.dp),
                     singleLine = true,
+                    isError = nameConflict,
+                    supportingText = if (nameConflict) {
+                        { Text("⚠ Bunday nomdagi karta mavjud", color = Color(0xFFC62828), fontSize = 12.sp) }
+                    } else null,
                     colors = OutlinedTextFieldDefaults.colors(
                         unfocusedBorderColor = ClaudeDivider,
                         focusedBorderColor = ClaudeAccent
@@ -835,6 +948,13 @@ fun FinansiPanel(
     val cards by viewModel.cards.collectAsStateWithLifecycle()
     val context = LocalContext.current
 
+    // Subscribe to VM user-message channel for success/error toasts.
+    LaunchedEffect(Unit) {
+        viewModel.userMessage.collect { (success, msg) ->
+            Toast.makeText(context, msg, if (success) Toast.LENGTH_SHORT else Toast.LENGTH_LONG).show()
+        }
+    }
+
     // ── Порядок карт (как в Otcheti) — сохраняется в SharedPreferences ────
     // Хранится как строка id1,id2,id3,... — карты, которых нет в строке,
     // добавляются в конец по возрастанию id.
@@ -891,6 +1011,13 @@ fun FinansiPanel(
             textMatch && filterMatch
         }
     }
+
+    // ── Archived cards split (§3: archived cards in separate UI section) ────
+    // Active cards render normally; archived cards render in a collapsed
+    // grey section below with an "Unarchive" action. Archived cards cannot
+    // receive new transfers and are excluded from card pickers.
+    val activeCards = remember(filteredOrderedCards) { filteredOrderedCards.filter { !it.isArchived } }
+    val archivedCards = remember(filteredOrderedCards) { filteredOrderedCards.filter { it.isArchived } }
 
     fun saveOrder(newOrder: List<Int>) {
         cardOrder = newOrder
@@ -1022,7 +1149,7 @@ fun FinansiPanel(
             visible = showFilterPanel
         )
         CardsGrid(
-            cards = filteredOrderedCards,
+            cards = activeCards,
             selectedIds = selectedIds,
             onCardClick = { card ->
                 // Тап по карте → открывает экран истории транзакций этой карты
@@ -1064,7 +1191,10 @@ fun FinansiPanel(
                         viewModel.transfer(fromId, toId, amount, note, reversed)
                     }
                 )
-            }
+            },
+            // ── Archived cards section (§3: separate section for archived cards) ──
+            archivedCards = archivedCards,
+            onUnarchive = { card -> viewModel.unarchiveCard(card) }
         )
     }
 
@@ -1086,6 +1216,7 @@ fun FinansiPanel(
     if (showCreateDialog || editingCard != null) {
         VirtualCardFormDialog(
             initial = editingCard,
+            existingCards = cards,
             onDismiss = {
                 showCreateDialog = false
                 editingCard = null

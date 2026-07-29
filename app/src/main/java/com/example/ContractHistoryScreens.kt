@@ -36,7 +36,9 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.example.data.ContractHistoryEntry
 import com.example.data.Renter
+import com.example.data.RepairOrder
 import com.example.data.Scooter
+import com.example.data.ScooterMetricsService
 import com.example.data.SettingsRepository
 import com.example.ui.ContractHistoryViewModel
 import com.example.ui.ScooterViewModel
@@ -98,6 +100,12 @@ fun RenterContractHistoryScreen(
     var editingContract by remember { mutableStateOf<ContractHistoryEntry?>(null) }
     var showDeleteConfirm by remember { mutableStateOf(false) }
     var showCreateDialog by remember { mutableStateOf(false) }
+    // §4: диалог акта выдачи/возврата.
+    var showHandoverActDialog by remember { mutableStateOf(false) }
+    var handoverActType by remember { mutableStateOf(com.example.data.HandoverAct.TYPE_HANDOVER) }
+    var handoverMileage by remember { mutableStateOf("") }
+    var handoverEquipment by remember { mutableStateOf("") }
+    var handoverCondition by remember { mutableStateOf("") }
     var generatingPdfFor by remember { mutableStateOf<Int?>(null) }
     var generatingUnlimitedPdf by remember { mutableStateOf(false) }
 
@@ -273,12 +281,21 @@ fun RenterContractHistoryScreen(
                                 "Boshlanish",
                                 dateFmt.format(Date(renter.rentStartDateTimestamp))
                             )
+                            // §5: Товарооборот = сумма всех контрактов арендатора.
+                            val turnover = contracts.sumOf { it.amount }
+                            SummaryColumn(
+                                "Tovaroborot",
+                                "${turnover.toLong()} UZS"
+                            )
+                            // §5: Баланс = paid − turnover: <0 долг, >0 аванс, =0 расчёт закрыт.
+                            val paidTotal = contracts.filter { it.isPaid }.sumOf { it.amount }
+                            val computedBalance = paidTotal - turnover
                             SummaryColumn(
                                 "Balans",
-                                "${renter.balance.toLong()} UZS",
+                                "${computedBalance.toLong()} UZS",
                                 valueColor = when {
-                                    renter.balance < 0 -> StatusOverdue
-                                    renter.balance > 0 -> StatusOk
+                                    computedBalance < 0 -> StatusOverdue
+                                    computedBalance > 0 -> StatusOk
                                     else -> ClaudeText
                                 }
                             )
@@ -292,7 +309,11 @@ fun RenterContractHistoryScreen(
                 // контрактов доступны через кнопки «Yaratish» / «O'chir» ниже
                 // (диалоги CreateContractDialog и EditContractDialog).
 
-                // ── Переключатель «Контракты» / «Транзакции» ────────────
+                // ── Переключатель «Контракты» / «Транзакции» ─────────────
+                // Вкладка «Davrlar» удалена по запросу пользователя —
+                // просмотр арендных периодов больше не нужен на этой
+                // странице. RentPeriodsViewer() остаётся в коде на случай
+                // будущих вызовов, но из UI убран.
                 item {
                     Row(
                         modifier = Modifier
@@ -357,6 +378,16 @@ fun RenterContractHistoryScreen(
                             enabled = selectedContracts.isNotEmpty(),
                             onClick = { showDeleteConfirm = true }
                         )
+                        // §4: Акт выдачи/возврата — открывает диалог записи акта
+                        // с пробегом и комплектацией. Доступен всегда, если у
+                        // арендатора есть скутер.
+                        if (renter.scooterId != null) {
+                            SecondaryButton(
+                                label = "Akt",
+                                icon = Icons.Default.Assignment,
+                                onClick = { showHandoverActDialog = true }
+                            )
+                        }
                         Spacer(Modifier.weight(1f))
                     }
                 }
@@ -548,12 +579,20 @@ fun RenterContractHistoryScreen(
                                 "Boshlanish",
                                 dateFmt.format(Date(renter.rentStartDateTimestamp))
                             )
+                            // §5: Товарооборот и баланс на вкладке транзакций.
+                            val turnoverTx = contracts.sumOf { it.amount }
+                            SummaryColumn(
+                                "Tovaroborot",
+                                "${turnoverTx.toLong()} UZS"
+                            )
+                            val paidTotalTx = contracts.filter { it.isPaid }.sumOf { it.amount }
+                            val computedBalanceTx = paidTotalTx - turnoverTx
                             SummaryColumn(
                                 "Balans",
-                                "${renter.balance.toLong()} UZS",
+                                "${computedBalanceTx.toLong()} UZS",
                                 valueColor = when {
-                                    renter.balance < 0 -> StatusOverdue
-                                    renter.balance > 0 -> StatusOk
+                                    computedBalanceTx < 0 -> StatusOverdue
+                                    computedBalanceTx > 0 -> StatusOk
                                     else -> ClaudeText
                                 }
                             )
@@ -565,7 +604,7 @@ fun RenterContractHistoryScreen(
                     // также не показываем — остаётся только сводка + табы +
                     // поиск + список транзакций.
 
-                    // Табы
+                    // Табы (вкладка «Davrlar» удалена — только 2 таба)
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
@@ -669,6 +708,107 @@ fun RenterContractHistoryScreen(
                     label = "Bekor",
                     icon = Icons.Default.Close,
                     onClick = { showDeleteConfirm = false }
+                )
+            }
+        )
+    }
+
+    // ── §4: Диалог акта выдачи/возврата ────────────────────────────────────
+    if (showHandoverActDialog) {
+        val scope = rememberCoroutineScope()
+        val ctx = LocalContext.current
+        AlertDialog(
+            onDismissRequest = { showHandoverActDialog = false },
+            title = { Text("Akt yozish — ${renter.name}") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    // Тип акта: выдача или возврат.
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        FilterChip(
+                            selected = handoverActType == com.example.data.HandoverAct.TYPE_HANDOVER,
+                            onClick = { handoverActType = com.example.data.HandoverAct.TYPE_HANDOVER },
+                            label = { Text("Berish (выдача)") }
+                        )
+                        FilterChip(
+                            selected = handoverActType == com.example.data.HandoverAct.TYPE_RETURN,
+                            onClick = { handoverActType = com.example.data.HandoverAct.TYPE_RETURN },
+                            label = { Text("Qaytarish (возврат)") }
+                        )
+                    }
+                    OutlinedTextField(
+                        value = handoverMileage,
+                        onValueChange = { handoverMileage = it.filter { c -> c.isDigit() } },
+                        label = { Text("Probeg (km)") },
+                        modifier = Modifier.fillMaxWidth(),
+                        singleLine = true
+                    )
+                    OutlinedTextField(
+                        value = handoverEquipment,
+                        onValueChange = { handoverEquipment = it },
+                        label = { Text("Komplektatsiya (akkumulyatorlar, kalit, dublkka...)") },
+                        modifier = Modifier.fillMaxWidth(),
+                        minLines = 2
+                    )
+                    OutlinedTextField(
+                        value = handoverCondition,
+                        onValueChange = { handoverCondition = it },
+                        label = { Text("Holat / kamchiliklar") },
+                        modifier = Modifier.fillMaxWidth(),
+                        minLines = 2
+                    )
+                }
+            },
+            confirmButton = {
+                PrimaryButton(
+                    label = "Saqlash",
+                    icon = Icons.Default.Save,
+                    onClick = {
+                        scope.launch {
+                            val db = com.example.data.AppDatabase.getDatabase(ctx)
+                            val mileage = handoverMileage.toLongOrNull() ?: 0L
+                            db.handoverActDao().insert(
+                                com.example.data.HandoverAct(
+                                    actType = handoverActType,
+                                    renterId = renter.id,
+                                    scooterId = renter.scooterId!!,
+                                    mileageKm = mileage,
+                                    equipmentChecklist = handoverEquipment.trim(),
+                                    conditionNotes = handoverCondition.trim()
+                                )
+                            )
+                            // При возврате обновляем текущий пробег скутера.
+                            if (handoverActType == com.example.data.HandoverAct.TYPE_RETURN) {
+                                val scooter = renter.scooterId?.let { db.scooterDao().getScooterById(it) }
+                                if (scooter != null && mileage > scooter.mileageKm) {
+                                    db.scooterDao().update(scooter.copy(mileageKm = mileage))
+                                }
+                            }
+                            db.auditEventDao().insert(
+                                com.example.data.AuditEvent(
+                                    action = if (handoverActType == com.example.data.HandoverAct.TYPE_HANDOVER)
+                                        com.example.data.AuditEvent.ACTION_CONTRACT_CREATE
+                                    else
+                                        com.example.data.AuditEvent.ACTION_CONTRACT_UPDATE,
+                                    entityType = "SCOOTER",
+                                    entityId = renter.scooterId.toString(),
+                                    reason = "Handover act: $handoverActType",
+                                    afterSnapshot = "mileage=$mileage; equipment=${handoverEquipment.take(80)}"
+                                )
+                            )
+                            Toast.makeText(ctx, "Akt saqlandi", Toast.LENGTH_SHORT).show()
+                            showHandoverActDialog = false
+                            handoverMileage = ""
+                            handoverEquipment = ""
+                            handoverCondition = ""
+                        }
+                    }
+                )
+            },
+            dismissButton = {
+                TextActionButton(
+                    label = "Bekor",
+                    icon = Icons.Default.Close,
+                    onClick = { showHandoverActDialog = false }
                 )
             }
         )
@@ -1813,6 +1953,13 @@ fun ScooterContractHistoryScreen(
                     isSelected = selectedTab == 1,
                     onClick = { selectedTab = 1 }
                 )
+                // §8: Repair tab — shows work orders + repair metrics
+                ToggleTabButton(
+                    label = "Ta'mir",
+                    icon = Icons.Default.Build,
+                    isSelected = selectedTab == 2,
+                    onClick = { selectedTab = 2 }
+                )
             }
 
             // ── Unified search bar ────────────────────────────────────
@@ -1958,6 +2105,14 @@ fun ScooterContractHistoryScreen(
                     contractHistoryViewModel = contractHistoryViewModel
                 )
             }
+
+            // ── §8: ВКЛАДКА «TA'MIR» — work order detail + repair metrics ────
+            if (selectedTab == 2) {
+                ScooterRepairDetailSection(
+                    scooter = scooter,
+                    contractHistoryViewModel = contractHistoryViewModel
+                )
+            }
         }
     }
 
@@ -1968,6 +2123,157 @@ fun ScooterContractHistoryScreen(
             onDismiss = { showDateRangePicker = false },
             title = "Sana bo'yicha filter"
         )
+    }
+}
+
+// ============================================================================
+// §4.1: RentPeriodsViewer — список биллинговых периодов со статусами
+// ============================================================================
+
+/**
+ * Показывает список RentPeriod арендатора с их статусами:
+ * SCHEDULED / PARTIALLY_PAID / PAID / OVERDUE / CLOSED_WITH_DEBT / CLOSED / CANCELLED.
+ *
+ * Цвет статуса соответствует единому языку статусов (§11):
+ *   • PAID / CLOSED        → зелёный (StatusOk)
+ *   • PARTIALLY_PAID        → янтарный (StatusReserved)
+ *   • OVERDUE / CLOSED_WITH_DEBT → красный (StatusOverdue)
+ *   • SCHEDULED             → серый (ClaudeTextSecondary)
+ *   • CANCELLED / SUSPENDED_REPAIR → серый (StatusArchived)
+ *
+ * Каждый период показывает:
+ *   • дату начала и окончания
+ *   • сумму начисления (chargeMinor) и сумму оплаты (paidMinor)
+ *   • остаток (outstandingMinor) — сколько ещё нужно оплатить
+ *   • статус-чип с цветом
+ */
+@Composable
+private fun RentPeriodsViewer(renterId: Int) {
+    val db = com.example.data.AppDatabase.getDatabase(
+        androidx.compose.ui.platform.LocalContext.current
+    )
+    val periods by db.rentPeriodDao().forRenter(renterId)
+        .collectAsStateWithLifecycle(initialValue = emptyList())
+
+    val dateFmt = remember { java.text.SimpleDateFormat("dd.MM.yyyy", java.util.Locale.getDefault()) }
+
+    LazyColumn(
+        modifier = Modifier.fillMaxSize().padding(16.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
+        if (periods.isEmpty()) {
+            item {
+                Box(
+                    modifier = Modifier.fillMaxSize().padding(32.dp),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text(
+                        "Davrlar yo'q",
+                        color = ClaudeTextSecondary,
+                        style = MaterialTheme.typography.bodyMedium
+                    )
+                }
+            }
+        } else {
+            items(periods, key = { it.id }) { period ->
+                RentPeriodCard(period = period, dateFmt = dateFmt)
+            }
+        }
+    }
+}
+
+@Composable
+private fun RentPeriodCard(
+    period: com.example.data.RentPeriod,
+    dateFmt: java.text.SimpleDateFormat
+) {
+    val (statusColor, statusLabel) = when (period.status) {
+        com.example.data.RentPeriod.STATUS_PAID -> StatusOk to "To'langan"
+        com.example.data.RentPeriod.STATUS_CLOSED -> StatusOk to "Yopilgan"
+        com.example.data.RentPeriod.STATUS_PARTIALLY_PAID -> StatusReserved to "Qisman to'langan"
+        com.example.data.RentPeriod.STATUS_OVERDUE -> StatusOverdue to "Muddati o'tgan"
+        com.example.data.RentPeriod.STATUS_CLOSED_WITH_DEBT -> StatusOverdue to "Qarz bilan yopilgan"
+        com.example.data.RentPeriod.STATUS_SCHEDULED -> ClaudeTextSecondary to "Rejada"
+        com.example.data.RentPeriod.STATUS_ACTIVE -> ClaudeAccent to "Faol"
+        com.example.data.RentPeriod.STATUS_SUSPENDED_REPAIR -> StatusArchived to "Ta'mir sababli to'xtatilgan"
+        com.example.data.RentPeriod.STATUS_CANCELLED -> StatusArchived to "Bekor qilingan"
+        else -> ClaudeTextSecondary to period.status
+    }
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(12.dp),
+        colors = CardDefaults.cardColors(containerColor = ClaudeCard),
+        border = BorderStroke(1.dp, statusColor.copy(alpha = 0.4f))
+    ) {
+        Column(modifier = Modifier.padding(12.dp)) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    "${dateFmt.format(java.util.Date(period.startsAt))} → ${dateFmt.format(java.util.Date(period.endsAt))}",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = ClaudeText,
+                    fontWeight = FontWeight.SemiBold
+                )
+                Surface(
+                    color = statusColor.copy(alpha = 0.12f),
+                    shape = RoundedCornerShape(8.dp)
+                ) {
+                    Text(
+                        statusLabel,
+                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+                        color = statusColor,
+                        style = MaterialTheme.typography.labelSmall,
+                        fontWeight = FontWeight.Bold
+                    )
+                }
+            }
+            Spacer(Modifier.height(8.dp))
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                Column {
+                    Text(
+                        "Hisoblang",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = ClaudeTextSecondary
+                    )
+                    Text(
+                        "${period.chargeMinor / 100} so'm",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = ClaudeText
+                    )
+                }
+                Column {
+                    Text(
+                        "To'langan",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = ClaudeTextSecondary
+                    )
+                    Text(
+                        "${period.paidMinor / 100} so'm",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = if (period.paidMinor > 0) StatusOk else ClaudeTextSecondary
+                    )
+                }
+                Column {
+                    Text(
+                        "Qoldi",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = ClaudeTextSecondary
+                    )
+                    Text(
+                        "${period.outstandingMinor / 100} so'm",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = if (period.outstandingMinor > 0) StatusOverdue else StatusOk,
+                        fontWeight = FontWeight.Bold
+                    )
+                }
+            }
+        }
     }
 }
 
@@ -2037,6 +2343,271 @@ internal fun contractTypeColor(t: String): Color = when (t) {
     ContractHistoryEntry.TYPE_PAYMENT    -> StatusOk
     ContractHistoryEntry.TYPE_AUTO_RENEW -> ClaudeAccent
     ContractHistoryEntry.TYPE_TERMINATED -> StatusOverdue
-    ContractHistoryEntry.TYPE_RETURNED   -> StatusReturned
+    ContractHistoryEntry.TYPE_RETURNED   -> StatusArchived    // grey — returned/archived per unified color language
     else -> ClaudeTextSecondary
+}
+
+/**
+ * §8: Scooter repair detail section — work order list + repair metrics.
+ *
+ * Shows:
+ *  - Repair metrics card: total cost, average downtime, repeat failures (90d),
+ *    total repair count.
+ *  - List of all repair orders for this scooter (open + completed + cancelled),
+ *    sorted by openedAt descending. Each card shows scenario, status, dates,
+ *    diagnosis, performer, parts used, estimated vs actual cost.
+ *
+ * Per PLAN_UNIVERSAL_ACCOUNTING §8: 'Add repair metrics: cost, average
+ * downtime and repeat failures within 90 days. Output these metrics in the
+ * scooter card and combine with scooter profitability after repairs.'
+ * + §8: 'Add work order detail screen.'
+ */
+@Composable
+fun ScooterRepairDetailSection(
+    scooter: Scooter,
+    contractHistoryViewModel: ContractHistoryViewModel
+) {
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    val dateTimeFmt = remember { SimpleDateFormat("dd.MM.yyyy HH:mm", Locale.getDefault()) }
+
+    // ── Load repair orders + metrics ───────────────────────────────────────
+    var repairOrders by remember { mutableStateOf<List<RepairOrder>>(emptyList()) }
+    var metrics by remember { mutableStateOf<ScooterMetricsService.RepairMetrics?>(null) }
+
+    LaunchedEffect(scooter.id) {
+        val db = com.example.data.AppDatabase.getDatabase(context)
+        repairOrders = db.repairOrderDao().forScooterSince(
+            scooter.id, 0L  // all history
+        ).sortedByDescending { it.openedAt }
+        metrics = ScooterMetricsService(db).repairMetrics(scooter.id)
+    }
+
+    Column(modifier = Modifier.fillMaxSize().padding(16.dp)) {
+        // ── Metrics card ──────────────────────────────────────────────────
+        metrics?.let { m ->
+            Card(
+                modifier = Modifier.fillMaxWidth().padding(bottom = 12.dp),
+                shape = RoundedCornerShape(12.dp),
+                colors = CardDefaults.cardColors(containerColor = ClaudeAccentBg)
+            ) {
+                Column(modifier = Modifier.padding(16.dp)) {
+                    Text(
+                        "Ta'mir metrikalari",
+                        style = MaterialTheme.typography.titleSmall,
+                        color = ClaudeText,
+                        fontWeight = FontWeight.Bold
+                    )
+                    Spacer(Modifier.height(8.dp))
+                    Row(modifier = Modifier.fillMaxWidth()) {
+                        MetricColumn(
+                            label = "Umumiy xarajat",
+                            value = "${com.example.data.BusinessOperation.fromMinor(m.totalRepairCostMinor).toLong()} so'm",
+                            color = StatusOverdue,
+                            modifier = Modifier.weight(1f)
+                        )
+                        MetricColumn(
+                            label = "O'rtachaSimple",
+                            value = formatDurationMs(m.averageDowntimeMs),
+                            color = StatusReserved,
+                            modifier = Modifier.weight(1f)
+                        )
+                    }
+                    Spacer(Modifier.height(8.dp))
+                    Row(modifier = Modifier.fillMaxWidth()) {
+                        MetricColumn(
+                            label = "Takroriy (90k)",
+                            value = "${m.repeatFailures90d} ta",
+                            color = if (m.repeatFailures90d > 0) StatusOverdue else StatusOk,
+                            modifier = Modifier.weight(1f)
+                        )
+                        MetricColumn(
+                            label = "Jami ta'mirlar",
+                            value = "${m.totalRepairCount} ta",
+                            color = ClaudeText,
+                            modifier = Modifier.weight(1f)
+                        )
+                    }
+                }
+            }
+        }
+
+        // ── Work orders list ──────────────────────────────────────────────
+        Text(
+            "Ta'mir buyruqlari (${repairOrders.size})",
+            style = MaterialTheme.typography.titleSmall,
+            color = ClaudeText,
+            fontWeight = FontWeight.Bold,
+            modifier = Modifier.padding(vertical = 8.dp)
+        )
+
+        if (repairOrders.isEmpty()) {
+            Box(
+                modifier = Modifier.fillMaxSize().padding(32.dp),
+                contentAlignment = Alignment.Center
+            ) {
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    Icon(
+                        Icons.Default.Build,
+                        contentDescription = null,
+                        tint = StatusArchived,
+                        modifier = Modifier.size(48.dp)
+                    )
+                    Spacer(Modifier.height(8.dp))
+                    Text(
+                        "Ta'mir tarixi yo'q",
+                        style = MaterialTheme.typography.titleMedium,
+                        color = ClaudeText
+                    )
+                    Text(
+                        "Bu skuter hali ta'mirlanmagan.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = ClaudeTextSecondary
+                    )
+                }
+            }
+        } else {
+            LazyColumn(
+                modifier = Modifier.fillMaxSize(),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                items(repairOrders, key = { it.id }) { order ->
+                    val statusColor = when (order.status) {
+                        RepairOrder.STATUS_OPEN -> StatusOverdue
+                        RepairOrder.STATUS_COMPLETED -> StatusOk
+                        RepairOrder.STATUS_CANCELLED -> StatusArchived
+                        else -> ClaudeTextSecondary
+                    }
+                    Card(
+                        modifier = Modifier.fillMaxWidth(),
+                        shape = RoundedCornerShape(10.dp),
+                        colors = CardDefaults.cardColors(containerColor = ClaudeCard),
+                        border = androidx.compose.foundation.BorderStroke(1.dp, ClaudeDivider)
+                    ) {
+                        Column(modifier = Modifier.padding(12.dp)) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Box(
+                                    modifier = Modifier.size(8.dp).background(statusColor, CircleShape)
+                                )
+                                Spacer(Modifier.width(8.dp))
+                                Text(
+                                    scenarioLabel(order.scenario),
+                                    style = MaterialTheme.typography.titleSmall,
+                                    color = ClaudeText,
+                                    fontWeight = FontWeight.SemiBold,
+                                    modifier = Modifier.weight(1f)
+                                )
+                                Text(
+                                    order.status,
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = statusColor,
+                                    fontWeight = FontWeight.Bold
+                                )
+                            }
+                            Spacer(Modifier.height(4.dp))
+                            Text(
+                                "Ochildi: ${dateTimeFmt.format(Date(order.openedAt))}",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = ClaudeTextSecondary
+                            )
+                            order.closedAt?.let {
+                                Text(
+                                    "Yopildi: ${dateTimeFmt.format(Date(it))}",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = ClaudeTextSecondary
+                                )
+                            }
+                            Spacer(Modifier.height(6.dp))
+                            Text(
+                                "Diagnoz: ${order.diagnosis}",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = ClaudeText
+                            )
+                            order.performer?.let {
+                                Text(
+                                    "Ijrochi: $it",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = ClaudeTextSecondary
+                                )
+                            }
+                            order.partsUsed?.let {
+                                Text(
+                                    "Ehtiyot qismlar: $it",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = ClaudeTextSecondary
+                                )
+                            }
+                            if (order.estimatedMinor > 0 || order.actualMinor > 0) {
+                                Spacer(Modifier.height(4.dp))
+                                Row(modifier = Modifier.fillMaxWidth()) {
+                                    Text(
+                                        "Reja: ${com.example.data.BusinessOperation.fromMinor(order.estimatedMinor).toLong()}",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = ClaudeTextSecondary,
+                                        modifier = Modifier.weight(1f)
+                                    )
+                                    Text(
+                                        "Haqiqat: ${com.example.data.BusinessOperation.fromMinor(order.actualMinor).toLong()}",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = if (order.actualMinor > order.estimatedMinor) StatusOverdue else StatusOk,
+                                        fontWeight = FontWeight.Bold
+                                    )
+                                }
+                            }
+                            order.documentNote?.let {
+                                Spacer(Modifier.height(4.dp))
+                                Text(
+                                    "Izoh: $it",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = ClaudeTextSecondary
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun MetricColumn(
+    label: String,
+    value: String,
+    color: Color,
+    modifier: Modifier = Modifier
+) {
+    Column(modifier = modifier) {
+        Text(
+            label,
+            style = MaterialTheme.typography.labelSmall,
+            color = ClaudeTextSecondary
+        )
+        Text(
+            value,
+            style = MaterialTheme.typography.titleMedium,
+            color = color,
+            fontWeight = FontWeight.Bold
+        )
+    }
+}
+
+private fun scenarioLabel(scenario: String): String = when (scenario) {
+    RepairOrder.SCENARIO_RENTER_REPAIR -> "Arendachi ta'mirladi"
+    RepairOrder.SCENARIO_OWNER_REPAIR -> "Egasi ta'mirladi"
+    RepairOrder.SCENARIO_REPLACEMENT -> "Almashtirish"
+    RepairOrder.SCENARIO_RETIREMENT -> "Ro'yxatdan o'chirish"
+    else -> scenario
+}
+
+private fun formatDurationMs(ms: Long): String {
+    if (ms <= 0) return "—"
+    val days = ms / (24L * 60 * 60 * 1000)
+    val hours = (ms % (24L * 60 * 60 * 1000)) / (60 * 60 * 1000)
+    return if (days > 0) "$days k ${hours}s"
+           else if (hours > 0) "${hours}s"
+           else "<1s"
 }

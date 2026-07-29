@@ -1,8 +1,10 @@
 package com.example
 
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -28,10 +30,13 @@ import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -58,7 +63,11 @@ import com.example.ui.theme.StatusOverdue
 import com.example.ui.theme.StatusOverdueBg
 import com.example.ui.theme.StatusReturned
 import com.example.ui.theme.StatusReturnedBg
+import com.example.ui.theme.StatusReserved
+import com.example.ui.theme.StatusReservedBg
+import com.example.data.RentPeriod
 import java.util.Calendar
+import java.util.Date
 import java.util.Locale
 
 /* ============================================================================
@@ -97,14 +106,31 @@ data class ContractGroup(
 
 /** Статус дня в режиме просмотра (страница деталей арендатора). */
 enum class DayStatus {
+    /** Ремонтный период - арендатор не платит, но скутер у него. Оранжевый фон. */
+    REPAIR_BREAK,
     /** Оплаченный день — зелёный фон. */
     PAID,
     /** Неоплаченный день (контракт есть, но isPaid=false) — красный фон. */
     UNPAID,
-    /** Приостановленный контракт (TERMINATED) — серый фон. */
+    /** Приостановленный/ремонтируемый скутер — серый фон, плата не начисляется. */
     SUSPENDED,
+    /** Запланированный будущий период — янтарный фон. */
+    SCHEDULED,
+    /** Частично оплаченный период — бирюзовый фон. */
+    PARTIAL,
     /** Обычный день — белый фон. */
     EMPTY
+}
+
+/** Single mapping used by calendar views backed by the universal RentPeriod model. */
+fun RentPeriod.toCalendarDayStatus(): DayStatus = when (status) {
+    RentPeriod.STATUS_PAID, RentPeriod.STATUS_CLOSED -> DayStatus.PAID
+    RentPeriod.STATUS_PARTIALLY_PAID -> DayStatus.PARTIAL
+    RentPeriod.STATUS_SCHEDULED -> DayStatus.SCHEDULED
+    RentPeriod.STATUS_SUSPENDED_REPAIR -> DayStatus.SUSPENDED
+    RentPeriod.STATUS_REPAIR_BREAK -> DayStatus.REPAIR_BREAK
+    RentPeriod.STATUS_OVERDUE, RentPeriod.STATUS_CLOSED_WITH_DEBT -> DayStatus.UNPAID
+    else -> DayStatus.EMPTY
 }
 
 /** Палитра цветов для меток групп. */
@@ -167,7 +193,9 @@ fun ContractCalendar(
      */
     onEditDayContract: ((Long) -> Unit)? = null,
     /** Доп. callback при тапе на день (опционально, для просмотра деталей). */
-    onDayClick: (Long) -> Unit = {}
+    onDayClick: (Long) -> Unit = {},
+    /** Callback for creating a repair period via long-tap on date range. */
+    onCreateRepairPeriod: ((startMs: Long, endMs: Long) -> Unit)? = null
 ) {
     val cal = remember { Calendar.getInstance() }
     var viewYear by remember { mutableStateOf(cal.get(Calendar.YEAR)) }
@@ -185,6 +213,9 @@ fun ContractCalendar(
     // для однодневного периода). После выбора end группа создаётся и активной
     // становится следующая "новая" (activeGroupId = null).
     var pendingStartMs by remember { mutableStateOf<Long?>(null) }
+    
+    // State for repair period creation via long-tap
+    var repairPendingStartMs by remember { mutableStateOf<Long?>(null) }
 
     // ── Текущий статус для новых групп (To'langan / To'lanmagan) ───────
     // По умолчанию "To'langan" (оплаченный). Пользователь может переключить
@@ -226,27 +257,92 @@ fun ContractCalendar(
                 .padding(12.dp)
         ) {
             // ── Шапка: месяц/год + навигация + статус + стрелка свернуть/развернуть ──
+            // «Сегодня» и выбор месяца/года (PLAN_UNIVERSAL_ACCOUNTING §4.1) —
+            // избавляют от многократного нажатия стрелок.
+            var showMonthPicker by remember { mutableStateOf(false) }
+            var showYearPicker by remember { mutableStateOf(false) }
+            val monthNames = remember {
+                listOf("Yanvar","Fevral","Mart","Aprel","May","Iyun",
+                       "Iyul","Avgust","Sentabr","Oktabr","Noyabr","Dekabr")
+            }
+            val currentYear = remember { java.util.Calendar.getInstance().get(java.util.Calendar.YEAR) }
+            val yearsList = remember { (currentYear - 5 .. currentYear + 5).toList() }
+
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.SpaceBetween
             ) {
-                // Левая часть: навигация ← месяц/год →
+                // Левая часть: навигация ← месяц/год (tappable) → + «Сегодня»
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     IconButton(onClick = {
                         if (viewMonth == 0) { viewMonth = 11; viewYear-- } else viewMonth--
                     }) {
                         Icon(Icons.Default.ChevronLeft, contentDescription = "Oldingi oy")
                     }
-                    Text(
-                        text = monthTitle,
-                        style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.SemiBold),
-                        color = ClaudeText
-                    )
+                    // Месяц — tappable, открывает picker
+                    Box {
+                        Text(
+                            text = monthTitle,
+                            style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.SemiBold),
+                            color = ClaudeAccent,
+                            modifier = Modifier
+                                .clickable { showMonthPicker = true }
+                                .padding(horizontal = 4.dp, vertical = 2.dp)
+                        )
+                        DropdownMenu(
+                            expanded = showMonthPicker,
+                            onDismissRequest = { showMonthPicker = false }
+                        ) {
+                            monthNames.forEachIndexed { idx, name ->
+                                DropdownMenuItem(
+                                    text = { Text(if (idx == viewMonth) "✓ $name" else name) },
+                                    onClick = { viewMonth = idx; showMonthPicker = false }
+                                )
+                            }
+                        }
+                    }
                     IconButton(onClick = {
                         if (viewMonth == 11) { viewMonth = 0; viewYear++ } else viewMonth++
                     }) {
                         Icon(Icons.Default.ChevronRight, contentDescription = "Keyingi oy")
+                    }
+                    // Год — tappable, открывает picker
+                    Box {
+                        Text(
+                            text = viewYear.toString(),
+                            style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.SemiBold),
+                            color = ClaudeAccent,
+                            modifier = Modifier
+                                .clickable { showYearPicker = true }
+                                .padding(horizontal = 4.dp, vertical = 2.dp)
+                        )
+                        DropdownMenu(
+                            expanded = showYearPicker,
+                            onDismissRequest = { showYearPicker = false }
+                        ) {
+                            yearsList.forEach { y ->
+                                DropdownMenuItem(
+                                    text = { Text(if (y == viewYear) "✓ $y" else y.toString()) },
+                                    onClick = { viewYear = y; showYearPicker = false }
+                                )
+                            }
+                        }
+                    }
+                    // Кнопка «Сегодня» — мгновенный переход к текущему месяцу/году
+                    TextButton(
+                        onClick = {
+                            val today = java.util.Calendar.getInstance()
+                            viewMonth = today.get(java.util.Calendar.MONTH)
+                            viewYear = today.get(java.util.Calendar.YEAR)
+                        },
+                        modifier = Modifier.padding(start = 4.dp)
+                    ) {
+                        Text(
+                            "Bugun",
+                            style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.SemiBold),
+                            color = ClaudeAccent
+                        )
                     }
                 }
 
@@ -324,6 +420,21 @@ fun ContractCalendar(
                 Spacer(Modifier.height(8.dp))
             }
 
+            pendingStartMs?.let { selectedStart ->
+                val selectedFormat = remember { java.text.SimpleDateFormat("dd MMMM yyyy", Locale.getDefault()) }
+                Card(
+                    colors = CardDefaults.cardColors(containerColor = ClaudeAccentBg),
+                    modifier = Modifier.fillMaxWidth().padding(bottom = 6.dp)
+                ) {
+                    Text(
+                        "Boshlanish: ${selectedFormat.format(Date(selectedStart))}. Tugash sanasini tanlang.",
+                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 7.dp),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = ClaudeText
+                    )
+                }
+            }
+
             // ── Заголовки дней недели ──────────────────────────────────
             Row(modifier = Modifier.fillMaxWidth()) {
                 val dayNames = listOf("Du", "Se", "Ch", "Pa", "Ju", "Sh", "Ya")
@@ -371,30 +482,42 @@ fun ContractCalendar(
                                         )
                                     } else if (onAddGroup != null) {
                                         // Режим просмотра с возможностью добавления —
-                                        // логика та же, но новая группа передаётся в
-                                        // onAddGroup (для создания контрактов в БД).
-                                        // ОДНАКО: если включён onEditDayContract и тап
-                                        // пришёлся на день, который уже входит в
-                                        // существующий контракт — открываем диалог
-                                        // редактирования контракта вместо выбора
-                                        // нового диапазона.
-                                        val inExisting = groups.firstOrNull { g ->
-                                            ms >= g.startMs && ms <= g.endMs
-                                        }
-                                        if (inExisting != null && onEditDayContract != null) {
-                                            onEditDayContract.invoke(ms)
-                                        } else {
-                                            handleDayClickWithAddCallback(
-                                                ms = ms,
-                                                pendingStartMs = pendingStartMs,
-                                                setPendingStart = { pendingStartMs = it },
-                                                activeGroupId = activeGroupId,
-                                                newGroupIsPaid = newGroupIsPaid,
-                                                onAddGroup = onAddGroup
-                                            )
-                                        }
+                                        // одиночный тап всегда создаёт новый диапазон;
+                                        // для редактирования существующего контракта
+                                        // нужно долгое нажатие (long-press).
+                                        handleDayClickWithAddCallback(
+                                            ms = ms,
+                                            pendingStartMs = pendingStartMs,
+                                            setPendingStart = { pendingStartMs = it },
+                                            activeGroupId = activeGroupId,
+                                            newGroupIsPaid = newGroupIsPaid,
+                                            onAddGroup = onAddGroup
+                                        )
                                     } else {
                                         onDayClick(ms)
+                                    }
+                                },
+                                onDayLongClick = { ms ->
+                                    // Long-tap can either edit existing contract or create repair period
+                                    val inExisting = groups.firstOrNull { g ->
+                                        ms >= g.startMs && ms <= g.endMs
+                                    }
+                                    
+                                    if (inExisting != null && onEditDayContract != null) {
+                                        // Edit existing contract
+                                        onEditDayContract.invoke(ms)
+                                    } else if (onCreateRepairPeriod != null) {
+                                        // Create repair period
+                                        if (repairPendingStartMs == null) {
+                                            // First long-tap: set start date
+                                            repairPendingStartMs = ms
+                                        } else {
+                                            // Second long-tap: set end date and create
+                                            val startMs = minOf(repairPendingStartMs!!, ms)
+                                            val endMs = maxOf(repairPendingStartMs!!, ms) + (24L * 60 * 60 * 1000) // Include end day
+                                            onCreateRepairPeriod.invoke(startMs, endMs)
+                                            repairPendingStartMs = null
+                                        }
                                     }
                                 }
                             )
@@ -412,7 +535,7 @@ fun ContractCalendar(
                 ) {
                     LegendItem("To'langan", StatusOkBg, StatusOk)
                     LegendItem("To'lanmagan", StatusOverdueBg, StatusOverdue)
-                    LegendItem("To'xtatilgan", StatusReturnedBg, StatusReturned)
+                    LegendItem("To'xtatilgan", StatusReservedBg, StatusReserved)
                     LegendItem("Bo'sh", ClaudeCard, ClaudeTextSecondary)
                 }
             } else {
@@ -427,7 +550,7 @@ fun ContractCalendar(
                             "«+» tugmasi bilan yangi guruh boshlang — birinchi sanani tanlang"
                         }
                     }
-                    else -> "Ikkinchi sanani tanling — davr yopiladi (yoki shu sanani qayt tanlang — 1 haftalik kontrakt)"
+                    else -> "Ikkinchi sanani tanlang — shu sanani qayt tanlasangiz, 1 kunlik davr yaratiladi"
                 }
                 Text(
                     text = hint,
@@ -463,48 +586,17 @@ private fun handleDayClick(
         // Первый тап — сохраняем старт
         setPendingStart(ms)
     } else {
-        // ── Старая логика однодневного выбора (legacy) ──────────────────
-        // В старом календаре (DatePickerDialog в форме создания арендатора)
-        // пользователь выбирал ОДНУ дату. Система АВТОМАТИЧЕСКИ определяла
-        // статус контракта по этой дате:
-        //   • Если дата была БОЛЕЕ НЕДЕЛИ назад (now - date > 7 дней) →
-        //     неоплаченный контракт (долг), isPaid = false.
-        //   • Если дата менее недели назад или сегодня/в будущем →
-        //     оплаченный контракт (предоплата), isPaid = true.
-        // Период всегда был [date, date + 7 дней] (одна неделя).
-        //
-        // При двойном клике на одну и ту же дату в новом календаре мы
-        // применяем ЭТУ ЖЕ логику — автоопределение статуса по дате,
-        // игнорируя пользовательский toggle (To'langan/To'lanmagan).
-        // Toggle используется только при выборе диапазона из двух РАЗНЫХ
-        // дат (это новая возможность, которой в старом календаре не было).
-        val isSameDayTap = isSameDay(pendingStartMs, ms)
-        if (isSameDayTap) {
-            // ── Двойной клик на одну дату → недельный контракт с авто-статусом ──
-            val now = System.currentTimeMillis()
-            val isOverdue = (now - ms) > weekMs
-            val autoIsPaid = !isOverdue
-            val start = ms
-            val realEnd = ms + weekMs - 1
-            val newId = (groups.maxOfOrNull { it.id } ?: 0) + 1
-            val newGroup = ContractGroup(
-                id = newId, startMs = start, endMs = realEnd, isPaid = autoIsPaid
-            )
-            onGroupsChange(groups + newGroup)
-            onActiveGroupChange(newId)
-            setPendingStart(null)
-        } else {
-            // ── Два разных дня → диапазон с пользовательским статусом ──
-            val start = minOf(pendingStartMs, ms)
-            val realEnd = maxOf(pendingStartMs, ms) + dayMs - 1
-            val newId = (groups.maxOfOrNull { it.id } ?: 0) + 1
-            val newGroup = ContractGroup(
-                id = newId, startMs = start, endMs = realEnd, isPaid = newGroupIsPaid
-            )
-            onGroupsChange(groups + newGroup)
-            onActiveGroupChange(newId)
-            setPendingStart(null)
-        }
+        // A range is always explicit. Tapping the same date twice creates a
+        // one-day period with the status selected by the user; it never
+        // silently becomes a paid/unpaid seven-day contract.
+        val start = minOf(pendingStartMs, ms)
+        val realEnd = maxOf(pendingStartMs, ms) + dayMs - 1
+        val newId = (groups.maxOfOrNull { it.id } ?: 0) + 1
+        onGroupsChange(groups + ContractGroup(
+            id = newId, startMs = start, endMs = realEnd, isPaid = newGroupIsPaid
+        ))
+        onActiveGroupChange(newId)
+        setPendingStart(null)
     }
 }
 
@@ -525,36 +617,19 @@ private fun handleDayClickWithAddCallback(
     if (pendingStartMs == null) {
         setPendingStart(ms)
     } else {
-        // ── Та же legacy-логика автоопределения статуса по дате ──────
-        val isSameDayTap = isSameDay(pendingStartMs, ms)
-        if (isSameDayTap) {
-            val now = System.currentTimeMillis()
-            val isOverdue = (now - ms) > weekMs
-            val autoIsPaid = !isOverdue
-            val start = ms
-            val realEnd = ms + weekMs - 1
-            // Используем отрицательный id как временный — реальный id
-            // присвоит БД при создании контракта. Колбэк onAddGroup должен
-            // проигнорировать это поле и использовать startMs/endMs/isPaid.
-            val newGroup = ContractGroup(
-                id = -1, startMs = start, endMs = realEnd, isPaid = autoIsPaid
-            )
-            onAddGroup(newGroup)
-            setPendingStart(null)
-        } else {
-            // Два разных дня → диапазон с пользовательским статусом
-            val start = minOf(pendingStartMs, ms)
-            val realEnd = maxOf(pendingStartMs, ms) + dayMs - 1
-            val newGroup = ContractGroup(
-                id = -1, startMs = start, endMs = realEnd, isPaid = newGroupIsPaid
-            )
-            onAddGroup(newGroup)
-            setPendingStart(null)
-        }
+        val start = minOf(pendingStartMs, ms)
+        val realEnd = maxOf(pendingStartMs, ms) + dayMs - 1
+        // Negative ID is only a temporary UI value; the database assigns the
+        // real contract ID through the callback.
+        onAddGroup(ContractGroup(
+            id = -1, startMs = start, endMs = realEnd, isPaid = newGroupIsPaid
+        ))
+        setPendingStart(null)
     }
 }
 
 /* ── Ячейка дня (объявлена как RowScope для доступа к Modifier.weight) ─── */
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun RowScope.DayCell(
     dayMs: Long,
@@ -564,7 +639,8 @@ private fun RowScope.DayCell(
     activeGroupId: Int?,
     pendingStartMs: Long?,
     dayStatusFor: (Long) -> DayStatus,
-    onDayClick: (Long) -> Unit
+    onDayClick: (Long) -> Unit,
+    onDayLongClick: ((Long) -> Unit)? = null
 ) {
     val cal = remember { Calendar.getInstance() }
     cal.timeInMillis = dayMs
@@ -612,7 +688,10 @@ private fun RowScope.DayCell(
         when (dayStatusFor(dayMs)) {
             DayStatus.PAID -> { bgColor = StatusOkBg; fgColor = StatusOk }
             DayStatus.UNPAID -> { bgColor = StatusOverdueBg; fgColor = StatusOverdue }
-            DayStatus.SUSPENDED -> { bgColor = StatusReturnedBg; fgColor = StatusReturned }
+            DayStatus.PARTIAL -> { bgColor = ClaudeAccentBg; fgColor = ClaudeAccent }
+            DayStatus.SCHEDULED -> { bgColor = Color(0xFFFFF3D6); fgColor = Color(0xFF9A6700) }
+            DayStatus.SUSPENDED -> { bgColor = StatusReservedBg; fgColor = StatusReserved }
+            DayStatus.REPAIR_BREAK -> { bgColor = Color(0xFFFFF7ED); fgColor = Color(0xFFF97316) }
             DayStatus.EMPTY -> {
                 bgColor = if (isCurrentMonth) ClaudeCard else ClaudeBackground
                 fgColor = if (isCurrentMonth) ClaudeText else ClaudeTextSecondary
@@ -631,7 +710,16 @@ private fun RowScope.DayCell(
                 if (borderColor != null) Modifier.border(1.dp, borderColor, RoundedCornerShape(6.dp))
                 else Modifier
             )
-            .clickable { onDayClick(dayMs) },
+            .then(
+                if (onDayLongClick != null) {
+                    Modifier.combinedClickable(
+                        onClick = { onDayClick(dayMs) },
+                        onLongClick = { onDayLongClick.invoke(dayMs) }
+                    )
+                } else {
+                    Modifier.clickable { onDayClick(dayMs) }
+                }
+            ),
         contentAlignment = Alignment.Center
     ) {
         Text(
@@ -655,6 +743,7 @@ private fun GroupsPanel(
     onAddGroup: () -> Unit,
     onRemoveGroup: (Int) -> Unit
 ) {
+    val groupDateFormat = remember { java.text.SimpleDateFormat("dd.MM", Locale.getDefault()) }
     Column(modifier = Modifier.fillMaxWidth()) {
         // ── Ряд 1: «+» и кнопки статуса ────────────────────────────────
         Row(
@@ -734,10 +823,11 @@ private fun GroupsPanel(
                             .background(color)
                     )
                     Text(
-                        text = "${idx + 1}",
-                        fontSize = 12.sp,
+                        text = "${idx + 1} ${groupDateFormat.format(Date(g.startMs))}–${groupDateFormat.format(Date(g.endMs))}",
+                        fontSize = 10.sp,
                         color = ClaudeText,
-                        fontWeight = FontWeight.SemiBold
+                        fontWeight = FontWeight.SemiBold,
+                        maxLines = 1
                     )
                     Icon(
                         Icons.Default.Close,

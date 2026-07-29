@@ -12,9 +12,11 @@ import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
+import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -51,6 +53,7 @@ import androidx.compose.material.icons.filled.Clear
 import androidx.compose.material.icons.filled.Tag
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Schedule
+import androidx.compose.material.icons.filled.Apps
 import androidx.compose.material.icons.filled.Category
 import androidx.compose.material.icons.filled.Build
 import androidx.compose.material.icons.filled.Numbers
@@ -72,8 +75,11 @@ import androidx.compose.material.icons.filled.CreditCard
 import androidx.compose.material.icons.filled.Bolt
 import androidx.compose.material.icons.filled.Description
 import androidx.compose.material.icons.filled.Receipt
+import androidx.compose.material.icons.filled.ReceiptLong
 import androidx.compose.material.icons.filled.RequestQuote
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.Visibility
+import androidx.compose.material.icons.filled.VisibilityOff
 import androidx.compose.material.icons.outlined.Notifications
 import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.foundation.ExperimentalFoundationApi
@@ -84,12 +90,16 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.input.OffsetMapping
+import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.TransformedText
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
@@ -102,6 +112,10 @@ import androidx.work.WorkManager
 import com.example.data.NotificationHistoryEntity
 import com.example.data.Renter
 import com.example.data.Scooter
+import com.example.data.maskAddress
+import com.example.data.maskIdentifier
+import com.example.data.maskPhone
+import com.example.data.PrivacyPolicy
 import com.example.data.remote.InAppUpdateManager
 import com.example.data.remote.InAppUpdateState
 import com.example.data.remote.UpdateCheckResult
@@ -129,6 +143,10 @@ import com.example.ui.theme.StatusOverdue
 import com.example.ui.theme.StatusOverdueBg
 import com.example.ui.theme.StatusReturned
 import com.example.ui.theme.StatusReturnedBg
+import com.example.ui.theme.StatusArchived
+import com.example.ui.theme.StatusArchivedBg
+import com.example.ui.theme.StatusReserved
+import com.example.ui.theme.StatusReservedBg
 import com.example.ui.components.UnifiedSearchBar
 import com.example.ui.components.FilterSidePanel
 import com.example.ui.components.FilterColumn
@@ -148,10 +166,12 @@ import com.example.ui.components.DangerOutlinedButton
 import com.example.ui.components.TextActionButton
 import com.example.ui.components.SortableHeaderCellFixed
 import com.example.ui.components.NonSortableHeaderCellFixed
+import com.example.ui.components.rememberLauncherCurtainState
 import com.example.worker.NotificationHelper
 import android.util.Log
 import com.example.worker.PaymentCheckWorker
 import com.example.worker.SmsWorker
+import com.example.worker.ServiceCheckWorker
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -210,6 +230,14 @@ class MainActivity : ComponentActivity() {
             paymentCheckRequest
         )
 
+        // Daily service due reminders are independent from rental payment checks.
+        val serviceCheckRequest = PeriodicWorkRequestBuilder<ServiceCheckWorker>(24, TimeUnit.HOURS).build()
+        WorkManager.getInstance(applicationContext).enqueueUniquePeriodicWork(
+            "ServiceCheckWork",
+            ExistingPeriodicWorkPolicy.KEEP,
+            serviceCheckRequest
+        )
+
         // ── Принудительное обновление нативных виджетов при старте приложения ──
         // Виджеты на главном экране Android могут показывать "не удалось загрузить
         // виджет" если они не получили RemoteViews после установки/перезагрузки.
@@ -226,6 +254,22 @@ class MainActivity : ComponentActivity() {
                     contract = ActivityResultContracts.RequestPermission()
                 ) { /* результат не важен — мы запрашиваем автоматически */ }
 
+                // ── §9A: Splash screen with loading animation ────────────────
+                // Shows logo + progress indicator while data prepares, then
+                // smoothly transitions to MainScreen. MainScreen's first frame
+                // shows the launcher curtain overlaying the Mijozlar page.
+                // The curtain is a free-drag panel: where the user releases,
+                // it stays. No snap points. Tapping any tile dismisses the
+                // curtain and opens the corresponding tab. The 4 primary
+                // icons are always visible in the bottom nav below the
+                // curtain; the curtain exposes the 4 secondary shortcuts
+                // (reports / history / trash / settings).
+                var showSplash by remember { mutableStateOf(true) }
+                // Launcher is deliberately shown after every cold start. It
+                // replaces the old behavior that jumped straight to renters.
+                var showLauncher by remember { mutableStateOf(true) }
+                var launcherTab by remember { mutableStateOf(0) }
+
                 // Авто-запрос SMS + POST_NOTIFICATIONS (Android 13+) + READ_PHONE_STATE при первом старте.
                 LaunchedEffect(Unit) {
                     permissionLauncher.launch(Manifest.permission.SEND_SMS)
@@ -236,7 +280,33 @@ class MainActivity : ComponentActivity() {
                     permissionLauncher.launch(Manifest.permission.READ_PHONE_STATE)
                 }
 
-                MainScreen()
+                if (showSplash) {
+                    SplashScreen(onFinished = { showSplash = false })
+                } else {
+                    val launcherState = rememberLauncherCurtainState()
+                    MainScreen(
+                        initialTab = launcherTab,
+                        onShowLauncher = { showLauncher = true },
+                        showLauncher = showLauncher,
+                        launcherState = launcherState,
+                        onLauncherPageClick = { page ->
+                            launcherTab = when (page) {
+                                "renters"   -> 0
+                                "scooters"  -> 1
+                                "contracts" -> 2
+                                "finansi"   -> 5
+                                "reports"   -> 4
+                                "history"   -> 7
+                                "trash"     -> 8
+                                "settings"  -> 6
+                                else        -> 0
+                            }
+                            // Reset curtain so next time launcher opens at top.
+                            launcherState.offsetPx = 0f
+                            showLauncher = false
+                        }
+                    )
+                }
             }
         }
     }
@@ -321,7 +391,7 @@ private fun statusOf(renter: Renter): RenterStatus = when {
 }
 
 private fun statusColor(s: RenterStatus): Color = when (s) {
-    RenterStatus.RETURNED -> StatusReturned
+    RenterStatus.RETURNED -> StatusArchived    // grey — returned/archived per unified color language
     RenterStatus.OVERDUE  -> StatusOverdue
     RenterStatus.OK       -> StatusOk
 }
@@ -332,25 +402,148 @@ private fun statusLabel(s: RenterStatus): String = when (s) {
     RenterStatus.OK       -> "Faol"
 }
 
+/**
+ * §9A: Splash screen with logo + loading animation.
+ *
+ * Shows a centered scooter icon + app name + progress indicator while the
+ * app prepares data (DB migrations, initial flows, widget updates). After
+ * a minimum visible duration (1.2s for smooth UX), calls [onFinished] so
+ * the parent can switch to MainScreen.
+ *
+ * The launcher + drawer part of §9A (movable cubes, multi-level bottom
+ * navigation) is a larger UI feature deferred to a later iteration.
+ */
+@Composable
+fun SplashScreen(
+    onFinished: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    // Minimum splash duration for smooth UX — avoids flash on fast devices.
+    val minDurationMs = 1200L
+    var progress by remember { mutableStateOf(0f) }
+
+    LaunchedEffect(Unit) {
+        val startTime = System.currentTimeMillis()
+        // Smoothly animate progress to 1f over minDurationMs
+        val steps = 60
+        repeat(steps) { i ->
+            progress = (i + 1).toFloat() / steps
+            kotlinx.coroutines.delay(minDurationMs / steps)
+        }
+        // Ensure minimum duration has elapsed before finishing
+        val elapsed = System.currentTimeMillis() - startTime
+        if (elapsed < minDurationMs) {
+            kotlinx.coroutines.delay(minDurationMs - elapsed)
+        }
+        onFinished()
+    }
+
+    Surface(
+        modifier = modifier.fillMaxSize(),
+        color = ClaudeBackground
+    ) {
+        Column(
+            modifier = Modifier.fillMaxSize(),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.Center
+        ) {
+            // ── Logo: scooter icon in a circular accent background ────────
+            Box(
+                modifier = Modifier
+                    .size(120.dp)
+                    .background(ClaudeAccent, CircleShape),
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(
+                    imageVector = Icons.Default.DirectionsBike,
+                    contentDescription = null,
+                    tint = ClaudeCard,
+                    modifier = Modifier.size(64.dp)
+                )
+            }
+            Spacer(Modifier.height(24.dp))
+            // ── App name ──────────────────────────────────────────────────
+            Text(
+                "Scooter Rent",
+                style = MaterialTheme.typography.headlineMedium,
+                color = ClaudeText,
+                fontWeight = FontWeight.Bold
+            )
+            Spacer(Modifier.height(8.dp))
+            Text(
+                "Boshqaruv tizimi",
+                style = MaterialTheme.typography.bodyMedium,
+                color = ClaudeTextSecondary
+            )
+            Spacer(Modifier.height(48.dp))
+            // ── Progress indicator ────────────────────────────────────────
+            CircularProgressIndicator(
+                progress = { progress },
+                modifier = Modifier.size(48.dp),
+                color = ClaudeAccent,
+                strokeWidth = 4.dp,
+                trackColor = ClaudeDivider
+            )
+            Spacer(Modifier.height(16.dp))
+            Text(
+                "Ma'lumotlar tayyorlanmoqda…",
+                style = MaterialTheme.typography.labelSmall,
+                color = ClaudeTextSecondary
+            )
+        }
+    }
+}
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun MainScreen(
+    initialTab: Int = 0,
     viewModel: RenterViewModel = viewModel(),
     settingsViewModel: SettingsViewModel = viewModel(),
     scooterViewModel: ScooterViewModel = viewModel(),
     historyViewModel: NotificationHistoryViewModel = viewModel(),
     contractHistoryViewModel: ContractHistoryViewModel = viewModel(),
     transactionViewModel: TransactionViewModel = viewModel(),
-    finansiViewModel: com.example.ui.FinansiViewModel = viewModel()
+    finansiViewModel: com.example.ui.FinansiViewModel = viewModel(),
+    trashViewModel: com.example.ui.TrashViewModel = viewModel(),
+    historyTimelineViewModel: com.example.ui.HistoryViewModel = viewModel(),
+    onShowLauncher: () -> Unit = {},
+    showLauncher: Boolean = false,
+    launcherState: com.example.ui.components.LauncherCurtainState = com.example.ui.components.rememberLauncherCurtainState(),
+    onLauncherPageClick: (String) -> Unit = {}
 ) {
-    var currentTab by remember { mutableStateOf(0) }
+    var currentTab by remember { mutableStateOf(initialTab) }
+    // Launcher tile taps update `initialTab` from the parent composable.
+    // Without this LaunchedEffect, those taps would be ignored because
+    // `remember { mutableStateOf(initialTab) }` only seeds the initial
+    // value once. This syncs currentTab whenever initialTab changes
+    // (e.g. when the user taps a launcher tile).
+    LaunchedEffect(initialTab) {
+        if (currentTab != initialTab) currentTab = initialTab
+    }
     var showAddDialog by remember { mutableStateOf(false) }
     var showAddScooterDialog by remember { mutableStateOf(false) }
     var renterToEdit by remember { mutableStateOf<Renter?>(null) }
     var scooterToEdit by remember { mutableStateOf<Scooter?>(null) }
     var contractToEdit by remember { mutableStateOf<com.example.data.ContractHistoryEntry?>(null) }
     var selectedRenters by remember { mutableStateOf(setOf<Int>()) }
+    // ── Universal dangerous-action confirmation (§10) ───────────────────────
+    // Single state drives one AlertDialog for all destructive universal-delete
+    // actions on renters/scooters/history. Contracts/transactions/cards have
+    // their own per-screen confirmations already.
+    var showUniversalDeleteConfirm by remember { mutableStateOf(false) }
+    var pendingDeleteTab by remember { mutableStateOf(-1) }
+    var showVariablePaymentDialog by remember { mutableStateOf(false) }
+    var variablePaymentAmount by remember { mutableStateOf("") }
+    var variablePaymentNote by remember { mutableStateOf("") }
+    var showTerminationDialog by remember { mutableStateOf(false) }
+    var forgiveTerminationDebt by remember { mutableStateOf(false) }
     var selectedScooters by remember { mutableStateOf(setOf<Int>()) }
+    var showRepairDialog by remember { mutableStateOf(false) }
+    var showRepairResumeDialog by remember { mutableStateOf(false) }
+    var repairNote by remember { mutableStateOf("") }
+    var repairScenario by remember { mutableStateOf(com.example.data.RepairOrder.SCENARIO_RENTER_REPAIR) }
+    var replacementScooterId by remember { mutableStateOf<Int?>(null) }
     var searchQuery by remember { mutableStateOf("") }
     var showDateRangePicker by remember { mutableStateOf(false) }
     val dateRangePickerState = rememberDateRangePickerState()
@@ -370,6 +563,18 @@ fun MainScreen(
     // вкладках одинаково, а неуниверсальные кнопки-дубликаты удалены.
     var selectedContracts by remember { mutableStateOf(setOf<Int>()) }
     var selectedTxs by remember { mutableStateOf(setOf<Int>()) }
+    var selectedTrashItems by remember { mutableStateOf(setOf<Long>()) }
+    var selectedHistoryEventId by remember { mutableStateOf<Long?>(null) }
+    var historyCreateTrigger by remember { mutableStateOf(0) }
+    var historyEditTrigger by remember { mutableStateOf(0) }
+    var trashRestoreTrigger by remember { mutableStateOf(0) }
+    var trashEditTrigger by remember { mutableStateOf(0) }
+    var trashPurgeTrigger by remember { mutableStateOf(0) }
+    // History: rename-branch dialog state. Populated when user presses the
+    // universal ✎ on tab 7 with a non-main-branch event selected.
+    var showHistoryBranchRenameDialog by remember { mutableStateOf(false) }
+    var historyBranchRenameId by remember { mutableStateOf<Long?>(null) }
+    var historyBranchRenameText by remember { mutableStateOf("") }
     var contractEditTrigger by remember { mutableStateOf(0) }
     var contractDeleteTrigger by remember { mutableStateOf(0) }
     var transactionEditTrigger by remember { mutableStateOf(0) }
@@ -383,6 +588,12 @@ fun MainScreen(
     // ── Навигация ────────────────────────────────────────────────────
     var navState by remember { mutableStateOf<NavigationState>(NavigationState.MainView) }
 
+
+    // The bottom nav is now a single static row of 4 primary icons —
+    // no expand state needed. Secondary shortcuts live in the launcher
+    // curtain (LauncherScreen), opened by tapping the title.
+    // Pull-down shade state for quick stats and actions
+    var shadeExpanded by remember { mutableStateOf(false) }
     var renterSortState by remember { mutableStateOf(TableSortState()) }
     var scooterSortState by remember { mutableStateOf(TableSortState()) }
     // Filter panel state
@@ -407,6 +618,7 @@ fun MainScreen(
             FilterColumn("col_scooter",  "Skuter",           "Skuter nomi"),
             FilterColumn("col_start",    "Boshlanish sanasi","dd.MM.yyyy"),
             FilterColumn("col_end",      "Tugash sanasi",    "dd.MM.yyyy"),
+            FilterColumn("col_turnover", "Tovaroborot",      "summa kontraktlar"),
             FilterColumn("col_balance",  "Balans",           "summa"),
             FilterColumn("col_status",   "Holat",            "Faol / Qaytgan / Qarzdor"),
             FilterColumn("col_passport", "Pasport",          "AA 1234567"),
@@ -437,34 +649,39 @@ fun MainScreen(
 
     val scooters by scooterViewModel.scootersList.collectAsStateWithLifecycle()
 
-    // Авто-проверка обновлений при запуске
-    // Показываем уведомление ТОЛЬКО если есть реальное обновление
+    // Авто-проверка обновлений при запуске. Интернет на Android нередко
+    // становится доступным через несколько секунд после splash/permissions,
+    // поэтому повторяем только ошибки, а уведомление показываем исключительно
+    // после подтверждённого более нового versionCode.
     LaunchedEffect(Unit) {
-        try {
-            val checker = UpdateChecker(localContext)
-            val (result, info) = checker.checkForUpdate()
-            when (result) {
-                UpdateCheckResult.UPDATE_AVAILABLE -> {
-                    updateInfo = info
-                    isUpToDate = false
-                    Log.d("MainScreen", "Update available: v${info?.versionName}")
+        val checker = UpdateChecker(localContext)
+        repeat(3) { attempt ->
+            try {
+                val (result, info) = checker.checkForUpdate()
+                when (result) {
+                    UpdateCheckResult.UPDATE_AVAILABLE -> {
+                        updateInfo = info
+                        isUpToDate = false
+                        Log.d("MainScreen", "Update available: v${info?.versionName}")
+                        return@LaunchedEffect
+                    }
+                    UpdateCheckResult.UP_TO_DATE -> {
+                        updateInfo = null
+                        isUpToDate = true
+                        return@LaunchedEffect
+                    }
+                    UpdateCheckResult.ERROR -> {
+                        Log.w("MainScreen", "Update check attempt ${attempt + 1} failed")
+                        if (attempt < 2) kotlinx.coroutines.delay((attempt + 1) * 5_000L)
+                    }
                 }
-                UpdateCheckResult.UP_TO_DATE -> {
-                    updateInfo = null
-                    isUpToDate = true
-                    Log.d("MainScreen", "App is up to date")
-                }
-                UpdateCheckResult.ERROR -> {
-                    // Ошибка API = НЕ показываем уведомление
-                    updateInfo = null
-                    isUpToDate = false
-                    Log.d("MainScreen", "Update check failed — not showing notification")
-                }
+            } catch (e: Exception) {
+                Log.w("MainScreen", "Auto-update check failed", e)
+                if (attempt < 2) kotlinx.coroutines.delay((attempt + 1) * 5_000L)
             }
-        } catch (e: Exception) {
-            Log.w("MainScreen", "Auto-update check failed", e)
-            // Ошибка = не показываем уведомление
         }
+        updateInfo = null
+        isUpToDate = false
     }
 
     val renters by viewModel.rentersList.collectAsStateWithLifecycle()
@@ -651,7 +868,7 @@ fun MainScreen(
                     initialScooter = scooterToEdit,
                     existingScooters = scooters,
                     onDismiss = { scooterToEdit = null },
-                    onSave = { name, docNum, vin, engine, serial, batt1, batt2, extra ->
+                    onSave = { name, docNum, vin, engine, serial, batt1, batt2, extra, nextService ->
                         scooterToEdit?.let {
                             scooterViewModel.updateScooter(
                                 it.copy(
@@ -662,7 +879,8 @@ fun MainScreen(
                                     scooterSerialNumber = serial,
                                     batteryId1 = batt1,
                                     batteryId2 = batt2,
-                                    additionalInfo = extra
+                                    additionalInfo = extra,
+                                    nextServiceAt = nextService
                                 )
                             )
                         }
@@ -833,15 +1051,25 @@ fun MainScreen(
         NavigationState.MainView -> { /* продолжаем — основной Scaffold ниже */ }
     }
 
+    // ── §9.A: Scaffold with expandable bottom navigation ───────────────
+    // The bottom navigation panel is itself expandable — pulling it up
+    // reveals a second row of secondary icons (Reports/History/Trash/
+    // Settings). No more full-screen launcher overlay; the bottom nav
+    // IS the launcher now.
     Scaffold(
         modifier = Modifier.fillMaxSize(),
         containerColor = ClaudeBackground,
         topBar = {
             TopAppBar(
                 title = {
+                    // ── §9.A: Title is tappable — opens the launcher curtain.
+                    // Tapping "Skuter Ijarasi" reveals the LauncherScreen
+                    // overlay (free-drag curtain) with the 4 secondary
+                    // shortcuts: Reports / History / Trash / Settings.
                     Text(
                         "Skuter Ijarasi",
-                        style = MaterialTheme.typography.headlineMedium.copy(fontWeight = FontWeight.Bold)
+                        style = MaterialTheme.typography.headlineMedium.copy(fontWeight = FontWeight.Bold),
+                        modifier = Modifier.clickable { onShowLauncher() }
                     )
                 },
                 colors = TopAppBarDefaults.topAppBarColors(
@@ -850,6 +1078,13 @@ fun MainScreen(
                     actionIconContentColor = ClaudeText
                 ),
                 actions = {
+                    // ── §9.A: Кнопка launcher (домик) убрана из TopAppBar по
+                    // запросу пользователя. Вместо неё — expandable bottom nav:
+                    // тяни нижнюю панель вверх (или жми на заголовок «Skuter
+                    // Ijarasi»), чтобы открыть второй ряд иконок (Reports /
+                    // History / Trash / Settings). Свайп вниз или клик по
+                    // стрелке закрывает второй ряд обратно.
+
                     // ── Кнопка сканера (Mistral OCR) ──────────────────────────────
                     // Иконка камеры, доступна с любой вкладки. Открывает экран
                     // сканера документов: пользователь фотографирует список
@@ -913,7 +1148,7 @@ fun MainScreen(
                     // сущностей для создания (только виджеты). Edit/delete там тоже
                     // не показываются — нет строк для выбора.
                     // ── Кнопка «+» — скрыта на «Отчётах» (4) и «Sozlamalar» (6) ─
-                    if (currentTab != 4 && currentTab != 6) {
+                    if (currentTab !in setOf(4, 6)) {
                         IconButton(
                             onClick = {
                                 when (currentTab) {
@@ -922,6 +1157,11 @@ fun MainScreen(
                                     2 -> contractCreateTrigger++
                                     3 -> transactionCreateTrigger++
                                     5 -> cardCreateTrigger++
+                                    7 -> historyCreateTrigger++
+                                    8 -> {
+                                        selectedTrashItems.forEach { trashViewModel.restore(it) }
+                                        selectedTrashItems = emptySet()
+                                    }
                                 }
                             },
                             modifier = Modifier
@@ -939,13 +1179,15 @@ fun MainScreen(
                     }
 
                     // ── Кнопка «✎ Tahrirlash» — скрыта на «Отчётах» (4) и «Sozlamalar» (6)
-                    if (currentTab != 4 && currentTab != 6) {
+                    if (currentTab !in setOf(4, 6)) {
                         val editEnabled = when (currentTab) {
                             0 -> selectedRenters.size == 1
                             1 -> selectedScooters.size == 1
                             2 -> selectedContracts.size == 1
                             3 -> selectedTxs.size == 1
                             5 -> selectedCardIds.size == 1
+                            7 -> selectedHistoryEventId != null
+                            8 -> selectedTrashItems.size == 1
                             else -> false
                         }
                         IconButton(
@@ -964,6 +1206,30 @@ fun MainScreen(
                                     2 -> contractEditTrigger++
                                     3 -> transactionEditTrigger++
                                     5 -> cardEditTrigger++
+                                    7 -> {
+                                        // If selected event belongs to a non-main branch → open
+                                        // rename dialog. Otherwise no-op (events on the Main
+                                        // branch cannot be "renamed"; the universal ✎ only
+                                        // edits branch metadata on the history tab).
+                                        val ev = historyTimelineViewModel.events.value.firstOrNull {
+                                            it.id == selectedHistoryEventId
+                                        }
+                                        val branchId = ev?.branchId
+                                        val branches = historyTimelineViewModel.branches.value
+                                        val branch = branches.firstOrNull { it.id == branchId }
+                                        if (branch != null && !branch.isMain) {
+                                            historyBranchRenameId = branch.id
+                                            historyBranchRenameText = branch.name
+                                            showHistoryBranchRenameDialog = true
+                                        } else {
+                                            Toast.makeText(
+                                                localContext,
+                                                "Faqat Main'dan boshqa tarmoqni tahrirlash mumkin",
+                                                Toast.LENGTH_SHORT
+                                            ).show()
+                                        }
+                                    }
+                                    8 -> trashEditTrigger++
                                 }
                             },
                             enabled = editEnabled,
@@ -991,24 +1257,23 @@ fun MainScreen(
                             2 -> selectedContracts.isNotEmpty()
                             3 -> selectedTxs.isNotEmpty()
                             5 -> selectedCardIds.isNotEmpty()
+                            7 -> selectedHistoryEventId != null
+                            8 -> selectedTrashItems.isNotEmpty()
                             else -> false
                         }
                         IconButton(
                             onClick = {
                                 when (currentTab) {
-                                    0 -> {
-                                        selectedRenters.forEach { id -> viewModel.deleteRenter(id) }
-                                        selectedRenters = emptySet()
-                                    }
-                                    1 -> {
-                                        scooters.filter { it.id in selectedScooters }.forEach {
-                                            scooterViewModel.deleteScooter(it)
-                                        }
-                                        selectedScooters = emptySet()
+                                    0, 1, 7 -> {
+                                        // ── Dangerous actions: ask for confirmation first (§10) ──
+                                        // Tabs 2/3/5/8 already have their own per-screen confirmations.
+                                        pendingDeleteTab = currentTab
+                                        showUniversalDeleteConfirm = true
                                     }
                                     2 -> contractDeleteTrigger++
                                     3 -> transactionDeleteTrigger++
                                     5 -> cardDeleteTrigger++
+                                    8 -> trashPurgeTrigger++
                                 }
                             },
                             enabled = deleteEnabled,
@@ -1037,109 +1302,47 @@ fun MainScreen(
             )
         },
         bottomBar = {
-            NavigationBar(containerColor = ClaudeCard, contentColor = ClaudeText) {
-                NavigationBarItem(
-                    selected = currentTab == 0,
-                    onClick = { currentTab = 0 },
-                    icon = { Icon(Icons.Default.List, contentDescription = "Ijarachilar") },
-                    label = { Text("Ijarachilar") },
-                    colors = NavigationBarItemDefaults.colors(
-                        selectedIconColor = ClaudeAccent,
-                        unselectedIconColor = ClaudeTextSecondary,
-                        selectedTextColor = ClaudeAccent,
-                        unselectedTextColor = ClaudeTextSecondary,
-                        indicatorColor = ClaudeAccentBg
-                    )
-                )
-                NavigationBarItem(
-                    selected = currentTab == 1,
-                    onClick = { currentTab = 1 },
-                    icon = { Icon(Icons.Default.DirectionsBike, contentDescription = "Skuterlar") },
-                    label = { Text("Skuterlar") },
-                    colors = NavigationBarItemDefaults.colors(
-                        selectedIconColor = ClaudeAccent,
-                        unselectedIconColor = ClaudeTextSecondary,
-                        selectedTextColor = ClaudeAccent,
-                        unselectedTextColor = ClaudeTextSecondary,
-                        indicatorColor = ClaudeAccentBg
-                    )
-                )
-                NavigationBarItem(
-                    selected = currentTab == 2,
-                    onClick = { currentTab = 2 },
-                    icon = { Icon(Icons.Default.Description, contentDescription = "Kontraktlar") },
-                    label = { Text("Kontraktlar") },
-                    colors = NavigationBarItemDefaults.colors(
-                        selectedIconColor = ClaudeAccent,
-                        unselectedIconColor = ClaudeTextSecondary,
-                        selectedTextColor = ClaudeAccent,
-                        unselectedTextColor = ClaudeTextSecondary,
-                        indicatorColor = ClaudeAccentBg
-                    )
-                )
-                NavigationBarItem(
-                    selected = currentTab == 3,
-                    onClick = { currentTab = 3 },
-                    icon = { Icon(Icons.Default.RequestQuote, contentDescription = "Tranzaksiyalar") },
-                    label = { Text("Tranzaksiya") },
-                    colors = NavigationBarItemDefaults.colors(
-                        selectedIconColor = ClaudeAccent,
-                        unselectedIconColor = ClaudeTextSecondary,
-                        selectedTextColor = ClaudeAccent,
-                        unselectedTextColor = ClaudeTextSecondary,
-                        indicatorColor = ClaudeAccentBg
-                    )
-                )
-                NavigationBarItem(
-                    selected = currentTab == 4,
-                    onClick = { currentTab = 4 },
-                    icon = { Icon(Icons.Default.RequestQuote, contentDescription = "Otchetlar") },
-                    label = { Text("Otchetlar") },
-                    colors = NavigationBarItemDefaults.colors(
-                        selectedIconColor = ClaudeAccent,
-                        unselectedIconColor = ClaudeTextSecondary,
-                        selectedTextColor = ClaudeAccent,
-                        unselectedTextColor = ClaudeTextSecondary,
-                        indicatorColor = ClaudeAccentBg
-                    )
-                )
-                NavigationBarItem(
-                    selected = currentTab == 5,
-                    onClick = { currentTab = 5 },
-                    icon = { Icon(Icons.Default.AccountBalanceWallet, contentDescription = "Finansi") },
-                    label = { Text("Finansi") },
-                    colors = NavigationBarItemDefaults.colors(
-                        selectedIconColor = ClaudeAccent,
-                        unselectedIconColor = ClaudeTextSecondary,
-                        selectedTextColor = ClaudeAccent,
-                        unselectedTextColor = ClaudeTextSecondary,
-                        indicatorColor = ClaudeAccentBg
-                    )
-                )
-                // ── 7-я вкладка: Sozlamalar ──────────────────────────────────
-                // Раньше была кнопка-иконка в TopAppBar. Теперь — полноценная
-                // вкладка внизу, рядом с остальными главными страницами.
-                NavigationBarItem(
-                    selected = currentTab == 6,
-                    onClick = { currentTab = 6 },
-                    icon = { Icon(Icons.Outlined.Settings, contentDescription = "Sozlamalar") },
-                    label = { Text("Sozlamalar") },
-                    colors = NavigationBarItemDefaults.colors(
-                        selectedIconColor = ClaudeAccent,
-                        unselectedIconColor = ClaudeTextSecondary,
-                        selectedTextColor = ClaudeAccent,
-                        unselectedTextColor = ClaudeTextSecondary,
-                        indicatorColor = ClaudeAccentBg
-                    )
-                )
-            }
+            // ── "Pull up" hint visibility ──────────────────────────────
+            // The hint chip appears above the bottom nav when the launcher
+            // curtain has been dragged down past the bottom nav's top edge.
+            // LauncherScreen now publishes `panelHiddenUnderNav` on its
+            // shared state — it computes the threshold from the ACTUAL
+            // on-screen Box dimensions (via BoxWithConstraints) instead
+            // of guessing screen + topbar + bottomnav heights here.
+            // Reading that single boolean keeps the two components in
+            // perfect sync — no more "the chip doesn't show even though
+            // the panel is hidden" bug.
+            val showPullUpHint = showLauncher && launcherState.panelHiddenUnderNav
+
+            com.example.ui.components.ExpandableBottomNav(
+                selectedId = when (currentTab) {
+                    0 -> "renters"; 1 -> "scooters"; 2 -> "contracts"; 5 -> "finansi"
+                    4 -> "reports"; 7 -> "history"; 8 -> "trash"; 6 -> "settings"
+                    else -> "renters"
+                },
+                onPageClick = { page ->
+                    currentTab = when (page) {
+                        "renters" -> 0; "scooters" -> 1; "contracts" -> 2; "finansi" -> 5
+                        "reports" -> 4; "history" -> 7; "trash" -> 8; "settings" -> 6
+                        else -> 0
+                    }
+                },
+                showPullUpHint = showPullUpHint,
+                onPullUpClick = {
+                    // Pull the curtain back to the top.
+                    launcherState.offsetPx = 0f
+                }
+            )
         }
     ) { innerPadding ->
-        Column(
+        Box(
             modifier = Modifier
                 .padding(innerPadding)
                 .fillMaxSize()
         ) {
+          Column(
+              modifier = Modifier.fillMaxSize()
+          ) {
             // ── Баннер обновления (ТОЛЬКО если есть обновление) ──
             when (val st = updateState) {
                 is InAppUpdateState.Downloading -> {
@@ -1291,8 +1494,38 @@ fun MainScreen(
             }
 
             if (currentTab == 0) {
-                // Unified search bar with calendar + filter buttons
-                UnifiedSearchBar(
+                // Pull-down shade for quick stats
+                Box(
+                    modifier = Modifier.fillMaxSize()
+                ) {
+                    // Main content
+                    Column(modifier = Modifier.fillMaxSize()) {
+                        // ── Pull handle indicator REMOVED per user request ──
+                        // Previously a small 4dp × 40dp gray bar sat here
+                        // between the TopAppBar (universal buttons) and the
+                        // search bar. User found it visually noisy. The
+                        // pull-down shade can still be triggered by swiping
+                        // down anywhere in the renters page header area;
+                        // we keep the gesture detector on a 0-height Box so
+                        // the shadeExpanded logic still works but nothing
+                        // is rendered.
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(0.dp)
+                                .pointerInput(Unit) {
+                                    detectVerticalDragGestures(
+                                        onDragEnd = { if (shadeExpanded) shadeExpanded = false },
+                                        onVerticalDrag = { change, dragAmount ->
+                                            change.consume()
+                                            if (dragAmount > 50) shadeExpanded = true
+                                        }
+                                    )
+                                }
+                        )
+                        
+                        // Unified search bar with calendar + filter buttons
+                        UnifiedSearchBar(
                     query = searchQuery,
                     onQueryChange = { searchQuery = it },
                     placeholder = "Mijoz yoki skuter qidirish",
@@ -1338,9 +1571,11 @@ fun MainScreen(
                         icon = Icons.Default.Payments,
                         enabled = hasSelection,
                         onClick = {
-                            viewModel.payWeeklyForRenters(selectedRenters)
-                            Toast.makeText(localContext, "To'lov qabul qilindi", Toast.LENGTH_SHORT).show()
-                            selectedRenters = emptySet()
+                            val weekly = com.example.data.SettingsRepository(localContext).weeklyPrice
+                                .let { if (it > 0) it else com.example.data.SettingsRepository.DEFAULT_WEEKLY_PRICE }
+                            variablePaymentAmount = weekly.toLong().toString()
+                            variablePaymentNote = "Bitta to'lov"
+                            showVariablePaymentDialog = true
                         },
                         modifier = Modifier.weight(1.4f)
                     )
@@ -1349,9 +1584,8 @@ fun MainScreen(
                         icon = Icons.Default.PowerOff,
                         enabled = hasSelection,
                         onClick = {
-                            viewModel.terminateRenters(selectedRenters)
-                            Toast.makeText(localContext, "Kontrakt tugatildi", Toast.LENGTH_SHORT).show()
-                            selectedRenters = emptySet()
+                            forgiveTerminationDebt = false
+                            showTerminationDialog = true
                         },
                         modifier = Modifier.weight(1.2f)
                     )
@@ -1439,6 +1673,36 @@ fun MainScreen(
                             }
                     }
 
+                // ── Товарооборот и оплаченный итог по каждому арендатору ──────
+                // turnover = сумма сумм всех контрактов (CREATED + AUTO_RENEW).
+                // paid     = сумма сумм оплаченных контрактов (isPaid=true).
+                // balance  = paid − turnover: <0 долг, >0 аванс, =0 расчёт закрыт.
+                val turnoverByRenter: Map<Int, Double> =
+                    remember(contractHistory) {
+                        contractHistory
+                            .asSequence()
+                            .filter {
+                                it.type == com.example.data.ContractHistoryEntry.TYPE_CREATED ||
+                                it.type == com.example.data.ContractHistoryEntry.TYPE_AUTO_RENEW
+                            }
+                            .filter { it.renterId > 0 }
+                            .groupBy { it.renterId }
+                            .mapValues { (_, entries) -> entries.sumOf { it.amount } }
+                    }
+                val paidByRenter: Map<Int, Double> =
+                    remember(contractHistory) {
+                        contractHistory
+                            .asSequence()
+                            .filter {
+                                it.type == com.example.data.ContractHistoryEntry.TYPE_CREATED ||
+                                it.type == com.example.data.ContractHistoryEntry.TYPE_AUTO_RENEW
+                            }
+                            .filter { it.isPaid }
+                            .filter { it.renterId > 0 }
+                            .groupBy { it.renterId }
+                            .mapValues { (_, entries) -> entries.sumOf { it.amount } }
+                    }
+
                 // Helper: даты последнего контракта (с fallback на поля Renter).
                 fun latestStartTs(r: Renter): Long =
                     latestContractByRenter[r.id]?.weekStart ?: r.rentStartDateTimestamp
@@ -1512,6 +1776,8 @@ fun MainScreen(
                     sortState = renterSortState,
                     columnVisibility = renterColumnVisibility,
                     latestContractByRenter = latestContractByRenter,
+                    turnoverByRenter = turnoverByRenter,
+                    paidByRenter = paidByRenter,
                     onSortClick = { colId ->
                         renterSortState = renterSortState.click(colId)
                     },
@@ -1525,6 +1791,222 @@ fun MainScreen(
                         navState = NavigationState.RenterHistory(renter)
                     }
                 )
+                    } // End Column
+                    } // End main Column in Box
+                    
+                    // Shade overlay when expanded
+                    androidx.compose.animation.AnimatedVisibility(
+                        visible = shadeExpanded,
+                        enter = androidx.compose.animation.slideInVertically(
+                            initialOffsetY = { -it }
+                        ) + androidx.compose.animation.fadeIn(),
+                        exit = androidx.compose.animation.slideOutVertically(
+                            targetOffsetY = { -it }
+                        ) + androidx.compose.animation.fadeOut()
+                    ) {
+                        Surface(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .fillMaxHeight(0.6f)
+                                .pointerInput(Unit) {
+                                    detectVerticalDragGestures(
+                                        onVerticalDrag = { change, dragAmount ->
+                                            change.consume()
+                                            if (dragAmount < -50) shadeExpanded = false
+                                        }
+                                    )
+                                },
+                            color = Color(0xFF0A0A0A),
+                            shape = RoundedCornerShape(bottomStart = 24.dp, bottomEnd = 24.dp),
+                            shadowElevation = 16.dp
+                        ) {
+                            Column(
+                                modifier = Modifier
+                                    .fillMaxSize()
+                                    .padding(24.dp),
+                                verticalArrangement = Arrangement.spacedBy(16.dp)
+                            ) {
+                                Text(
+                                    "Tezkor ma'lumotlar",
+                                    style = MaterialTheme.typography.headlineSmall,
+                                    fontWeight = FontWeight.Bold,
+                                    color = Color.White
+                                )
+                                
+                                Spacer(modifier = Modifier.height(8.dp))
+                                
+                                // Stats row 1
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.spacedBy(12.dp)
+                                ) {
+                                    // Active renters card
+                                    Surface(
+                                        modifier = Modifier.weight(1f),
+                                        color = Color(0xFF10B981).copy(alpha = 0.15f),
+                                        shape = RoundedCornerShape(12.dp)
+                                    ) {
+                                        Column(
+                                            modifier = Modifier.padding(16.dp),
+                                            horizontalAlignment = Alignment.CenterHorizontally
+                                        ) {
+                                            Text(
+                                                "${renters.count { !it.isReturned }}/${renters.size}",
+                                                style = MaterialTheme.typography.titleLarge,
+                                                fontWeight = FontWeight.Bold,
+                                                color = Color(0xFF10B981)
+                                            )
+                                            Text("Ijarachilar", color = Color(0xFF9CA3AF), fontSize = 12.sp)
+                                        }
+                                    }
+                                    
+                                    // Available scooters card
+                                    Surface(
+                                        modifier = Modifier.weight(1f),
+                                        color = Color(0xFF3B82F6).copy(alpha = 0.15f),
+                                        shape = RoundedCornerShape(12.dp)
+                                    ) {
+                                        Column(
+                                            modifier = Modifier.padding(16.dp),
+                                            horizontalAlignment = Alignment.CenterHorizontally
+                                        ) {
+                                            val availableScooters = scooters.count { 
+                                                it.lifecycleStatus == com.example.data.Scooter.STATUS_AVAILABLE 
+                                            }
+                                            Text(
+                                                "$availableScooters/${scooters.size}",
+                                                style = MaterialTheme.typography.titleLarge,
+                                                fontWeight = FontWeight.Bold,
+                                                color = Color(0xFF3B82F6)
+                                            )
+                                            Text("Skuterlar", color = Color(0xFF9CA3AF), fontSize = 12.sp)
+                                        }
+                                    }
+                                }
+                                
+                                // Stats row 2
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.spacedBy(12.dp)
+                                ) {
+                                    // Total debt card
+                                    Surface(
+                                        modifier = Modifier.weight(1f),
+                                        color = Color(0xFFEF4444).copy(alpha = 0.15f),
+                                        shape = RoundedCornerShape(12.dp)
+                                    ) {
+                                        Column(
+                                            modifier = Modifier.padding(16.dp),
+                                            horizontalAlignment = Alignment.CenterHorizontally
+                                        ) {
+                                            val totalDebt = renters.filter { it.balance < 0 }.sumOf { -it.balance }
+                                            Text(
+                                                "${totalDebt.toLong()}",
+                                                style = MaterialTheme.typography.titleLarge,
+                                                fontWeight = FontWeight.Bold,
+                                                color = Color(0xFFEF4444)
+                                            )
+                                            Text("Umumiy qarz", color = Color(0xFF9CA3AF), fontSize = 12.sp)
+                                        }
+                                    }
+                                    
+                                    // Overdue count
+                                    Surface(
+                                        modifier = Modifier.weight(1f),
+                                        color = Color(0xFFF59E0B).copy(alpha = 0.15f),
+                                        shape = RoundedCornerShape(12.dp)
+                                    ) {
+                                        Column(
+                                            modifier = Modifier.padding(16.dp),
+                                            horizontalAlignment = Alignment.CenterHorizontally
+                                        ) {
+                                            val overdueCount = renters.count { it.balance < 0 && !it.isReturned }
+                                            Text(
+                                                "$overdueCount",
+                                                style = MaterialTheme.typography.titleLarge,
+                                                fontWeight = FontWeight.Bold,
+                                                color = Color(0xFFF59E0B)
+                                            )
+                                            Text("Kechikkan", color = Color(0xFF9CA3AF), fontSize = 12.sp)
+                                        }
+                                    }
+                                }
+                                
+                                Spacer(modifier = Modifier.weight(1f))
+                                
+                                // Quick actions
+                                Text("Tezkor harakatlar", color = Color(0xFF9CA3AF), fontSize = 12.sp)
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                ) {
+                                    Surface(
+                                        modifier = Modifier.weight(1f),
+                                        color = Color(0xFF10B981).copy(alpha = 0.2f),
+                                        shape = RoundedCornerShape(8.dp),
+                                        onClick = { showAddDialog = true; shadeExpanded = false }
+                                    ) {
+                                        Text(
+                                            "Yangi ijara",
+                                            modifier = Modifier.padding(12.dp),
+                                            textAlign = TextAlign.Center,
+                                            color = Color(0xFF10B981),
+                                            fontWeight = FontWeight.Medium,
+                                            fontSize = 12.sp
+                                        )
+                                    }
+                                    Surface(
+                                        modifier = Modifier.weight(1f),
+                                        color = Color(0xFF3B82F6).copy(alpha = 0.2f),
+                                        shape = RoundedCornerShape(8.dp),
+                                        onClick = { currentTab = 4; shadeExpanded = false }
+                                    ) {
+                                        Text(
+                                            "Hisobot",
+                                            modifier = Modifier.padding(12.dp),
+                                            textAlign = TextAlign.Center,
+                                            color = Color(0xFF3B82F6),
+                                            fontWeight = FontWeight.Medium,
+                                            fontSize = 12.sp
+                                        )
+                                    }
+                                    Surface(
+                                        modifier = Modifier.weight(1f),
+                                        color = Color(0xFFF59E0B).copy(alpha = 0.2f),
+                                        shape = RoundedCornerShape(8.dp),
+                                        onClick = { currentTab = 5; shadeExpanded = false }
+                                    ) {
+                                        Text(
+                                            "Finansi",
+                                            modifier = Modifier.padding(12.dp),
+                                            textAlign = TextAlign.Center,
+                                            color = Color(0xFFF59E0B),
+                                            fontWeight = FontWeight.Medium,
+                                            fontSize = 12.sp
+                                        )
+                                    }
+                                }
+                                
+                                // Close handle
+                                Box(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(top = 8.dp),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    Box(
+                                        modifier = Modifier
+                                            .width(40.dp)
+                                            .height(4.dp)
+                                            .background(Color(0xFF4A4A4A), RoundedCornerShape(2.dp))
+                                            .clickable { shadeExpanded = false }
+                                    )
+                                }
+                            }
+                        }
+                    }
+                // End if (currentTab == 0) content — Box for shade + AnimatedVisibility
+                // (closing brace is provided by the } else if below)
             } else if (currentTab == 1) {
                 // Вкладка «Скутеры» — unified search bar с календарём
                 // (фильтр по дате начала активного контракта скутера) и фильтром.
@@ -1566,6 +2048,19 @@ fun MainScreen(
                         .padding(horizontal = 16.dp, vertical = 6.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
+                    val selectedScooter = scooters.firstOrNull { it.id in selectedScooters }
+                    if (selectedScooters.size == 1 && selectedScooter != null) {
+                        if (selectedScooter.lifecycleStatus == Scooter.STATUS_REPAIR) {
+                            TextButton(onClick = { repairNote = ""; showRepairResumeDialog = true }) { Text("Ta'mirdan qaytdi") }
+                        } else {
+                            TextButton(onClick = {
+                                repairNote = ""
+                                repairScenario = com.example.data.RepairOrder.SCENARIO_RENTER_REPAIR
+                                replacementScooterId = scooters.firstOrNull { it.id != selectedScooter.id && it.lifecycleStatus == Scooter.STATUS_AVAILABLE }?.id
+                                showRepairDialog = true
+                            }) { Text("Ta'mirga") }
+                        }
+                    }
                     Spacer(Modifier.weight(1f))
                     Text(
                         "Jami: ${scooters.size}",
@@ -1600,7 +2095,7 @@ fun MainScreen(
                             "col_batt2"  -> scooter.batteryId2.contains(filterText, ignoreCase = true)
                             "col_extra"  -> scooter.additionalInfo.contains(filterText, ignoreCase = true)
                             "col_status" -> {
-                                val status = scooterStatusLabel(scooterStatusOf(scooter.id, renters))
+                                val status = scooterStatusLabel(scooterStatusOf(scooter, renters))
                                 status.contains(filterText, ignoreCase = true)
                             }
                             else -> true
@@ -1638,6 +2133,16 @@ fun MainScreen(
                     },
                     onClick = { scooter ->
                         // Клик по скутеру → экран истории контрактов скутера
+                        navState = NavigationState.ScooterHistory(scooter)
+                    }
+                )
+
+                // ── Upcoming maintenance banner (§8) ──────────────────────
+                // Shows scooters with nextServiceAt in the next 7 days or overdue.
+                // Tap a scooter → opens scooter history (where service can be set).
+                UpcomingMaintenanceBanner(
+                    scooters = scooters,
+                    onScooterClick = { scooter ->
                         navState = NavigationState.ScooterHistory(scooter)
                     }
                 )
@@ -1783,7 +2288,78 @@ fun MainScreen(
                     // TopAppBar «Sozlamalar») и снизу (contentWindowInsets).
                     showTopBar = false
                 )
+            } else if (currentTab == 7) {
+                HistoryScreen(
+                    createTrigger = historyCreateTrigger,
+                    editTrigger = historyEditTrigger,
+                    selectedEventId = selectedHistoryEventId,
+                    onSelectedEventChange = { selectedHistoryEventId = it },
+                    viewModel = historyTimelineViewModel
+                )
+            } else if (currentTab == 8) {
+                TrashScreen(
+                    restoreTrigger = trashRestoreTrigger,
+                    editTrigger = trashEditTrigger,
+                    purgeTrigger = trashPurgeTrigger,
+                    selected = selectedTrashItems,
+                    onSelectedChange = { selectedTrashItems = it },
+                    viewModel = trashViewModel
+                )
+            } else if (currentTab == 9) {
+                // §2: Operations journal — full financial audit trail
+                OperationsJournalScreen()
             }
+        }
+
+        if (showRepairDialog || showRepairResumeDialog) {
+            val selectedId = selectedScooters.firstOrNull()
+            AlertDialog(
+                onDismissRequest = { showRepairDialog = false; showRepairResumeDialog = false },
+                title = { Text(if (showRepairDialog) "Skuterni ta'mirga yuborish" else "Ta'mirdan qaytarish") },
+                text = {
+                    Column {
+                        Text(if (showRepairDialog)
+                            "Ijara davri to'xtatiladi: ta'mir kunlari uchun to'lov hisoblanmaydi."
+                            else "Ijara davri ta'mir davomiyligiga uzaytiriladi; to'lov qayta boshlanadi.")
+                        if (showRepairDialog) {
+                            listOf(
+                                com.example.data.RepairOrder.SCENARIO_RENTER_REPAIR to "Ijarachi ta'mirlaydi",
+                                com.example.data.RepairOrder.SCENARIO_OWNER_REPAIR to "Egasi / servis ta'mirlaydi",
+                                com.example.data.RepairOrder.SCENARIO_REPLACEMENT to "Almashtirish rejalashtirilgan"
+                            ).forEach { (scenario, label) ->
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    RadioButton(selected = repairScenario == scenario, onClick = { repairScenario = scenario })
+                                    Text(label)
+                                }
+                            }
+                            if (repairScenario == com.example.data.RepairOrder.SCENARIO_REPLACEMENT) {
+                                val available = scooters.filter { it.lifecycleStatus == Scooter.STATUS_AVAILABLE && it.id != selectedId }
+                                Text("Almashtiruvchi skuter", style = MaterialTheme.typography.labelSmall)
+                                available.forEach { candidate ->
+                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                        RadioButton(selected = replacementScooterId == candidate.id, onClick = { replacementScooterId = candidate.id })
+                                        Text(candidate.name)
+                                    }
+                                }
+                                if (available.isEmpty()) Text("Bo'sh skuter yo'q", style = MaterialTheme.typography.bodySmall, color = StatusOverdue)
+                            }
+                        }
+                        OutlinedTextField(repairNote, { repairNote = it }, label = { Text("Izoh / sabab") })
+                    }
+                },
+                confirmButton = { TextButton(onClick = {
+                    if (selectedId != null && repairNote.isNotBlank() &&
+                        (!showRepairDialog || repairScenario != com.example.data.RepairOrder.SCENARIO_REPLACEMENT || replacementScooterId != null)) {
+                        if (showRepairDialog) {
+                            if (repairScenario == com.example.data.RepairOrder.SCENARIO_REPLACEMENT) {
+                                replacementScooterId?.let { scooterViewModel.replaceScooterForRental(selectedId, it, repairNote) }
+                            } else scooterViewModel.sendToRepair(selectedId, repairNote, repairScenario)
+                        } else scooterViewModel.resumeAfterRepair(selectedId, repairNote)
+                        showRepairDialog = false; showRepairResumeDialog = false; repairNote = ""
+                    } else Toast.makeText(localContext, "Izoh va almashtiruvchi skuter tanlang", Toast.LENGTH_SHORT).show()
+                }) { Text("Tasdiqlash") } },
+                dismissButton = { TextButton(onClick = { showRepairDialog = false; showRepairResumeDialog = false }) { Text("Bekor qilish") } }
+            )
         }
 
         // ===== Диалог создания/редактирования арендатора =====
@@ -1869,7 +2445,7 @@ fun MainScreen(
                     showAddScooterDialog = false
                     scooterToEdit = null
                 },
-                onSave = { name, docNum, vin, engine, serial, batt1, batt2, extra ->
+                onSave = { name, docNum, vin, engine, serial, batt1, batt2, extra, nextService ->
                     if (isEditScooter) {
                         scooterToEdit?.let {
                             scooterViewModel.updateScooter(
@@ -1881,7 +2457,8 @@ fun MainScreen(
                                     scooterSerialNumber = serial,
                                     batteryId1 = batt1,
                                     batteryId2 = batt2,
-                                    additionalInfo = extra
+                                    additionalInfo = extra,
+                                    nextServiceAt = nextService
                                 )
                             )
                         }
@@ -1894,12 +2471,222 @@ fun MainScreen(
                             scooterSerialNumber = serial,
                             batteryId1 = batt1,
                             batteryId2 = batt2,
-                            additionalInfo = extra
+                            additionalInfo = extra,
+                            nextServiceAt = nextService
                         )
                     }
                     showAddScooterDialog = false
                     scooterToEdit = null
                 }
+            )
+        }
+
+        // ── Universal dangerous-action confirmation dialog (§10) ───────────
+        // Single dialog for renters/scooters/history delete. Shows item count
+        // and warning; user must explicitly confirm before destructive action.
+        if (showUniversalDeleteConfirm) {
+            val itemCount = when (pendingDeleteTab) {
+                0 -> selectedRenters.size
+                1 -> selectedScooters.size
+                7 -> if (selectedHistoryEventId != null) 1 else 0
+                else -> 0
+            }
+            val itemLabel = when (pendingDeleteTab) {
+                0 -> "arendator(lar)"
+                1 -> "skuter(lar)"
+                7 -> "tarix voqeasi"
+                else -> "element"
+            }
+            AlertDialog(
+                onDismissRequest = {
+                    showUniversalDeleteConfirm = false
+                    pendingDeleteTab = -1
+                },
+                title = { Text("Tasdiqlash") },
+                text = {
+                    Column {
+                        Text(
+                            "$itemCount $itemLabel o'chirilsinmi?",
+                            style = MaterialTheme.typography.bodyLarge,
+                            color = ClaudeText
+                        )
+                        Spacer(Modifier.height(8.dp))
+                        Text(
+                            "Ushbu amal bekor qilib bo'lmaydi. O'chirilgan elementlar " +
+                            "korzinaga ko'chiriladi va u yerdan qayta tiklanishi mumkin.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = ClaudeTextSecondary
+                        )
+                    }
+                },
+                confirmButton = {
+                    TextButton(
+                        onClick = {
+                            when (pendingDeleteTab) {
+                                0 -> {
+                                    selectedRenters.forEach { id -> viewModel.deleteRenter(id) }
+                                    selectedRenters = emptySet()
+                                }
+                                1 -> {
+                                    scooters.filter { it.id in selectedScooters }.forEach {
+                                        scooterViewModel.deleteScooter(it)
+                                    }
+                                    selectedScooters = emptySet()
+                                }
+                                7 -> selectedHistoryEventId?.let { id ->
+                                    historyTimelineViewModel.events.value.firstOrNull { it.id == id }?.let { ev ->
+                                        // Per user spec: if selected event is a DELETE-type
+                                        // timecode referencing an entity, permanently delete
+                                        // the referenced object (renter/scooter) AND the
+                                        // timeline event. Otherwise just archive the event.
+                                        val upper = ev.actionType.uppercase()
+                                        val isDeleteType = upper.contains("DELETE") || upper.contains("REMOVE") ||
+                                                           upper.contains("TERMINATE") || upper.contains("CANCEL")
+                                        if (isDeleteType && ev.entityId != null) {
+                                            coroutineScope.launch {
+                                                historyTimelineViewModel.permanentlyDeleteReferencedObject(ev)
+                                            }
+                                        } else {
+                                            historyTimelineViewModel.archiveSelected(ev)
+                                        }
+                                    }
+                                    selectedHistoryEventId = null
+                                }
+                            }
+                            showUniversalDeleteConfirm = false
+                            pendingDeleteTab = -1
+                        }
+                    ) { Text("O'chirish", color = StatusOverdue, fontWeight = FontWeight.Bold) }
+                },
+                dismissButton = {
+                    TextButton(onClick = {
+                        showUniversalDeleteConfirm = false
+                        pendingDeleteTab = -1
+                    }) { Text("Bekor qilish") }
+                }
+            )
+        }
+
+        // ── History: rename branch dialog (universal ✎ on tab 7) ─────────
+        // Lets the user rename a non-main branch that the selected event
+        // belongs to. The Main branch cannot be renamed via this dialog.
+        if (showHistoryBranchRenameDialog && historyBranchRenameId != null) {
+            AlertDialog(
+                onDismissRequest = {
+                    showHistoryBranchRenameDialog = false
+                    historyBranchRenameId = null
+                    historyBranchRenameText = ""
+                },
+                title = { Text("Tarmoqni qayta nomlash") },
+                text = {
+                    Column {
+                        Text(
+                            "Bu nom faqat tanlangan voqea tegishli bo'lgan tarmoqqa taalluqli.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = ClaudeTextSecondary
+                        )
+                        Spacer(Modifier.height(12.dp))
+                        OutlinedTextField(
+                            value = historyBranchRenameText,
+                            onValueChange = { historyBranchRenameText = it },
+                            label = { Text("Tarmoq nomi") },
+                            modifier = Modifier.fillMaxWidth(),
+                            singleLine = true
+                        )
+                    }
+                },
+                confirmButton = {
+                    TextButton(
+                        onClick = {
+                            historyBranchRenameId?.let { id ->
+                                historyTimelineViewModel.renameBranch(id, historyBranchRenameText)
+                            }
+                            showHistoryBranchRenameDialog = false
+                            historyBranchRenameId = null
+                            historyBranchRenameText = ""
+                        },
+                        enabled = historyBranchRenameText.isNotBlank()
+                    ) { Text("Saqlash") }
+                },
+                dismissButton = {
+                    TextButton(onClick = {
+                        showHistoryBranchRenameDialog = false
+                        historyBranchRenameId = null
+                        historyBranchRenameText = ""
+                    }) { Text("Bekor") }
+                }
+            )
+        }
+
+        if (showTerminationDialog) {
+            AlertDialog(
+                onDismissRequest = { showTerminationDialog = false },
+                title = { Text("Kontraktni tugatish") },
+                text = {
+                    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                        Text("Skuter bo'shatiladi. Qarzni saqlash yoki kechirishni tanlang.")
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Checkbox(
+                                checked = forgiveTerminationDebt,
+                                onCheckedChange = { forgiveTerminationDebt = it }
+                            )
+                            Text("Qolgan qarzni kechirish")
+                        }
+                        if (!forgiveTerminationDebt) {
+                            Text("Qarz yopilmaydi: u keyinchalik alohida to'lov bilan qabul qilinadi.", style = MaterialTheme.typography.bodySmall)
+                        }
+                    }
+                },
+                confirmButton = {
+                    TextButton(onClick = {
+                        viewModel.terminateRenters(selectedRenters, forgiveTerminationDebt)
+                        Toast.makeText(localContext, "Kontrakt tugatildi", Toast.LENGTH_SHORT).show()
+                        selectedRenters = emptySet()
+                        showTerminationDialog = false
+                    }) { Text("Tugatish") }
+                },
+                dismissButton = { TextButton(onClick = { showTerminationDialog = false }) { Text("Bekor qilish") } }
+            )
+        }
+
+        if (showVariablePaymentDialog) {
+            AlertDialog(
+                onDismissRequest = { showVariablePaymentDialog = false },
+                title = { Text("To'lovni qabul qilish") },
+                text = {
+                    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                        Text("${selectedRenters.size} mijoz uchun. Kiritilgan summa har bir mijozga alohida qo'llanadi.")
+                        OutlinedTextField(
+                            value = variablePaymentAmount,
+                            onValueChange = { variablePaymentAmount = it.filter { c -> c.isDigit() } },
+                            label = { Text("Summa (UZS)") },
+                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                            singleLine = true
+                        )
+                        OutlinedTextField(
+                            value = variablePaymentNote,
+                            onValueChange = { variablePaymentNote = it },
+                            label = { Text("Izoh") },
+                            singleLine = true
+                        )
+                    }
+                },
+                confirmButton = {
+                    TextButton(onClick = {
+                        val amount = variablePaymentAmount.toDoubleOrNull()
+                        if (amount != null && amount > 0) {
+                            selectedRenters.forEach { renterId ->
+                                viewModel.acceptVariablePayment(renterId, amount, variablePaymentNote)
+                            }
+                            Toast.makeText(localContext, "To'lov qabul qilindi", Toast.LENGTH_SHORT).show()
+                            selectedRenters = emptySet()
+                            showVariablePaymentDialog = false
+                        } else {
+                            Toast.makeText(localContext, "Musbat summa kiriting", Toast.LENGTH_SHORT).show()
+                        }
+                    }) { Text("Qabul qilish") }
+                },
+                dismissButton = { TextButton(onClick = { showVariablePaymentDialog = false }) { Text("Bekor qilish") } }
             )
         }
 
@@ -1929,7 +2716,35 @@ fun MainScreen(
                 }
             }
         }
-    }
+
+        // ── §9.B: Launcher curtain rendered as a SIBLING of the Column ──
+        // (NOT inside the Column). The Column above stacks the update banner
+        // + per-tab content, which would constrain the launcher's measured
+        // height to "whatever is left after the Column" — making it appear
+        // cropped. By rendering the launcher as a direct child of the
+        // content Box, it gets the FULL content area height (= screen −
+        // topbar − bottomnav) and overlays the entire page.
+        //
+        // Because the bottom bar from Scaffold lives on top of the content
+        // area, the launcher will visually slide UNDER the bottom nav when
+        // dragged down — exactly the spec'd behavior. The launcher is a
+        // free-drag panel: where the user releases, it stays. No snap
+        // points. See LauncherScreen for the full behavior contract.
+        if (showLauncher) {
+            val density = LocalDensity.current
+            // Kept for source compatibility — LauncherScreen now uses
+            // BoxWithConstraints to get the real container height, so this
+            // value is no longer authoritative.
+            val bottomNavHeightPx = with(density) { 72.dp.toPx() }
+            com.example.ui.components.LauncherScreen(
+                state = launcherState,
+                onPageClick = onLauncherPageClick,
+                bottomNavHeightPx = bottomNavHeightPx
+            )
+        }
+
+        }   // ← end of content Box
+    }   // ← end of Scaffold
 }
 
 /* ============================================================================
@@ -1947,6 +2762,8 @@ fun RenterTable(
     sortState: TableSortState,
     columnVisibility: Map<String, Boolean>,
     latestContractByRenter: Map<Int, com.example.data.ContractHistoryEntry>,
+    turnoverByRenter: Map<Int, Double> = emptyMap(),
+    paidByRenter: Map<Int, Double> = emptyMap(),
     onSortClick: (String) -> Unit,
     onSelect: (Int, Boolean) -> Unit,
     onClick: (Renter) -> Unit
@@ -1962,6 +2779,7 @@ fun RenterTable(
     val showScooter  = isColVisible("col_scooter")
     val showStart    = isColVisible("col_start")
     val showEnd      = isColVisible("col_end")
+    val showTurnover = isColVisible("col_turnover")
     val showBalance  = isColVisible("col_balance")
     val showPassport = isColVisible("col_passport")
     val showAddress  = isColVisible("col_address")
@@ -1976,11 +2794,13 @@ fun RenterTable(
     // а пользователь скроллит таблицу по горизонтали если колонок много.
     val hasAnyExtraVisible = showPassport || showAddress || showPinfl
 
+    val wNum      = 40.dp    // № — порядковый номер строки
     val wName     = 160.dp   // увеличено с 110 — вмещает «Имя Фамилия»
     val wPhone    = 115.dp
     val wScoot    = 90.dp
     val wStart    = 90.dp
     val wEnd      = 90.dp
+    val wTurnover = 95.dp   // товарооборот — сумма всех контрактов
     val wDebt     = 80.dp
     val wPassport = 115.dp
     val wAddress  = 150.dp
@@ -1998,11 +2818,13 @@ fun RenterTable(
                     .padding(horizontal = 8.dp, vertical = 4.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
+                NonSortableHeaderCellFixed(Icons.Default.Numbers, wNum, "№")
                 if (showName)     SortableHeaderCellFixed(Icons.Default.Person,               wName,     "col_name",     sortState) { onSortClick("col_name") }
                 if (showPhone)    SortableHeaderCellFixed(Icons.Default.Phone,                wPhone,    "col_phone",    sortState) { onSortClick("col_phone") }
                 if (showScooter)  SortableHeaderCellFixed(Icons.Default.DirectionsBike,       wScoot,    "col_scooter",  sortState) { onSortClick("col_scooter") }
                 if (showStart)    SortableHeaderCellFixed(Icons.Default.CalendarToday,        wStart,    "col_start",    sortState) { onSortClick("col_start") }
                 if (showEnd)      SortableHeaderCellFixed(Icons.Default.Event,                wEnd,      "col_end",      sortState) { onSortClick("col_end") }
+                if (showTurnover) NonSortableHeaderCellFixed(Icons.Default.AccountBalanceWallet, wTurnover, "Tovaroborot")
                 if (showBalance)  SortableHeaderCellFixed(Icons.Default.AccountBalanceWallet, wDebt,     "col_balance",  sortState) { onSortClick("col_balance") }
                 if (showPassport) SortableHeaderCellFixed(Icons.Default.CreditCard,           wPassport, "col_passport", sortState) { onSortClick("col_passport") }
                 if (showAddress)  SortableHeaderCellFixed(Icons.Default.Home,                 wAddress,  "col_address",  sortState) { onSortClick("col_address") }
@@ -2028,7 +2850,7 @@ fun RenterTable(
         }
 
         LazyColumn(modifier = Modifier.fillMaxSize()) {
-            items(renters, key = { it.id }) { renter ->
+            itemsIndexed(renters, key = { _, it -> it.id }) { idx, renter ->
                 val isSelected = selected.contains(renter.id)
                 val status = statusOf(renter)
                 val sColor = statusColor(status)
@@ -2056,6 +2878,14 @@ fun RenterTable(
                             .padding(horizontal = 8.dp, vertical = 10.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
+                        Text(
+                            "${idx + 1}",
+                            modifier = Modifier.width(wNum).padding(horizontal = 4.dp),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = ClaudeTextSecondary,
+                            fontWeight = FontWeight.Medium,
+                            maxLines = 1
+                        )
                         // Mijoz — имя + фамилия. maxLines=2 чтобы «Akmal Karimov»
                         // переносилось на вторую строку вместо обрезки «Akmal…».
                         if (showName) {
@@ -2072,10 +2902,12 @@ fun RenterTable(
                                 overflow = TextOverflow.Visible
                             )
                         }
-                        // Tel
+                        // Tel — masked per §10 (full phone visible on detail screen)
                         if (showPhone) {
+                            val displayPhone = if (PrivacyPolicy.MASK_PHONES_IN_TABLES)
+                                maskPhone(renter.phoneNumber) else renter.phoneNumber
                             Text(
-                                renter.phoneNumber,
+                                displayPhone,
                                 modifier = Modifier
                                     .width(wPhone)
                                     .padding(horizontal = 4.dp),
@@ -2134,15 +2966,43 @@ fun RenterTable(
                                 overflow = TextOverflow.Visible
                             )
                         }
-                        // Balans
+                        // Tovaroborot — сумма сумм всех контрактов арендатора.
+                        // Вычисляется из истории контрактов (CREATED + AUTO_RENEW).
+                        if (showTurnover) {
+                            val turnover = turnoverByRenter[renter.id] ?: 0.0
+                            Text(
+                                turnover.toLong().toString(),
+                                modifier = Modifier
+                                    .width(wTurnover)
+                                    .padding(horizontal = 4.dp),
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = ClaudeText,
+                                fontWeight = FontWeight.Medium,
+                                textAlign = TextAlign.End,
+                                maxLines = 2,
+                                softWrap = true,
+                                overflow = TextOverflow.Visible
+                            )
+                        }
+                        // Balans = paid − turnover: <0 долг, >0 аванс, =0 расчёт закрыт.
+                        // Источник: turnoverByRenter и paidByRenter (из contract_history).
+                        // Fallback на renter.balance если контракт-история недоступна.
                         if (showBalance) {
+                            val computedBalance =
+                                (paidByRenter[renter.id] ?: 0.0) -
+                                    (turnoverByRenter[renter.id] ?: 0.0)
+                            val displayBalance = if (turnoverByRenter.containsKey(renter.id)) {
+                                computedBalance
+                            } else {
+                                renter.balance
+                            }
                             val balanceColor = when {
-                                renter.balance < 0 -> StatusOverdue
-                                renter.balance > 0 -> StatusOk
+                                displayBalance < 0 -> StatusOverdue
+                                displayBalance > 0 -> StatusOk
                                 else -> ClaudeText
                             }
                             Text(
-                                renter.balance.toLong().toString(),
+                                displayBalance.toLong().toString(),
                                 modifier = Modifier
                                     .width(wDebt)
                                     .padding(horizontal = 4.dp),
@@ -2156,9 +3016,12 @@ fun RenterTable(
                             )
                         }
                         // ── Опциональные колонки (показываются если включены) ─
+                        // §10: mask passport/address/PINFL in tables — full info on detail screen
                         if (showPassport) {
+                            val displayPassport = if (PrivacyPolicy.MASK_PASSPORT_IN_TABLES)
+                                maskIdentifier(renter.passportData) else renter.passportData.ifBlank { "—" }
                             Text(
-                                renter.passportData.ifBlank { "—" },
+                                displayPassport,
                                 modifier = Modifier.width(wPassport).padding(horizontal = 4.dp),
                                 style = MaterialTheme.typography.bodySmall,
                                 color = ClaudeText,
@@ -2168,8 +3031,10 @@ fun RenterTable(
                             )
                         }
                         if (showAddress) {
+                            val displayAddress = if (PrivacyPolicy.MASK_ADDRESS_IN_TABLES)
+                                maskAddress(renter.address) else renter.address.ifBlank { "—" }
                             Text(
-                                renter.address.ifBlank { "—" },
+                                displayAddress,
                                 modifier = Modifier.width(wAddress).padding(horizontal = 4.dp),
                                 style = MaterialTheme.typography.bodySmall,
                                 color = ClaudeText,
@@ -2179,8 +3044,10 @@ fun RenterTable(
                             )
                         }
                         if (showPinfl) {
+                            val displayPinfl = if (PrivacyPolicy.MASK_PINFL_IN_TABLES)
+                                maskIdentifier(renter.pinfl) else renter.pinfl.ifBlank { "—" }
                             Text(
-                                renter.pinfl.ifBlank { "—" },
+                                displayPinfl,
                                 modifier = Modifier.width(wPinfl).padding(horizontal = 4.dp),
                                 style = MaterialTheme.typography.bodySmall,
                                 color = ClaudeText,
@@ -2335,6 +3202,24 @@ fun RenterFormDialog(
     var phone by remember {
         mutableStateOf(initialRenter?.phoneNumber?.filter { it.isDigit() }?.takeLast(9) ?: "")
     }
+
+    // ── Real-time duplicate detection ──────────────────────────────────
+    // As the user types, check if any OTHER renter (excluding the one being
+    // edited, if any) has the same name (case-insensitive) or the same phone.
+    // Show a red warning below the field so the user sees the conflict BEFORE
+    // pressing Save. This complements the hard block in RenterViewModel.addRenter.
+    val excludeId = initialRenter?.id ?: 0
+    val nameConflict = remember(name) {
+        name.trim().isNotBlank() && activeRenters.any {
+            it.id != excludeId && it.name.trim().equals(name.trim(), ignoreCase = true)
+        }
+    }
+    val phoneConflict = remember(phone) {
+        val p = phone.trim()
+        p.length >= 7 && activeRenters.any {
+            it.id != excludeId && it.phoneNumber.filter { c -> c.isDigit() }.takeLast(9) == p
+        }
+    }
     var debt by remember {
         // Показываем долг = -balance (если balance < 0), иначе debtAmount
         val displayDebt = if ((initialRenter?.balance ?: 0.0) < 0) -initialRenter!!.balance
@@ -2476,9 +3361,13 @@ fun RenterFormDialog(
                     label = { Text("To'liq ism (ФИШ)") },
                     modifier = Modifier.fillMaxWidth(),
                     shape = RoundedCornerShape(8.dp),
+                    isError = nameConflict,
+                    supportingText = if (nameConflict) {
+                        { Text("⚠ Bunday ismli arendator allaqachon mavjud", color = Color(0xFFC62828), fontSize = 12.sp) }
+                    } else null,
                     colors = OutlinedTextFieldDefaults.colors(
-                        unfocusedBorderColor = ClaudeDivider,
-                        focusedBorderColor = ClaudeTextSecondary
+                        unfocusedBorderColor = if (nameConflict) Color(0xFFC62828) else ClaudeDivider,
+                        focusedBorderColor = if (nameConflict) Color(0xFFC62828) else ClaudeTextSecondary
                     )
                 )
                 OutlinedTextField(
@@ -2490,6 +3379,10 @@ fun RenterFormDialog(
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Phone),
                     visualTransformation = UzPhoneVisualTransformation(),
                     modifier = Modifier.fillMaxWidth(),
+                    isError = phoneConflict,
+                    supportingText = if (phoneConflict) {
+                        { Text("⚠ Bu raqam boshqa arendatorga biriktirilgan", color = Color(0xFFC62828), fontSize = 12.sp) }
+                    } else null,
                     shape = RoundedCornerShape(8.dp)
                 )
 
@@ -2509,20 +3402,184 @@ fun RenterFormDialog(
                 // и используются в addRenter. Если группы пусты — startTimestamp
                 // остаётся как сегодня (default) и работает автоматическая
                 // логика по дате.
+                // Load existing rent periods for this renter (edit mode)
+                var existingPeriods by remember { mutableStateOf<List<com.example.data.RentPeriod>>(emptyList()) }
+                val localContext = LocalContext.current
+                
+                LaunchedEffect(initialRenter?.id) {
+                    if (initialRenter != null) {
+                        kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                            val db = com.example.data.AppDatabase.getDatabase(localContext)
+                            existingPeriods = db.rentPeriodDao().getAllForRenter(initialRenter.id)
+                        }
+                    }
+                }
+                
+                // Day status callback for showing existing contracts
+                val dayStatusFor: (Long) -> DayStatus = remember(existingPeriods) {
+                    { dayMs: Long ->
+                        val dayStart = dayMs - (dayMs % (24L * 60 * 60 * 1000))
+                        val dayEnd = dayStart + (24L * 60 * 60 * 1000)
+                        
+                        val matchingPeriod = existingPeriods.firstOrNull { period ->
+                            period.startsAt < dayEnd && period.endsAt > dayStart
+                        }
+                        
+                        when (matchingPeriod?.status) {
+                            com.example.data.RentPeriod.STATUS_PAID,
+                            com.example.data.RentPeriod.STATUS_CLOSED -> DayStatus.PAID
+                            com.example.data.RentPeriod.STATUS_PARTIALLY_PAID -> DayStatus.PARTIAL
+                            com.example.data.RentPeriod.STATUS_SCHEDULED -> DayStatus.SCHEDULED
+                            com.example.data.RentPeriod.STATUS_SUSPENDED_REPAIR -> DayStatus.SUSPENDED
+                            com.example.data.RentPeriod.STATUS_REPAIR_BREAK -> DayStatus.REPAIR_BREAK
+                            com.example.data.RentPeriod.STATUS_OVERDUE,
+                            com.example.data.RentPeriod.STATUS_CLOSED_WITH_DEBT,
+                            com.example.data.RentPeriod.STATUS_ACTIVE -> DayStatus.UNPAID
+                            else -> DayStatus.EMPTY
+                        }
+                    }
+                }
+                
+                // State for long-press repair period creation
+                var repairStartDate by remember { mutableStateOf<Long?>(null) }
+                var showRepairConfirmDialog by remember { mutableStateOf(false) }
+                var repairEndDate by remember { mutableStateOf<Long?>(null) }
+                
+                // Repair period confirmation dialog.
+                // Creates a real RentPeriod with STATUS_REPAIR_BREAK — the renter
+                // keeps the scooter but pays no rental charge for this interval.
+                // Used when the scooter is in accident repair (renter fixes it
+                // themselves) or when we send our own scooters to the shop.
+                if (showRepairConfirmDialog && repairStartDate != null && initialRenter != null) {
+                    val dateFmt = remember { java.text.SimpleDateFormat("dd.MM.yyyy", java.util.Locale.getDefault()) }
+                    AlertDialog(
+                        onDismissRequest = {
+                            showRepairConfirmDialog = false
+                            repairStartDate = null
+                            repairEndDate = null
+                        },
+                        title = { Text("Ta'mir davri yaratish") },
+                        text = {
+                            Column {
+                                Text("Bu davr uchun ijara to'lovi olinmaydi.")
+                                Text("Skuter shu ijarachi-da qoladi, faqat to'lov to'xtatiladi.")
+                                Spacer(Modifier.height(8.dp))
+                                Text(
+                                    "Davr: ${dateFmt.format(java.util.Date(repairStartDate!!))} - ${dateFmt.format(java.util.Date(repairEndDate ?: repairStartDate!!))}",
+                                    fontWeight = FontWeight.Bold
+                                )
+                            }
+                        },
+                        confirmButton = {
+                            TextButton(
+                                onClick = {
+                                    val renterId = initialRenter!!.id
+                                    val scooterId = initialRenter.scooterId
+                                    val startMs = repairStartDate!!
+                                    val endMs = repairEndDate ?: (startMs + 24L * 60 * 60 * 1000)
+                                    val appCtx = localContext
+                                    kotlinx.coroutines.MainScope().launch {
+                                        kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                                            val db = com.example.data.AppDatabase.getDatabase(appCtx)
+                                            // Find the renter's currently active or scheduled period
+                                            // to use as the parent (so the repair break is linked).
+                                            val parent = db.rentPeriodDao()
+                                                .getAllForRenter(renterId)
+                                                .firstOrNull {
+                                                    it.status in com.example.data.RentPeriod.ACTIVE_STATUSES &&
+                                                    it.startsAt <= startMs && it.endsAt >= endMs
+                                                }
+                                            val repairPeriod = com.example.data.RentPeriod(
+                                                renterId = renterId,
+                                                scooterId = scooterId,
+                                                startsAt = startMs,
+                                                endsAt = endMs,
+                                                chargeMinor = 0L,
+                                                paidMinor = 0L,
+                                                status = com.example.data.RentPeriod.STATUS_REPAIR_BREAK,
+                                                parentPeriodId = parent?.id,
+                                                suspensionReason = "Ta'mir davri (foydalanuvchi tomonidan yaratilgan)"
+                                            )
+                                            db.rentPeriodDao().insert(repairPeriod)
+                                            // Refresh existingPeriods so the calendar shows the
+                                            // new repair-break block immediately (orange tint).
+                                            existingPeriods = db.rentPeriodDao().getAllForRenter(renterId)
+                                        }
+                                    }
+                                    showRepairConfirmDialog = false
+                                    repairStartDate = null
+                                    repairEndDate = null
+                                }
+                            ) { Text("Yaratish") }
+                        },
+                        dismissButton = {
+                            TextButton(
+                                onClick = {
+                                    showRepairConfirmDialog = false
+                                    repairStartDate = null
+                                    repairEndDate = null
+                                }
+                            ) { Text("Bekor") }
+                        }
+                    )
+                }
+                
                 ContractCalendar(
                     editable = true,
                     groups = contractGroups,
                     activeGroupId = activeGroupId,
                     onGroupsChange = { contractGroups = it },
-                    onActiveGroupChange = { activeGroupId = it }
+                    onActiveGroupChange = { activeGroupId = it },
+                    dayStatusFor = if (isEdit) dayStatusFor else { _ -> DayStatus.EMPTY },
+                    onCreateRepairPeriod = if (isEdit) { start, end ->
+                        repairStartDate = start
+                        repairEndDate = end
+                        showRepairConfirmDialog = true
+                    } else null
                 )
 
                 if (isEdit) {
-                    Text(
-                        "Holat: ${if (initialRenter?.isReturned == true) "Qaytarilgan" else "Faol"}",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = ClaudeTextSecondary
-                    )
+                    // ── Активный/пассивный статус (§4) ───────────────────────────
+                    // Toggle позволяет переключать арендатора между «Faol» (активен)
+                    // и «Qaytarilgan» (пассивен/возвращён) прямо в форме редактирования.
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(vertical = 4.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            "Holat:",
+                            style = MaterialTheme.typography.labelLarge,
+                            color = ClaudeText
+                        )
+                        Spacer(Modifier.width(12.dp))
+                        FilterChip(
+                            selected = isActive,
+                            onClick = { isActive = true },
+                            label = { Text("Faol") },
+                            leadingIcon = if (isActive) {
+                                { Icon(Icons.Default.Check, contentDescription = null, modifier = Modifier.size(16.dp)) }
+                            } else null,
+                            colors = FilterChipDefaults.filterChipColors(
+                                selectedContainerColor = StatusOkBg,
+                                selectedLabelColor = StatusOk
+                            )
+                        )
+                        Spacer(Modifier.width(8.dp))
+                        FilterChip(
+                            selected = !isActive,
+                            onClick = { isActive = false },
+                            label = { Text("Qaytarilgan") },
+                            leadingIcon = if (!isActive) {
+                                { Icon(Icons.Default.Close, contentDescription = null, modifier = Modifier.size(16.dp)) }
+                            } else null,
+                            colors = FilterChipDefaults.filterChipColors(
+                                selectedContainerColor = StatusArchivedBg,
+                                selectedLabelColor = StatusArchived
+                            )
+                        )
+                    }
                 }
 
                 ExposedDropdownMenuBox(
@@ -2892,18 +3949,24 @@ fun SettingsScreen(
     showTopBar: Boolean = true
 ) {
     var template by remember { mutableStateOf(currentTemplate) }
-    var weekly by remember {
-        mutableStateOf(if (currentWeeklyPrice > 0) currentWeeklyPrice.toString() else "")
-    }
-    var monthly by remember {
-        mutableStateOf(if (currentMonthlyPrice > 0) currentMonthlyPrice.toString() else "")
-    }
     // SMS avto-yuborish rejimi — darhol saqlanadi (Save bosishni kutmaydi).
     var smsAutoSend by remember { mutableStateOf(currentSmsAutoSend) }
     val settingsContext = LocalContext.current
     val settingsRepo = remember { com.example.data.SettingsRepository(settingsContext) }
+    // Daily price is the single source of truth
+    var dailyPrice by remember {
+        mutableStateOf(
+            settingsRepo.dailyPrice.let {
+                if (it > 0) it.toString() else com.example.data.SettingsRepository.DEFAULT_DAILY_PRICE.toString()
+            }
+        )
+    }
+    // Computed values for display
+    val computedWeekly = (dailyPrice.toDoubleOrNull() ?: 0.0) * 7
+    val computedMonthly = (dailyPrice.toDoubleOrNull() ?: 0.0) * 30
     var paymeLink by remember { mutableStateOf(settingsRepo.paymeLink) }
     var callCenter by remember { mutableStateOf(settingsRepo.callCenter) }
+    // Partial period mode removed - using simple daily pricing
     // ── Поля для страницы Отчёты: стоимость скутера и курс USD ──────────
     var scooterPriceUsd by remember {
         mutableStateOf(settingsRepo.scooterPriceUsd.let {
@@ -2918,9 +3981,9 @@ fun SettingsScreen(
 
     // ── Автосохранение — поля сохраняются автоматически при изменении,
     // отдельные кнопки «Saqla» больше не нужны (форма живая).
-    LaunchedEffect(template, weekly, monthly, paymeLink, callCenter, scooterPriceUsd, usdToUzsRate) {
-        val wPrice = weekly.toDoubleOrNull() ?: 0.0
-        val mPrice = monthly.toDoubleOrNull() ?: 0.0
+    LaunchedEffect(template, dailyPrice, paymeLink, callCenter, scooterPriceUsd, usdToUzsRate) {
+        val dPrice = dailyPrice.toDoubleOrNull()
+            ?: com.example.data.SettingsRepository.DEFAULT_DAILY_PRICE
         settingsRepo.paymeLink = paymeLink.trim().ifBlank {
             com.example.data.SettingsRepository.DEFAULT_PAYME_LINK
         }
@@ -2932,7 +3995,9 @@ fun SettingsScreen(
             ?: com.example.data.SettingsRepository.DEFAULT_SCOOTER_PRICE_USD
         settingsRepo.usdToUzsRate = usdToUzsRate.toDoubleOrNull()
             ?: com.example.data.SettingsRepository.DEFAULT_USD_TO_UZS_RATE
-        onSave(template, wPrice, mPrice, paymeLink, callCenter)
+        // Передаём daily × 7 / daily × 30 в onSave для совместимости со
+        // старым API (SettingsViewModel.updatePrices(weekly, monthly)).
+        onSave(template, dPrice * 7, dPrice * 30, paymeLink, callCenter)
     }
 
     // ── Storage Access Framework launchers для экспорта/импорта Excel ────
@@ -2990,26 +4055,53 @@ fun SettingsScreen(
                 .padding(horizontal = 16.dp),
             verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
+                // ── §9.A: Текстовую карточку «Ilova versiyasi» убрали из верха
+                // настроек по запросу пользователя — версия не нужна на этой
+                // странице. Информация об обновлениях остаётся доступной через
+                // кнопку «Tekshirish» ниже (updateInfo/isUpToDate).
+
                 Column {
-                    Text("Tariflar", style = MaterialTheme.typography.labelMedium, color = ClaudeText)
+                    Text("Ijara narxi", style = MaterialTheme.typography.labelMedium, color = ClaudeText)
                     Spacer(modifier = Modifier.height(8.dp))
                     OutlinedTextField(
-                        value = weekly,
-                        onValueChange = { weekly = it },
-                        label = { Text("Haftalik tarif narxi") },
+                        value = dailyPrice,
+                        onValueChange = { 
+                            dailyPrice = it
+                            // Auto-save daily price
+                            it.toDoubleOrNull()?.let { price ->
+                                settingsRepo.dailyPrice = price
+                            }
+                        },
+                        label = { Text("Kunlik ijara narxi (UZS)") },
                         keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
                         modifier = Modifier.fillMaxWidth(),
                         shape = RoundedCornerShape(8.dp)
                     )
                     Spacer(modifier = Modifier.height(8.dp))
-                    OutlinedTextField(
-                        value = monthly,
-                        onValueChange = { monthly = it },
-                        label = { Text("Oylik tarif narxi") },
-                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                    // Show computed prices
+                    Surface(
                         modifier = Modifier.fillMaxWidth(),
+                        color = ClaudeAccentBg,
                         shape = RoundedCornerShape(8.dp)
-                    )
+                    ) {
+                        Column(modifier = Modifier.padding(12.dp)) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween
+                            ) {
+                                Text("Haftalik (7 kun):", style = MaterialTheme.typography.bodyMedium, color = ClaudeTextSecondary)
+                                Text("${computedWeekly.toLong()} UZS", style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Bold, color = ClaudeText)
+                            }
+                            Spacer(modifier = Modifier.height(4.dp))
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween
+                            ) {
+                                Text("Oylik (30 kun):", style = MaterialTheme.typography.bodyMedium, color = ClaudeTextSecondary)
+                                Text("${computedMonthly.toLong()} UZS", style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Bold, color = ClaudeText)
+                            }
+                        }
+                    }
                     Spacer(modifier = Modifier.height(8.dp))
                     OutlinedTextField(
                         value = scooterPriceUsd,
@@ -3068,6 +4160,84 @@ fun SettingsScreen(
                         shape = RoundedCornerShape(8.dp),
                         singleLine = true
                     )
+                }
+
+                HorizontalDivider()
+
+                // ── Mistral AI API kaliti ──────────────────────────────────
+                // Foydalanuvchi o'z Mistral API kalitini shu yerda kiritadi.
+                // Kalit skaner OCR va AI komanda generatsiyasi uchun ishlatiladi.
+                // Standart kalit allaqachon kiritilgan — foydalanuvchi xohlasa
+                // o'zgartirishi mumkin.
+                val mistralContext = LocalContext.current
+                val mistralSettingsRepo = remember { com.example.data.SettingsRepository(mistralContext) }
+                var mistralApiKey by remember { mutableStateOf(mistralSettingsRepo.mistralApiKey) }
+                var mistralKeyVisible by remember { mutableStateOf(false) }
+
+                Column {
+                    Text(
+                        "AI Skaner (Mistral API)",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = ClaudeText
+                    )
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Text(
+                        "Skaner OCR ishlashi uchun Mistral AI API kaliti kerak. " +
+                            "Standart kalit allaqachon kiritilgan. O'z kalitingizni " +
+                            "ishlatmoqchi bo'lsangiz, uni shu yerda almashtiring. " +
+                            "Kalit olinadi: console.mistral.ai → API Keys",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = ClaudeTextSecondary
+                    )
+                    Spacer(modifier = Modifier.height(8.dp))
+                    OutlinedTextField(
+                        value = mistralApiKey,
+                        onValueChange = {
+                            mistralApiKey = it
+                            mistralSettingsRepo.mistralApiKey = it
+                        },
+                        label = { Text("Mistral API kaliti") },
+                        modifier = Modifier.fillMaxWidth(),
+                        shape = RoundedCornerShape(8.dp),
+                        singleLine = true,
+                        visualTransformation = if (mistralKeyVisible)
+                            VisualTransformation.None else PasswordVisualTransformation(),
+                        trailingIcon = {
+                            IconButton(onClick = { mistralKeyVisible = !mistralKeyVisible }) {
+                                Icon(
+                                    imageVector = if (mistralKeyVisible)
+                                        Icons.Default.VisibilityOff else Icons.Default.Visibility,
+                                    contentDescription = if (mistralKeyVisible)
+                                        "Yashirish" else "Ko'rsatish",
+                                    tint = ClaudeTextSecondary
+                                )
+                            }
+                        }
+                    )
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        SecondaryButton(
+                            label = "Standartga qaytarish",
+                            icon = Icons.Default.Refresh,
+                            onClick = {
+                                mistralApiKey = com.example.data.SettingsRepository.DEFAULT_MISTRAL_API_KEY
+                                mistralSettingsRepo.mistralApiKey = mistralApiKey
+                            },
+                            modifier = Modifier.weight(1f)
+                        )
+                        SecondaryButton(
+                            label = "Tozalash",
+                            icon = Icons.Default.Clear,
+                            onClick = {
+                                mistralApiKey = ""
+                                mistralSettingsRepo.mistralApiKey = ""
+                            },
+                            modifier = Modifier.weight(1f)
+                        )
+                    }
                 }
 
                 HorizontalDivider()
@@ -3553,21 +4723,35 @@ class UzPhoneVisualTransformation : VisualTransformation {
    ТАБЛИЦА СКУТЕРОВ (с колонкой состояния)
    ============================================================================ */
 
-private enum class ScooterStatus { RENTED, IN_BASE }
+private enum class ScooterStatus { AVAILABLE, RESERVED, RENTED, REPAIR, SERVICE, RETIRED }
 
-private fun scooterStatusOf(scooterId: Int, renters: List<Renter>): ScooterStatus {
-    val active = renters.any { it.scooterId == scooterId && !it.isReturned }
-    return if (active) ScooterStatus.RENTED else ScooterStatus.IN_BASE
+private fun scooterStatusOf(scooter: Scooter, renters: List<Renter>): ScooterStatus {
+    return when (scooter.lifecycleStatus) {
+        Scooter.STATUS_RESERVED -> ScooterStatus.RESERVED
+        Scooter.STATUS_REPAIR -> ScooterStatus.REPAIR
+        Scooter.STATUS_SERVICE -> ScooterStatus.SERVICE
+        Scooter.STATUS_RETIRED -> ScooterStatus.RETIRED
+        Scooter.STATUS_RENTED -> ScooterStatus.RENTED
+        else -> if (renters.any { it.scooterId == scooter.id && !it.isReturned }) ScooterStatus.RENTED else ScooterStatus.AVAILABLE
+    }
 }
 
 private fun scooterStatusColor(s: ScooterStatus): Color = when (s) {
-    ScooterStatus.RENTED  -> StatusOverdue
-    ScooterStatus.IN_BASE -> StatusOk
+    ScooterStatus.RENTED -> Color(0xFF2563EB)
+    ScooterStatus.RESERVED -> Color(0xFFF59E0B)
+    ScooterStatus.REPAIR -> StatusOverdue
+    ScooterStatus.SERVICE -> Color(0xFF7C3AED)
+    ScooterStatus.RETIRED -> StatusArchived    // grey — decommissioned/archived
+    ScooterStatus.AVAILABLE -> StatusOk
 }
 
 private fun scooterStatusLabel(s: ScooterStatus): String = when (s) {
-    ScooterStatus.RENTED  -> "Ijarada"
-    ScooterStatus.IN_BASE -> "Bazada"
+    ScooterStatus.RENTED -> "Ijarada"
+    ScooterStatus.RESERVED -> "Rezervda"
+    ScooterStatus.REPAIR -> "Ta'mirda"
+    ScooterStatus.SERVICE -> "Servisda"
+    ScooterStatus.RETIRED -> "Hisobdan chiqarilgan"
+    ScooterStatus.AVAILABLE -> "Bo'sh"
 }
 
 @OptIn(ExperimentalFoundationApi::class)
@@ -3599,6 +4783,7 @@ fun ScooterTable(
     // ВСЕГДА используем fixed widths + горизонтальный скролл — даже когда
     // скрыты все extra-колонки. Это гарантирует что имя скутера не будет
     // обрезано (maxLines=2 + softWrap позволяют переносу на 2 строки).
+    val wNum    = 40.dp    // № — порядковый номер строки
     val wName   = 140.dp   // увеличено с 110 — вмещает «Skillmax-001» с запасом
     val wDoc    = 115.dp
     val wVin    = 140.dp
@@ -3622,6 +4807,7 @@ fun ScooterTable(
                     .padding(horizontal = 8.dp, vertical = 4.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
+                NonSortableHeaderCellFixed(Icons.Default.Numbers, wNum, "№")
                 if (showName)   SortableHeaderCellFixed(Icons.Default.Label,         wName,   "col_name",  sortState) { onSortClick("col_name") }
                 if (showDoc)    NonSortableHeaderCellFixed(Icons.Default.CreditCard,   wDoc,    "Hujjat raqami")
                 if (showVin)    NonSortableHeaderCellFixed(Icons.Default.Numbers,      wVin,    "VIN")
@@ -3652,9 +4838,9 @@ fun ScooterTable(
         }
 
         LazyColumn(modifier = Modifier.fillMaxSize()) {
-            items(scooters, key = { it.id }) { scooter ->
+            itemsIndexed(scooters, key = { _, it -> it.id }) { idx, scooter ->
                 val isSelected = selected.contains(scooter.id)
-                val status = scooterStatusOf(scooter.id, renters)
+                val status = scooterStatusOf(scooter, renters)
                 val sColor = scooterStatusColor(status)
 
                 Row(
@@ -3678,6 +4864,14 @@ fun ScooterTable(
                             .padding(horizontal = 8.dp, vertical = 12.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
+                        Text(
+                            "${idx + 1}",
+                            modifier = Modifier.width(wNum).padding(horizontal = 4.dp),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = ClaudeTextSecondary,
+                            fontWeight = FontWeight.Medium,
+                            maxLines = 1
+                        )
                         if (showName) {
                             Text(
                                 scooter.name,
@@ -3705,7 +4899,8 @@ fun ScooterTable(
                         }
                         if (showVin) {
                             Text(
-                                scooter.vinNumber.ifBlank { "—" },
+                                // §10: mask VIN/engine/serial in table — full info on detail screen
+                                if (PrivacyPolicy.MASK_PASSPORT_IN_TABLES) maskIdentifier(scooter.vinNumber) else scooter.vinNumber.ifBlank { "—" },
                                 modifier = Modifier.width(wVin).padding(horizontal = 4.dp),
                                 style = MaterialTheme.typography.bodySmall,
                                 color = ClaudeText,
@@ -3716,7 +4911,7 @@ fun ScooterTable(
                         }
                         if (showEngine) {
                             Text(
-                                scooter.engineNumber.ifBlank { "—" },
+                                if (PrivacyPolicy.MASK_PASSPORT_IN_TABLES) maskIdentifier(scooter.engineNumber) else scooter.engineNumber.ifBlank { "—" },
                                 modifier = Modifier.width(wEngine).padding(horizontal = 4.dp),
                                 style = MaterialTheme.typography.bodySmall,
                                 color = ClaudeText,
@@ -3727,7 +4922,7 @@ fun ScooterTable(
                         }
                         if (showSerial) {
                             Text(
-                                scooter.scooterSerialNumber.ifBlank { "—" },
+                                if (PrivacyPolicy.MASK_PASSPORT_IN_TABLES) maskIdentifier(scooter.scooterSerialNumber) else scooter.scooterSerialNumber.ifBlank { "—" },
                                 modifier = Modifier.width(wSerial).padding(horizontal = 4.dp),
                                 style = MaterialTheme.typography.bodySmall,
                                 color = ClaudeText,
@@ -3801,6 +4996,124 @@ fun ScooterTable(
 }
 
 /**
+ * Upcoming maintenance banner (§8: 'list of nearest maintenances').
+ *
+ * Shows scooters whose nextServiceAt is within the next 7 days OR overdue.
+ * Collapsible. Tap a scooter card → calls onScooterClick (typically opens
+ * scooter history screen where the service date can be edited).
+ *
+ * Color coding per §11 unified status language:
+ *   - red: overdue (nextServiceAt <= now)
+ *   - amber: due soon (nextServiceAt within 7 days)
+ *   - hidden: no scooters need service
+ */
+@Composable
+fun UpcomingMaintenanceBanner(
+    scooters: List<Scooter>,
+    onScooterClick: (Scooter) -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val now = System.currentTimeMillis()
+    val weekMs = 7L * 24 * 60 * 60 * 1000
+    val dueScooters = remember(scooters, now) {
+        scooters
+            .filter { it.nextServiceAt != null && it.lifecycleStatus != Scooter.STATUS_RETIRED }
+            .filter { it.nextServiceAt!! <= now + weekMs }
+            .sortedBy { it.nextServiceAt!! }
+    }
+    if (dueScooters.isEmpty()) return
+    var expanded by remember { mutableStateOf(true) }
+    val dateFmt = remember { SimpleDateFormat("dd.MM.yyyy", Locale.getDefault()) }
+
+    Surface(
+        color = StatusReservedBg,
+        shape = RoundedCornerShape(12.dp),
+        modifier = modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 6.dp),
+        border = androidx.compose.foundation.BorderStroke(1.dp, StatusReserved)
+    ) {
+        Column(modifier = Modifier.padding(12.dp)) {
+            Row(
+                modifier = Modifier.fillMaxWidth().clickable { expanded = !expanded },
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Icon(
+                    imageVector = Icons.Default.Build,
+                    contentDescription = null,
+                    tint = StatusReserved,
+                    modifier = Modifier.size(20.dp)
+                )
+                Spacer(Modifier.width(8.dp))
+                Text(
+                    "Tez orada servis: ${dueScooters.size} skuter",
+                    style = MaterialTheme.typography.titleSmall,
+                    color = StatusReserved,
+                    fontWeight = FontWeight.SemiBold,
+                    modifier = Modifier.weight(1f)
+                )
+                Text(
+                    if (expanded) "▲" else "▼",
+                    color = StatusReserved,
+                    style = MaterialTheme.typography.titleSmall
+                )
+            }
+            if (expanded) {
+                Spacer(Modifier.height(8.dp))
+                dueScooters.forEach { scooter ->
+                    val isOverdue = scooter.nextServiceAt!! <= now
+                    val color = if (isOverdue) StatusOverdue else StatusReserved
+                    val bgColor = if (isOverdue) StatusOverdueBg else Color.White
+                    Surface(
+                        color = bgColor,
+                        shape = RoundedCornerShape(8.dp),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(vertical = 4.dp)
+                            .clickable { onScooterClick(scooter) }
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(10.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Box(
+                                modifier = Modifier.size(10.dp).background(color, CircleShape)
+                            )
+                            Spacer(Modifier.width(8.dp))
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    scooter.name,
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    color = ClaudeText,
+                                    fontWeight = FontWeight.SemiBold
+                                )
+                                val label = if (isOverdue) "Kechikkan servis"
+                                            else "Servis: ${dateFmt.format(Date(scooter.nextServiceAt!!))}"
+                                Text(
+                                    label,
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = color
+                                )
+                            }
+                            Icon(
+                                imageVector = Icons.Default.KeyboardArrowRight,
+                                contentDescription = "Batafsil",
+                                tint = color,
+                                modifier = Modifier.size(20.dp)
+                            )
+                        }
+                    }
+                }
+                Spacer(Modifier.height(4.dp))
+                Text(
+                    "Skuterni bosib, servis sanasini tahrirlash mumkin.",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = ClaudeTextSecondary
+                )
+            }
+        }
+    }
+}
+
+/**
  * Диалог создания / редактирования скутера.
  * При создании автоматически предлагает следующий свободный «BC-NNN» —
  * формат фиксированный и сохраняется при сохранении.
@@ -3818,7 +5131,8 @@ fun ScooterFormDialog(
         scooterSerialNumber: String,
         batteryId1: String,
         batteryId2: String,
-        additionalInfo: String
+        additionalInfo: String,
+        nextServiceAt: Long?
     ) -> Unit
 ) {
     val initialName = remember(initialScooter, existingScooters) {
@@ -3846,6 +5160,40 @@ fun ScooterFormDialog(
     var batteryId1 by remember { mutableStateOf(initialScooter?.batteryId1 ?: "") }
     var batteryId2 by remember { mutableStateOf(initialScooter?.batteryId2 ?: "") }
     var additionalInfo by remember { mutableStateOf(initialScooter?.additionalInfo ?: "") }
+
+    // ── Real-time duplicate detection for scooter name ───────────────
+    // Block creation if another scooter (excluding self) has the same name.
+    val scooterNameConflict = remember(name) {
+        val trimmed = name.trim()
+        trimmed.isNotBlank() && existingScooters.any {
+            it.id != (initialScooter?.id ?: 0) &&
+            it.name.trim().equals(trimmed, ignoreCase = true)
+        }
+    }
+    // Also check VIN/engine/serial duplicates live — matches the existing
+    // hard block in ScooterViewModel.addScooter/updateScooter.
+    val vinConflict = remember(vinNumber) {
+        val v = vinNumber.trim()
+        v.isNotBlank() && existingScooters.any {
+            it.id != (initialScooter?.id ?: 0) && it.vinNumber.trim().equals(v, ignoreCase = true)
+        }
+    }
+    val engineConflict = remember(engineNumber) {
+        val e = engineNumber.trim()
+        e.isNotBlank() && existingScooters.any {
+            it.id != (initialScooter?.id ?: 0) && it.engineNumber.trim().equals(e, ignoreCase = true)
+        }
+    }
+    val serialConflict = remember(scooterSerialNumber) {
+        val s = scooterSerialNumber.trim()
+        s.isNotBlank() && existingScooters.any {
+            it.id != (initialScooter?.id ?: 0) && it.scooterSerialNumber.trim().equals(s, ignoreCase = true)
+        }
+    }
+    val serviceDateFormat = remember { SimpleDateFormat("yyyy-MM-dd", Locale.getDefault()) }
+    var nextServiceDate by remember {
+        mutableStateOf(initialScooter?.nextServiceAt?.let { serviceDateFormat.format(Date(it)) } ?: "")
+    }
 
     // Все доп. поля теперь ВСЕГДА видны и обязательны — пользователь явно
     // попросил убрать кнопку «More»/«Yashirish» из диалогов создания и
@@ -3877,8 +5225,11 @@ fun ScooterFormDialog(
                     label = { Text("Skuter nomi (Skillmax- formatida)") },
                     modifier = Modifier.fillMaxWidth(),
                     shape = RoundedCornerShape(8.dp),
+                    isError = scooterNameConflict,
                     supportingText = {
-                        if (initialScooter == null) {
+                        if (scooterNameConflict) {
+                            Text("⚠ Bunday nomdagi skuter allaqachon mavjud", color = Color(0xFFC62828), fontSize = 12.sp)
+                        } else if (initialScooter == null) {
                             Text(
                                 "Avtomatik raqamlandi. Istalgan nom bilan almashtirishingiz mumkin.",
                                 style = MaterialTheme.typography.labelSmall,
@@ -3904,21 +5255,33 @@ fun ScooterFormDialog(
                     onValueChange = { vinNumber = it },
                     label = { Text("VIN номери") },
                     modifier = Modifier.fillMaxWidth(),
-                    shape = RoundedCornerShape(8.dp)
+                    shape = RoundedCornerShape(8.dp),
+                    isError = vinConflict,
+                    supportingText = if (vinConflict) {
+                        { Text("⚠ Bu VIN boshqa skuterga biriktirilgan", color = Color(0xFFC62828), fontSize = 12.sp) }
+                    } else null
                 )
                 OutlinedTextField(
                     value = engineNumber,
                     onValueChange = { engineNumber = it },
                     label = { Text("Двигатель номери") },
                     modifier = Modifier.fillMaxWidth(),
-                    shape = RoundedCornerShape(8.dp)
+                    shape = RoundedCornerShape(8.dp),
+                    isError = engineConflict,
+                    supportingText = if (engineConflict) {
+                        { Text("⚠ Bu dvigatel raqami mavjud", color = Color(0xFFC62828), fontSize = 12.sp) }
+                    } else null
                 )
                 OutlinedTextField(
                     value = scooterSerialNumber,
                     onValueChange = { scooterSerialNumber = it },
                     label = { Text("ID номери") },
                     modifier = Modifier.fillMaxWidth(),
-                    shape = RoundedCornerShape(8.dp)
+                    shape = RoundedCornerShape(8.dp),
+                    isError = serialConflict,
+                    supportingText = if (serialConflict) {
+                        { Text("⚠ Bu ID raqami mavjud", color = Color(0xFFC62828), fontSize = 12.sp) }
+                    } else null
                 )
                 Row(
                     modifier = Modifier.fillMaxWidth(),
@@ -3946,6 +5309,15 @@ fun ScooterFormDialog(
                     modifier = Modifier.fillMaxWidth(),
                     shape = RoundedCornerShape(8.dp)
                 )
+                OutlinedTextField(
+                    value = nextServiceDate,
+                    onValueChange = { nextServiceDate = it },
+                    label = { Text("Keyingi servis sanasi (yyyy-MM-dd)") },
+                    placeholder = { Text("2026-08-01") },
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(8.dp),
+                    singleLine = true
+                )
             }
         },
         confirmButton = {
@@ -3964,7 +5336,8 @@ fun ScooterFormDialog(
                         scooterSerialNumber.trim(),
                         batteryId1.trim(),
                         batteryId2.trim(),
-                        additionalInfo.trim()
+                        additionalInfo.trim(),
+                        try { nextServiceDate.trim().takeIf { it.isNotEmpty() }?.let { serviceDateFormat.parse(it)?.time } } catch (_: Exception) { null }
                     )
                 }
             )

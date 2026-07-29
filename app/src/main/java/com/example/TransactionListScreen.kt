@@ -97,6 +97,7 @@ fun TransactionListScreen(
     val allRenters by renterViewModel.rentersList.collectAsStateWithLifecycle()
     val allScooters by scooterViewModel.scootersList.collectAsStateWithLifecycle()
     val allHistory by contractHistoryViewModel.history.collectAsStateWithLifecycle()
+
     // ── Карточные транзакции (переводы между виртуальными картами) ────────
     // Раньше были отдельной секцией ВНЕ LazyColumn, без поиска/фильтра и с
     // лимитом 20 строк. Теперь включаем их в общую ленту: пользователь видит
@@ -106,6 +107,13 @@ fun TransactionListScreen(
     val cards by finansiViewModel.cards.collectAsStateWithLifecycle()
     val cardById = remember(cards) { cards.associateBy { it.id } }
     val context = LocalContext.current
+
+    // Subscribe to VM user-message channel for success/error toasts.
+    LaunchedEffect(Unit) {
+        transactionViewModel.userMessage.collect { (success, msg) ->
+            Toast.makeText(context, msg, if (success) Toast.LENGTH_SHORT else Toast.LENGTH_LONG).show()
+        }
+    }
 
     var searchQuery by remember { mutableStateOf("") }
     var editingTx by remember { mutableStateOf<Transaction?>(null) }
@@ -680,12 +688,10 @@ fun TransactionListScreen(
             onSave = { updated ->
                 transactionViewModel.updateTransaction(updated)
                 editingTx = null
-                Toast.makeText(context, "Tranzaksiya yangilandi", Toast.LENGTH_SHORT).show()
             },
             onDelete = {
                 transactionViewModel.deleteTransaction(tx.id)
                 editingTx = null
-                Toast.makeText(context, "Tranzaksiya o'chirildi", Toast.LENGTH_SHORT).show()
             }
         )
     }
@@ -702,7 +708,6 @@ fun TransactionListScreen(
                     icon = Icons.Default.Delete,
                     onClick = {
                         transactionViewModel.deleteTransactions(selectedTxs.toList())
-                        Toast.makeText(context, "${selectedTxs.size} ta o'chirildi", Toast.LENGTH_SHORT).show()
                         onSelectedTxsChange(emptySet())
                         showDeleteConfirm = false
                     }
@@ -739,7 +744,6 @@ fun TransactionListScreen(
                     timestamp = timestamp,
                     notes = noteText
                 )
-                Toast.makeText(context, "Tranzaksiya yaratildi", Toast.LENGTH_SHORT).show()
                 showCreateDialog = false
             }
         )

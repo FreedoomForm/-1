@@ -39,15 +39,19 @@ val ClaudeDarkBg = Color(0xFF241C10)       // dk-bg
 val ClaudeDarkText = Color(0xFFF4ECDB)     // dk-text
 val ClaudeDarkMuted = Color(0xA3F4ECDB)    // dk-muted (rgba .64)
 
-// ── Semantic status colors (for table rows: paid/unpaid) ───────────────────
-// Green / red are explicitly kept for status lines per user request — these
-// colours are a universal convention (paid=green, overdue=red) and stay
-// saturated so they remain readable against the cream paper background.
-val StatusOk = Color(0xFF16A34A)           // green-600 — paid / active / in base
+// ── Semantic status colors (unified language per PLAN_UNIVERSAL_ACCOUNTING §11) ─
+// Зелёный — оплачено/успех, янтарный — резерв/частичная оплата,
+// красный — долг/ошибка, серый — архив/корзина.
+// Saturated so they remain readable against the cream paper background.
+val StatusOk = Color(0xFF16A34A)           // green-600 — paid / active / in base / success
 val StatusOkBg = Color(0xFFDCFCE7)
-val StatusOverdue = Color(0xFFDC2626)      // red-600 — overdue / unpaid / rented
+val StatusOverdue = Color(0xFFDC2626)      // red-600 — overdue / unpaid / error / debt
 val StatusOverdueBg = Color(0xFFFEE2E2)
-val StatusReturned = Color(0xFF71624B)     // muted brown = returned
+val StatusReserved = Color(0xFFD97706)     // amber-600 — reserve / partial payment / scheduled
+val StatusReservedBg = Color(0xFFFEF3C7)
+val StatusArchived = Color(0xFF6B7280)     // gray-500 — archive / recycle bin / cancelled
+val StatusArchivedBg = Color(0xFFF3F4F6)
+val StatusReturned = Color(0xFF71624B)     // muted brown = returned (legacy alias)
 val StatusReturnedBg = Color(0xFFEFE4CD)
 val StatusInfo = Color(0xFFB8862B)         // gold = info
 val StatusInfoBg = Color(0xFFF6EDD6)

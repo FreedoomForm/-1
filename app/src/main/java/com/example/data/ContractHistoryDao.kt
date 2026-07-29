@@ -109,4 +109,45 @@ interface ContractHistoryDao {
     /** Обновляет renterId при смене id арендатора. */
     @Query("UPDATE contract_history SET renterId = :newId WHERE renterId = :oldId")
     suspend fun updateRenterId(oldId: Int, newId: Int)
+
+    // ── Товарооборот и оплаченный итог (§5 — turnover/balance) ────────────
+    // Товарооборот арендатора = сумма сумм всех контрактов (CREATED + AUTO_RENEW).
+    // Оплаченный итог = сумма сумм контрактов с isPaid=1.
+    // Баланс = оплаченный итог − товарооборот:
+    //   • < 0 — арендатор должен (turnover превысил оплаты)
+    //   • > 0 — аванс (арендатор переплатил)
+    //   • = 0 — расчёт закрыт (соответствует «balance=0 when paying»).
+
+    @Query("""
+        SELECT COALESCE(SUM(amount), 0) FROM contract_history
+        WHERE renterId = :renterId
+          AND type IN ('CREATED', 'AUTO_RENEW')
+    """)
+    suspend fun getTurnoverForRenter(renterId: Int): Double
+
+    @Query("""
+        SELECT COALESCE(SUM(amount), 0) FROM contract_history
+        WHERE renterId = :renterId
+          AND type IN ('CREATED', 'AUTO_RENEW')
+          AND isPaid = 1
+    """)
+    suspend fun getPaidTotalForRenter(renterId: Int): Double
+
+    @Query("""
+        SELECT COALESCE(SUM(amount), 0) FROM contract_history
+        WHERE renterId = :renterId
+          AND type = 'PAYMENT'
+    """)
+    suspend fun getPaymentsTotalForRenter(renterId: Int): Double
+
+    /**
+     * Reactive-вариант: оборот по контрактам арендатора.
+     * Обновляется автоматически при вставке/обновлении контрактов.
+     */
+    @Query("""
+        SELECT COALESCE(SUM(amount), 0) FROM contract_history
+        WHERE renterId = :renterId
+          AND type IN ('CREATED', 'AUTO_RENEW')
+    """)
+    fun getTurnoverForRenterFlow(renterId: Int): Flow<Double>
 }

@@ -75,6 +75,14 @@ object BackupManager {
     private const val SHEET_VIRTUAL_CARDS = "VirtualCards"
     private const val SHEET_CARD_TX = "CardTx"
     private const val SHEET_NOTIFICATIONS = "Notifications"
+    private const val SHEET_BUSINESS_OPERATIONS = "BusinessOperations"
+    private const val SHEET_RENT_PERIODS = "RentPeriods"
+    private const val SHEET_PAYMENT_ALLOCATIONS = "PaymentAllocations"
+    private const val SHEET_AUDIT_EVENTS = "AuditEvents"
+    private const val SHEET_APP_USERS = "AppUsers"
+    private const val SHEET_METADATA = "Metadata"
+    private const val SHEET_SMS_DELIVERIES = "SmsDeliveries"
+    private const val BACKUP_SCHEMA_VERSION = 2
 
     /* =========================================================================
        ЭКСПОРТ
@@ -99,6 +107,12 @@ object BackupManager {
             val cards = db.virtualCardDao().getAllCardsOnce()
             val cardTx = db.cardTransactionDao().getRecentTransactions(Int.MAX_VALUE)
             val notifications = db.notificationHistoryDao().getAllOnce()
+            val businessOperations = db.businessOperationDao().getAllOnce()
+            val rentPeriods = db.rentPeriodDao().getAllOnce()
+            val paymentAllocations = db.paymentAllocationDao().getAllOnce()
+            val auditEvents = db.auditEventDao().getAllOnce()
+            val appUsers = db.appUserDao().getAllOnce()
+            val smsDeliveries = db.smsDeliveryDao().allOnce()
 
             // ── Двухфазная запись: сначала в temp-файл, потом копирование в SAF ──
             //
@@ -133,6 +147,10 @@ object BackupManager {
                 val buf = java.io.BufferedOutputStream(fos, 8192)
                 try {
                     val wb = Workbook(buf, "ScooterRent", "1.0")
+                    writeBackupMetadata(
+                        wb, renters.size, scooters.size, contracts.size, transactions.size,
+                        cards.size, cardTx.size, businessOperations.size, rentPeriods.size, paymentAllocations.size
+                    )
                     writeRenters(wb, renters)
                     writeScooters(wb, scooters)
                     writeContracts(wb, contracts)
@@ -140,6 +158,12 @@ object BackupManager {
                     writeVirtualCards(wb, cards)
                     writeCardTransactions(wb, cardTx)
                     writeNotifications(wb, notifications)
+                    writeBusinessOperations(wb, businessOperations)
+                    writeRentPeriods(wb, rentPeriods)
+                    writePaymentAllocations(wb, paymentAllocations)
+                    writeAuditEvents(wb, auditEvents)
+                    writeAppUsers(wb, appUsers)
+                    writeSmsDeliveries(wb, smsDeliveries)
                     wb.finish()
                     // ⚠ КРИТИЧНО: flush буфера в FileOutputStream, иначе
                     // байты останутся в памяти и tempFile будет 0 байт.
@@ -185,6 +209,22 @@ object BackupManager {
             Log.e(TAG, "Export failed", e)
             "Xato: ${e.message ?: e.javaClass.simpleName}"
         }
+    }
+
+    /** First worksheet: enables safe forward-compatibility checks on import. */
+    private fun writeBackupMetadata(
+        wb: Workbook, renters: Int, scooters: Int, contracts: Int, transactions: Int,
+        cards: Int, cardTransactions: Int, operations: Int, periods: Int, allocations: Int
+    ) {
+        val ws = wb.newWorksheet(SHEET_METADATA)
+        val headers = listOf(
+            "schemaVersion", "exportedAt", "appDatabaseVersion", "renters", "scooters",
+            "contracts", "transactions", "cards", "cardTransactions", "operations", "periods", "allocations"
+        )
+        headers.forEachIndexed { i, value -> ws.value(0, i, value) }
+        val values = listOf(BACKUP_SCHEMA_VERSION.toLong(), System.currentTimeMillis(), 26L, renters.toLong(), scooters.toLong(),
+            contracts.toLong(), transactions.toLong(), cards.toLong(), cardTransactions.toLong(), operations.toLong(), periods.toLong(), allocations.toLong())
+        values.forEachIndexed { i, value -> ws.value(1, i, value) }
     }
 
     private fun writeRenters(wb: Workbook, items: List<Renter>) {
@@ -304,7 +344,7 @@ object BackupManager {
         val ws = wb.newWorksheet(SHEET_VIRTUAL_CARDS)
         val headers = listOf(
             "id", "name", "balance", "colorHex", "info", "isDefault",
-            "kind", "createdAt"
+            "kind", "isArchived", "createdAt"
         )
         headers.forEachIndexed { i, h -> ws.value(0, i, h) }
         items.forEachIndexed { rowIdx, c ->
@@ -316,7 +356,8 @@ object BackupManager {
             c.info?.let { ws.value(r, 4, it) }
             ws.value(r, 5, c.isDefault)
             ws.value(r, 6, c.kind)
-            ws.value(r, 7, c.createdAt)
+            ws.value(r, 7, c.isArchived)
+            ws.value(r, 8, c.createdAt)
         }
     }
 
@@ -354,6 +395,54 @@ object BackupManager {
         }
     }
 
+    private fun writeBusinessOperations(wb: Workbook, items: List<BusinessOperation>) {
+        val ws = wb.newWorksheet(SHEET_BUSINESS_OPERATIONS)
+        val h = listOf("id","occurredAt","type","direction","amountMinor","renterId","scooterId","contractId","fromCardId","toCardId","cardTransactionId","legacyTransactionId","note","status","reversesOperationId","createdAt")
+        h.forEachIndexed { i, v -> ws.value(0, i, v) }
+        items.forEachIndexed { index, o ->
+            val r = index + 1
+            ws.value(r,0,o.id); ws.value(r,1,o.occurredAt); ws.value(r,2,o.type); ws.value(r,3,o.direction); ws.value(r,4,o.amountMinor)
+            o.renterId?.let { ws.value(r,5,it) }; o.scooterId?.let { ws.value(r,6,it) }; o.contractId?.let { ws.value(r,7,it) }
+            o.fromCardId?.let { ws.value(r,8,it) }; o.toCardId?.let { ws.value(r,9,it) }; o.cardTransactionId?.let { ws.value(r,10,it) }
+            o.legacyTransactionId?.let { ws.value(r,11,it) }; o.note?.let { ws.value(r,12,it) }; ws.value(r,13,o.status)
+            o.reversesOperationId?.let { ws.value(r,14,it) }; ws.value(r,15,o.createdAt)
+        }
+    }
+
+    private fun writeRentPeriods(wb: Workbook, items: List<RentPeriod>) {
+        val ws = wb.newWorksheet(SHEET_RENT_PERIODS)
+        val h = listOf("id","contractHistoryId","renterId","scooterId","startsAt","endsAt","chargeMinor","paidMinor","status","suspendedAt","suspensionReason","createdAt","updatedAt")
+        h.forEachIndexed { i,v -> ws.value(0,i,v) }
+        items.forEachIndexed { index,p ->
+            val r=index+1; ws.value(r,0,p.id); p.contractHistoryId?.let { ws.value(r,1,it) }; ws.value(r,2,p.renterId); p.scooterId?.let { ws.value(r,3,it) }
+            ws.value(r,4,p.startsAt); ws.value(r,5,p.endsAt); ws.value(r,6,p.chargeMinor); ws.value(r,7,p.paidMinor); ws.value(r,8,p.status); p.suspendedAt?.let { ws.value(r,9,it) }; p.suspensionReason?.let { ws.value(r,10,it) }; ws.value(r,11,p.createdAt); ws.value(r,12,p.updatedAt)
+        }
+    }
+
+    private fun writePaymentAllocations(wb: Workbook, items: List<PaymentAllocationEntity>) {
+        val ws = wb.newWorksheet(SHEET_PAYMENT_ALLOCATIONS)
+        listOf("id","operationId","rentPeriodId","amountMinor","createdAt").forEachIndexed { i,v -> ws.value(0,i,v) }
+        items.forEachIndexed { index,a -> val r=index+1; ws.value(r,0,a.id); ws.value(r,1,a.operationId); ws.value(r,2,a.rentPeriodId); ws.value(r,3,a.amountMinor); ws.value(r,4,a.createdAt) }
+    }
+
+    private fun writeAuditEvents(wb: Workbook, items: List<AuditEvent>) {
+        val ws = wb.newWorksheet(SHEET_AUDIT_EVENTS)
+        listOf("id","occurredAt","actor","action","entityType","entityId","reason","beforeSnapshot","afterSnapshot").forEachIndexed { i,v -> ws.value(0,i,v) }
+        items.forEachIndexed { index,e -> val r=index+1; ws.value(r,0,e.id); ws.value(r,1,e.occurredAt); ws.value(r,2,e.actor); ws.value(r,3,e.action); ws.value(r,4,e.entityType); ws.value(r,5,e.entityId); e.reason?.let { ws.value(r,6,it) }; e.beforeSnapshot?.let { ws.value(r,7,it) }; e.afterSnapshot?.let { ws.value(r,8,it) } }
+    }
+
+    private fun writeSmsDeliveries(wb: Workbook, items: List<SmsDelivery>) {
+        val ws = wb.newWorksheet(SHEET_SMS_DELIVERIES)
+        listOf("id","renterId","timestamp","status","messagePreview","error").forEachIndexed { i,v -> ws.value(0,i,v) }
+        items.forEachIndexed { index,d -> val r=index+1; ws.value(r,0,d.id); ws.value(r,1,d.renterId); ws.value(r,2,d.timestamp); ws.value(r,3,d.status); ws.value(r,4,d.messagePreview); d.error?.let { ws.value(r,5,it) } }
+    }
+
+    private fun writeAppUsers(wb: Workbook, items: List<AppUser>) {
+        val ws = wb.newWorksheet(SHEET_APP_USERS)
+        listOf("id","displayName","role","isActive","createdAt").forEachIndexed { i,v -> ws.value(0,i,v) }
+        items.forEachIndexed { index,u -> val r=index+1; ws.value(r,0,u.id); ws.value(r,1,u.displayName); ws.value(r,2,u.role); ws.value(r,3,u.isActive); ws.value(r,4,u.createdAt) }
+    }
+
     /* =========================================================================
        ИМПОРТ
        ========================================================================= */
@@ -388,6 +477,14 @@ object BackupManager {
                     // Считываем все листы один раз и кладём в Map по имени.
                     val sheetMap = mutableMapOf<String, Sheet>()
                     wb.sheets.forEach { sh -> sheetMap[sh.name] = sh }
+                    val backupMetadata = sheetMap[SHEET_METADATA]?.let { metadata ->
+                        val values = readBackupMetadata(metadata)
+                        val version = values["schemaVersion"]?.toInt() ?: 1
+                        require(version <= BACKUP_SCHEMA_VERSION) {
+                            "Backup schema v$version is newer than this app supports (v$BACKUP_SCHEMA_VERSION)"
+                        }
+                        values
+                    } ?: emptyMap()
 
                     // ── Порядок импорта: сначала независимые таблицы ──────
                     // (Scooters, VirtualCards, Renters), потом зависимые
@@ -395,6 +492,12 @@ object BackupManager {
 
                     // 1) Очистка всех таблиц
                     db.notificationHistoryDao().deleteAll()
+                    db.auditEventDao().clear()
+                    db.smsDeliveryDao().clear()
+                    db.appUserDao().clear()
+                    db.paymentAllocationDao().clear()
+                    db.rentPeriodDao().clear()
+                    db.businessOperationDao().clear()
                     db.cardTransactionDao().deleteAll()
                     db.transactionDao().clear()
                     db.contractHistoryDao().deleteAll()
@@ -450,6 +553,51 @@ object BackupManager {
                         list.forEach { db.notificationHistoryDao().insert(it) }
                         notifCount = list.size
                     }
+
+                    // New backups preserve the exact journal/allocation graph.
+                    // Older files are rebuilt from their legacy projections.
+                    val hasNativeLedger = sheetMap.containsKey(SHEET_BUSINESS_OPERATIONS)
+                    if (hasNativeLedger) {
+                        sheetMap[SHEET_RENT_PERIODS]?.let { sh ->
+                            readRentPeriods(sh).forEach { db.rentPeriodDao().insert(it) }
+                        }
+                        sheetMap[SHEET_BUSINESS_OPERATIONS]?.let { sh ->
+                            readBusinessOperations(sh).forEach { db.businessOperationDao().insert(it) }
+                        }
+                        sheetMap[SHEET_PAYMENT_ALLOCATIONS]?.let { sh ->
+                            readPaymentAllocations(sh).forEach { db.paymentAllocationDao().insert(it) }
+                        }
+                        sheetMap[SHEET_AUDIT_EVENTS]?.let { sh ->
+                            readAuditEvents(sh).forEach { db.auditEventDao().insert(it) }
+                        }
+                        sheetMap[SHEET_APP_USERS]?.let { sh ->
+                            readAppUsers(sh).forEach { db.appUserDao().insert(it) }
+                        }
+                        sheetMap[SHEET_SMS_DELIVERIES]?.let { sh ->
+                            readSmsDeliveries(sh).forEach { db.smsDeliveryDao().insert(it) }
+                        }
+                    } else {
+                        LegacyProjectionRebuilder.rebuild(db)
+                    }
+                    // Legacy backups predate local roles; always leave a
+                    // usable owner account after restore.
+                    if (db.appUserDao().first() == null) {
+                        db.appUserDao().insert(AppUser(id = 1, displayName = "Owner", role = AppUser.ROLE_OWNER))
+                    }
+                    // A versioned backup must restore exactly the rows it says
+                    // it contains; mismatches are surfaced instead of silently
+                    // accepting a truncated export.
+                    fun verifyCount(key: String, actual: Int) {
+                        backupMetadata[key]?.let { expected ->
+                            require(expected.toInt() == actual) { "Backup integrity mismatch for $key: expected $expected, restored $actual" }
+                        }
+                    }
+                    verifyCount("renters", rentersCount)
+                    verifyCount("scooters", scootersCount)
+                    verifyCount("contracts", contractsCount)
+                    verifyCount("transactions", transactionsCount)
+                    verifyCount("cards", cardsCount)
+                    verifyCount("cardTransactions", cardTxCount)
                 }
             }
 
@@ -463,6 +611,15 @@ object BackupManager {
     }
 
     /* ── Парсеры листов ─────────────────────────────────────────────────── */
+
+    private fun readBackupMetadata(sheet: Sheet): Map<String, Long> {
+        val rows = sheet.read()
+        val headers = rows.getOrNull(0) ?: return emptyMap()
+        val values = rows.getOrNull(1) ?: return emptyMap()
+        return headers.mapIndexedNotNull { index, cell ->
+            cell.asString()?.let { key -> values.getCell(index)?.asNumber()?.toLong()?.let { key to it } }
+        }.toMap()
+    }
 
     private fun readRenters(sheet: Sheet): List<Renter> {
         val rows = sheet.read()
@@ -591,7 +748,11 @@ object BackupManager {
                     info = row.getCell(4)?.asString(),
                     isDefault = row.getCell(5)?.asBoolean() ?: false,
                     kind = row.getCell(6)?.asString() ?: VirtualCard.KIND_REGULAR,
-                    createdAt = row.getCell(7)?.asNumber()?.toLong() ?: System.currentTimeMillis()
+                    // Old backups have no isArchived column: null means false.
+                    isArchived = row.getCell(7)?.asBoolean() ?: false,
+                    createdAt = row.getCell(8)?.asNumber()?.toLong()
+                        ?: row.getCell(7)?.asNumber()?.toLong()
+                        ?: System.currentTimeMillis()
                 )
             } catch (e: Exception) {
                 Log.w(TAG, "Skip virtual card row: ${e.message}")
@@ -622,6 +783,47 @@ object BackupManager {
                 null
             }
         }
+    }
+
+    private fun readBusinessOperations(sheet: Sheet): List<BusinessOperation> = sheet.read().drop(1).mapNotNull { row ->
+        try { BusinessOperation(
+            id=row.getCell(0)?.asNumber()?.toLong() ?: 0, occurredAt=row.getCell(1)?.asNumber()?.toLong() ?: 0,
+            type=row.getCell(2)?.asString() ?: BusinessOperation.TYPE_ADJUSTMENT, direction=row.getCell(3)?.asString() ?: BusinessOperation.DIRECTION_TRANSFER,
+            amountMinor=row.getCell(4)?.asNumber()?.toLong() ?: 0, renterId=row.getCell(5)?.asNumber()?.toInt(), scooterId=row.getCell(6)?.asNumber()?.toInt(),
+            contractId=row.getCell(7)?.asNumber()?.toInt(), fromCardId=row.getCell(8)?.asNumber()?.toInt(), toCardId=row.getCell(9)?.asNumber()?.toInt(),
+            cardTransactionId=row.getCell(10)?.asNumber()?.toInt(), legacyTransactionId=row.getCell(11)?.asNumber()?.toInt(), note=row.getCell(12)?.asString(),
+            status=row.getCell(13)?.asString() ?: BusinessOperation.STATUS_ACTIVE, reversesOperationId=row.getCell(14)?.asNumber()?.toLong(), createdAt=row.getCell(15)?.asNumber()?.toLong() ?: System.currentTimeMillis()
+        ) } catch (e: Exception) { Log.w(TAG,"Skip operation row: ${e.message}"); null }
+    }
+
+    private fun readRentPeriods(sheet: Sheet): List<RentPeriod> = sheet.read().drop(1).mapNotNull { row ->
+        try { RentPeriod(
+            id=row.getCell(0)?.asNumber()?.toLong() ?: 0, contractHistoryId=row.getCell(1)?.asNumber()?.toInt(), renterId=row.getCell(2)?.asNumber()?.toInt() ?: 0,
+            scooterId=row.getCell(3)?.asNumber()?.toInt(), startsAt=row.getCell(4)?.asNumber()?.toLong() ?: 0, endsAt=row.getCell(5)?.asNumber()?.toLong() ?: 0,
+            chargeMinor=row.getCell(6)?.asNumber()?.toLong() ?: 0, paidMinor=row.getCell(7)?.asNumber()?.toLong() ?: 0,
+            status=row.getCell(8)?.asString() ?: RentPeriod.STATUS_ACTIVE, suspendedAt=row.getCell(9)?.asNumber()?.toLong(), suspensionReason=row.getCell(10)?.asString(),
+            createdAt=row.getCell(11)?.asNumber()?.toLong() ?: row.getCell(9)?.asNumber()?.toLong() ?: System.currentTimeMillis(), updatedAt=row.getCell(12)?.asNumber()?.toLong() ?: row.getCell(10)?.asNumber()?.toLong() ?: System.currentTimeMillis()
+        ) } catch (e: Exception) { Log.w(TAG,"Skip period row: ${e.message}"); null }
+    }
+
+    private fun readPaymentAllocations(sheet: Sheet): List<PaymentAllocationEntity> = sheet.read().drop(1).mapNotNull { row ->
+        try { PaymentAllocationEntity(id=row.getCell(0)?.asNumber()?.toLong() ?: 0, operationId=row.getCell(1)?.asNumber()?.toLong() ?: 0, rentPeriodId=row.getCell(2)?.asNumber()?.toLong() ?: 0, amountMinor=row.getCell(3)?.asNumber()?.toLong() ?: 0, createdAt=row.getCell(4)?.asNumber()?.toLong() ?: System.currentTimeMillis()) }
+        catch (e: Exception) { Log.w(TAG,"Skip allocation row: ${e.message}"); null }
+    }
+
+    private fun readAuditEvents(sheet: Sheet): List<AuditEvent> = sheet.read().drop(1).mapNotNull { row ->
+        try { AuditEvent(id=row.getCell(0)?.asNumber()?.toLong() ?: 0, occurredAt=row.getCell(1)?.asNumber()?.toLong() ?: System.currentTimeMillis(), actor=row.getCell(2)?.asString() ?: "LOCAL_SYSTEM", action=row.getCell(3)?.asString() ?: "IMPORTED", entityType=row.getCell(4)?.asString() ?: "UNKNOWN", entityId=row.getCell(5)?.asString() ?: "", reason=row.getCell(6)?.asString(), beforeSnapshot=row.getCell(7)?.asString(), afterSnapshot=row.getCell(8)?.asString()) }
+        catch (e: Exception) { Log.w(TAG,"Skip audit row: ${e.message}"); null }
+    }
+
+    private fun readSmsDeliveries(sheet: Sheet): List<SmsDelivery> = sheet.read().drop(1).mapNotNull { row ->
+        try { SmsDelivery(id=row.getCell(0)?.asNumber()?.toLong() ?: 0, renterId=row.getCell(1)?.asNumber()?.toInt() ?: 0, timestamp=row.getCell(2)?.asNumber()?.toLong() ?: System.currentTimeMillis(), status=row.getCell(3)?.asString() ?: SmsDelivery.STATUS_FAILED, messagePreview=row.getCell(4)?.asString() ?: "", error=row.getCell(5)?.asString()) }
+        catch (e: Exception) { Log.w(TAG,"Skip SMS delivery row: ${e.message}"); null }
+    }
+
+    private fun readAppUsers(sheet: Sheet): List<AppUser> = sheet.read().drop(1).mapNotNull { row ->
+        try { AppUser(id=row.getCell(0)?.asNumber()?.toLong() ?: 0, displayName=row.getCell(1)?.asString() ?: "User", role=row.getCell(2)?.asString() ?: AppUser.ROLE_VIEWER, isActive=row.getCell(3)?.asBoolean() ?: true, createdAt=row.getCell(4)?.asNumber()?.toLong() ?: System.currentTimeMillis()) }
+        catch (e: Exception) { Log.w(TAG,"Skip user row: ${e.message}"); null }
     }
 
     private fun readNotifications(sheet: Sheet): List<NotificationHistoryEntity> {

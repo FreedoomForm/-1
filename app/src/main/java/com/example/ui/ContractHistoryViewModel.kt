@@ -7,9 +7,11 @@ import android.util.Log
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.data.AppDatabase
+import com.example.data.BusinessOperation
 import com.example.data.ContractHistoryEntry
 import com.example.data.ContractHistoryRepository
 import com.example.data.Renter
+import com.example.data.RentPeriod
 import com.example.data.RenterRepository
 import com.example.data.Scooter
 import com.example.data.SettingsRepository
@@ -18,9 +20,12 @@ import com.example.data.TransactionRepository
 import com.example.data.VirtualCard
 import com.example.data.VirtualCardRepository
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
@@ -36,6 +41,10 @@ class ContractHistoryViewModel(application: Application) : AndroidViewModel(appl
     private val virtualCardRepo: VirtualCardRepository
     val history: StateFlow<List<ContractHistoryEntry>>
 
+    /** UI feedback channel — emit (success, message) tuples for toast display. */
+    private val _userMessage = MutableSharedFlow<Pair<Boolean, String>>(extraBufferCapacity = 4)
+    val userMessage: SharedFlow<Pair<Boolean, String>> = _userMessage.asSharedFlow()
+
     // Кэш StateFlow по renterId — чтобы не создавать новый flow на каждую рекомпозицию
     // (старая версия создавала новый flow каждый вызов forRenter() → утечка + мерцание UI)
     private val renterFlows = mutableMapOf<Int, StateFlow<List<ContractHistoryEntry>>>()
@@ -48,7 +57,7 @@ class ContractHistoryViewModel(application: Application) : AndroidViewModel(appl
         repo = ContractHistoryRepository(db.contractHistoryDao())
         renterRepo = RenterRepository(db.renterDao())
         transactionRepo = TransactionRepository(db.transactionDao())
-        virtualCardRepo = VirtualCardRepository(db.virtualCardDao(), db.cardTransactionDao())
+        virtualCardRepo = VirtualCardRepository(db.virtualCardDao(), db.cardTransactionDao(), db)
         history = repo.allHistory.stateIn(
             viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList()
         )
@@ -194,6 +203,24 @@ class ContractHistoryViewModel(application: Application) : AndroidViewModel(appl
                 isPaid = isPaid
             )
             val contractId = repo.insert(entry).toInt()
+            val periodStatus = when {
+                weekStart > now -> RentPeriod.STATUS_SCHEDULED
+                isPaid -> RentPeriod.STATUS_PAID
+                weekEnd <= now -> RentPeriod.STATUS_OVERDUE
+                else -> RentPeriod.STATUS_ACTIVE
+            }
+            AppDatabase.getDatabase(getApplication()).rentPeriodDao().insert(RentPeriod(
+                contractHistoryId = contractId,
+                renterId = renter.id,
+                scooterId = renter.scooterId,
+                startsAt = weekStart,
+                endsAt = weekEnd,
+                chargeMinor = BusinessOperation.toMinor(effectiveAmount),
+                paidMinor = if (isPaid) BusinessOperation.toMinor(effectiveAmount) else 0,
+                status = periodStatus,
+                createdAt = now,
+                updatedAt = now
+            ))
 
             // ── 2. Если оплачен — создаём Transaction + зачисляем на карту ──
             if (isPaid && contractId > 0) {
@@ -224,7 +251,9 @@ class ContractHistoryViewModel(application: Application) : AndroidViewModel(appl
                     virtualCardRepo.depositContractIncome(
                         amount = effectiveAmount,
                         note = "To'lov: ${renter.name} (kalendar) — #$contractId",
-                        contractId = contractId
+                        contractId = contractId,
+                        renterId = renter.id,
+                        scooterId = renter.scooterId
                     )
                 } catch (e: Exception) {
                     Log.w("ContractHistoryVM", "depositContractIncome failed: ${e.message}")
@@ -311,19 +340,46 @@ class ContractHistoryViewModel(application: Application) : AndroidViewModel(appl
                 additionalInfo = pickScooterField(overrideExtra, scooter?.additionalInfo),
                 isPaid = isPaid
             )
-            repo.insert(entry)
+            val contractId = repo.insert(entry).toInt()
+            // Previously manual contracts did NOT insert a matching RentPeriod,
+            // which broke FIFO payment logic in RentPeriodAccountingService and
+            // left the update path (which expects a RentPeriod to exist) unable
+            // to sync. Now we insert one mirroring the calendar-create path.
+            try {
+                val db = AppDatabase.getDatabase(getApplication())
+                val status = when {
+                    isPaid -> RentPeriod.STATUS_PAID
+                    weekEnd <= System.currentTimeMillis() -> RentPeriod.STATUS_OVERDUE
+                    else -> RentPeriod.STATUS_ACTIVE
+                }
+                db.rentPeriodDao().insert(RentPeriod(
+                    contractHistoryId = contractId,
+                    renterId = renterId,
+                    scooterId = scooterId ?: scooter?.id,
+                    startsAt = weekStart,
+                    endsAt = weekEnd,
+                    chargeMinor = BusinessOperation.toMinor(kotlin.math.abs(amount)),
+                    paidMinor = if (isPaid) BusinessOperation.toMinor(kotlin.math.abs(amount)) else 0,
+                    status = status
+                ))
+            } catch (e: Exception) {
+                Log.w("ContractHistoryVM", "Failed to insert RentPeriod for manual contract", e)
+            }
+            _userMessage.emit(true to "Kontrakt yaratildi")
         }
     }
 
     fun deleteContract(id: Int) {
         viewModelScope.launch(Dispatchers.IO) {
             deleteContractWithCascade(id)
+            _userMessage.emit(true to "Kontrakt o'chirildi")
         }
     }
 
     fun deleteContracts(ids: List<Int>) {
         viewModelScope.launch(Dispatchers.IO) {
             ids.forEach { deleteContractWithCascade(it) }
+            _userMessage.emit(true to "${ids.size} ta kontrakt o'chirildi")
         }
     }
 
@@ -379,11 +435,17 @@ class ContractHistoryViewModel(application: Application) : AndroidViewModel(appl
                 Log.w(TAG, "deleteContractWithCascade: contract #$contractId not found, nothing to do")
                 return
             }
+            // Preserve a restorable snapshot before the existing financial
+            // cascade reverses linked cash projections and removes the row.
+            com.example.data.TrashService(AppDatabase.getDatabase(getApplication()))
+                .snapshotContract(contract, "Contract deleted from list")
 
             // ── 2. Загружаем связанные Transaction-записи ─────────────────
             // Это записи TYPE_PAYMENT, созданные при оплате этого контракта
             // (applyWeeklyPayment / updateContract status-change).
             val relatedTx = transactionRepo.forContractOnce(contractId)
+            val trashService = com.example.data.TrashService(AppDatabase.getDatabase(getApplication()))
+            relatedTx.forEach { trashService.snapshotTransaction(it, "Removed with contract #$contractId") }
 
             // ── 3. Загружаем связанные CardTransaction-записи ─────────────
             // Это TYPE_CONTRACT_INCOME — деньги, упавшие на Glavnaya карту.
@@ -783,7 +845,9 @@ class ContractHistoryViewModel(application: Application) : AndroidViewModel(appl
                         virtualCardRepo.depositContractIncome(
                             amount = amountForStatus,
                             note = noteText,
-                            contractId = entry.id
+                            contractId = entry.id,
+                            renterId = renter.id,
+                            scooterId = renter.scooterId
                         )
                     } catch (e: Exception) {
                         Log.w("ContractHistoryVM", "depositContractIncome failed: ${e.message}")
@@ -800,6 +864,25 @@ class ContractHistoryViewModel(application: Application) : AndroidViewModel(appl
                 renterRepo.update(updated)
             }
             repo.update(entry)
+            // Keep the explicit billing period in sync with legacy calendar
+            // edits until the UI is fully migrated to RentPeriod.
+            AppDatabase.getDatabase(getApplication()).rentPeriodDao().byContractHistoryId(entry.id)?.let { period ->
+                val charge = BusinessOperation.toMinor(kotlin.math.abs(entry.amount))
+                val paid = if (entry.isPaid) charge else 0L
+                val status = when {
+                    entry.weekStart != null && entry.weekStart > System.currentTimeMillis() -> RentPeriod.STATUS_SCHEDULED
+                    entry.isPaid -> RentPeriod.STATUS_PAID
+                    entry.weekEnd != null && entry.weekEnd <= System.currentTimeMillis() -> RentPeriod.STATUS_OVERDUE
+                    else -> RentPeriod.STATUS_ACTIVE
+                }
+                AppDatabase.getDatabase(getApplication()).rentPeriodDao().update(period.copy(
+                    chargeMinor = charge,
+                    paidMinor = paid,
+                    status = status,
+                    updatedAt = System.currentTimeMillis()
+                ))
+            }
+            _userMessage.emit(true to "Kontrakt yangilandi")
         }
     }
 
