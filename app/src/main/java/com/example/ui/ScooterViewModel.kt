@@ -285,16 +285,18 @@ class ScooterViewModel(application: Application) : AndroidViewModel(application)
                 contracts.forEach { trashSvc.snapshotContract(it, "Removed with scooter #${scooter.id}") }
                 for (contract in contracts) {
                     // Reverse + delete CardTransactions tied to this contract
-                    val cardTxs = virtualCardRepository.getCardTxForContract(contract.id)
+                    val cardTxs = try { db.cardTransactionDao().getForContractOnce(contract.id) } catch (_: Exception) { emptyList() }
                     for (cardTx in cardTxs) {
                         try {
-                            virtualCardRepository.adjustCardBalance(cardTx.toCardId, -cardTx.amount)
+                            db.virtualCardDao().adjustBalance(cardTx.toCardId, -cardTx.amount)
                             try { db.businessOperationDao().markReversedByCardTransactionId(cardTx.id) } catch (_: Exception) {}
                         } catch (e: Exception) {
                             Log.w(TAG, "deleteScooter: failed to reverse cardTx #${cardTx.id}: ${e.message}")
                         }
                     }
-                    if (cardTxs.isNotEmpty()) virtualCardRepository.deleteCardTxForContract(contract.id)
+                    if (cardTxs.isNotEmpty()) {
+                        try { db.cardTransactionDao().deleteForContract(contract.id) } catch (_: Exception) {}
+                    }
 
                     // Snapshot + delete Transaction rows for this contract
                     val contractTxs = db.transactionDao().getForContractOnce(contract.id)
