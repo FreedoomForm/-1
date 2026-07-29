@@ -14,8 +14,8 @@ android {
     applicationId = "com.aistudio.scooterrent.xyzab"
     minSdk = 24
     targetSdk = 36
-    versionCode = 117
-    versionName = "1.2.117"
+    versionCode = 118
+    versionName = "1.2.118"
 
     // Never commit an AI key. Release/CI injects it through an environment
     // variable; an empty key simply disables external Mistral calls.

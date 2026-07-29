@@ -1,3 +1,5 @@
+@file:OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
+
 package com.example
 
 import androidx.compose.animation.animateColorAsState
@@ -854,7 +856,7 @@ private fun VisualTimelineView(
                                         text = " · ikkilamchi",
                                         color = ClaudeTextSecondary,
                                         fontSize = 10.sp,
-                                        fontStyle = androidx.compose.ui.text.style.FontStyle.Italic
+                                        fontStyle = androidx.compose.ui.text.font.FontStyle.Italic
                                     )
                                 }
                             }
