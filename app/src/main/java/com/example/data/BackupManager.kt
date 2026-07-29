@@ -598,6 +598,30 @@ object BackupManager {
                     verifyCount("transactions", transactionsCount)
                     verifyCount("cards", cardsCount)
                     verifyCount("cardTransactions", cardTxCount)
+
+                    // Self-healing системных карт после импорта.
+                    //
+                    // Если в импортируемом .xlsx-файле не было листа VirtualCards
+                    // (или лист был пуст), таблица virtual_cards останется пустой
+                    // после deleteAll на шаге 1. Без системных карт (Glavnaya,
+                    // Vtorostepennaya, Tashqidan, Tashqiga) приложение теряет
+                    // ключевую функциональность: оплаты контрактов некуда зачислять,
+                    // внешние переводы невозможны.
+                    //
+                    // Выполняем ТОТ ЖЕ INSERT OR IGNORE, что и в AppDatabase.onOpen,
+                    // через openHelper — это даёт прямой доступ к SupportSQLiteDatabase.
+                    // INSERT OR IGNORE безопасен для бэкапов, в которых системные
+                    // карты уже есть: существующие записи (с пользовательскими
+                    // балансами) не трогаются.
+                    db.openHelper.writableDatabase.execSQL("""
+                        INSERT OR IGNORE INTO `virtual_cards`
+                            (id, name, balance, colorHex, info, isDefault, createdAt, kind)
+                        VALUES
+                            (1, 'Glavnaya', 0.0, '#FF1565C0', 'Asosiy kassa — contract to''lovlari shu yerga tushadi', 1, strftime('%s','now') * 1000, 'REGULAR'),
+                            (2, 'Vtorostepennaya', 0.0, '#FF2E7D32', 'Qo`shimcha karta', 1, strftime('%s','now') * 1000, 'REGULAR'),
+                            (3, 'Tashqidan', 0.0, '#FF00838F', 'Tashqidan kirgan pul (bank, naqd va h.k.)', 1, strftime('%s','now') * 1000, 'EXTERNAL_IN'),
+                            (4, 'Tashqiga',  0.0, '#FFC62828', 'Tashqiga chiqarilgan pul (yechib olish, to''lovlar)', 1, strftime('%s','now') * 1000, 'EXTERNAL_OUT')
+                    """.trimIndent())
                 }
             }
 

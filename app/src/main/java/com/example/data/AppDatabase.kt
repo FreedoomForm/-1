@@ -711,6 +711,48 @@ abstract class AppDatabase : RoomDatabase() {
                             db.execSQL("INSERT OR IGNORE INTO app_users (id, displayName, role, isActive, createdAt) VALUES (1, 'Owner', 'OWNER', 1, strftime('%s','now') * 1000)")
                             db.execSQL("INSERT OR IGNORE INTO timeline_branches (id, name, parentBranchId, forkEventId, createdAt, isMain) VALUES (1, 'Main', NULL, NULL, strftime('%s','now') * 1000, 1)")
                         }
+
+                        /**
+                         * Self-healing: вызывается КАЖДЫЙ раз при открытии базы данных
+                         * (а не только при первом создании, как onCreate).
+                         *
+                         * Проблема, которую решает этот коллбэк:
+                         *   Пользователь сообщил, что после «удаления приложения и
+                         *   очистки данных» 4 системные карты (Glavnaya,
+                         *   Vtorostepennaya, Tashqidan, Tashqiga) исчезли и не
+                         *   восстанавливаются. onCreate срабатывает только один раз
+                         *   за жизнь DB-файла; если по какой-то причине карты
+                         *   пропали (баг, ручная чистка БД, кривой бэкап, частичное
+                         *   удаление), они больше никогда не вернутся.
+                         *
+                         * Решение: на каждом открытии БД выполняем INSERT OR IGNORE
+                         * для всех 4 системных карт. INSERT OR IGNORE безопасен:
+                         *   • Если карта с таким id уже есть — ничего не происходит,
+                         *     баланс и имя пользователя не трогаются.
+                         *   • Если карты нет — она создаётся с правильными
+                         *     параметрами (isDefault=1, правильный kind, цвет).
+                         *
+                         * Дополнительно: восстанавливаем системного пользователя
+                         * Owner (id=1) и главную ветку таймлайна (id=1) — те же
+                         * гарантии идемпотентности.
+                         */
+                        override fun onOpen(db: SupportSQLiteDatabase) {
+                            super.onOpen(db)
+                            // 4 системные карты — Selbstheilung при каждом открытии БД.
+                            db.execSQL("""
+                                INSERT OR IGNORE INTO `virtual_cards`
+                                    (id, name, balance, colorHex, info, isDefault, createdAt, kind)
+                                VALUES
+                                    (1, 'Glavnaya', 0.0, '#FF1565C0', 'Asosiy kassa — contract to''lovlari shu yerga tushadi', 1, strftime('%s','now') * 1000, 'REGULAR'),
+                                    (2, 'Vtorostepennaya', 0.0, '#FF2E7D32', 'Qo`shimcha karta', 1, strftime('%s','now') * 1000, 'REGULAR'),
+                                    (3, 'Tashqidan', 0.0, '#FF00838F', 'Tashqidan kirgan pul (bank, naqd va h.k.)', 1, strftime('%s','now') * 1000, 'EXTERNAL_IN'),
+                                    (4, 'Tashqiga',  0.0, '#FFC62828', 'Tashqiga chiqarilgan pul (yechib olish, to''lovlar)', 1, strftime('%s','now') * 1000, 'EXTERNAL_OUT')
+                            """.trimIndent())
+                            // Системный пользователь Owner и главная ветка таймлайна —
+                            // те же гарантии: создаются если их нет, не трогаются если есть.
+                            db.execSQL("INSERT OR IGNORE INTO app_users (id, displayName, role, isActive, createdAt) VALUES (1, 'Owner', 'OWNER', 1, strftime('%s','now') * 1000)")
+                            db.execSQL("INSERT OR IGNORE INTO timeline_branches (id, name, parentBranchId, forkEventId, createdAt, isMain) VALUES (1, 'Main', NULL, NULL, strftime('%s','now') * 1000, 1)")
+                        }
                     })
                     .build()
                 INSTANCE = instance
