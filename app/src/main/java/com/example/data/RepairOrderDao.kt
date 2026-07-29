@@ -17,6 +17,20 @@ interface RepairOrderDao {
     @Query("SELECT * FROM repair_orders WHERE scooterId = :scooterId AND status = 'OPEN' ORDER BY openedAt ASC")
     suspend fun openForScooter(scooterId: Int): List<RepairOrder>
 
+    /**
+     * Закрывает все открытые repair orders для данного скутера.
+     * Используется при удалении скутера, чтобы не оставлять «висящие»
+     * OPEN orders со ссылкой на несуществующий скутер.
+     */
+    @Query("""
+        UPDATE repair_orders
+        SET status = 'COMPLETED',
+            closedAt = :closedAt,
+            note = COALESCE(note || ' | ', '') || :reason
+        WHERE scooterId = :scooterId AND status = 'OPEN'
+    """)
+    suspend fun closeOpenForScooter(scooterId: Int, reason: String, closedAt: Long = System.currentTimeMillis())
+
     @Insert
     suspend fun insert(order: RepairOrder): Long
 

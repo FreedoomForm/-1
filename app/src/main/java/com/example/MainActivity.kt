@@ -2717,6 +2717,49 @@ fun MainScreen(
             }
         }
 
+        // ── User messages from other ViewModels ───────────────────────────
+        // Each ViewModel exposes a SharedFlow<Pair<Boolean, String>> for
+        // success/failure feedback (duplicate detection, cascade failures,
+        // missing permissions, etc.). Without these collectors, the user sees
+        // nothing when a CRUD operation silently fails — which was the root
+        // cause of the "create/delete doesn't work" bug.
+        LaunchedEffect(Unit) {
+            scooterViewModel.userMessage.collect { (success, msg) ->
+                if (success) {
+                    Toast.makeText(localContext, msg, Toast.LENGTH_SHORT).show()
+                } else {
+                    Toast.makeText(localContext, msg, Toast.LENGTH_LONG).show()
+                }
+            }
+        }
+        LaunchedEffect(Unit) {
+            transactionViewModel.userMessage.collect { (success, msg) ->
+                if (success) {
+                    Toast.makeText(localContext, msg, Toast.LENGTH_SHORT).show()
+                } else {
+                    Toast.makeText(localContext, msg, Toast.LENGTH_LONG).show()
+                }
+            }
+        }
+        LaunchedEffect(Unit) {
+            contractHistoryViewModel.userMessage.collect { (success, msg) ->
+                if (success) {
+                    Toast.makeText(localContext, msg, Toast.LENGTH_SHORT).show()
+                } else {
+                    Toast.makeText(localContext, msg, Toast.LENGTH_LONG).show()
+                }
+            }
+        }
+        LaunchedEffect(Unit) {
+            finansiViewModel.userMessage.collect { (success, msg) ->
+                if (success) {
+                    Toast.makeText(localContext, msg, Toast.LENGTH_SHORT).show()
+                } else {
+                    Toast.makeText(localContext, msg, Toast.LENGTH_LONG).show()
+                }
+            }
+        }
+
         // ── §9.B: Launcher curtain rendered as a SIBLING of the Column ──
         // (NOT inside the Column). The Column above stacks the update banner
         // + per-tab content, which would constrain the launcher's measured

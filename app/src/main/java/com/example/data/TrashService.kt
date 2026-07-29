@@ -59,6 +59,21 @@ class TrashService(private val db: AppDatabase) {
         return itemId
     }
 
+    /**
+     * Snapshot скутера перед удалением. Сохраняет все реквизиты (VIN, двигатель,
+     * серийный номер, аккумуляторы, доп. информация, lifecycle status, сервисные
+     * даты), чтобы скутер можно было восстановить из корзины.
+     */
+    suspend fun snapshotScooter(scooter: Scooter, reason: String? = null): Long {
+        val json = scooter.toJson()
+        val itemId = db.deletedItemDao().insert(DeletedItem(
+            sourceType = DeletedItem.TYPE_SCOOTER, sourceId = scooter.id.toString(), title = scooter.name,
+            snapshotJson = json.toString(), reason = reason
+        ))
+        audit("TRASH_MOVED", DeletedItem.TYPE_SCOOTER, itemId.toString(), reason)
+        return itemId
+    }
+
     suspend fun moveTransactionToTrash(transaction: Transaction, reason: String? = null): Long = db.withTransaction {
         val itemId = snapshotTransaction(transaction, reason)
         db.transactionDao().deleteById(transaction.id)
@@ -95,6 +110,7 @@ class TrashService(private val db: AppDatabase) {
                 if (restored > 0) requireNotNull(originalId).toLong() else db.virtualCardDao().insertCard(item.snapshotJson.toCard())
             }
             DeletedItem.TYPE_RENTER -> db.renterDao().insert(item.snapshotJson.toRenter())
+            DeletedItem.TYPE_SCOOTER -> db.scooterDao().insertScooter(item.snapshotJson.toScooter())
             DeletedItem.TYPE_TRANSACTION -> db.transactionDao().insert(item.snapshotJson.toTransaction())
             DeletedItem.TYPE_CONTRACT -> {
                 val contract = item.snapshotJson.toContract()
@@ -203,6 +219,27 @@ class TrashService(private val db: AppDatabase) {
         put("passportData", passportData); put("address", address); put("pinfl", pinfl); put("vinNumber", vinNumber); put("engineNumber", engineNumber)
         put("scooterSerialNumber", scooterSerialNumber); put("batteryId1", batteryId1); put("batteryId2", batteryId2); put("additionalInfo", additionalInfo); put("isPaid", isPaid)
     }
+
+    private fun Scooter.toJson() = JSONObject().apply {
+        put("name", name); put("documentedNumber", documentedNumber); put("vinNumber", vinNumber)
+        put("engineNumber", engineNumber); put("scooterSerialNumber", scooterSerialNumber)
+        put("batteryId1", batteryId1); put("batteryId2", batteryId2); put("additionalInfo", additionalInfo)
+        put("lifecycleStatus", lifecycleStatus); put("lastServiceAt", lastServiceAt); put("nextServiceAt", nextServiceAt)
+        put("mileageKm", mileageKm)
+    }
+
+    private fun String.toScooter(): Scooter = JSONObject(this).let { o -> Scooter(
+        name = o.optString("name"),
+        documentedNumber = o.optString("documentedNumber").takeIf { it.isNotBlank() },
+        vinNumber = o.optString("vinNumber"), engineNumber = o.optString("engineNumber"),
+        scooterSerialNumber = o.optString("scooterSerialNumber"),
+        batteryId1 = o.optString("batteryId1"), batteryId2 = o.optString("batteryId2"),
+        additionalInfo = o.optString("additionalInfo"),
+        lifecycleStatus = o.optString("lifecycleStatus", Scooter.STATUS_AVAILABLE),
+        lastServiceAt = if (o.isNull("lastServiceAt")) null else o.optLong("lastServiceAt"),
+        nextServiceAt = if (o.isNull("nextServiceAt")) null else o.optLong("nextServiceAt"),
+        mileageKm = o.optLong("mileageKm", 0L)
+    ) }
 
     private fun String.toContract(): ContractHistoryEntry = JSONObject(this).let { o -> ContractHistoryEntry(
         renterId = o.optInt("renterId"), timestamp = o.optLong("timestamp"), type = o.optString("type"), amount = o.optDouble("amount"),

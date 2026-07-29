@@ -27,6 +27,14 @@ interface TransactionDao {
     @Query("SELECT * FROM transactions WHERE scooterId = :scooterId ORDER BY timestamp DESC")
     fun getForScooter(scooterId: Int): Flow<List<Transaction>>
 
+    /** Suspend-вариант — используется каскадным удалением скутера. */
+    @Query("SELECT * FROM transactions WHERE scooterId = :scooterId ORDER BY timestamp DESC")
+    suspend fun forScooterOnce(scooterId: Int): List<Transaction>
+
+    /** Каскадное удаление всех транзакций данного скутера. */
+    @Query("DELETE FROM transactions WHERE scooterId = :scooterId")
+    suspend fun deleteForScooter(scooterId: Int)
+
     @Query("SELECT * FROM transactions WHERE contractId = :contractId ORDER BY timestamp DESC")
     fun getForContract(contractId: Int): Flow<List<Transaction>>
 

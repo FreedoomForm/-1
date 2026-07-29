@@ -24,6 +24,7 @@ data class DeletedItem(
 ) {
     companion object {
         const val TYPE_RENTER = "RENTER"
+        const val TYPE_SCOOTER = "SCOOTER"
         const val TYPE_CONTRACT = "CONTRACT"
         const val TYPE_TRANSACTION = "TRANSACTION"
         const val TYPE_CARD = "CARD"

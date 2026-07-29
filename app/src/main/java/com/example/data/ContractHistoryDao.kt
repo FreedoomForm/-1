@@ -24,6 +24,17 @@ interface ContractHistoryDao {
     @Query("SELECT * FROM contract_history WHERE scooterName = :scooterName ORDER BY timestamp DESC")
     fun getForScooterFlow(scooterName: String): Flow<List<ContractHistoryEntry>>
 
+    /**
+     * Suspend-вариант [getForScooterFlow] — используется каскадным
+     * удалением скутера для snapshot-удаления всех связанных контрактов.
+     */
+    @Query("SELECT * FROM contract_history WHERE scooterName = :scooterName ORDER BY timestamp DESC")
+    suspend fun getForScooterOnce(scooterName: String): List<ContractHistoryEntry>
+
+    /** Каскадное удаление всех контрактов данного скутера. */
+    @Query("DELETE FROM contract_history WHERE scooterName = :scooterName")
+    suspend fun deleteForScooter(scooterName: String)
+
     @Query("SELECT * FROM contract_history WHERE id = :id LIMIT 1")
     suspend fun getById(id: Int): ContractHistoryEntry?
 
