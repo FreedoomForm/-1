@@ -752,6 +752,30 @@ abstract class AppDatabase : RoomDatabase() {
                             // те же гарантии: создаются если их нет, не трогаются если есть.
                             db.execSQL("INSERT OR IGNORE INTO app_users (id, displayName, role, isActive, createdAt) VALUES (1, 'Owner', 'OWNER', 1, strftime('%s','now') * 1000)")
                             db.execSQL("INSERT OR IGNORE INTO timeline_branches (id, name, parentBranchId, forkEventId, createdAt, isMain) VALUES (1, 'Main', NULL, NULL, strftime('%s','now') * 1000, 1)")
+
+                            // ── Batch 8 (H2): orphan-row / FK-consistency sweep ──────
+                            // Runs on EVERY DB open. Previously purged trash items
+                            // left dangling FKs in dependent tables (business_operations,
+                            // payment_allocations, rent_periods, handover_acts,
+                            // card_transactions). Reports silently undercounted because
+                            // joins against the now-missing parent rows returned nothing.
+                            //
+                            // The sweep is:
+                            //   • Conservative — only nulls dangling FKs in immutable
+                            //     audit tables (business_operations), only hard-deletes
+                            //     fully-orphan rows in derived tables (payment_allocations,
+                            //     rent_periods, handover_acts).
+                            //   • Idempotent — running twice produces the same state.
+                            //   • Audited — every sweep that repairs >0 rows writes a
+                            //     single ACTION_ORPHAN_SWEEP AuditEvent with a summary.
+                            //   • Fail-safe — if any sub-step throws, the rest still
+                            //     run; the next app launch will retry.
+                            try {
+                                OrphanSweeper.sweep(db)
+                            } catch (e: Exception) {
+                                android.util.Log.e("AppDatabase",
+                                    "OrphanSweeper threw on onOpen — DB will be left partially repaired, will retry next launch", e)
+                            }
                         }
                     })
                     .build()

@@ -52,6 +52,20 @@ class VirtualCardRepository(
                 note = "Opening balance: ${card.name}"
             ))
         }
+        // §10 / Batch 8: previously insertCard was completely unaudited —
+        // the only signal was a new row in virtual_cards. A user creating
+        // accounts left zero audit trail, which made post-incident reviews
+        // impossible. ACTION_CARD_CREATE records the creation event with
+        // the opening-balance snapshot for later reconciliation.
+        database?.auditEventDao()?.insert(AuditEvent(
+            actor = "LOCAL_SYSTEM",
+            action = AuditEvent.ACTION_CARD_CREATE,
+            entityType = "VIRTUAL_CARD",
+            entityId = id.toString(),
+            reason = "Card created via UI",
+            beforeSnapshot = null,
+            afterSnapshot = "name=${card.name}; balance=${card.balance}; kind=${card.kind}"
+        ))
         id
     }
     suspend fun updateCard(card: VirtualCard) = atomic {
@@ -63,7 +77,8 @@ class VirtualCardRepository(
         // edit-card dialog silently fail whenever the user changed the balance
         // field.
         val delta = card.balance - current.balance
-        if (kotlin.math.abs(delta) >= 0.005) {
+        val balanceEdited = kotlin.math.abs(delta) >= 0.005
+        if (balanceEdited) {
             // Adjust the actual stored balance to match what the user entered.
             cardDao.adjustBalance(card.id, delta)
             appendOperation(BusinessOperation(
@@ -74,14 +89,33 @@ class VirtualCardRepository(
                 toCardId = if (delta > 0) card.id else CardTransaction.EXTERNAL_SOURCE_ID,
                 note = "Manual balance edit: ${current.name}"
             ))
+        }
+        // §10 / Batch 8 (was M2/H3): the previous audit code reused
+        // ACTION_CARD_TRANSACTION_REVERSED for a non-reversal balance edit —
+        // a misleading action code that polluted card-reversal reports.
+        // Now we emit ACTION_CARD_UPDATE whenever ANY card field changes
+        // (name, color, info, kind, or balance), with before/after snapshots
+        // capturing every edited dimension. The audit is emitted even when
+        // only non-financial fields change (e.g. user renames a card) —
+        // previously such edits left zero audit trail.
+        val nameChanged = current.name != card.name
+        val colorChanged = current.colorHex != card.colorHex
+        val kindChanged = current.kind != card.kind
+        val infoChanged = current.info != card.info
+        if (balanceEdited || nameChanged || colorChanged || kindChanged || infoChanged) {
             database?.auditEventDao()?.insert(AuditEvent(
                 actor = "LOCAL_SYSTEM",
-                action = AuditEvent.ACTION_CARD_TRANSACTION_REVERSED,
+                action = AuditEvent.ACTION_CARD_UPDATE,
                 entityType = "VIRTUAL_CARD",
                 entityId = card.id.toString(),
-                reason = "Balance edited via card form",
-                beforeSnapshot = "balance=${current.balance}",
-                afterSnapshot = "balance=${card.balance}; delta=$delta"
+                reason = when {
+                    balanceEdited && (nameChanged || colorChanged || kindChanged || infoChanged) ->
+                        "Card fields + balance edited via card form"
+                    balanceEdited -> "Balance edited via card form"
+                    else -> "Card metadata edited via card form"
+                },
+                beforeSnapshot = "name=${current.name}; color=${current.colorHex}; kind=${current.kind}; info=${current.info}; balance=${current.balance}",
+                afterSnapshot = "name=${card.name}; color=${card.colorHex}; kind=${card.kind}; info=${card.info}; balance=${current.balance + delta}; delta=$delta"
             ))
         }
         // Persist the rest (name/colorHex/info/kind). Use a copy that keeps
@@ -133,7 +167,7 @@ class VirtualCardRepository(
         val result = cardDao.unarchiveCard(card.id)
         if (result > 0) database?.auditEventDao()?.insert(AuditEvent(
             actor = actor,
-            action = "CARD_UNARCHIVED",
+            action = AuditEvent.ACTION_CARD_UNARCHIVED,
             entityType = "VIRTUAL_CARD",
             entityId = card.id.toString(),
             reason = "Account reopened by user",

@@ -47,6 +47,25 @@ class ScooterMaintenanceService(private val db: AppDatabase) {
             occurredAt = now, action = "SCOOTER_STATUS_CHANGED", entityType = "SCOOTER", entityId = scooterId.toString(), reason = reason,
             beforeSnapshot = "status=${scooter.lifecycleStatus}", afterSnapshot = "status=$status"
         ))
+        // Batch 8 (was H3): when the status change STARTS a repair, also
+        // emit the structured ACTION_REPAIR_START audit event. Previously
+        // only FINISH / PAUSE / RESUME had dedicated action codes — a
+        // repair that was started but never explicitly finished left a
+        // gap in the audit trail, making it impossible to reconstruct
+        // the repair timeline from audit_events alone. The generic
+        // SCOOTER_STATUS_CHANGED audit above is kept for backward compat
+        // with existing audit-log readers.
+        if (status == Scooter.STATUS_REPAIR) {
+            db.auditEventDao().insert(AuditEvent(
+                occurredAt = now,
+                action = AuditEvent.ACTION_REPAIR_START,
+                entityType = "SCOOTER",
+                entityId = scooterId.toString(),
+                reason = reason,
+                beforeSnapshot = "status=${scooter.lifecycleStatus}",
+                afterSnapshot = "status=$status; pausedPeriods=${db.rentPeriodDao().suspendedForScooter(scooterId).size}"
+            ))
+        }
     }
 
     /**

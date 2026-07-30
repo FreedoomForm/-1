@@ -123,16 +123,21 @@ fun TrashScreen(
                 Column {
                     Text(msg, style = MaterialTheme.typography.bodyMedium)
                     Spacer(Modifier.height(8.dp))
-                    if (msg.contains("balance", ignoreCase = true)) {
+                    // Batch 8 (was M3): the previous "balance" branch was dead
+                    // code — no current TrashService error message contains the
+                    // word "balance". Replaced with a hint for the actual
+                    // renter-missing case, which is a common user-facing failure
+                    // (restoring a contract whose renter is still in trash).
+                    if (msg.contains("renter no longer exists", ignoreCase = true)) {
                         Text(
-                            "Karta qoldig'i 0 emas. Avval balansni tekshiring yoki " +
-                            "bank operatsiyalari orqali moslang, so'ng qayta urinib ko'ring.",
+                            "Shartnoma uchun ijarchi topilmadi. Avval korzinkadan " +
+                            "ijarchini qayta tiklang, so'ng shartnomani qayta urinib ko'ring.",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.error
                         )
                     } else if (msg.contains("conflict", ignoreCase = true)) {
                         Text(
-                            "Skuter boshaka aktiv ijara bilan band. Avval joriy " +
+                            "Skuter boshqa aktiv ijara bilan band. Avval joriy " +
                             "ijarani tugating yoki sanalarni o'zgartiring.",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.error

@@ -47,5 +47,20 @@ data class AuditEvent(
         const val ACTION_CARD_UPDATE = "CARD_UPDATE"
         const val ACTION_TRASH_RESTORE = "TRASH_RESTORE"
         const val ACTION_TRASH_PURGE = "TRASH_PURGE"
+
+        // ── Batch 8 — audit-trail completeness ───────────────────────────
+        // Previously these events were either unaudited or used a misleading
+        // action code (e.g. updateCard reused ACTION_CARD_TRANSACTION_REVERSED
+        // for a non-reversal balance edit). Each new constant closes one
+        // silent-mutation gap found during the Batch 7→8 audit.
+        /** Card was unarchived (reopened) by the user. */
+        const val ACTION_CARD_UNARCHIVED = "CARD_UNARCHIVED"
+        /** Lightweight FK-consistency sweep ran on DB open and repaired
+         *  orphan rows (dangling FKs nulled, fully-orphan dependents deleted). */
+        const val ACTION_ORPHAN_SWEEP = "ORPHAN_SWEEP"
+        /** A restore path silently nulled out a stale card FK on a restored
+         *  BusinessOperation because the referenced card was still in trash.
+         *  Surfaces the previously-invisible data adjustment. */
+        const val ACTION_TRASH_FK_NULLIFIED = "TRASH_FK_NULLIFIED"
     }
 }

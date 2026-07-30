@@ -261,6 +261,10 @@ class TrashService(private val db: AppDatabase) {
                 val root = JSONObject(item.snapshotJson)
                 val oldRenterId = item.sourceId.toIntOrNull()
                 val newRenterId = db.renterDao().insert(root.toRenter())
+                // Batch 8 (L2): collect every stale card FK we null out so
+                // a single ACTION_TRASH_FK_NULLIFIED audit event can be
+                // emitted at the end of the restore.
+                val nullifiedFks = mutableListOf<Pair<String, Int>>()
                 // Re-insert the renter's own BusinessOperations (deposits,
                 // debt forgiveness, adjustments not tied to any contract/tx).
                 // Use the new renterId so the restored ops point to the
@@ -271,11 +275,14 @@ class TrashService(private val db: AppDatabase) {
                         val op = opsArray.optJSONObject(i) ?: continue
                         val status = op.optString("status", BusinessOperation.STATUS_ACTIVE)
                         if (status != BusinessOperation.STATUS_ACTIVE) continue
-                        // Validate card FKs the same way other paths do.
-                        val safeFromCardId = op.optInt("fromCardId", 0).takeIf { it > 0 }
-                            ?.let { if (db.virtualCardDao().getCardById(it) != null) it else null }
-                        val safeToCardId = op.optInt("toCardId", 0).takeIf { it > 0 }
-                            ?.let { if (db.virtualCardDao().getCardById(it) != null) it else null }
+                        // Validate card FKs via the centralised helper so
+                        // null-outs are recorded for the audit trail.
+                        val safeFromCardId = validateCardFk(
+                            op.optInt("fromCardId", 0), "fromCardId", nullifiedFks
+                        )
+                        val safeToCardId = validateCardFk(
+                            op.optInt("toCardId", 0), "toCardId", nullifiedFks
+                        )
                         // Validate legacyTransactionId — the original tx may
                         // have been trashed alongside the renter and not yet
                         // restored.
@@ -296,6 +303,7 @@ class TrashService(private val db: AppDatabase) {
                         )
                     }
                 }
+                auditFkNullifications(itemId, DeletedItem.TYPE_RENTER, nullifiedFks)
                 // Critical: dependent TYPE_CONTRACT and TYPE_TRANSACTION
                 // snapshots in the recycle bin still reference the OLD
                 // renterId. Their restore paths validate renter existence
@@ -347,6 +355,8 @@ class TrashService(private val db: AppDatabase) {
             DeletedItem.TYPE_SCOOTER -> {
                 val root = JSONObject(item.snapshotJson)
                 val newScooterId = db.scooterDao().insertScooter(root.toScooter()).toInt()
+                // Batch 8 (L2): collect stale card FKs for audit.
+                val nullifiedFks = mutableListOf<Pair<String, Int>>()
                 // Re-insert RepairOrder rows tied to the NEW scooterId.
                 // Without this, the restored scooter has zero repair history
                 // — per-scooter profitability and repeat-failure metrics
@@ -371,10 +381,12 @@ class TrashService(private val db: AppDatabase) {
                         val op = opsArray.optJSONObject(i) ?: continue
                         val status = op.optString("status", BusinessOperation.STATUS_ACTIVE)
                         if (status != BusinessOperation.STATUS_ACTIVE) continue
-                        val safeFromCardId = op.optInt("fromCardId", 0).takeIf { it > 0 }
-                            ?.let { if (db.virtualCardDao().getCardById(it) != null) it else null }
-                        val safeToCardId = op.optInt("toCardId", 0).takeIf { it > 0 }
-                            ?.let { if (db.virtualCardDao().getCardById(it) != null) it else null }
+                        val safeFromCardId = validateCardFk(
+                            op.optInt("fromCardId", 0), "fromCardId", nullifiedFks
+                        )
+                        val safeToCardId = validateCardFk(
+                            op.optInt("toCardId", 0), "toCardId", nullifiedFks
+                        )
                         val safeLegacyTxId = op.optInt("legacyTransactionId", 0).takeIf { it > 0 }
                             ?.let { if (db.transactionDao().getById(it) != null) it else null }
                         val safeContractId = op.optInt("contractId", 0).takeIf { it > 0 }
@@ -391,11 +403,14 @@ class TrashService(private val db: AppDatabase) {
                         )
                     }
                 }
+                auditFkNullifications(itemId, DeletedItem.TYPE_SCOOTER, nullifiedFks)
                 newScooterId.toLong()
             }
             DeletedItem.TYPE_TRANSACTION -> {
                 val root = JSONObject(item.snapshotJson)
                 val txSnapshot = root.toTransaction()
+                // Batch 8 (L2): collect stale card FKs for audit.
+                val nullifiedFks = mutableListOf<Pair<String, Int>>()
                 // Validate that the renter still exists — same guard the
                 // contract-restore path has. A restored transaction whose
                 // renterId points to a now-deleted renter would be invisible
@@ -426,13 +441,14 @@ class TrashService(private val db: AppDatabase) {
                         // entries were audit facts before trash and stay audit.
                         val status = op.optString("status", BusinessOperation.STATUS_ACTIVE)
                         if (status != BusinessOperation.STATUS_ACTIVE) continue
-                        // Validate fromCardId/toCardId — if the cards were also
-                        // trashed, null them out so card-balance reports don't
-                        // double-count a restored op against a non-existent card.
-                        val safeFromCardId = op.optInt("fromCardId", 0).takeIf { it > 0 }
-                            ?.let { if (db.virtualCardDao().getCardById(it) != null) it else null }
-                        val safeToCardId = op.optInt("toCardId", 0).takeIf { it > 0 }
-                            ?.let { if (db.virtualCardDao().getCardById(it) != null) it else null }
+                        // Validate fromCardId/toCardId via the centralised
+                        // helper so null-outs are recorded for the audit trail.
+                        val safeFromCardId = validateCardFk(
+                            op.optInt("fromCardId", 0), "fromCardId", nullifiedFks
+                        )
+                        val safeToCardId = validateCardFk(
+                            op.optInt("toCardId", 0), "toCardId", nullifiedFks
+                        )
                         dedupOrInsertBusinessOperation(
                             op = op,
                             renterId = txSnapshot.renterId.takeIf { it > 0 },
@@ -445,6 +461,7 @@ class TrashService(private val db: AppDatabase) {
                         )
                     }
                 }
+                auditFkNullifications(itemId, DeletedItem.TYPE_TRANSACTION, nullifiedFks)
                 newTxId
             }
             DeletedItem.TYPE_CONTRACT -> {
@@ -550,6 +567,11 @@ class TrashService(private val db: AppDatabase) {
                 // No try/catch: a partial restore (contract without its
                 // CardTransactions) silently diverges card-cash-flow reports
                 // from the journal. Roll back instead.
+                //
+                // Batch 8 (L2): collect stale card FKs from CardTransaction
+                // rows AND from BusinessOperation rows so a single audit
+                // event covers the whole restore.
+                val nullifiedFks = mutableListOf<Pair<String, Int>>()
                 val cardTxIdMap = mutableMapOf<Int, Int>() // old id → new id
                 val cardTxsArray = root.optJSONArray("cardTransactions")
                 // Pre-fetch valid card ids once so we don't hit the DAO per row.
@@ -560,6 +582,17 @@ class TrashService(private val db: AppDatabase) {
                     for (i in 0 until cardTxsArray.length()) {
                         val ctx = cardTxsArray.optJSONObject(i) ?: continue
                         val oldCtxId = ctx.optInt("id", 0)
+                        // Record stale card FKs BEFORE the row is built —
+                        // toCardTransaction silently maps invalid ids to 0,
+                        // so we capture the original values here.
+                        val oldFromCardId = ctx.optInt("fromCardId", 0)
+                        val oldToCardId = ctx.optInt("toCardId", 0)
+                        if (oldFromCardId > 0 && oldFromCardId !in validCardIds) {
+                            nullifiedFks.add("cardTx[$oldCtxId].fromCardId" to oldFromCardId)
+                        }
+                        if (oldToCardId > 0 && oldToCardId !in validCardIds) {
+                            nullifiedFks.add("cardTx[$oldCtxId].toCardId" to oldToCardId)
+                        }
                         val newCtxId = db.cardTransactionDao().insertTransaction(
                             ctx.toCardTransaction(contractId = contractId.toInt(), validCardIds = validCardIds)
                         ).toInt()
@@ -589,13 +622,14 @@ class TrashService(private val db: AppDatabase) {
                         // would silently mis-count.
                         val safeLegacyTxId = op.optInt("legacyTransactionId", 0).takeIf { it > 0 }
                             ?.let { if (db.transactionDao().getById(it) != null) it else null }
-                        // Validate fromCardId/toCardId — if the cards were also
-                        // trashed, null them out so card-balance reports don't
-                        // double-count a restored op against a non-existent card.
-                        val safeFromCardId = op.optInt("fromCardId", 0).takeIf { it > 0 }
-                            ?.let { if (db.virtualCardDao().getCardById(it) != null) it else null }
-                        val safeToCardId = op.optInt("toCardId", 0).takeIf { it > 0 }
-                            ?.let { if (db.virtualCardDao().getCardById(it) != null) it else null }
+                        // Validate fromCardId/toCardId via the centralised
+                        // helper so null-outs are recorded for the audit trail.
+                        val safeFromCardId = validateCardFk(
+                            op.optInt("fromCardId", 0), "bo[$oldOpId].fromCardId", nullifiedFks
+                        )
+                        val safeToCardId = validateCardFk(
+                            op.optInt("toCardId", 0), "bo[$oldOpId].toCardId", nullifiedFks
+                        )
                         // Remap cardTransactionId via cardTxIdMap. If the
                         // original CardTransaction wasn't restored (e.g. its
                         // row was missing from the snapshot), null it out —
@@ -615,6 +649,7 @@ class TrashService(private val db: AppDatabase) {
                         if (oldOpId > 0L) operationIdMap[oldOpId] = newOpId
                     }
                 }
+                auditFkNullifications(itemId, DeletedItem.TYPE_CONTRACT, nullifiedFks)
 
                 // Re-insert HandoverAct rows tied to the new contractId.
                 // No try/catch: a partial restore (contract without handover
@@ -703,6 +738,68 @@ class TrashService(private val db: AppDatabase) {
 
     private suspend fun audit(action: String, type: String, id: String, reason: String?) {
         db.auditEventDao().insert(AuditEvent(action = action, entityType = type, entityId = id, reason = reason))
+    }
+
+    /**
+     * Batch 8 (was L2): surfaces previously-invisible FK null-outs.
+     *
+     * When a restore path detects that a BusinessOperation's card FK
+     * (fromCardId / toCardId) points to a card that is still in trash
+     * (or otherwise gone), the FK is silently nulled to keep the restore
+     * from producing a dangling row. Without this audit, the user had
+     * no way to discover that a restored operation's card linkage was
+     * dropped — they would see the operation in reports but with no
+     * card attribution, and the card-balance reports would silently
+     * under-count.
+     *
+     * This helper writes a single ACTION_TRASH_FK_NULLIFIED audit event
+     * per restore call, listing every FK that was nulled. It is best-
+     * effort: if the audit insert itself fails, the restore still
+     * proceeds (the financial data is correct; only the audit trail
+     * would be incomplete).
+     */
+    private suspend fun auditFkNullifications(
+        itemId: Long,
+        sourceType: String,
+        nullifiedFks: List<Pair<String, Int>>
+    ) {
+        if (nullifiedFks.isEmpty()) return
+        try {
+            db.auditEventDao().insert(AuditEvent(
+                occurredAt = System.currentTimeMillis(),
+                action = AuditEvent.ACTION_TRASH_FK_NULLIFIED,
+                entityType = sourceType,
+                entityId = itemId.toString(),
+                reason = "Restore of trash item #$itemId required nulling ${nullifiedFks.size} stale card FK(s)",
+                beforeSnapshot = nullifiedFks.joinToString("; ") { (field, oldId) -> "$field=$oldId" },
+                afterSnapshot = nullifiedFks.joinToString("; ") { (field, _) -> "$field=null" }
+            ))
+        } catch (_: Exception) {
+            // Best-effort — don't fail the restore if audit insert fails.
+        }
+    }
+
+    /**
+     * Validates a card FK against the live DB. Returns null if the card
+     * doesn't exist (so the caller can null out the FK) and records the
+     * null-out via [auditFkNullifications] when [nullifiedSink] is provided.
+     *
+     * Centralising the validate-and-record logic here ensures every
+     * restore path uses the same null-out semantics and emits the same
+     * audit trail.
+     */
+    private suspend fun validateCardFk(
+        cardId: Int,
+        fieldName: String,
+        nullifiedSink: MutableList<Pair<String, Int>>? = null
+    ): Int? {
+        if (cardId <= 0) return null
+        return if (db.virtualCardDao().getCardById(cardId) != null) {
+            cardId
+        } else {
+            nullifiedSink?.add(fieldName to cardId)
+            null
+        }
     }
 
     /**
