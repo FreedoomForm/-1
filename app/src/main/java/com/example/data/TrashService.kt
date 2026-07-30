@@ -87,6 +87,12 @@ class TrashService(private val db: AppDatabase) {
             put("name", renter.name); put("phone", renter.phoneNumber); put("debt", renter.debtAmount)
             put("duration", renter.rentDurationDays); put("start", renter.rentStartDateTimestamp); put("scooterId", renter.scooterId); put("scooterName", renter.scooterName)
             put("passport", renter.passportData); put("address", renter.address); put("pinfl", renter.pinfl)
+            // Capture the renter's own BusinessOperations so the restored
+            // renter has the same financial footprint (deposits, debt
+            // forgiveness, adjustments not tied to any contract/tx).
+            put("businessOperations", JSONArray().apply {
+                try { db.businessOperationDao().getAllByRenter(renter.id).forEach { put(it.toJson()) } } catch (_: Exception) {}
+            })
         }
         val itemId = db.deletedItemDao().insert(DeletedItem(
             sourceType = DeletedItem.TYPE_RENTER, sourceId = renter.id.toString(), title = renter.name,
@@ -100,9 +106,22 @@ class TrashService(private val db: AppDatabase) {
      * Snapshot скутера перед удалением. Сохраняет все реквизиты (VIN, двигатель,
      * серийный номер, аккумуляторы, доп. информация, lifecycle status, сервисные
      * даты), чтобы скутер можно было восстановить из корзины.
+     *
+     * Также сохраняет связанные RepairOrder и BusinessOperation(ы) для этого
+     * скутера — иначе восстановленный скутер теряет всю историю ремонтов
+     * (cost, downtime, repeat-failure metrics) и все REPAIR-операции,
+     * что делает per-scooter profitability reports молча неверными.
      */
     suspend fun snapshotScooter(scooter: Scooter, reason: String? = null): Long {
         val json = scooter.toJson()
+        val repairOrders = try {
+            db.repairOrderDao().getAllForScooterOnce(scooter.id)
+        } catch (_: Exception) { emptyList() }
+        val operations = try {
+            db.businessOperationDao().getAllByScooter(scooter.id)
+        } catch (_: Exception) { emptyList() }
+        json.put("repairOrders", JSONArray().apply { repairOrders.forEach { put(it.toJson()) } })
+        json.put("businessOperations", JSONArray().apply { operations.forEach { put(it.toJson()) } })
         val itemId = db.deletedItemDao().insert(DeletedItem(
             sourceType = DeletedItem.TYPE_SCOOTER, sourceId = scooter.id.toString(), title = scooter.name,
             snapshotJson = json.toString(), reason = reason
@@ -153,10 +172,19 @@ class TrashService(private val db: AppDatabase) {
             if (periodIds.isNotEmpty()) db.paymentAllocationDao().forRentPeriods(periodIds)
             else emptyList()
         } catch (_: Exception) { emptyList() }
+        // Capture CardTransaction rows that reference this contract via
+        // contractId (CONTRACT_INCOME type). They are hard-deleted during
+        // the renter/scooter trash cascade — without this snapshot, the
+        // CashFlowWidget and MainCardIncomeWidget on the Reports screen
+        // silently undercount income by the restored contract's amount.
+        val cardTransactions = try {
+            db.cardTransactionDao().getForContractOnce(contract.id)
+        } catch (_: Exception) { emptyList() }
 
         json.put("businessOperations", JSONArray().apply { operations.forEach { put(it.toJson()) } })
         json.put("rentPeriods", JSONArray().apply { periods.forEach { put(it.toJson()) } })
         json.put("handoverActs", JSONArray().apply { handoverActs.forEach { put(it.toJson()) } })
+        json.put("cardTransactions", JSONArray().apply { cardTransactions.forEach { put(it.toJson()) } })
         json.put("paymentAllocations", JSONArray().apply {
             // Each allocation is stored together with the index of its
             // original rentPeriod in the rentPeriods array, so on restore
@@ -224,8 +252,120 @@ class TrashService(private val db: AppDatabase) {
                 val restored = originalId?.let { db.virtualCardDao().unarchiveCard(it) } ?: 0
                 if (restored > 0) requireNotNull(originalId).toLong() else db.virtualCardDao().insertCard(item.snapshotJson.toCard())
             }
-            DeletedItem.TYPE_RENTER -> db.renterDao().insert(item.snapshotJson.toRenter())
-            DeletedItem.TYPE_SCOOTER -> db.scooterDao().insertScooter(item.snapshotJson.toScooter())
+            DeletedItem.TYPE_RENTER -> {
+                val root = JSONObject(item.snapshotJson)
+                val oldRenterId = item.sourceId.toIntOrNull()
+                val newRenterId = db.renterDao().insert(root.toRenter())
+                // Re-insert the renter's own BusinessOperations (deposits,
+                // debt forgiveness, adjustments not tied to any contract/tx).
+                // Use the new renterId so the restored ops point to the
+                // restored renter — the snapshot's renterId is now stale.
+                val opsArray = root.optJSONArray("businessOperations")
+                if (opsArray != null) {
+                    for (i in 0 until opsArray.length()) {
+                        val op = opsArray.optJSONObject(i) ?: continue
+                        val status = op.optString("status", BusinessOperation.STATUS_ACTIVE)
+                        if (status != BusinessOperation.STATUS_ACTIVE) continue
+                        // Validate card FKs the same way other paths do.
+                        val safeFromCardId = op.optInt("fromCardId", 0).takeIf { it > 0 }
+                            ?.let { if (db.virtualCardDao().getCardById(it) != null) it else null }
+                        val safeToCardId = op.optInt("toCardId", 0).takeIf { it > 0 }
+                            ?.let { if (db.virtualCardDao().getCardById(it) != null) it else null }
+                        // Validate legacyTransactionId — the original tx may
+                        // have been trashed alongside the renter and not yet
+                        // restored.
+                        val safeLegacyTxId = op.optInt("legacyTransactionId", 0).takeIf { it > 0 }
+                            ?.let { if (db.transactionDao().getById(it) != null) it else null }
+                        // Validate contractId — same reasoning.
+                        val safeContractId = op.optInt("contractId", 0).takeIf { it > 0 }
+                            ?.let { if (db.contractHistoryDao().getById(it) != null) it else null }
+                        db.businessOperationDao().insert(op.toBusinessOperation(
+                            renterId = newRenterId.toInt(),
+                            contractId = safeContractId,
+                            legacyTransactionId = safeLegacyTxId,
+                            status = BusinessOperation.STATUS_ACTIVE,
+                            fromCardId = safeFromCardId,
+                            toCardId = safeToCardId
+                        ))
+                    }
+                }
+                // Critical: dependent TYPE_CONTRACT and TYPE_TRANSACTION
+                // snapshots in the recycle bin still reference the OLD
+                // renterId. Their restore paths validate renter existence
+                // (see lines above for TYPE_TRANSACTION / TYPE_CONTRACT)
+                // and would throw "renter no longer exists" on every
+                // restore attempt — leaving them stuck in trash forever.
+                // Rewrite each dependent snapshot's renterId to the new
+                // value so subsequent restores succeed.
+                if (oldRenterId != null && oldRenterId > 0) {
+                    try {
+                        db.deletedItemDao().getAllOnceInclTrash().forEach { dep ->
+                            if (dep.id == itemId) return@forEach
+                            if (dep.sourceType != DeletedItem.TYPE_CONTRACT &&
+                                dep.sourceType != DeletedItem.TYPE_TRANSACTION) return@forEach
+                            try {
+                                val depRoot = JSONObject(dep.snapshotJson)
+                                if (depRoot.optInt("renterId", -1) != oldRenterId) return@forEach
+                                depRoot.put("renterId", newRenterId.toInt())
+                                db.deletedItemDao().updateSnapshot(dep.id, depRoot.toString())
+                            } catch (_: Exception) {
+                                // Snapshot may be legacy/malformed — skip silently.
+                            }
+                        }
+                    } catch (_: Exception) {
+                        // Best-effort: don't fail the whole renter restore
+                        // just because the cross-snapshot rewrite failed.
+                    }
+                }
+                newRenterId
+            }
+            DeletedItem.TYPE_SCOOTER -> {
+                val root = JSONObject(item.snapshotJson)
+                val newScooterId = db.scooterDao().insertScooter(root.toScooter()).toInt()
+                // Re-insert RepairOrder rows tied to the NEW scooterId.
+                // Without this, the restored scooter has zero repair history
+                // — per-scooter profitability and repeat-failure metrics
+                // silently drop the scooter's full maintenance past.
+                val repairOrdersArray = root.optJSONArray("repairOrders")
+                if (repairOrdersArray != null) {
+                    for (i in 0 until repairOrdersArray.length()) {
+                        val ro = repairOrdersArray.optJSONObject(i) ?: continue
+                        // Re-OPEN any order that was OPEN at trash time —
+                        // the user can re-close it manually if needed. We
+                        // don't auto-close because that would silently
+                        // fabricate a closedAt timestamp.
+                        db.repairOrderDao().insert(ro.toRepairOrder(scooterId = newScooterId))
+                    }
+                }
+                // Re-insert ACTIVE BusinessOperations tied to the NEW
+                // scooterId (typically TYPE_REPAIR expenses). REVERSED
+                // ones stay as audit.
+                val opsArray = root.optJSONArray("businessOperations")
+                if (opsArray != null) {
+                    for (i in 0 until opsArray.length()) {
+                        val op = opsArray.optJSONObject(i) ?: continue
+                        val status = op.optString("status", BusinessOperation.STATUS_ACTIVE)
+                        if (status != BusinessOperation.STATUS_ACTIVE) continue
+                        val safeFromCardId = op.optInt("fromCardId", 0).takeIf { it > 0 }
+                            ?.let { if (db.virtualCardDao().getCardById(it) != null) it else null }
+                        val safeToCardId = op.optInt("toCardId", 0).takeIf { it > 0 }
+                            ?.let { if (db.virtualCardDao().getCardById(it) != null) it else null }
+                        val safeLegacyTxId = op.optInt("legacyTransactionId", 0).takeIf { it > 0 }
+                            ?.let { if (db.transactionDao().getById(it) != null) it else null }
+                        val safeContractId = op.optInt("contractId", 0).takeIf { it > 0 }
+                            ?.let { if (db.contractHistoryDao().getById(it) != null) it else null }
+                        db.businessOperationDao().insert(op.toBusinessOperation(
+                            scooterId = newScooterId,
+                            contractId = safeContractId,
+                            legacyTransactionId = safeLegacyTxId,
+                            status = BusinessOperation.STATUS_ACTIVE,
+                            fromCardId = safeFromCardId,
+                            toCardId = safeToCardId
+                        ))
+                    }
+                }
+                newScooterId.toLong()
+            }
             DeletedItem.TYPE_TRANSACTION -> {
                 val root = JSONObject(item.snapshotJson)
                 val txSnapshot = root.toTransaction()
@@ -360,6 +500,35 @@ class TrashService(private val db: AppDatabase) {
                     ))
                 }
 
+                // Re-insert CardTransaction rows tied to the new contractId.
+                // Build a map from old cardTx id → new cardTx id so the
+                // BusinessOperation re-insertion pass below can remap
+                // cardTransactionId FK. Without this, restored BusinessOperations
+                // would point to non-existent CardTransaction ids — the
+                // CashFlowWidget and MainCardIncomeWidget read CardTransactions
+                // directly, so they would silently undercount income by the
+                // restored contract's amount.
+                //
+                // No try/catch: a partial restore (contract without its
+                // CardTransactions) silently diverges card-cash-flow reports
+                // from the journal. Roll back instead.
+                val cardTxIdMap = mutableMapOf<Int, Int>() // old id → new id
+                val cardTxsArray = root.optJSONArray("cardTransactions")
+                // Pre-fetch valid card ids once so we don't hit the DAO per row.
+                val validCardIds = try {
+                    db.virtualCardDao().getAllCardsOnce().map { it.id }.toSet()
+                } catch (_: Exception) { emptySet() }
+                if (cardTxsArray != null) {
+                    for (i in 0 until cardTxsArray.length()) {
+                        val ctx = cardTxsArray.optJSONObject(i) ?: continue
+                        val oldCtxId = ctx.optInt("id", 0)
+                        val newCtxId = db.cardTransactionDao().insertTransaction(
+                            ctx.toCardTransaction(contractId = contractId.toInt(), validCardIds = validCardIds)
+                        ).toInt()
+                        if (oldCtxId > 0) cardTxIdMap[oldCtxId] = newCtxId
+                    }
+                }
+
                 // Re-insert all BusinessOperation rows tied to the new contractId.
                 // Build a map from old operation id → new operation id so
                 // PaymentAllocations can be re-linked. Only ACTIVE-status
@@ -389,12 +558,19 @@ class TrashService(private val db: AppDatabase) {
                             ?.let { if (db.virtualCardDao().getCardById(it) != null) it else null }
                         val safeToCardId = op.optInt("toCardId", 0).takeIf { it > 0 }
                             ?.let { if (db.virtualCardDao().getCardById(it) != null) it else null }
+                        // Remap cardTransactionId via cardTxIdMap. If the
+                        // original CardTransaction wasn't restored (e.g. its
+                        // row was missing from the snapshot), null it out —
+                        // a stale FK would point to a non-existent card_tx.
+                        val safeCardTxId = op.optInt("cardTransactionId", 0).takeIf { it > 0 }
+                            ?.let { cardTxIdMap[it] }
                         val newOpId = db.businessOperationDao().insert(op.toBusinessOperation(
                             contractId = contractId.toInt(),
                             legacyTransactionId = safeLegacyTxId,
                             status = BusinessOperation.STATUS_ACTIVE,
                             fromCardId = safeFromCardId,
-                            toCardId = safeToCardId
+                            toCardId = safeToCardId,
+                            cardTransactionId = safeCardTxId
                         ))
                         if (oldOpId > 0L) operationIdMap[oldOpId] = newOpId
                     }
@@ -502,13 +678,13 @@ class TrashService(private val db: AppDatabase) {
         kind = o.optString("kind", VirtualCard.KIND_REGULAR), createdAt = o.optLong("created", System.currentTimeMillis())
     ) }
 
-    private fun String.toRenter(): Renter = JSONObject(this).let { o -> Renter(
-        name = o.optString("name"), phoneNumber = o.optString("phone"), debtAmount = o.optDouble("debt"),
-        balance = -o.optDouble("debt"), rentDurationDays = o.optInt("duration", 7), rentStartDateTimestamp = o.optLong("start", System.currentTimeMillis()),
-        scooterId = o.optInt("scooterId").takeIf { !o.isNull("scooterId") },
-        scooterName = o.optString("scooterName").takeIf { !o.isNull("scooterName") },
-        passportData = o.optString("passport"), address = o.optString("address"), pinfl = o.optString("pinfl")
-    ) }
+    private fun JSONObject.toRenter(): Renter = Renter(
+        name = optString("name"), phoneNumber = optString("phone"), debtAmount = optDouble("debt"),
+        balance = -optDouble("debt"), rentDurationDays = optInt("duration", 7), rentStartDateTimestamp = optLong("start", System.currentTimeMillis()),
+        scooterId = optInt("scooterId").takeIf { !isNull("scooterId") },
+        scooterName = optString("scooterName").takeIf { !isNull("scooterName") },
+        passportData = optString("passport"), address = optString("address"), pinfl = optString("pinfl")
+    )
 
     private fun Transaction.toJson() = JSONObject().apply {
         put("id", id); put("contractId", contractId); put("renterId", renterId); put("scooterId", scooterId)
@@ -539,18 +715,18 @@ class TrashService(private val db: AppDatabase) {
         put("mileageKm", mileageKm)
     }
 
-    private fun String.toScooter(): Scooter = JSONObject(this).let { o -> Scooter(
-        name = o.optString("name"),
-        documentedNumber = o.optString("documentedNumber").takeIf { it.isNotBlank() },
-        vinNumber = o.optString("vinNumber"), engineNumber = o.optString("engineNumber"),
-        scooterSerialNumber = o.optString("scooterSerialNumber"),
-        batteryId1 = o.optString("batteryId1"), batteryId2 = o.optString("batteryId2"),
-        additionalInfo = o.optString("additionalInfo"),
-        lifecycleStatus = o.optString("lifecycleStatus", Scooter.STATUS_AVAILABLE),
-        lastServiceAt = if (o.isNull("lastServiceAt")) null else o.optLong("lastServiceAt"),
-        nextServiceAt = if (o.isNull("nextServiceAt")) null else o.optLong("nextServiceAt"),
-        mileageKm = o.optLong("mileageKm", 0L)
-    ) }
+    private fun JSONObject.toScooter(): Scooter = Scooter(
+        name = optString("name"),
+        documentedNumber = optString("documentedNumber").takeIf { it.isNotBlank() },
+        vinNumber = optString("vinNumber"), engineNumber = optString("engineNumber"),
+        scooterSerialNumber = optString("scooterSerialNumber"),
+        batteryId1 = optString("batteryId1"), batteryId2 = optString("batteryId2"),
+        additionalInfo = optString("additionalInfo"),
+        lifecycleStatus = optString("lifecycleStatus", Scooter.STATUS_AVAILABLE),
+        lastServiceAt = if (isNull("lastServiceAt")) null else optLong("lastServiceAt"),
+        nextServiceAt = if (isNull("nextServiceAt")) null else optLong("nextServiceAt"),
+        mileageKm = optLong("mileageKm", 0L)
+    )
 
     private fun JSONObject.toContract(): ContractHistoryEntry = ContractHistoryEntry(
         renterId = optInt("renterId"), timestamp = optLong("timestamp"), type = optString("type"), amount = optDouble("amount"),
@@ -575,25 +751,29 @@ class TrashService(private val db: AppDatabase) {
     }
 
     /** Deserialise a BusinessOperation from snapshot, allowing callers to
-     *  override foreign-key fields (contractId, legacyTransactionId) and
-     *  status so the restored row points to the newly-created parent. */
+     *  override foreign-key fields (renterId, scooterId, contractId,
+     *  legacyTransactionId) and status so the restored row points to
+     *  the newly-created parent. */
     private fun JSONObject.toBusinessOperation(
+        renterId: Int? = optInt("renterId").takeIf { !isNull("renterId") && it > 0 },
+        scooterId: Int? = optInt("scooterId").takeIf { !isNull("scooterId") && it > 0 },
         contractId: Int? = optInt("contractId").takeIf { !isNull("contractId") && it > 0 },
         legacyTransactionId: Int? = optInt("legacyTransactionId").takeIf { !isNull("legacyTransactionId") && it > 0 },
         status: String = optString("status", BusinessOperation.STATUS_ACTIVE),
         fromCardId: Int? = optInt("fromCardId").takeIf { !isNull("fromCardId") && it > 0 },
-        toCardId: Int? = optInt("toCardId").takeIf { !isNull("toCardId") && it > 0 }
+        toCardId: Int? = optInt("toCardId").takeIf { !isNull("toCardId") && it > 0 },
+        cardTransactionId: Int? = optInt("cardTransactionId").takeIf { !isNull("cardTransactionId") && it > 0 }
     ): BusinessOperation = BusinessOperation(
         occurredAt = optLong("occurredAt", System.currentTimeMillis()),
         type = optString("type"),
         direction = optString("direction"),
         amountMinor = optLong("amountMinor", 0L),
-        renterId = optInt("renterId").takeIf { !isNull("renterId") && it > 0 },
-        scooterId = optInt("scooterId").takeIf { !isNull("scooterId") && it > 0 },
+        renterId = renterId,
+        scooterId = scooterId,
         contractId = contractId,
         fromCardId = fromCardId,
         toCardId = toCardId,
-        cardTransactionId = optInt("cardTransactionId").takeIf { !isNull("cardTransactionId") && it > 0 },
+        cardTransactionId = cardTransactionId,
         legacyTransactionId = legacyTransactionId,
         note = optString("note").takeIf { !isNull("note") },
         status = status,
@@ -661,5 +841,68 @@ class TrashService(private val db: AppDatabase) {
         equipmentChecklist = optString("equipmentChecklist"),
         conditionNotes = optString("conditionNotes"),
         signedBy = optString("signedBy", "LOCAL_SYSTEM")
+    )
+
+    /** Serialise a RepairOrder for snapshot storage. Keeps the id for
+     *  reference only — restored rows get a new auto-generated id. */
+    private fun RepairOrder.toJson(): JSONObject = JSONObject().apply {
+        put("id", id)
+        put("scenario", scenario); put("status", status); put("openedAt", openedAt)
+        put("closedAt", closedAt); put("diagnosis", diagnosis); put("performer", performer)
+        put("partsUsed", partsUsed); put("estimatedMinor", estimatedMinor)
+        put("actualMinor", actualMinor); put("documentNote", documentNote)
+        put("pauseIntervalsJson", pauseIntervalsJson); put("totalPauseMs", totalPauseMs)
+        put("currentlyPaused", currentlyPaused); put("lastPausedAt", lastPausedAt)
+        // renterId is kept so the restored order still shows who initiated
+        // the repair (if known). Caller may override via toRepairOrder.
+        put("renterId", renterId)
+    }
+
+    /** Deserialise a RepairOrder from snapshot, letting the caller override
+     *  the scooterId (always required) so the restored row points to the
+     *  newly-created scooter. */
+    private fun JSONObject.toRepairOrder(scooterId: Int): RepairOrder = RepairOrder(
+        scooterId = scooterId,
+        renterId = optInt("renterId").takeIf { !isNull("renterId") && it > 0 },
+        scenario = optString("scenario", RepairOrder.SCENARIO_OWNER_REPAIR),
+        status = optString("status", RepairOrder.STATUS_OPEN),
+        openedAt = optLong("openedAt", System.currentTimeMillis()),
+        closedAt = optLong("closedAt").takeIf { !isNull("closedAt") && it > 0 },
+        diagnosis = optString("diagnosis"),
+        performer = optString("performer").takeIf { !isNull("performer") },
+        partsUsed = optString("partsUsed").takeIf { !isNull("partsUsed") },
+        estimatedMinor = optLong("estimatedMinor", 0L),
+        actualMinor = optLong("actualMinor", 0L),
+        documentNote = optString("documentNote").takeIf { !isNull("documentNote") },
+        pauseIntervalsJson = optString("pauseIntervalsJson", "[]"),
+        totalPauseMs = optLong("totalPauseMs", 0L),
+        currentlyPaused = optBoolean("currentlyPaused", false),
+        lastPausedAt = optLong("lastPausedAt").takeIf { !isNull("lastPausedAt") && it > 0 }
+    )
+
+    /** Serialise a CardTransaction for snapshot storage. Keeps the id for
+     *  reference only — restored rows get a new auto-generated id. */
+    private fun CardTransaction.toJson(): JSONObject = JSONObject().apply {
+        put("id", id); put("timestamp", timestamp); put("fromCardId", fromCardId)
+        put("toCardId", toCardId); put("amount", amount); put("note", note)
+        put("type", type); put("contractId", contractId)
+    }
+
+    /** Deserialise a CardTransaction from snapshot, letting the caller
+     *  override the contractId so the restored row points to the new
+     *  contract. Also validates fromCardId / toCardId against the live DB
+     *  — stale card references are nulled (mapped to EXTERNAL_SOURCE_ID = 0
+     *  if fromCardId, kept as-is only if valid). */
+    private fun JSONObject.toCardTransaction(
+        contractId: Int?,
+        validCardIds: Set<Int>
+    ): CardTransaction = CardTransaction(
+        timestamp = optLong("timestamp", System.currentTimeMillis()),
+        fromCardId = optInt("fromCardId", 0).let { if (it == 0 || it in validCardIds) it else 0 },
+        toCardId = optInt("toCardId", 0).let { if (it in validCardIds) it else 0 },
+        amount = optDouble("amount", 0.0),
+        note = optString("note").takeIf { !isNull("note") },
+        type = optString("type", CardTransaction.TYPE_CARD_TRANSFER),
+        contractId = contractId
     )
 }

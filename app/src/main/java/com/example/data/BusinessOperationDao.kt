@@ -53,6 +53,22 @@ interface BusinessOperationDao {
     @Query("SELECT * FROM business_operations WHERE contractId = :contractId ORDER BY id ASC")
     suspend fun getAllByContract(contractId: Int): List<BusinessOperation>
 
+    /**
+     * Returns ALL operations (ACTIVE and REVERSED) for a given scooter.
+     * Used by TrashService.snapshotScooter so the repair-cost history of
+     * a scooter can be rebuilt after restoration from the recycle bin.
+     */
+    @Query("SELECT * FROM business_operations WHERE scooterId = :scooterId ORDER BY id ASC")
+    suspend fun getAllByScooter(scooterId: Int): List<BusinessOperation>
+
+    /**
+     * Returns ALL operations (ACTIVE and REVERSED) for a given renter.
+     * Used by TrashService.snapshotRenter so the renter's full financial
+     * history can be rebuilt after restoration from the recycle bin.
+     */
+    @Query("SELECT * FROM business_operations WHERE renterId = :renterId ORDER BY id ASC")
+    suspend fun getAllByRenter(renterId: Int): List<BusinessOperation>
+
     @Query("UPDATE business_operations SET cardTransactionId = :cardTransactionId WHERE id = :operationId")
     suspend fun markCardTransaction(operationId: Long, cardTransactionId: Int)
 

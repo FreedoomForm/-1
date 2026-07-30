@@ -15,6 +15,14 @@ interface RepairOrderDao {
     @Query("SELECT * FROM repair_orders ORDER BY id ASC")
     suspend fun getAllOnce(): List<RepairOrder>
 
+    /**
+     * Returns ALL repair orders for a scooter (OPEN + COMPLETED + CANCELLED).
+     * Used by TrashService.snapshotScooter so the full repair history can be
+     * rebuilt after restoration from the recycle bin.
+     */
+    @Query("SELECT * FROM repair_orders WHERE scooterId = :scooterId ORDER BY openedAt ASC, id ASC")
+    suspend fun getAllForScooterOnce(scooterId: Int): List<RepairOrder>
+
     /** Used by BackupManager to truncate before re-import. */
     @Query("DELETE FROM repair_orders")
     suspend fun deleteAll()
