@@ -436,7 +436,7 @@ class TrashService(private val db: AppDatabase) {
                         dedupOrInsertBusinessOperation(
                             op = op,
                             renterId = txSnapshot.renterId.takeIf { it > 0 },
-                            scooterId = txSnapshot.scooterId.takeIf { it > 0 },
+                            scooterId = txSnapshot.scooterId?.takeIf { it > 0 },
                             contractId = safeContractId,
                             legacyTransactionId = newTxId.toInt(),
                             fromCardId = safeFromCardId,
