@@ -54,7 +54,17 @@ class SmsWorker(
 
             activeRenters.forEach { renter ->
                 if (!settingsRepo.canSendAutoSms(currentTime)) return@forEach
-                if (renter.isOverdueSmsSent || renter.balance >= 0.0) {
+                // Batch 10 (was HIGH B2): removed `renter.isOverdueSmsSent`
+                // from this skip condition. The flag was set true after the
+                // FIRST successful SMS and only reset by autoRenew / payWeekly
+                // / terminate / acceptPayment — meaning once a renter got one
+                // overdue SMS, the configurable smsReminderCooldownHours had
+                // ZERO effect: no further reminders were sent until the renter
+                // paid or the contract renewed (which could be a week later).
+                // The cooldown check below at lines 69-74 already throttles
+                // repeat SMS; the boolean flag was redundant and overrode it.
+                // We still skip if the renter is no longer in debt.
+                if (renter.balance >= 0.0) {
                     skippedCount++
                     return@forEach
                 }
@@ -81,9 +91,38 @@ class SmsWorker(
                     .replace("{payme}", settingsRepo.paymeLink)
                     .replace("{call}", settingsRepo.callCenter)
 
-                val ok = sendSms(renter.phoneNumber, message)
+                // Batch 10 (was HIGH B1): normalize the phone number before
+                // handing it to SmsManager. Previously the raw renter.phoneNumber
+                // was passed — if stored as "998901234567" (no +) or
+                // "+998 90 123 45 67" (spaces), SmsManager would reject with
+                // INVALID_NUMBER / GENERIC_FAILURE and the worker would
+                // retry the same bad number indefinitely, wasting battery
+                // and creating a stream of FAILED SmsDelivery rows.
+                val normalizedPhone = SimHelper.normalizePhoneNumber(renter.phoneNumber)
+                if (!SimHelper.isValidUzbekPhone(normalizedPhone)) {
+                    db.smsDeliveryDao().insert(com.example.data.SmsDelivery(
+                        renterId = renter.id, timestamp = currentTime,
+                        status = com.example.data.SmsDelivery.STATUS_FAILED,
+                        messagePreview = message.take(160),
+                        error = "Invalid Uzbek phone number: ${renter.phoneNumber} → $normalizedPhone"
+                    ))
+                    Log.w(TAG, "SMS skipped for renter #${renter.id}: invalid phone ${renter.phoneNumber}")
+                    skippedCount++
+                    return@forEach
+                }
+                val ok = sendSms(normalizedPhone, message)
                 if (ok) {
-                    repository.update(renter.copy(isOverdueSmsSent = true))
+                    // Batch 10 (was HIGH B4): use the field-specific
+                    // updateOverdueSmsFlag DAO method instead of full-entity
+                    // @Update. Previously this code did
+                    // `repository.update(renter.copy(isOverdueSmsSent = true))`
+                    // which wrote ALL columns of the renter — if
+                    // PaymentCheckWorker.autoRenew ran between the read at
+                    // line 55 and this write, the autoRenew's increment of
+                    // rentDurationDays would be silently reverted, causing
+                    // double-billing on the next autoRenew. The
+                    // field-specific UPDATE touches only isOverdueSmsSent.
+                    db.renterDao().updateOverdueSmsFlag(renter.id, true)
                     settingsRepo.recordAutoSmsSent(currentTime)
                     db.smsDeliveryDao().insert(com.example.data.SmsDelivery(
                         renterId = renter.id, timestamp = currentTime,

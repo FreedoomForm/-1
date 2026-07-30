@@ -56,6 +56,20 @@ interface RenterDao {
 
     suspend fun update(renter: Renter) = updateRenter(renter)
 
+    // ── Batch 10 (was HIGH B4): field-specific UPDATE queries ──────────
+    // The full-entity @Update above is a lost-update landmine on hot paths:
+    // if coroutine A reads the renter, modifies one field, and writes back
+    // while coroutine B is doing the same with a different field, B's write
+    // clobbers A's. The most common offender is SmsWorker (sets
+    // isOverdueSmsSent=true) racing with PaymentCheckWorker.autoRenew
+    // (increments rentDurationDays). The field-specific UPDATEs below
+    // touch ONLY the column they intend to change, eliminating the race.
+    @Query("UPDATE renters SET isOverdueSmsSent = :flag WHERE id = :id")
+    suspend fun updateOverdueSmsFlag(id: Int, flag: Boolean)
+
+    @Query("UPDATE renters SET lastPaymentTimestamp = :timestamp WHERE id = :id")
+    suspend fun updateLastPaymentTimestamp(id: Int, timestamp: Long)
+
     @Query("DELETE FROM renters WHERE id = :id")
     suspend fun deleteRenter(id: Int)
 

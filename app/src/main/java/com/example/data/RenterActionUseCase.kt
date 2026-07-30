@@ -2,6 +2,7 @@ package com.example.data
 
 import android.content.Context
 import android.util.Log
+import androidx.room.withTransaction
 import com.example.widget.WidgetUpdater
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -61,6 +62,14 @@ class RenterActionUseCase(
         renter: Renter,
         notes: String,
         weeklyPriceOverride: Double? = null
+    ) = db_for(context).withTransaction {
+        _payWeeklyInternal(renter, notes, weeklyPriceOverride)
+    }
+
+    private suspend fun _payWeeklyInternal(
+        renter: Renter,
+        notes: String,
+        weeklyPriceOverride: Double?
     ) {
         val weeklyPrice = weeklyPriceOverride ?: settingsRepository.weeklyPrice
         val effectivePrice = if (weeklyPrice > 0) weeklyPrice else SettingsRepository.DEFAULT_WEEKLY_PRICE
@@ -92,7 +101,7 @@ class RenterActionUseCase(
                     ))
                 }
             }
-            
+
             // Запись PAYMENT для истории
             val paymentEntry = ContractHistoryEntry(
                 renterId = renter.id, timestamp = now,
@@ -115,28 +124,30 @@ class RenterActionUseCase(
                 val we = e.weekEnd?.let { dateFmt.format(java.util.Date(it)) } ?: ""
                 "#${e.id}  $ws → $we"
             } ?: ""
-            
-            try {
-                transactionRepository.insert(Transaction(
-                    contractId = unpaid?.id, renterId = renter.id, scooterId = renter.scooterId,
-                    timestamp = now, type = Transaction.TYPE_PAYMENT, amount = effectivePrice,
-                    notes = notes, renterName = renter.name, renterPhone = renter.phoneNumber,
-                    scooterName = renter.scooterName ?: "", contractLabel = contractLabel
-                ))
-            } catch (e: Exception) {
-                Log.w(TAG, "Failed to insert transaction: ${e.message}")
-            }
+
+            // Batch 10 (was HIGH B3): removed try/catch around
+            // transactionRepository.insert and depositContractIncome.
+            // Previously a failure in depositContractIncome was silently
+            // swallowed and the renter's balance was still updated to
+            // newBalance — leaving the card short of the deposited amount
+            // and triggering AccountingIntegrityService discrepancies.
+            // Now the whole payWeekly is wrapped in db.withTransaction
+            // (see payWeekly wrapper above), so any failure rolls back
+            // ALL writes — contract history, transaction, card deposit,
+            // renter balance — leaving the DB in its pre-payment state.
+            transactionRepository.insert(Transaction(
+                contractId = unpaid?.id, renterId = renter.id, scooterId = renter.scooterId,
+                timestamp = now, type = Transaction.TYPE_PAYMENT, amount = effectivePrice,
+                notes = notes, renterName = renter.name, renterPhone = renter.phoneNumber,
+                scooterName = renter.scooterName ?: "", contractLabel = contractLabel
+            ))
 
             // Зачисление на карту — ТОЛЬКО ОДИН РАЗ
-            try {
-                virtualCardRepository.depositContractIncome(
-                    amount = effectivePrice,
-                    note = "To'lov: ${renter.name} (qarz yopildi) — $notes",
-                    contractId = unpaid?.id, renterId = renter.id, scooterId = renter.scooterId
-                )
-            } catch (e: Exception) {
-                Log.w(TAG, "depositContractIncome failed: ${e.message}")
-            }
+            virtualCardRepository.depositContractIncome(
+                amount = effectivePrice,
+                note = "To'lov: ${renter.name} (qarz yopildi) — $notes",
+                contractId = unpaid?.id, renterId = renter.id, scooterId = renter.scooterId
+            )
 
             val updated = renter.copy(
                 debtAmount = maxOf(0.0, -newBalance),
@@ -178,7 +189,7 @@ class RenterActionUseCase(
                 isPaid = true
             )
             val newContractId = historyRepository.insert(newContract)
-            
+
             db.rentPeriodDao().insert(RentPeriod(
                 contractHistoryId = newContractId.toInt(),
                 renterId = renter.id, scooterId = renter.scooterId,
@@ -188,6 +199,27 @@ class RenterActionUseCase(
                 status = RentPeriod.STATUS_PAID,
                 createdAt = now, updatedAt = now
             ))
+
+            // Batch 10 (was HIGH B5): auto-create a HandoverAct when a new
+            // contract is created via prepayment. Previously HandoverAct was
+            // only created via the manual "Akt saqlash" dialog button in
+            // ContractHistoryScreens — the handover_acts table was effectively
+            // always empty unless the user explicitly created acts. Now every
+            // new prepayment contract gets a structured HANDOVER act tied to
+            // the new contractHistoryId, so the per-contract handover history
+            // is populated automatically. The user can still edit fields
+            // (mileage, equipment, condition) via the manual dialog later.
+            renter.scooterId?.let { sid ->
+                db.handoverActDao().insert(HandoverAct(
+                    timestamp = now,
+                    actType = HandoverAct.TYPE_HANDOVER,
+                    renterId = renter.id,
+                    scooterId = sid,
+                    contractHistoryId = newContractId.toInt(),
+                    conditionNotes = "Auto-created by prepayment: $notes",
+                    signedBy = "LOCAL_SYSTEM"
+                ))
+            }
 
             // Запись PAYMENT
             val paymentEntry = ContractHistoryEntry(
@@ -208,28 +240,22 @@ class RenterActionUseCase(
             val wsStr = dateFmt.format(java.util.Date(weekStart))
             val weStr = dateFmt.format(java.util.Date(weekEnd))
             val newContractLabel = "#$newContractId  $wsStr → $weStr"
-            
-            try {
-                transactionRepository.insert(Transaction(
-                    contractId = newContractId.toInt(), renterId = renter.id, scooterId = renter.scooterId,
-                    timestamp = now, type = Transaction.TYPE_PAYMENT, amount = effectivePrice,
-                    notes = notes, renterName = renter.name, renterPhone = renter.phoneNumber,
-                    scooterName = renter.scooterName ?: "", contractLabel = newContractLabel
-                ))
-            } catch (e: Exception) {
-                Log.w(TAG, "Failed to insert transaction: ${e.message}")
-            }
+
+            // Batch 10 (B3): removed try/catch — see debt-payoff branch above
+            // for the rationale. The whole payWeekly is now transactional.
+            transactionRepository.insert(Transaction(
+                contractId = newContractId.toInt(), renterId = renter.id, scooterId = renter.scooterId,
+                timestamp = now, type = Transaction.TYPE_PAYMENT, amount = effectivePrice,
+                notes = notes, renterName = renter.name, renterPhone = renter.phoneNumber,
+                scooterName = renter.scooterName ?: "", contractLabel = newContractLabel
+            ))
 
             // Зачисление на карту — ТОЛЬКО ОДИН РАЗ
-            try {
-                virtualCardRepository.depositContractIncome(
-                    amount = effectivePrice,
-                    note = "To'lov: ${renter.name} (oldindan) — $notes",
-                    contractId = newContractId.toInt(), renterId = renter.id, scooterId = renter.scooterId
-                )
-            } catch (e: Exception) {
-                Log.w(TAG, "depositContractIncome failed: ${e.message}")
-            }
+            virtualCardRepository.depositContractIncome(
+                amount = effectivePrice,
+                note = "To'lov: ${renter.name} (oldindan) — $notes",
+                contractId = newContractId.toInt(), renterId = renter.id, scooterId = renter.scooterId
+            )
 
             val updated = renter.copy(
                 debtAmount = maxOf(0.0, -newBalance),
@@ -254,6 +280,8 @@ class RenterActionUseCase(
             )
         } catch (_: Exception) {}
     }
+
+    private fun db_for(context: Context): AppDatabase = AppDatabase.getDatabase(context)
 
     /**
      * Auto-create missing unpaid contracts for an active renter.
@@ -364,7 +392,12 @@ class RenterActionUseCase(
     /**
      * Расторжение контракта.
      */
-    suspend fun terminate(renter: Renter, weeklyPrice: Double, forgiveDebt: Boolean = false) {
+    suspend fun terminate(renter: Renter, weeklyPrice: Double, forgiveDebt: Boolean = false) =
+        db_for(context).withTransaction {
+            _terminateInternal(renter, weeklyPrice, forgiveDebt)
+        }
+
+    private suspend fun _terminateInternal(renter: Renter, weeklyPrice: Double, forgiveDebt: Boolean) {
         val effectivePrice = if (weeklyPrice > 0) weeklyPrice else SettingsRepository.DEFAULT_WEEKLY_PRICE
         val now = System.currentTimeMillis()
         val scooter: Scooter? = renter.scooterId?.let { fetchScooterById(it) }
@@ -468,7 +501,24 @@ class RenterActionUseCase(
             additionalInfo = scooter?.additionalInfo ?: ""
         )
         historyRepository.insert(entry)
-        
+
+        // Batch 10 (was HIGH B5): auto-create a HandoverAct TYPE_RETURN
+        // when a contract is terminated. Complements the TYPE_HANDOVER act
+        // created by the prepayment branch of payWeekly — together they
+        // give a complete handover/return history per scooter without
+        // requiring the user to manually create acts.
+        renter.scooterId?.let { sid ->
+            db.handoverActDao().insert(HandoverAct(
+                timestamp = now,
+                actType = HandoverAct.TYPE_RETURN,
+                renterId = renter.id,
+                scooterId = sid,
+                contractHistoryId = null, // terminate doesn't create a new contract
+                conditionNotes = "Auto-created by terminate: ${entry.notes}",
+                signedBy = "LOCAL_SYSTEM"
+            ))
+        }
+
         db.auditEventDao().insert(AuditEvent(
             occurredAt = now,
             action = AuditEvent.ACTION_RENT_TERMINATED,
