@@ -149,14 +149,24 @@ class RenterActionUseCase(
                 contractId = unpaid?.id, renterId = renter.id, scooterId = renter.scooterId
             )
 
-            val updated = renter.copy(
-                debtAmount = maxOf(0.0, -newBalance),
+            // Batch 12 (was HIGH B4): switched from full-entity
+            // renterRepository.update(renter.copy(...)) to field-specific
+            // UPDATE queries. The full-entity write clobbered any concurrent
+            // field-specific write to rentDurationDays / scooterId /
+            // scooterName / passportData / address / pinfl because the
+            // read-modify-write captured the renter snapshot at the top of
+            // payWeekly and wrote ALL 13 columns back. Now we touch ONLY
+            // the 5 columns this branch mutates.
+            db.renterDao().updateBalanceAndDebt(
+                renter.id,
                 balance = newBalance,
-                lastPaymentTimestamp = now,
-                isOverdueSmsSent = false,
-                isReturned = if (newBalance >= 0) false else renter.isReturned
+                debtAmount = maxOf(0.0, -newBalance)
             )
-            renterRepository.update(updated)
+            db.renterDao().updateLastPaymentTimestamp(renter.id, now)
+            db.renterDao().updateOverdueSmsFlag(renter.id, false)
+            if (newBalance >= 0 && renter.isReturned) {
+                db.renterDao().updateReturnedFlag(renter.id, false)
+            }
         } else {
             // ── Предоплата: создаём новый оплаченный контракт ──
             val latestPaid = historyRepository.getLatestPaidContract(renter.id)
@@ -257,14 +267,20 @@ class RenterActionUseCase(
                 contractId = newContractId.toInt(), renterId = renter.id, scooterId = renter.scooterId
             )
 
-            val updated = renter.copy(
-                debtAmount = maxOf(0.0, -newBalance),
+            // Batch 12 (was HIGH B4): same field-specific UPDATE pattern
+            // as the debt-payoff branch above. The prepayment branch
+            // unconditionally sets isReturned=false (the renter is
+            // continuing) in addition to balance/debt/timestamp/SMS flag.
+            db.renterDao().updateBalanceAndDebt(
+                renter.id,
                 balance = newBalance,
-                lastPaymentTimestamp = now,
-                isOverdueSmsSent = false,
-                isReturned = false
+                debtAmount = maxOf(0.0, -newBalance)
             )
-            renterRepository.update(updated)
+            db.renterDao().updateLastPaymentTimestamp(renter.id, now)
+            db.renterDao().updateOverdueSmsFlag(renter.id, false)
+            if (renter.isReturned) {
+                db.renterDao().updateReturnedFlag(renter.id, false)
+            }
         }
 
         try { WidgetUpdater.updateAll(context) } catch (_: Exception) {}
@@ -429,14 +445,22 @@ class RenterActionUseCase(
         
         val finalBalance = if (forgiveDebt) renter.balance.coerceAtLeast(0.0) else renter.balance
 
-        val updated = renter.copy(
-            isReturned = true,
+        // Batch 12 (was HIGH B4): switched from full-entity
+        // renterRepository.update(renter.copy(...)) to field-specific
+        // UPDATE queries. The full-entity write clobbered any concurrent
+        // field-specific write to rentDurationDays / scooterId /
+        // scooterName / passportData / address / pinfl because the renter
+        // snapshot was captured at the top of _terminateInternal (before
+        // the scooter-lookup loop) and wrote ALL 13 columns back. Now we
+        // touch ONLY the 5 columns terminate actually mutates.
+        db.renterDao().updateReturnedFlag(renter.id, true)
+        db.renterDao().updateBalanceAndDebt(
+            renter.id,
             balance = finalBalance,
-            debtAmount = maxOf(0.0, -finalBalance),
-            lastPaymentTimestamp = now,
-            isOverdueSmsSent = false
+            debtAmount = maxOf(0.0, -finalBalance)
         )
-        renterRepository.update(updated)
+        db.renterDao().updateLastPaymentTimestamp(renter.id, now)
+        db.renterDao().updateOverdueSmsFlag(renter.id, false)
         
         if (forgivenMinor > 0) {
             db.businessOperationDao().insert(BusinessOperation(

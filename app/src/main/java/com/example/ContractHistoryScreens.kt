@@ -766,11 +766,29 @@ fun RenterContractHistoryScreen(
                         scope.launch {
                             val db = com.example.data.AppDatabase.getDatabase(ctx)
                             val mileage = handoverMileage.toLongOrNull() ?: 0L
+                            // Batch 12 (was MEDIUM 8.1): guard the
+                            // renter.scooterId!! NPE. Previously if the
+                            // renter had no scooter assigned (e.g. their
+                            // scooter was unassigned via ScooterViewModel
+                            // .deleteScooter, or the renter was created
+                            // without a scooter and a handover act was
+                            // attempted), the !! crashed the app with
+                            // NullPointerException. Now we surface a
+                            // Toast and bail out cleanly.
+                            val sid = renter.scooterId
+                            if (sid == null) {
+                                android.widget.Toast.makeText(
+                                    ctx,
+                                    "Avval skuter biriktiring, so'ng akt saqlang.",
+                                    android.widget.Toast.LENGTH_LONG
+                                ).show()
+                                return@launch
+                            }
                             db.handoverActDao().insert(
                                 com.example.data.HandoverAct(
                                     actType = handoverActType,
                                     renterId = renter.id,
-                                    scooterId = renter.scooterId!!,
+                                    scooterId = sid,
                                     mileageKm = mileage,
                                     equipmentChecklist = handoverEquipment.trim(),
                                     conditionNotes = handoverCondition.trim()
@@ -778,7 +796,7 @@ fun RenterContractHistoryScreen(
                             )
                             // При возврате обновляем текущий пробег скутера.
                             if (handoverActType == com.example.data.HandoverAct.TYPE_RETURN) {
-                                val scooter = renter.scooterId?.let { db.scooterDao().getScooterById(it) }
+                                val scooter = db.scooterDao().getScooterById(sid)
                                 if (scooter != null && mileage > scooter.mileageKm) {
                                     db.scooterDao().update(scooter.copy(mileageKm = mileage))
                                 }

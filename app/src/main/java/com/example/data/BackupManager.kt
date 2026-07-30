@@ -447,11 +447,19 @@ object BackupManager {
 
     private fun writeRentPeriods(wb: Workbook, items: List<RentPeriod>) {
         val ws = wb.newWorksheet(SHEET_RENT_PERIODS)
-        val h = listOf("id","contractHistoryId","renterId","scooterId","startsAt","endsAt","chargeMinor","paidMinor","status","suspendedAt","suspensionReason","createdAt","updatedAt")
+        // Batch 12 (was HIGH 5.1): added discountMinor + parentPeriodId
+        // to the export header. Previously a backup round-trip silently
+        // lost both fields — a discounted period restored with
+        // discountMinor=0 had effectiveChargeMinor == chargeMinor (the
+        // discount was erased and the renter's debt inflated), and a
+        // repair-break period lost its link to the parent period so
+        // resumeAfterRepair couldn't extend the correct period.
+        val h = listOf("id","contractHistoryId","renterId","scooterId","startsAt","endsAt","chargeMinor","paidMinor","status","suspendedAt","suspensionReason","createdAt","updatedAt","discountMinor","parentPeriodId")
         h.forEachIndexed { i,v -> ws.value(0,i,v) }
         items.forEachIndexed { index,p ->
             val r=index+1; ws.value(r,0,p.id); p.contractHistoryId?.let { ws.value(r,1,it) }; ws.value(r,2,p.renterId); p.scooterId?.let { ws.value(r,3,it) }
             ws.value(r,4,p.startsAt); ws.value(r,5,p.endsAt); ws.value(r,6,p.chargeMinor); ws.value(r,7,p.paidMinor); ws.value(r,8,p.status); p.suspendedAt?.let { ws.value(r,9,it) }; p.suspensionReason?.let { ws.value(r,10,it) }; ws.value(r,11,p.createdAt); ws.value(r,12,p.updatedAt)
+            ws.value(r,13,p.discountMinor); p.parentPeriodId?.let { ws.value(r,14,it) }
         }
     }
 
@@ -1155,7 +1163,14 @@ object BackupManager {
             scooterId=row.getCell(3)?.asNumber()?.toInt(), startsAt=row.getCell(4)?.asNumber()?.toLong() ?: 0, endsAt=row.getCell(5)?.asNumber()?.toLong() ?: 0,
             chargeMinor=row.getCell(6)?.asNumber()?.toLong() ?: 0, paidMinor=row.getCell(7)?.asNumber()?.toLong() ?: 0,
             status=row.getCell(8)?.asString() ?: RentPeriod.STATUS_ACTIVE, suspendedAt=row.getCell(9)?.asNumber()?.toLong(), suspensionReason=row.getCell(10)?.asString(),
-            createdAt=row.getCell(11)?.asNumber()?.toLong() ?: row.getCell(9)?.asNumber()?.toLong() ?: System.currentTimeMillis(), updatedAt=row.getCell(12)?.asNumber()?.toLong() ?: row.getCell(10)?.asNumber()?.toLong() ?: System.currentTimeMillis()
+            createdAt=row.getCell(11)?.asNumber()?.toLong() ?: row.getCell(9)?.asNumber()?.toLong() ?: System.currentTimeMillis(), updatedAt=row.getCell(12)?.asNumber()?.toLong() ?: row.getCell(10)?.asNumber()?.toLong() ?: System.currentTimeMillis(),
+            // Batch 12 (was HIGH 5.1): read discountMinor + parentPeriodId.
+            // Cells 13 and 14 are absent in backups written by older app
+            // versions — getCell returns null and we fall back to 0 / null,
+            // matching the RentPeriod default values. This keeps the import
+            // backward-compatible while preserving the fields for new backups.
+            discountMinor=row.getCell(13)?.asNumber()?.toLong() ?: 0,
+            parentPeriodId=row.getCell(14)?.asNumber()?.toLong()
         ) } catch (e: Exception) { Log.w(TAG,"Skip period row: ${e.message}"); null }
     }
 

@@ -192,7 +192,15 @@ class ScooterMaintenanceService(private val db: AppDatabase) {
             diagnosis = reason,
             documentNote = "Replaced by ${replacement.name}"
         ))
-        db.renterDao().updateRenter(renter.copy(scooterId = newScooterId, scooterName = replacement.name))
+        // Batch 12 (was HIGH B4): switched from full-entity
+        // db.renterDao().updateRenter(renter.copy(scooterId=...,
+        // scooterName=...)) to a field-specific UPDATE. The full-entity
+        // write clobbered any concurrent field-specific write to balance
+        // / debtAmount / lastPaymentTimestamp / isOverdueSmsSent / etc.
+        // because the renter snapshot was captured at the top of the
+        // transaction and wrote ALL 13 columns back. Now we touch ONLY
+        // scooterId and scooterName — the columns this code path mutates.
+        db.renterDao().updateScooterAssignment(renter.id, newScooterId, replacement.name)
         db.scooterDao().updateLifecycleStatus(oldScooterId, Scooter.STATUS_RETIRED)
         db.scooterDao().updateLifecycleStatus(newScooterId, if (renter.isReturned) Scooter.STATUS_AVAILABLE else Scooter.STATUS_RENTED)
         db.repairOrderDao().openForScooter(oldScooterId).forEach { order ->

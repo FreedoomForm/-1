@@ -63,13 +63,17 @@ class SmsWorker(
                 // paid or the contract renewed (which could be a week later).
                 // The cooldown check below at lines 69-74 already throttles
                 // repeat SMS; the boolean flag was redundant and overrode it.
-                // We still skip if the renter is no longer in debt.
-                if (renter.balance >= 0.0) {
-                    skippedCount++
-                    return@forEach
-                }
-                // A reminder is tied to an actual overdue billable period,
-                // not to the original contract duration (which may be months old).
+                //
+                // Batch 12 (was LOW 4.2): also removed the
+                // `renter.balance >= 0.0` short-circuit that was sitting here.
+                // Renter.balance is @Deprecated — payWeekly still writes it
+                // but PaymentCheckWorker.autoRenew no longer does (per its
+                // comment). That means a renter whose only activity is
+                // autoRenew keeps balance == 0 forever and was silently
+                // skipped by SmsWorker even when they had overdue RentPeriods.
+                // The overduePeriod check below is the authoritative signal;
+                // if it returns null the renter is genuinely not in debt and
+                // we skip. No balance short-circuit needed.
                 val overduePeriod = db.rentPeriodDao().openForRenter(renter.id)
                     .firstOrNull { it.status == com.example.data.RentPeriod.STATUS_OVERDUE }
                 if (overduePeriod == null) {
@@ -83,7 +87,20 @@ class SmsWorker(
                     return@forEach
                 }
                 val daysOverdue = ((currentTime - overduePeriod.endsAt) / (24L * 60 * 60 * 1000)).toInt().coerceAtLeast(1)
-                val debt = maxOf(0.0, -renter.balance)
+                // Batch 12 (was LOW 4.2 follow-up): compute the debt shown in
+                // the SMS from the overdue period's outstandingMinor rather
+                // than from the deprecated renter.balance. Previously the
+                // message showed "{debt}=0" for any renter whose balance
+                // hadn't been touched by payWeekly (e.g. a renter whose only
+                // activity was autoRenew), even when they had a real overdue
+                // period with non-zero outstandingMinor. Now the SMS shows
+                // the actual amount owed on the overdue period. We sum across
+                // ALL overdue periods for the renter (not just the first) so
+                // the message reflects total outstanding debt.
+                val debtMinor = db.rentPeriodDao().openForRenter(renter.id)
+                    .filter { it.status == com.example.data.RentPeriod.STATUS_OVERDUE }
+                    .sumOf { it.outstandingMinor }
+                val debt = com.example.data.BusinessOperation.fromMinor(debtMinor)
                 val message = settingsRepo.smsTemplate
                     .replace("{name}", renter.name.trim().lowercase())
                     .replace("{days}", daysOverdue.toString())

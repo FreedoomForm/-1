@@ -96,12 +96,20 @@ class RentPeriodAccountingService(private val db: AppDatabase) {
         // is added to it. Open-period debt remains negative balance.
         val previousAdvanceMinor = BusinessOperation.toMinor(renter.balance.coerceAtLeast(0.0))
         val newBalanceMinor = previousAdvanceMinor + allocation.unallocatedMinor - remainingDebt
-        db.renterDao().updateRenter(renter.copy(
+        // Batch 12 (was HIGH B4): switched from full-entity
+        // db.renterDao().updateRenter(renter.copy(...)) to field-specific
+        // UPDATE queries. The full-entity write clobbered any concurrent
+        // field-specific write to rentDurationDays / scooterId / scooterName
+        // / passportData / address / pinfl because the renter snapshot was
+        // captured at the top of acceptPayment and wrote ALL 13 columns
+        // back. Now we touch ONLY the 4 columns this code path mutates.
+        db.renterDao().updateBalanceAndDebt(
+            renter.id,
             balance = BusinessOperation.fromMinor(newBalanceMinor),
-            debtAmount = BusinessOperation.fromMinor((-newBalanceMinor).coerceAtLeast(0)),
-            lastPaymentTimestamp = occurredAt,
-            isOverdueSmsSent = false
-        ))
+            debtAmount = BusinessOperation.fromMinor((-newBalanceMinor).coerceAtLeast(0))
+        )
+        db.renterDao().updateLastPaymentTimestamp(renter.id, occurredAt)
+        db.renterDao().updateOverdueSmsFlag(renter.id, false)
         db.auditEventDao().insert(AuditEvent(
             occurredAt = occurredAt,
             actor = actor,

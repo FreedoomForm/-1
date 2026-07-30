@@ -70,6 +70,31 @@ interface RenterDao {
     @Query("UPDATE renters SET lastPaymentTimestamp = :timestamp WHERE id = :id")
     suspend fun updateLastPaymentTimestamp(id: Int, timestamp: Long)
 
+    // ── Batch 12 (was HIGH B4 carryover): more field-specific UPDATE
+    // queries. The remaining full-entity @Update callers in
+    // PaymentCheckWorker.autoRenew (rentDurationDays + isOverdueSmsSent),
+    // RenterActionUseCase.payWeekly/_terminateInternal (balance, debtAmount,
+    // lastPaymentTimestamp, isOverdueSmsSent, isReturned),
+    // RentPeriodAccountingService.acceptPayment (balance, debtAmount,
+    // lastPaymentTimestamp, isOverdueSmsSent), and
+    // ScooterMaintenanceService.replaceScooterForActiveRental (scooterId,
+    // scooterName) all rewrite the entire row. A concurrent field-specific
+    // UPDATE (e.g. SmsWorker setting isOverdueSmsSent=true, or a future
+    // scooter-assignment edit) is silently clobbered. The methods below
+    // touch ONLY the columns each caller intends to mutate, eliminating
+    // the lost-update race on the Renter table's hottest paths.
+    @Query("UPDATE renters SET rentDurationDays = :days WHERE id = :id")
+    suspend fun updateRentDurationDays(id: Int, days: Int)
+
+    @Query("UPDATE renters SET isReturned = :returned WHERE id = :id")
+    suspend fun updateReturnedFlag(id: Int, returned: Boolean)
+
+    @Query("UPDATE renters SET balance = :balance, debtAmount = :debtAmount WHERE id = :id")
+    suspend fun updateBalanceAndDebt(id: Int, balance: Double, debtAmount: Double)
+
+    @Query("UPDATE renters SET scooterId = :scooterId, scooterName = :scooterName WHERE id = :id")
+    suspend fun updateScooterAssignment(id: Int, scooterId: Int?, scooterName: String?)
+
     @Query("DELETE FROM renters WHERE id = :id")
     suspend fun deleteRenter(id: Int)
 

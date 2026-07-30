@@ -126,11 +126,17 @@ class PaymentCheckWorker(
         }
 
         // ИСПРАВЛЕНО: НЕ меняем balance напрямую, только увеличиваем срок
-        val renewed = renter.copy(
-            rentDurationDays = renter.rentDurationDays + 7,
-            isOverdueSmsSent = false
-        )
-        db.renterDao().updateRenter(renewed)
+        // Batch 12 (was HIGH B4): switched from full-entity @Update
+        // (renter.copy(...) + updateRenter) to two field-specific UPDATE
+        // queries. The full-entity write clobbered any concurrent
+        // field-specific write (e.g. a concurrent SmsWorker setting
+        // isOverdueSmsSent=true, or a payWeekly updating balance) because
+        // the read-modify-write here captured the renter snapshot at
+        // autoRenew entry and wrote ALL 13 columns back. Now we touch
+        // ONLY rentDurationDays and isOverdueSmsSent — the columns this
+        // code path actually mutates.
+        db.renterDao().updateRentDurationDays(renter.id, renter.rentDurationDays + 7)
+        db.renterDao().updateOverdueSmsFlag(renter.id, false)
 
         val scooter = renter.scooterId?.let { db.scooterDao().getScooterById(it) }
 

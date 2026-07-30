@@ -258,6 +258,15 @@ class MainActivity : ComponentActivity() {
                 // and surfaces a Snackbar if any critical permission is
                 // missing, so the user knows to go to Settings.
                 val snackbarHostState = remember { androidx.compose.material3.SnackbarHostState() }
+                // Batch 12 (was BLOCKER 1.1): use rememberCoroutineScope
+                // instead of MainScope().launch. MainScope() creates an
+                // unstructured global scope that survives the Activity but
+                // is detached from composition — coroutines launched into it
+                // are not cancelled when the composition disposes, and the
+                // scope is never cleaned up. rememberCoroutineScope is
+                // bound to the composition's lifecycle, so the launch is
+                // cancelled automatically when the user leaves the screen.
+                val uiScope = rememberCoroutineScope()
                 val permissionLauncher = rememberLauncherForActivityResult(
                     contract = ActivityResultContracts.RequestMultiplePermissions()
                 ) { results ->
@@ -275,9 +284,13 @@ class MainActivity : ComponentActivity() {
                                 else -> perm.substringAfterLast('.')
                             }
                         }
-                        // Best-effort snackbar — don't fail the composition
-                        // if the host state isn't attached yet.
-                        kotlinx.coroutines.MainScope().launch {
+                        // Best-effort snackbar — the host state is wired
+                        // into MainScreen's Scaffold (see MainScreen call
+                        // below) so the message is actually visible. The
+                        // launch is fire-and-forget; if the snackbar host
+                        // is not yet attached (e.g. still on splash), the
+                        // call is a no-op.
+                        uiScope.launch {
                             snackbarHostState.showSnackbar(
                                 message = "Ruxsatlar berilmadi: $names. Sozlamalardan yoqib qo'ying.",
                                 actionLabel = "Tushunarli",
@@ -324,6 +337,14 @@ class MainActivity : ComponentActivity() {
                         onShowLauncher = { showLauncher = true },
                         showLauncher = showLauncher,
                         launcherState = launcherState,
+                        // Batch 12 (was BLOCKER 1.1): pass the
+                        // snackbarHostState created above into MainScreen
+                        // so its Scaffold can render the SnackbarHost. The
+                        // permission-denial message (and any future
+                        // snackbar calls against this host) was previously
+                        // invisible because no SnackbarHost composable was
+                        // wired anywhere in the tree.
+                        snackbarHostState = snackbarHostState,
                         onLauncherPageClick = { page ->
                             launcherTab = when (page) {
                                 "renters"   -> 0
@@ -545,7 +566,12 @@ fun MainScreen(
     onShowLauncher: () -> Unit = {},
     showLauncher: Boolean = false,
     launcherState: com.example.ui.components.LauncherCurtainState = com.example.ui.components.rememberLauncherCurtainState(),
-    onLauncherPageClick: (String) -> Unit = {}
+    onLauncherPageClick: (String) -> Unit = {},
+    // Batch 12 (was BLOCKER 1.1): SnackbarHostState passed in from
+    // MainActivity so the permission-denial callback (and any other
+    // activity-level snackbar) actually has a host to render into.
+    // Defaults to a fresh state so previews / tests don't need to pass it.
+    snackbarHostState: androidx.compose.material3.SnackbarHostState = remember { androidx.compose.material3.SnackbarHostState() }
 ) {
     var currentTab by remember { mutableStateOf(initialTab) }
     // Launcher tile taps update `initialTab` from the parent composable.
@@ -1098,6 +1124,14 @@ fun MainScreen(
     Scaffold(
         modifier = Modifier.fillMaxSize(),
         containerColor = ClaudeBackground,
+        // Batch 12 (was BLOCKER 1.1): wire the SnackbarHost into the
+        // Scaffold. Previously the snackbarHostState was created in
+        // MainActivity but no SnackbarHost composable was attached
+        // anywhere in the tree, so all showSnackbar() calls were no-ops
+        // — the permission-denial message (and any future snackbar) was
+        // silently invisible. The host is positioned by the Scaffold's
+        // default placement (above the bottom bar).
+        snackbarHost = { androidx.compose.material3.SnackbarHost(snackbarHostState) },
         topBar = {
             TopAppBar(
                 title = {
