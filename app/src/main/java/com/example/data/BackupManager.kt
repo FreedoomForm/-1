@@ -581,6 +581,15 @@ object BackupManager {
             var cardsCount = 0
             var cardTxCount = 0
             var notifCount = 0
+            // Batch 7: extra warnings collected during import (e.g. stub-card
+            // recovery notice). Merged into the final summary string so the
+            // user is informed of any non-fatal data-loss prevention steps.
+            val importExtraWarnings = mutableListOf<String>()
+            // Hoisted out of the inner ReadableWorkbook scope so the result-
+            // string builder below can detect a missing/empty VirtualCards
+            // sheet and surface a warning instead of silently reporting
+            // cardsCount = 0.
+            var hadCardsSheet = false
 
             input.use { stream ->
                 ReadableWorkbook(stream).use { wb ->
@@ -633,6 +642,7 @@ object BackupManager {
                     }
 
                     // 3) VirtualCards
+                    hadCardsSheet = sheetMap.containsKey(SHEET_VIRTUAL_CARDS)
                     sheetMap[SHEET_VIRTUAL_CARDS]?.let { sh ->
                         val list = readVirtualCards(sh)
                         list.forEach { db.virtualCardDao().insertCard(it) }
@@ -769,12 +779,148 @@ object BackupManager {
                             (3, 'Tashqidan', 0.0, '#FF00838F', 'Tashqidan kirgan pul (bank, naqd va h.k.)', 1, strftime('%s','now') * 1000, 'EXTERNAL_IN'),
                             (4, 'Tashqiga',  0.0, '#FFC62828', 'Tashqiga chiqarilgan pul (yechib olish, to''lovlar)', 1, strftime('%s','now') * 1000, 'EXTERNAL_OUT')
                     """.trimIndent())
+
+                    // Batch 7 (fixes HIGH-1 / deferred FINDING G): stub-card
+                    // recovery. When the VirtualCards sheet is missing/empty,
+                    // only the 4 system cards above exist after self-healing.
+                    // But the imported CardTransactions and BusinessOperations
+                    // sheets may reference OTHER card ids (user-created cards
+                    // from the original DB that weren't included in the backup).
+                    //
+                    // Without stub recovery, those CardTransactions and
+                    // BusinessOperations silently reference non-existent card
+                    // ids — CashFlowWidget, MainCardIncomeWidget, and any
+                    // per-card report filter them out, silently losing income
+                    // or expense data.
+                    //
+                    // We can't restore the user's original card names/colors
+                    // (that metadata was only in the missing VirtualCards
+                    // sheet), but we CAN create placeholder stubs so the FK
+                    // references resolve. The user can manually rename/recolor
+                    // the stubs in the Finansi screen after import.
+                    //
+                    // Only run if the VirtualCards sheet was missing/empty —
+                    // otherwise the sheet already contains all cards and there
+                    // are no missing ids to stub.
+                    if (!hadCardsSheet || cardsCount == 0) {
+                        try {
+                            val existingCardIds = db.virtualCardDao().getAllCardsOnce().map { it.id }.toSet()
+                            // Scan CardTransactions and BusinessOperations
+                            // for referenced card ids not in existingCardIds.
+                            val missingIds = mutableSetOf<Int>()
+                            db.cardTransactionDao().getAllOnce().forEach { ctx ->
+                                if (ctx.fromCardId != 0 && ctx.fromCardId !in existingCardIds) {
+                                    missingIds.add(ctx.fromCardId)
+                                }
+                                if (ctx.toCardId != 0 && ctx.toCardId !in existingCardIds) {
+                                    missingIds.add(ctx.toCardId)
+                                }
+                            }
+                            try {
+                                db.businessOperationDao().getAllOnce().forEach { bo ->
+                                    bo.fromCardId?.let { if (it !in existingCardIds) missingIds.add(it) }
+                                    bo.toCardId?.let { if (it !in existingCardIds) missingIds.add(it) }
+                                }
+                            } catch (_: Exception) {
+                                // businessOperations sheet may not exist in
+                                // older backups — skip silently.
+                            }
+                            // Insert a stub card for each missing id. Use
+                            // INSERT OR IGNORE so we don't fail if a stub
+                            // already exists from a previous import attempt.
+                            // kind=REGULAR so the card appears in the user-
+                            // visible card list (the user can rename/recolor).
+                            // colorHex=#FF888888 (neutral grey) signals "stub".
+                            // balance=0 — we can't reconstruct the original
+                            // balance, so we start at 0 and let the imported
+                            // CardTransactions naturally recompute it via the
+                            // cash-flow ledger (or the user can manually adjust).
+                            val now = System.currentTimeMillis()
+                            missingIds.sorted().forEach { id ->
+                                db.openHelper.writableDatabase.execSQL(
+                                    """INSERT OR IGNORE INTO `virtual_cards`
+                                       (id, name, balance, colorHex, info, isDefault, createdAt, kind)
+                                       VALUES (?, ?, 0.0, '#FF888888', ?, 0, ?, 'REGULAR')""",
+                                    arrayOf<Any>(
+                                        id,
+                                        "Restored Card #$id",
+                                        "Auto-restored stub from imported transactions (original VirtualCards sheet missing)",
+                                        now
+                                    )
+                                )
+                            }
+                            // Surface the stubbed ids in the import result
+                            // so the user knows to rename/recolor them.
+                            if (missingIds.isNotEmpty()) {
+                                importExtraWarnings.add(
+                                    "Restored ${missingIds.size} ta stub karta (id=${missingIds.sorted().joinToString(",")}) — iltimos nomlarini/ranglarini Finansi ekranida o'zgartiring"
+                                )
+                            }
+                        } catch (_: Exception) {
+                            // Best-effort: don't fail import on stub-recovery error.
+                        }
+                    }
                 }
             }
 
             val total = rentersCount + scootersCount + contractsCount +
                 transactionsCount + cardsCount + cardTxCount + notifCount
-            "Import tayyor: $total ta yozuv qo'shildi"
+            // Build a detailed result string that surfaces data-loss risks
+            // instead of silently reporting a number. Three specific gaps
+            // are detected:
+            //   1) VirtualCards sheet missing or empty — only the 4 system
+            //      cards are restored by the self-healing step below; any
+            //      user-created cards are silently lost.
+            //   2) CardTransactions referencing non-existent card ids —
+            //      those rows dangle against an empty virtual_cards table
+            //      and silently disappear from CashFlowWidget / MainCardIncomeWidget.
+            //   3) Full per-table counts so the user can verify the import.
+            val warnings = mutableListOf<String>()
+            if (!hadCardsSheet || cardsCount == 0) {
+                // Batch 7: previously this branch said "user cards were
+                // not restored, only 4 system cards added". With stub-card
+                // recovery now in place, user cards referenced by imported
+                // CardTransactions/BusinessOperations ARE recovered as
+                // placeholder stubs. The user just needs to rename/recolor
+                // them. The detailed stub list is appended below from
+                // importExtraWarnings.
+                warnings.add("Diqqat: VirtualCards varaqi topilmadi — foydalanuvchi kartalari avtomatik stub sifatida tiklandi (nomlarini Finansi ekranida o'zgartiring)")
+            }
+            // Merge in any extra warnings collected during import (e.g.
+            // the list of stub card ids that were auto-created).
+            warnings.addAll(importExtraWarnings)
+            // After import + self-heal, scan CardTransactions for stale
+            // cardId references. Cheap: one query against virtual_cards
+            // to fetch all valid ids, then iterate the imported CardTx
+            // rows in memory.
+            try {
+                val validCardIds = db.virtualCardDao().getAllCardsOnce().map { it.id }.toSet()
+                var staleCount = 0
+                // Re-read the imported CardTransactions from DB (not the
+                // sheet — the sheet's rows have already been consumed).
+                val importedCardTx = db.cardTransactionDao().getAllOnce()
+                importedCardTx.forEach { ctx ->
+                    if ((ctx.fromCardId != 0 && ctx.fromCardId !in validCardIds) ||
+                        ctx.toCardId !in validCardIds) {
+                        staleCount++
+                    }
+                }
+                if (staleCount > 0) {
+                    warnings.add("Diqqat: $staleCount ta CardTransaction mavjud bo'lmagan kartaga ishora qilmoqda — ular card-cash-flow hisobotlarida ko'rinmaydi")
+                }
+            } catch (_: Exception) {
+                // Best-effort diagnostic; don't fail import on diagnostic error.
+            }
+            val summary = buildString {
+                append("Import tayyor: $total ta yozuv qo'shildi")
+                append(" (renters=$rentersCount, scooters=$scootersCount, contracts=$contractsCount")
+                append(", tx=$transactionsCount, cards=$cardsCount, cardTx=$cardTxCount, notif=$notifCount)")
+                if (warnings.isNotEmpty()) {
+                    append(" | ")
+                    append(warnings.joinToString("; "))
+                }
+            }
+            summary
         } catch (e: Exception) {
             Log.e(TAG, "Import failed", e)
             "Xato: ${e.message ?: e.javaClass.simpleName}"

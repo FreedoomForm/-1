@@ -14,6 +14,14 @@ interface NotificationHistoryDao {
     @Query("SELECT * FROM notification_history ORDER BY timestamp DESC")
     suspend fun getAllOnce(): List<NotificationHistoryEntity>
 
+    /**
+     * Returns ALL NotificationHistory rows for a given renter. Used by
+     * TrashService.snapshotRenter so notification history can be rebuilt
+     * after restoration from the recycle bin.
+     */
+    @Query("SELECT * FROM notification_history WHERE renterId = :renterId ORDER BY timestamp ASC, id ASC")
+    suspend fun forRenterOnce(renterId: Int): List<NotificationHistoryEntity>
+
     @Insert(onConflict = OnConflictStrategy.IGNORE)
     suspend fun insert(entity: NotificationHistoryEntity)
 

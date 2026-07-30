@@ -87,6 +87,49 @@ interface BusinessOperationDao {
     @Query("UPDATE business_operations SET status = 'REVERSED' WHERE cardTransactionId = :cardTxId AND status = 'ACTIVE'")
     suspend fun markReversedByCardTransactionId(cardTxId: Int): Int
 
+    /**
+     * Cross-snapshot BO deduplication lookup (Batch 7 — fixes BLOCKER B1).
+     *
+     * The same `BusinessOperation` row can be captured by TWO independent
+     * snapshots during cascade trash:
+     *   - `snapshotContract` captures it via `contractId`
+     *   - `snapshotTransaction` captures it via `legacyTransactionId`
+     *
+     * Without dedup, restoring both snapshots would insert two identical
+     * ACTIVE rows → income/expense reports silently double-count the
+     * operation's `amountMinor`.
+     *
+     * Solution: before inserting a restored BO, query by the fingerprint
+     * (`occurredAt + amountMinor + direction + type + renterId + scooterId`).
+     * If a matching ACTIVE op already exists, the restore path skips the
+     * insert and reuses the existing id for `operationIdMap` (so
+     * `PaymentAllocation` rows still link correctly).
+     *
+     * `renterId` / `scooterId` use `(x IS :y OR (x IS NULL AND :y IS NULL))`
+     * so a NULL parameter matches a NULL column (Room binds Kotlin `null`
+     * as SQL `NULL`). Without this form, `renterId = NULL` would never
+     * match (SQL `=` semantics return NULL, not TRUE, for NULL operands).
+     */
+    @Query("""
+        SELECT * FROM business_operations
+        WHERE status = 'ACTIVE'
+          AND occurredAt = :occurredAt
+          AND amountMinor = :amountMinor
+          AND direction = :direction
+          AND type = :type
+          AND (renterId IS :renterId OR (renterId IS NULL AND :renterId IS NULL))
+          AND (scooterId IS :scooterId OR (scooterId IS NULL AND :scooterId IS NULL))
+        LIMIT 1
+    """)
+    suspend fun findActiveByFingerprint(
+        occurredAt: Long,
+        amountMinor: Long,
+        direction: String,
+        type: String,
+        renterId: Int?,
+        scooterId: Int?
+    ): BusinessOperation?
+
     @Query("DELETE FROM business_operations")
     suspend fun clear()
 }

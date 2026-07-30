@@ -93,6 +93,17 @@ class TrashService(private val db: AppDatabase) {
             put("businessOperations", JSONArray().apply {
                 try { db.businessOperationDao().getAllByRenter(renter.id).forEach { put(it.toJson()) } } catch (_: Exception) {}
             })
+            // Capture SMS delivery + notification history. These rows are
+            // hard-deleted during the renter trash cascade (see
+            // RenterViewModel.deleteRenter). Without this snapshot, the
+            // restored renter has zero SMS delivery history — per-renter
+            // SMS success-rate reports silently drop all past entries.
+            put("smsDeliveries", JSONArray().apply {
+                try { db.smsDeliveryDao().forRenterOnce(renter.id).forEach { put(it.toJson()) } } catch (_: Exception) {}
+            })
+            put("notifications", JSONArray().apply {
+                try { db.notificationHistoryDao().forRenterOnce(renter.id).forEach { put(it.toJson()) } } catch (_: Exception) {}
+            })
         }
         val itemId = db.deletedItemDao().insert(DeletedItem(
             sourceType = DeletedItem.TYPE_RENTER, sourceId = renter.id.toString(), title = renter.name,
@@ -154,6 +165,17 @@ class TrashService(private val db: AppDatabase) {
      *  business-specific cascade removes it. */
     suspend fun snapshotContract(contract: ContractHistoryEntry, reason: String? = null): Long {
         val json = contract.toJson()
+        // Capture the scooterId at snapshot time. The contract row itself
+        // only stores scooterName (a denormalized string), so without this
+        // field the restore path would have to use renter.scooterId —
+        // which may have changed if the renter was reassigned after the
+        // contract was trashed. Storing the snapshot's scooterId lets the
+        // restore path run the conflict check against the SAME scooter
+        // the contract was originally written for.
+        val snapshotScooterId = try {
+            db.renterDao().getRenterById(contract.renterId)?.scooterId
+        } catch (_: Exception) { null }
+        json.put("snapshotScooterId", snapshotScooterId)
         // Capture all dependent rows so restore can rebuild the full
         // billing & financial history of the contract. Without this,
         // a restored contract would be an empty shell with one RentPeriod
@@ -212,23 +234,6 @@ class TrashService(private val db: AppDatabase) {
         return itemId
     }
 
-    suspend fun moveContractToTrash(contract: ContractHistoryEntry, reason: String? = null): Long = db.withTransaction {
-        val itemId = snapshotContract(contract, reason)
-        db.contractHistoryDao().deleteById(contract.id)
-        // Cancel the linked RentPeriod (don't hard-delete — preserves billing
-        // history for reports) and clean up PaymentAllocation rows that
-        // referenced it. Reverse BusinessOperations tied to this contract.
-        try {
-            db.rentPeriodDao().byContractHistoryId(contract.id)?.let {
-                db.rentPeriodDao().update(it.copy(status = RentPeriod.STATUS_CANCELLED))
-            }
-        } catch (_: Exception) {}
-        try { db.paymentAllocationDao().deleteByContractViaPeriod(contract.id) } catch (_: Exception) {}
-        try { db.businessOperationDao().markReversedByContract(contract.id) } catch (_: Exception) {}
-        try { db.handoverActDao().deleteByContract(contract.id) } catch (_: Exception) {}
-        itemId
-    }
-
     suspend fun restore(itemId: Long): Long {
         synchronized(restoringIds) {
             check(itemId !in restoringIds) {
@@ -279,14 +284,16 @@ class TrashService(private val db: AppDatabase) {
                         // Validate contractId — same reasoning.
                         val safeContractId = op.optInt("contractId", 0).takeIf { it > 0 }
                             ?.let { if (db.contractHistoryDao().getById(it) != null) it else null }
-                        db.businessOperationDao().insert(op.toBusinessOperation(
+                        dedupOrInsertBusinessOperation(
+                            op = op,
                             renterId = newRenterId.toInt(),
+                            scooterId = null,
                             contractId = safeContractId,
                             legacyTransactionId = safeLegacyTxId,
-                            status = BusinessOperation.STATUS_ACTIVE,
                             fromCardId = safeFromCardId,
-                            toCardId = safeToCardId
-                        ))
+                            toCardId = safeToCardId,
+                            cardTransactionId = null
+                        )
                     }
                 }
                 // Critical: dependent TYPE_CONTRACT and TYPE_TRANSACTION
@@ -315,6 +322,24 @@ class TrashService(private val db: AppDatabase) {
                     } catch (_: Exception) {
                         // Best-effort: don't fail the whole renter restore
                         // just because the cross-snapshot rewrite failed.
+                    }
+                }
+                // Re-insert SmsDelivery + NotificationHistory rows tied to
+                // the new renterId. Without this, the restored renter has
+                // zero SMS delivery history — per-renter SMS success-rate
+                // reports silently drop all past entries.
+                val smsArray = root.optJSONArray("smsDeliveries")
+                if (smsArray != null) {
+                    for (i in 0 until smsArray.length()) {
+                        val s = smsArray.optJSONObject(i) ?: continue
+                        db.smsDeliveryDao().insert(s.toSmsDelivery(renterId = newRenterId.toInt()))
+                    }
+                }
+                val notifArray = root.optJSONArray("notifications")
+                if (notifArray != null) {
+                    for (i in 0 until notifArray.length()) {
+                        val n = notifArray.optJSONObject(i) ?: continue
+                        db.notificationHistoryDao().insert(n.toNotification(renterId = newRenterId.toInt()))
                     }
                 }
                 newRenterId
@@ -354,14 +379,16 @@ class TrashService(private val db: AppDatabase) {
                             ?.let { if (db.transactionDao().getById(it) != null) it else null }
                         val safeContractId = op.optInt("contractId", 0).takeIf { it > 0 }
                             ?.let { if (db.contractHistoryDao().getById(it) != null) it else null }
-                        db.businessOperationDao().insert(op.toBusinessOperation(
+                        dedupOrInsertBusinessOperation(
+                            op = op,
+                            renterId = null,
                             scooterId = newScooterId,
                             contractId = safeContractId,
                             legacyTransactionId = safeLegacyTxId,
-                            status = BusinessOperation.STATUS_ACTIVE,
                             fromCardId = safeFromCardId,
-                            toCardId = safeToCardId
-                        ))
+                            toCardId = safeToCardId,
+                            cardTransactionId = null
+                        )
                     }
                 }
                 newScooterId.toLong()
@@ -406,13 +433,16 @@ class TrashService(private val db: AppDatabase) {
                             ?.let { if (db.virtualCardDao().getCardById(it) != null) it else null }
                         val safeToCardId = op.optInt("toCardId", 0).takeIf { it > 0 }
                             ?.let { if (db.virtualCardDao().getCardById(it) != null) it else null }
-                        db.businessOperationDao().insert(op.toBusinessOperation(
-                            legacyTransactionId = newTxId.toInt(),
+                        dedupOrInsertBusinessOperation(
+                            op = op,
+                            renterId = txSnapshot.renterId.takeIf { it > 0 },
+                            scooterId = txSnapshot.scooterId.takeIf { it > 0 },
                             contractId = safeContractId,
-                            status = BusinessOperation.STATUS_ACTIVE,
+                            legacyTransactionId = newTxId.toInt(),
                             fromCardId = safeFromCardId,
-                            toCardId = safeToCardId
-                        ))
+                            toCardId = safeToCardId,
+                            cardTransactionId = null
+                        )
                     }
                 }
                 newTxId
@@ -424,7 +454,15 @@ class TrashService(private val db: AppDatabase) {
                     ?: error("Cannot restore contract: renter no longer exists")
                 val start = contract.weekStart ?: contract.timestamp
                 val end = contract.weekEnd ?: start + 7L * 24 * 60 * 60 * 1000
-                renter.scooterId?.let { scooterId ->
+                // Use the SNAPSHOT's scooterId (captured at trash time) for
+                // the conflict check, not the renter's CURRENT scooterId —
+                // the renter may have been reassigned after the contract was
+                // trashed, and using the wrong scooter would silently allow
+                // a conflicting restore. Fall back to current renter.scooterId
+                // for legacy pre-Batch 7 snapshots that don't have the field.
+                val conflictScooterId = root.optInt("snapshotScooterId", 0).takeIf { it > 0 }
+                    ?: renter.scooterId
+                conflictScooterId?.let { scooterId ->
                     check(db.rentPeriodDao().conflictsForScooter(scooterId, start, end).isEmpty()) {
                         "Cannot restore contract: scooter period conflicts with an active rental"
                     }
@@ -564,14 +602,16 @@ class TrashService(private val db: AppDatabase) {
                         // a stale FK would point to a non-existent card_tx.
                         val safeCardTxId = op.optInt("cardTransactionId", 0).takeIf { it > 0 }
                             ?.let { cardTxIdMap[it] }
-                        val newOpId = db.businessOperationDao().insert(op.toBusinessOperation(
+                        val newOpId = dedupOrInsertBusinessOperation(
+                            op = op,
+                            renterId = contract.renterId.takeIf { it > 0 },
+                            scooterId = renter.scooterId,
                             contractId = contractId.toInt(),
                             legacyTransactionId = safeLegacyTxId,
-                            status = BusinessOperation.STATUS_ACTIVE,
                             fromCardId = safeFromCardId,
                             toCardId = safeToCardId,
                             cardTransactionId = safeCardTxId
-                        ))
+                        )
                         if (oldOpId > 0L) operationIdMap[oldOpId] = newOpId
                     }
                 }
@@ -663,6 +703,77 @@ class TrashService(private val db: AppDatabase) {
 
     private suspend fun audit(action: String, type: String, id: String, reason: String?) {
         db.auditEventDao().insert(AuditEvent(action = action, entityType = type, entityId = id, reason = reason))
+    }
+
+    /**
+     * Cross-snapshot BusinessOperation deduplication helper (Batch 7 — BLOCKER B1).
+     *
+     * The same `BusinessOperation` row is captured by TWO independent
+     * snapshots during cascade trash:
+     *   - `snapshotContract` captures it via `getAllByContract(contractId)`
+     *   - `snapshotTransaction` captures it via `getAllByLegacyTransactionId(txId)`
+     *
+     * If the same op has BOTH `contractId` AND `legacyTransactionId` set
+     * (the typical case — every Transaction has a BusinessOperation with
+     * `legacyTransactionId` AND `contractId` set during migration 23→24),
+     * both snapshots store the same JSON. Without dedup, restoring both
+     * snapshots inserts TWO identical ACTIVE rows → income/expense
+     * reports silently double-count the amount.
+     *
+     * Solution: before inserting a restored BO, query
+     * `findActiveByFingerprint(occurredAt, amountMinor, direction, type,
+     * renterId, scooterId)`. If a matching ACTIVE op already exists:
+     *   - Don't insert a duplicate.
+     *   - Return the existing op's id so the caller can record it in
+     *     `operationIdMap` — `PaymentAllocation` rows still link correctly.
+     *
+     * The fingerprint excludes `contractId`, `legacyTransactionId`,
+     * `cardTransactionId`, `fromCardId`, `toCardId`, `note` because:
+     *   - `contractId` / `legacyTransactionId` are intentionally DIFFERENT
+     *     between the two restore paths (each path nulls out the FK that
+     *     points to a not-yet-restored parent). Including them would
+     *     prevent dedup.
+     *   - `cardTransactionId` / `fromCardId` / `toCardId` are also remapped
+     *     per-restore and may differ.
+     *   - `note` is free text and may have been edited.
+     *
+     * The fingerprint uniquely identifies the ORIGINAL operation row
+     * because `occurredAt` is a millisecond timestamp set at insertion
+     * time and `amountMinor + direction + type + renterId + scooterId`
+     * fully describe the financial fact.
+     */
+    private suspend fun dedupOrInsertBusinessOperation(
+        op: JSONObject,
+        renterId: Int?,
+        scooterId: Int?,
+        contractId: Int?,
+        legacyTransactionId: Int?,
+        fromCardId: Int?,
+        toCardId: Int?,
+        cardTransactionId: Int?
+    ): Long {
+        val occurredAt = op.optLong("occurredAt", System.currentTimeMillis())
+        val amountMinor = op.optLong("amountMinor", 0L)
+        val direction = op.optString("direction", BusinessOperation.DIRECTION_INCOME)
+        val type = op.optString("type", BusinessOperation.TYPE_RENT_PAYMENT)
+        val existing = db.businessOperationDao().findActiveByFingerprint(
+            occurredAt, amountMinor, direction, type, renterId, scooterId
+        )
+        if (existing != null) {
+            // Already restored via the other snapshot path. Don't insert
+            // a duplicate — that would double-count income/expense.
+            return existing.id
+        }
+        return db.businessOperationDao().insert(op.toBusinessOperation(
+            renterId = renterId,
+            scooterId = scooterId,
+            contractId = contractId,
+            legacyTransactionId = legacyTransactionId,
+            status = BusinessOperation.STATUS_ACTIVE,
+            fromCardId = fromCardId,
+            toCardId = toCardId,
+            cardTransactionId = cardTransactionId
+        ))
     }
 
     private fun String.toTimelineEvent(): TimelineEvent = JSONObject(this).let { o -> TimelineEvent(
@@ -904,5 +1015,38 @@ class TrashService(private val db: AppDatabase) {
         note = optString("note").takeIf { !isNull("note") },
         type = optString("type", CardTransaction.TYPE_CARD_TRANSFER),
         contractId = contractId
+    )
+
+    /** Serialise an SmsDelivery for snapshot storage. Id is kept for
+     *  reference only — restored rows get a new auto-generated id. */
+    private fun SmsDelivery.toJson(): JSONObject = JSONObject().apply {
+        put("id", id); put("timestamp", timestamp); put("status", status)
+        put("messagePreview", messagePreview); put("error", error)
+    }
+
+    /** Deserialise an SmsDelivery from snapshot, letting the caller override
+     *  the renterId so the restored row points to the new renter. */
+    private fun JSONObject.toSmsDelivery(renterId: Int): SmsDelivery = SmsDelivery(
+        renterId = renterId,
+        timestamp = optLong("timestamp", System.currentTimeMillis()),
+        status = optString("status", SmsDelivery.STATUS_SENT),
+        messagePreview = optString("messagePreview"),
+        error = optString("error").takeIf { !isNull("error") }
+    )
+
+    /** Serialise a NotificationHistoryEntity for snapshot storage. Id is
+     *  kept for reference only — restored rows get a new auto-generated id. */
+    private fun NotificationHistoryEntity.toJson(): JSONObject = JSONObject().apply {
+        put("id", id); put("timestamp", timestamp); put("title", title); put("message", message)
+    }
+
+    /** Deserialise a NotificationHistoryEntity from snapshot, letting the
+     *  caller override the renterId so the restored row points to the new
+     *  renter. */
+    private fun JSONObject.toNotification(renterId: Int): NotificationHistoryEntity = NotificationHistoryEntity(
+        timestamp = optLong("timestamp", System.currentTimeMillis()),
+        renterId = renterId,
+        title = optString("title"),
+        message = optString("message")
     )
 }
