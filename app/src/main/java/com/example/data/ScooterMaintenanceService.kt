@@ -41,6 +41,18 @@ class ScooterMaintenanceService(private val db: AppDatabase) {
             check(conflicts.none { it.status in setOf(RentPeriod.STATUS_ACTIVE, RentPeriod.STATUS_PARTIALLY_PAID, RentPeriod.STATUS_OVERDUE) }) {
                 "Cannot move a scooter with an active rental into service/retirement"
             }
+            // Batch 9 (was MEDIUM C1): also block if there are SUSPENDED_REPAIR
+            // periods. The conflictsForScooter query filters by status IN
+            // (SCHEDULED, ACTIVE, PARTIALLY_PAID, OVERDUE) — it does NOT
+            // include SUSPENDED_REPAIR, so a scooter in repair would pass
+            // the guard and silently move to SERVICE/RETIRED with its open
+            // RepairOrder left dangling. The user must finish or cancel
+            // the repair first (via resumeAfterRepair or by closing the
+            // order manually).
+            val suspended = db.rentPeriodDao().suspendedForScooter(scooterId)
+            check(suspended.isEmpty()) {
+                "Cannot move a scooter with an open repair into service/retirement — finish or cancel the repair first"
+            }
         }
         db.scooterDao().updateLifecycleStatus(scooterId, status)
         db.auditEventDao().insert(AuditEvent(
@@ -82,13 +94,35 @@ class ScooterMaintenanceService(private val db: AppDatabase) {
         val openOrder = db.repairOrderDao().openForScooter(scooterId).firstOrNull()
         val extraPauseMs = openOrder?.totalPauseMs ?: 0L
         val paused = db.rentPeriodDao().suspendedForScooter(scooterId)
+        // Batch 9 (was HIGH B6): if the renter was terminated while the
+        // scooter was in repair, the SUSPENDED_REPAIR periods still belong
+        // to a terminated renter. Resuming them as ACTIVE/OVERDUE would
+        // inflate receivables for a renter who has already been closed out
+        // AND set the scooter back to STATUS_RENTED with no active renter.
+        // Detect this case up-front: if ANY paused period's renter is
+        // isReturned=true, close all paused periods as CLOSED (debt
+        // preserved if any) and leave the scooter AVAILABLE.
+        val terminatedRenterIds = paused
+            .mapNotNull { it.renterId }
+            .distinct()
+            .mapNotNull { rid -> db.renterDao().getRenterById(rid) }
+            .filter { it.isReturned }
+            .map { it.id }
+            .toSet()
+        val hasTerminatedRenter = terminatedRenterIds.isNotEmpty()
         paused.forEach { period ->
             val basePauseMs = (now - (period.suspendedAt ?: now)).coerceAtLeast(0L)
             // §8: добавляем суммарную длительность всех явных паузов ремонта.
             val totalPauseMs = basePauseMs + extraPauseMs
             val newEnd = period.endsAt + totalPauseMs
-            val restoredStatus = when {
-                period.paidMinor >= period.chargeMinor -> RentPeriod.STATUS_PAID
+            val restoredStatus = if (hasTerminatedRenter || period.renterId in terminatedRenterIds) {
+                // Batch 9 (B6): renter is terminated — close the period
+                // instead of reactivating it. Preserve debt (CLOSED_WITH_DEBT)
+                // if the renter still owed money; otherwise CLOSED.
+                if (period.paidMinor >= period.effectiveChargeMinor) RentPeriod.STATUS_CLOSED
+                else RentPeriod.STATUS_CLOSED_WITH_DEBT
+            } else when {
+                period.paidMinor >= period.effectiveChargeMinor -> RentPeriod.STATUS_PAID
                 period.paidMinor > 0 -> RentPeriod.STATUS_PARTIALLY_PAID
                 newEnd <= now -> RentPeriod.STATUS_OVERDUE
                 else -> RentPeriod.STATUS_ACTIVE
@@ -101,10 +135,13 @@ class ScooterMaintenanceService(private val db: AppDatabase) {
                 updatedAt = now
             ))
         }
-        db.scooterDao().updateLifecycleStatus(
-            scooterId,
-            if (paused.isNotEmpty()) Scooter.STATUS_RENTED else Scooter.STATUS_AVAILABLE
-        )
+        // Batch 9 (B6): only set STATUS_RENTED if there is at least one
+        // paused period whose renter is NOT terminated. If all paused
+        // periods belong to terminated renters, the scooter goes back to
+        // AVAILABLE (the renter returned it implicitly via terminate).
+        val anyActiveRenter = paused.any { it.renterId !in terminatedRenterIds }
+        val newStatus = if (anyActiveRenter && paused.isNotEmpty()) Scooter.STATUS_RENTED else Scooter.STATUS_AVAILABLE
+        db.scooterDao().updateLifecycleStatus(scooterId, newStatus)
         db.repairOrderDao().openForScooter(scooterId).forEach { order ->
             db.repairOrderDao().update(order.copy(
                 status = RepairOrder.STATUS_COMPLETED,
@@ -116,7 +153,7 @@ class ScooterMaintenanceService(private val db: AppDatabase) {
             occurredAt = now, action = AuditEvent.ACTION_REPAIR_FINISH, entityType = "SCOOTER", entityId = scooterId.toString(),
             reason = reason,
             beforeSnapshot = "status=${scooter.lifecycleStatus}; pausedPeriods=${paused.size}",
-            afterSnapshot = "status=${if (paused.isNotEmpty()) Scooter.STATUS_RENTED else Scooter.STATUS_AVAILABLE}; extraPauseMs=$extraPauseMs"
+            afterSnapshot = "status=$newStatus; extraPauseMs=$extraPauseMs; terminatedRenterClosed=${terminatedRenterIds.size}"
         ))
         paused.size
     }
@@ -200,6 +237,42 @@ class ScooterMaintenanceService(private val db: AppDatabase) {
             scooterId = scooterId, fromCardId = fromCardId, toCardId = VirtualCard.EXTERNAL_OUT_CARD_ID,
             cardTransactionId = cardTxId.toInt(), note = note
         ))
+        // Batch 9 (was BLOCKER A2): accumulate the expense on the open
+        // RepairOrder.actualMinor so ScooterMetricsService.repairMetrics
+        // reports a non-zero total repair cost. Previously actualMinor was
+        // never written by any code path, so the per-scooter detail screen
+        // always showed "Umumiy xarajat: 0 so'm" for every scooter, making
+        // the entire repair-cost metric useless. We accumulate (rather than
+        // overwrite) because recordRepairExpense can be called multiple
+        // times for the same repair (parts + labour billed separately).
+        val openOrders = db.repairOrderDao().openForScooter(scooterId)
+        if (openOrders.isNotEmpty()) {
+            // All open orders for this scooter are part of the same repair
+            // session — accumulate on every open order. (In practice there
+            // is only one; the loop is defensive.)
+            openOrders.forEach { order ->
+                db.repairOrderDao().update(order.copy(
+                    actualMinor = order.actualMinor + amountMinor,
+                    documentNote = listOfNotNull(order.documentNote, "Expense: $note ($amountMinor minor)").joinToString(" • ")
+                ))
+            }
+        } else {
+            // No open RepairOrder — the expense was recorded without a
+            // repair being started (e.g. preventive maintenance billed to
+            // a retired scooter). Synthesize a COMPLETED RepairOrder so
+            // the expense is still attributable for metrics.
+            db.repairOrderDao().insert(RepairOrder(
+                scooterId = scooterId,
+                renterId = null,
+                scenario = RepairOrder.SCENARIO_OWNER_REPAIR,
+                status = RepairOrder.STATUS_COMPLETED,
+                openedAt = occurredAt,
+                closedAt = occurredAt,
+                diagnosis = note,
+                actualMinor = amountMinor,
+                documentNote = "Synthesised from recordRepairExpense (no open repair order)"
+            ))
+        }
         db.auditEventDao().insert(AuditEvent(
             occurredAt = occurredAt, action = "SCOOTER_REPAIR_EXPENSE", entityType = "SCOOTER", entityId = scooterId.toString(),
             reason = note, beforeSnapshot = "card=$fromCardId; balance=${card.balance}",

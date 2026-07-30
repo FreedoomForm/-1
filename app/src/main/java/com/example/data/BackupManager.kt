@@ -3,6 +3,7 @@ package com.example.data
 import android.content.Context
 import android.net.Uri
 import android.util.Log
+import androidx.room.withTransaction
 import org.dhatim.fastexcel.Workbook
 import org.dhatim.fastexcel.reader.ReadableWorkbook
 import org.dhatim.fastexcel.reader.Sheet
@@ -573,6 +574,34 @@ object BackupManager {
             val input: java.io.InputStream = resolver.openInputStream(uri)
                 ?: return "Xato: fayl ochilmadi (openInputStream = null)"
 
+            // Batch 9 (was BLOCKER A1): wrap the ENTIRE truncate + parse +
+            // insert sequence in a single db.withTransaction. Previously a
+            // mid-import failure (malformed xlsx row, OOM, disk full, parser
+            // exception) left the DB in an inconsistent state: some tables
+            // fully truncated, others partially populated, foreign keys
+            // pointing to nothing. The user lost all existing data AND got
+            // a half-imported set. Now any exception rolls back the entire
+            // import — the DB is left in its pre-import state.
+            //
+            // We deliberately read the .xlsx inside the transaction too:
+            // parsing happens lazily during sheet.read(), and if the parser
+            // hits a malformed cell mid-way, the rollback still covers all
+            // writes done up to that point.
+            db.withTransaction {
+                _importFromExcelInternal(context, db, input)
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Import failed", e)
+            "Xato: ${e.message ?: e.javaClass.simpleName}"
+        }
+    }
+
+    private suspend fun _importFromExcelInternal(
+        context: Context,
+        db: AppDatabase,
+        input: java.io.InputStream
+    ): String {
+
             // Считаем статистику для отчёта
             var rentersCount = 0
             var scootersCount = 0
@@ -920,11 +949,11 @@ object BackupManager {
                     append(warnings.joinToString("; "))
                 }
             }
-            summary
-        } catch (e: Exception) {
-            Log.e(TAG, "Import failed", e)
-            "Xato: ${e.message ?: e.javaClass.simpleName}"
-        }
+            return summary
+        // No outer try/catch here — the wrapper importFromExcel() handles
+        // all exceptions and converts them to a user-facing error string.
+        // Reaching this point means the import succeeded inside the
+        // transaction and the result string is returned to the caller.
     }
 
     /* ── Парсеры листов ─────────────────────────────────────────────────── */

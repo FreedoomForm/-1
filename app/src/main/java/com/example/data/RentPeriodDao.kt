@@ -61,7 +61,7 @@ interface RentPeriodDao {
 
     @Query("""
         UPDATE rent_periods SET
-          status = CASE WHEN paidMinor >= chargeMinor THEN 'CLOSED' ELSE 'CLOSED_WITH_DEBT' END,
+          status = CASE WHEN paidMinor >= (chargeMinor - COALESCE(discountMinor, 0)) THEN 'CLOSED' ELSE 'CLOSED_WITH_DEBT' END,
           updatedAt = :timestamp
         WHERE renterId = :renterId AND status IN ('ACTIVE','PARTIALLY_PAID','OVERDUE')
     """)

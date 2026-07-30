@@ -157,14 +157,21 @@ object ManagementReportCalculator {
                 // Calculate daily rate for this period
                 val periodDays = ((period.endsAt - period.startsAt).toDouble() / DAY_MS).coerceAtLeast(1.0)
                 val dailyRateMinor = period.chargeMinor / periodDays
-                
+
                 // Calculate overlap with MRR window
                 val overlapStart = maxOf(period.startsAt, now)
                 val overlapEnd = minOf(period.endsAt, mrrWindowEnd)
                 val overlapDays = ((overlapEnd - overlapStart).toDouble() / DAY_MS).coerceAtLeast(0.0)
-                
-                // Contribution = daily rate * overlap days, scaled to 30 days
-                (dailyRateMinor * MONTH_DAYS).toLong()
+
+                // Batch 9 (was HIGH B7): use overlapDays instead of MONTH_DAYS.
+                // Previously the computed overlapDays was discarded and every
+                // period contributed `dailyRate × 30` regardless of how many
+                // days it actually overlapped the MRR window — overstating
+                // MRR by up to 30× for short-overlap periods. Now we prorate
+                // by actual overlap and scale to a 30-day month: a 7-day
+                // period that fully overlaps contributes (dailyRate × 7),
+                // which is the correct prorated monthly contribution.
+                (dailyRateMinor * overlapDays).toLong()
             }
     }
 

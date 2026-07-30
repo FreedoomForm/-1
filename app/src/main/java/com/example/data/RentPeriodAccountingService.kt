@@ -51,9 +51,16 @@ class RentPeriodAccountingService(private val db: AppDatabase) {
         allocation.allocations.forEach { applied ->
             val period = byId.getValue(applied.contractId)
             val paid = period.paidMinor + applied.appliedMinor
+            // Batch 9 (was HIGH B8): use effectiveChargeMinor (chargeMinor −
+            // discountMinor) instead of raw chargeMinor. Previously a
+            // discounted period that was fully paid after discount was
+            // wrongly marked PARTIALLY_PAID / CLOSED_WITH_DEBT. Now a
+            // period where paidMinor >= effectiveChargeMinor is correctly
+            // marked PAID / CLOSED.
+            val effective = period.effectiveChargeMinor
             val status = when {
-                paid >= period.chargeMinor && renter.isReturned -> RentPeriod.STATUS_CLOSED
-                paid >= period.chargeMinor -> RentPeriod.STATUS_PAID
+                paid >= effective && renter.isReturned -> RentPeriod.STATUS_CLOSED
+                paid >= effective -> RentPeriod.STATUS_PAID
                 renter.isReturned -> RentPeriod.STATUS_CLOSED_WITH_DEBT
                 else -> RentPeriod.STATUS_PARTIALLY_PAID
             }

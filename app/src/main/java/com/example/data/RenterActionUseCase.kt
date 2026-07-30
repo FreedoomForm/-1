@@ -418,7 +418,37 @@ class RenterActionUseCase(
         
         periodDao.closeOpenForRenter(renter.id, now)
         periodDao.cancelScheduledForRenter(renter.id, now)
-        renter.scooterId?.let { db.scooterDao().updateLifecycleStatus(it, Scooter.STATUS_AVAILABLE) }
+        // Batch 9 (was MEDIUM C2): don't blindly overwrite STATUS_REPAIR
+        // with STATUS_AVAILABLE. If the scooter is currently being repaired,
+        // setting it to AVAILABLE would (a) make it rentable even though
+        // it's broken, (b) leave the open RepairOrder dangling with no
+        // resolution. Only transition to AVAILABLE if the scooter is in a
+        // RENTED/RESERVED-like state. REPAIR / SERVICE / RETIRED are left
+        // alone — the user must explicitly finish or cancel the repair.
+        renter.scooterId?.let { sid ->
+            val scooter = db.scooterDao().getScooterById(sid)
+            if (scooter != null && scooter.lifecycleStatus == Scooter.STATUS_RENTED) {
+                db.scooterDao().updateLifecycleStatus(sid, Scooter.STATUS_AVAILABLE)
+            }
+            // If scooter is STATUS_REPAIR/SERVICE/RETIRED, leave it — the
+            // user will resolve the repair lifecycle separately. We also
+            // close any SUSPENDED_REPAIR periods tied to this renter so
+            // they don't get reactivated by a later resumeAfterRepair.
+            if (scooter != null && scooter.lifecycleStatus == Scooter.STATUS_REPAIR) {
+                db.rentPeriodDao().suspendedForScooter(sid)
+                    .filter { it.renterId == renter.id }
+                    .forEach { period ->
+                        val closedStatus = if (period.paidMinor >= period.effectiveChargeMinor)
+                            RentPeriod.STATUS_CLOSED else RentPeriod.STATUS_CLOSED_WITH_DEBT
+                        db.rentPeriodDao().update(period.copy(
+                            status = closedStatus,
+                            suspendedAt = null,
+                            suspensionReason = "Renter terminated during repair",
+                            updatedAt = now
+                        ))
+                    }
+            }
+        }
 
         val entry = ContractHistoryEntry(
             renterId = renter.id, timestamp = now,
