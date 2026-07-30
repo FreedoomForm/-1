@@ -250,9 +250,42 @@ class MainActivity : ComponentActivity() {
 
         setContent {
             MyApplicationTheme {
+                // Batch 11 (was MEDIUM C3): switched from three sequential
+                // RequestPermission.launch() calls (which raced — only the
+                // last dialog was actually shown, the others were silently
+                // denied) to a single RequestMultiplePermissions launch.
+                // The callback now inspects which permissions were granted
+                // and surfaces a Snackbar if any critical permission is
+                // missing, so the user knows to go to Settings.
+                val snackbarHostState = remember { androidx.compose.material3.SnackbarHostState() }
                 val permissionLauncher = rememberLauncherForActivityResult(
-                    contract = ActivityResultContracts.RequestPermission()
-                ) { /* результат не важен — мы запрашиваем автоматически */ }
+                    contract = ActivityResultContracts.RequestMultiplePermissions()
+                ) { results ->
+                    // Results is Map<String, Boolean>. Surface a message for
+                    // any denied permission so the user knows the app's SMS /
+                    // notification / dual-SIM features won't work until they
+                    // grant the permission via Settings.
+                    val denied = results.filterValues { !it }.keys
+                    if (denied.isNotEmpty()) {
+                        val names = denied.joinToString(", ") { perm ->
+                            when (perm) {
+                                Manifest.permission.SEND_SMS -> "SMS yuborish"
+                                Manifest.permission.POST_NOTIFICATIONS -> "Bildirishnomalar"
+                                Manifest.permission.READ_PHONE_STATE -> "SIM ma'lumotlari"
+                                else -> perm.substringAfterLast('.')
+                            }
+                        }
+                        // Best-effort snackbar — don't fail the composition
+                        // if the host state isn't attached yet.
+                        kotlinx.coroutines.MainScope().launch {
+                            snackbarHostState.showSnackbar(
+                                message = "Ruxsatlar berilmadi: $names. Sozlamalardan yoqib qo'ying.",
+                                actionLabel = "Tushunarli",
+                                withDismissAction = true
+                            )
+                        }
+                    }
+                }
 
                 // ── §9A: Splash screen with loading animation ────────────────
                 // Shows logo + progress indicator while data prepares, then
@@ -271,13 +304,15 @@ class MainActivity : ComponentActivity() {
                 var launcherTab by remember { mutableStateOf(0) }
 
                 // Авто-запрос SMS + POST_NOTIFICATIONS (Android 13+) + READ_PHONE_STATE при первом старте.
+                // Batch 11 (C3): single RequestMultiplePermissions launch instead
+                // of three sequential RequestPermission launches.
                 LaunchedEffect(Unit) {
-                    permissionLauncher.launch(Manifest.permission.SEND_SMS)
+                    val perms = mutableListOf(Manifest.permission.SEND_SMS)
                     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                        permissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+                        perms.add(Manifest.permission.POST_NOTIFICATIONS)
                     }
-                    // READ_PHONE_STATE — SIM kartalarni aniqlash uchun kerak (dual-SIM qo'llab-quvvatlash)
-                    permissionLauncher.launch(Manifest.permission.READ_PHONE_STATE)
+                    perms.add(Manifest.permission.READ_PHONE_STATE)
+                    permissionLauncher.launch(perms.toTypedArray())
                 }
 
                 if (showSplash) {
