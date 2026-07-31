@@ -15,6 +15,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -1976,7 +1977,8 @@ fun RenterTable(
     // а пользователь скроллит таблицу по горизонтали если колонок много.
     val hasAnyExtraVisible = showPassport || showAddress || showPinfl
 
-    val wName     = 160.dp   // увеличено с 110 — вмещает «Имя Фамилия»
+    val wNum      = 40.dp    // № — порядковый номер строки
+    val wName     = 200.dp   // увеличено с 160 — вмещает «Имя Фамилия Отчество» без обрезки
     val wPhone    = 115.dp
     val wScoot    = 90.dp
     val wStart    = 90.dp
@@ -1998,6 +2000,7 @@ fun RenterTable(
                     .padding(horizontal = 8.dp, vertical = 4.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
+                NonSortableHeaderCellFixed(Icons.Default.Numbers, wNum, "№")
                 if (showName)     SortableHeaderCellFixed(Icons.Default.Person,               wName,     "col_name",     sortState) { onSortClick("col_name") }
                 if (showPhone)    SortableHeaderCellFixed(Icons.Default.Phone,                wPhone,    "col_phone",    sortState) { onSortClick("col_phone") }
                 if (showScooter)  SortableHeaderCellFixed(Icons.Default.DirectionsBike,       wScoot,    "col_scooter",  sortState) { onSortClick("col_scooter") }
@@ -2028,7 +2031,7 @@ fun RenterTable(
         }
 
         LazyColumn(modifier = Modifier.fillMaxSize()) {
-            items(renters, key = { it.id }) { renter ->
+            itemsIndexed(renters, key = { _, it -> it.id }) { idx, renter ->
                 val isSelected = selected.contains(renter.id)
                 val status = statusOf(renter)
                 val sColor = statusColor(status)
@@ -2056,8 +2059,21 @@ fun RenterTable(
                             .padding(horizontal = 8.dp, vertical = 10.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        // Mijoz — имя + фамилия. maxLines=2 чтобы «Akmal Karimov»
-                        // переносилось на вторую строку вместо обрезки «Akmal…».
+                        // ── № — порядковый номер строки ──
+                        Text(
+                            "${idx + 1}",
+                            modifier = Modifier
+                                .width(wNum)
+                                .padding(horizontal = 4.dp),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = ClaudeTextSecondary,
+                            fontWeight = FontWeight.Medium,
+                            maxLines = 1
+                        )
+                        // Mijoz — полное Имя + Фамилия + Отчество (если есть).
+                        // maxLines = Int.MAX_VALUE — НЕ обрезаем никогда, даже если
+                        // имя длинное (3-4 слова). Пользователь явно просил: «не важно
+                        // хватает места или нет».
                         if (showName) {
                             Text(
                                 renter.name,
@@ -2067,7 +2083,7 @@ fun RenterTable(
                                 style = MaterialTheme.typography.bodyMedium,
                                 color = ClaudeText,
                                 fontWeight = FontWeight.SemiBold,
-                                maxLines = 2,
+                                maxLines = Int.MAX_VALUE,
                                 softWrap = true,
                                 overflow = TextOverflow.Visible
                             )
@@ -3599,6 +3615,7 @@ fun ScooterTable(
     // ВСЕГДА используем fixed widths + горизонтальный скролл — даже когда
     // скрыты все extra-колонки. Это гарантирует что имя скутера не будет
     // обрезано (maxLines=2 + softWrap позволяют переносу на 2 строки).
+    val wNum    = 40.dp    // № — порядковый номер строки
     val wName   = 140.dp   // увеличено с 110 — вмещает «Skillmax-001» с запасом
     val wDoc    = 115.dp
     val wVin    = 140.dp
@@ -3622,6 +3639,7 @@ fun ScooterTable(
                     .padding(horizontal = 8.dp, vertical = 4.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
+                NonSortableHeaderCellFixed(Icons.Default.Numbers, wNum, "№")
                 if (showName)   SortableHeaderCellFixed(Icons.Default.Label,         wName,   "col_name",  sortState) { onSortClick("col_name") }
                 if (showDoc)    NonSortableHeaderCellFixed(Icons.Default.CreditCard,   wDoc,    "Hujjat raqami")
                 if (showVin)    NonSortableHeaderCellFixed(Icons.Default.Numbers,      wVin,    "VIN")
@@ -3652,7 +3670,7 @@ fun ScooterTable(
         }
 
         LazyColumn(modifier = Modifier.fillMaxSize()) {
-            items(scooters, key = { it.id }) { scooter ->
+            itemsIndexed(scooters, key = { _, it -> it.id }) { idx, scooter ->
                 val isSelected = selected.contains(scooter.id)
                 val status = scooterStatusOf(scooter.id, renters)
                 val sColor = scooterStatusColor(status)
@@ -3678,6 +3696,17 @@ fun ScooterTable(
                             .padding(horizontal = 8.dp, vertical = 12.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
+                        // ── № — порядковый номер строки ──
+                        Text(
+                            "${idx + 1}",
+                            modifier = Modifier
+                                .width(wNum)
+                                .padding(horizontal = 4.dp),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = ClaudeTextSecondary,
+                            fontWeight = FontWeight.Medium,
+                            maxLines = 1
+                        )
                         if (showName) {
                             Text(
                                 scooter.name,

@@ -847,6 +847,11 @@ fun SimpleDataTable(
     modifier: Modifier = Modifier,
     headerColors: List<Color> = emptyList()
 ) {
+    // Автоматически добавляем колонку «№» (порядковый номер строки) —
+    // пользователь явно просил: «во всех таблицах добавь столбик номер».
+    val allHeaders = listOf("№") + headers
+    val allRows = rows.mapIndexed { i, row -> listOf("${i + 1}") + row }
+    val allHeaderColors = listOf(ClaudeTextSecondary) + headerColors
     Column(
         modifier = modifier
             .fillMaxWidth()
@@ -861,18 +866,18 @@ fun SimpleDataTable(
                 .background(ClaudeAccentBg)
                 .padding(vertical = 6.dp, horizontal = 8.dp)
         ) {
-            headers.forEachIndexed { i, h ->
+            allHeaders.forEachIndexed { i, h ->
                 Text(
                     h,
                     fontSize = 10.sp,
                     fontWeight = FontWeight.Bold,
                     color = ClaudeText,
-                    modifier = Modifier.weight(1f)
+                    modifier = Modifier.weight(if (i == 0) 0.5f else 1f)
                 )
             }
         }
         // Строки
-        rows.forEachIndexed { rowIdx, row ->
+        allRows.forEachIndexed { rowIdx, row ->
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -880,13 +885,13 @@ fun SimpleDataTable(
                     .background(if (rowIdx % 2 == 0) Color.Transparent else ClaudeBackground2.copy(alpha = 0.3f))
             ) {
                 row.forEachIndexed { colIdx, cell ->
-                    val cellColor = headerColors.getOrNull(colIdx) ?: ClaudeText
+                    val cellColor = allHeaderColors.getOrNull(colIdx) ?: ClaudeText
                     Text(
                         cell,
                         fontSize = 10.sp,
                         color = if (colIdx == row.size - 1) cellColor else ClaudeText,
                         fontWeight = if (colIdx == 0) FontWeight.SemiBold else FontWeight.Normal,
-                        modifier = Modifier.weight(1f),
+                        modifier = Modifier.weight(if (colIdx == 0) 0.5f else 1f),
                         maxLines = 1
                     )
                 }

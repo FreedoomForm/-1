@@ -9,6 +9,7 @@ import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -124,6 +125,7 @@ fun RenterTransactionListSection(
 
     // Ширины fixed-колонок (как в TransactionListScreen)
     val hScrollState = rememberScrollState()
+    val wNum      = 40.dp    // № — порядковый номер строки
     val wId       = 50.dp
     val wDate     = 110.dp
     val wScooter  = 90.dp
@@ -176,6 +178,7 @@ fun RenterTransactionListSection(
                     .padding(horizontal = 8.dp, vertical = 4.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
+                NonSortableHeaderCellFixed(Icons.Default.Numbers,              wNum,      "№")
                 NonSortableHeaderCellFixed(Icons.Default.Numbers,              wId,       "#")
                 NonSortableHeaderCellFixed(Icons.Default.DateRange,             wDate,     "Sana")
                 NonSortableHeaderCellFixed(Icons.Default.DirectionsBike,        wScooter,  "Skuter")
@@ -202,7 +205,7 @@ fun RenterTransactionListSection(
             }
         } else {
             LazyColumn(modifier = Modifier.fillMaxSize()) {
-                items(filteredTxs, key = { it.id }) { tx ->
+                itemsIndexed(filteredTxs, key = { _, it -> it.id }) { idx, tx ->
                     val isSelected = tx.id in selectedTxs
                     val isPositive = TransactionViewModel.typeIsPositive(tx.type)
                     val effectivePositive = isPositive && tx.amount >= 0
@@ -242,6 +245,15 @@ fun RenterTransactionListSection(
                                 .padding(horizontal = 8.dp, vertical = 10.dp),
                             verticalAlignment = Alignment.CenterVertically
                         ) {
+                            // ── № — порядковый номер строки ──
+                            Text(
+                                "${idx + 1}",
+                                modifier = Modifier.width(wNum).padding(horizontal = 4.dp),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = ClaudeTextSecondary,
+                                fontWeight = FontWeight.Medium,
+                                maxLines = 1
+                            )
                             Text(
                                 "#${tx.id}",
                                 modifier = Modifier.width(wId).padding(horizontal = 4.dp),
@@ -436,6 +448,7 @@ fun ScooterTransactionListSection(
     }
 
     val hScrollState = rememberScrollState()
+    val wNum      = 40.dp    // № — порядковый номер строки
     val wId       = 50.dp
     val wDate     = 110.dp
     val wRenter   = 110.dp
@@ -489,6 +502,7 @@ fun ScooterTransactionListSection(
                     .padding(horizontal = 8.dp, vertical = 4.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
+                NonSortableHeaderCellFixed(Icons.Default.Numbers,              wNum,      "№")
                 NonSortableHeaderCellFixed(Icons.Default.Numbers,              wId,       "#")
                 NonSortableHeaderCellFixed(Icons.Default.DateRange,             wDate,     "Sana")
                 NonSortableHeaderCellFixed(Icons.Default.Person,                wRenter,   "Mijoz")
@@ -516,7 +530,7 @@ fun ScooterTransactionListSection(
             }
         } else {
             LazyColumn(modifier = Modifier.fillMaxSize()) {
-                items(filteredTxs, key = { it.id }) { tx ->
+                itemsIndexed(filteredTxs, key = { _, it -> it.id }) { idx, tx ->
                     val isSelected = tx.id in selectedTxs
                     val isPositive = TransactionViewModel.typeIsPositive(tx.type)
                     val effectivePositive = isPositive && tx.amount >= 0
@@ -556,6 +570,15 @@ fun ScooterTransactionListSection(
                                 .padding(horizontal = 8.dp, vertical = 10.dp),
                             verticalAlignment = Alignment.CenterVertically
                         ) {
+                            // ── № — порядковый номер строки ──
+                            Text(
+                                "${idx + 1}",
+                                modifier = Modifier.width(wNum).padding(horizontal = 4.dp),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = ClaudeTextSecondary,
+                                fontWeight = FontWeight.Medium,
+                                maxLines = 1
+                            )
                             Text(
                                 "#${tx.id}",
                                 modifier = Modifier.width(wId).padding(horizontal = 4.dp),
@@ -577,7 +600,9 @@ fun ScooterTransactionListSection(
                                 style = MaterialTheme.typography.bodyMedium,
                                 color = ClaudeText,
                                 fontWeight = FontWeight.SemiBold,
-                                maxLines = 1
+                                maxLines = Int.MAX_VALUE,
+                                softWrap = true,
+                                overflow = TextOverflow.Visible
                             )
                             Text(
                                 tx.renterPhone.ifBlank { "—" },

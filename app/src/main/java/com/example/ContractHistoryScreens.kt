@@ -11,6 +11,7 @@ import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -374,6 +375,7 @@ fun RenterContractHistoryScreen(
                                 .padding(horizontal = 12.dp, vertical = 4.dp),
                             verticalAlignment = Alignment.CenterVertically
                         ) {
+                            NonSortableHeaderCell(Icons.Default.Numbers,   0.3f, "№")
                             NonSortableHeaderCell(Icons.Default.Numbers,   0.4f, "#")
                             NonSortableHeaderCell(Icons.Default.DateRange, 1.8f, "Muddat (hafta)")
                             NonSortableHeaderCell(Icons.Default.Payments,  1.0f, "Summa")
@@ -399,7 +401,7 @@ fun RenterContractHistoryScreen(
                         }
                     }
                 } else {
-                    items(filteredContracts, key = { it.id }) { entry ->
+                    itemsIndexed(filteredContracts, key = { _, it -> it.id }) { idx, entry ->
                         val isSelected = entry.id in selectedContracts
                         val statusColor = if (entry.isPaid) StatusOk else StatusOverdue
                         val statusLabel = if (entry.isPaid) "To'langan" else "To'lanmagan"
@@ -431,6 +433,15 @@ fun RenterContractHistoryScreen(
                                 .padding(horizontal = 8.dp, vertical = 10.dp),
                             verticalAlignment = Alignment.CenterVertically
                         ) {
+                            // ── № — порядковый номер строки ──
+                            Text(
+                                "${idx + 1}",
+                                modifier = Modifier.weight(0.3f),
+                                style = MaterialTheme.typography.labelSmall,
+                                color = ClaudeTextSecondary,
+                                fontWeight = FontWeight.Medium,
+                                maxLines = 1
+                            )
                             Text(
                                 "#${entry.id}",
                                 modifier = Modifier.weight(0.4f),

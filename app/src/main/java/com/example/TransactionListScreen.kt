@@ -8,6 +8,7 @@ import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -271,9 +272,10 @@ fun TransactionListScreen(
     val hScrollState = rememberScrollState()
 
     // Ширины fixed-колонок
+    val wNum       = 40.dp    // № — порядковый номер строки
     val wId       = 50.dp
     val wDate     = 110.dp
-    val wRenter   = 110.dp
+    val wRenter   = 130.dp   // увеличено с 110 — вмещает «Имя Фамилия»
     val wPhone    = 95.dp
     val wScooter  = 80.dp
     val wContract = 140.dp
@@ -350,6 +352,7 @@ fun TransactionListScreen(
                         .padding(horizontal = 8.dp, vertical = 4.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
+                    NonSortableHeaderCellFixed(Icons.Default.Numbers, wNum, "№")
                     if (showId)       NonSortableHeaderCellFixed(Icons.Default.Numbers,              wId,       "#")
                     if (showDate)     NonSortableHeaderCellFixed(Icons.Default.DateRange,            wDate,     "Sana")
                     if (showRenter)   NonSortableHeaderCellFixed(Icons.Default.Person,               wRenter,   "Mijoz")
@@ -385,7 +388,7 @@ fun TransactionListScreen(
                 }.sortedByDescending { it.timestamp }
 
                 LazyColumn(modifier = Modifier.fillMaxSize()) {
-                    items(mergedItems, key = { it.uniqueKey }) { item ->
+                    itemsIndexed(mergedItems, key = { _, it -> it.uniqueKey }) { idx, item ->
                         when (item) {
                             is UnifiedTxItem.ContractTx -> {
                                 val tx = item.tx
@@ -431,6 +434,15 @@ fun TransactionListScreen(
                                             .padding(horizontal = 8.dp, vertical = 10.dp),
                                         verticalAlignment = Alignment.CenterVertically
                                     ) {
+                                        // ── № — порядковый номер строки ──
+                                        Text(
+                                            "${idx + 1}",
+                                            modifier = Modifier.width(wNum).padding(horizontal = 4.dp),
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = ClaudeTextSecondary,
+                                            fontWeight = FontWeight.Medium,
+                                            maxLines = 1
+                                        )
                                         if (showId) {
                                             Text(
                                                 "#${tx.id}",
@@ -451,13 +463,16 @@ fun TransactionListScreen(
                                             )
                                         }
                                         if (showRenter) {
+                                            // Полное имя арендатора без обрезки.
                                             Text(
                                                 tx.renterName.ifBlank { "—" },
                                                 modifier = Modifier.width(wRenter).padding(horizontal = 4.dp),
                                                 style = MaterialTheme.typography.bodyMedium,
                                                 color = ClaudeText,
                                                 fontWeight = FontWeight.SemiBold,
-                                                maxLines = 1
+                                                maxLines = Int.MAX_VALUE,
+                                                softWrap = true,
+                                                overflow = TextOverflow.Visible
                                             )
                                         }
                                         if (showPhone) {
@@ -572,6 +587,15 @@ fun TransactionListScreen(
                                             .padding(horizontal = 8.dp, vertical = 10.dp),
                                         verticalAlignment = Alignment.CenterVertically
                                     ) {
+                                        // ── № — порядковый номер строки ──
+                                        Text(
+                                            "${idx + 1}",
+                                            modifier = Modifier.width(wNum).padding(horizontal = 4.dp),
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = ClaudeTextSecondary,
+                                            fontWeight = FontWeight.Medium,
+                                            maxLines = 1
+                                        )
                                         if (showId) {
                                             Text(
                                                 "K${ctx.id}",
