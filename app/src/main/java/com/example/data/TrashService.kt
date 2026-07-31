@@ -485,6 +485,22 @@ class TrashService(private val db: AppDatabase) {
                     }
                 }
                 val contractId = db.contractHistoryDao().insert(contract)
+                // Batch 15 (was HIGH D1): guard against the IGNORE-strategy
+                // insert returning -1 on id collision. ContractHistoryDao.insert
+                // uses OnConflictStrategy.IGNORE — if a contract row with the
+                // snapshot's original id still exists (e.g. a prior
+                // deleteContractWithCascade failed mid-way and left the row,
+                // or two trash items reference the same contractId), insert
+                // returns -1. Previously the code used -1 as contractId for
+                // every downstream FK (RentPeriod, BusinessOperation,
+                // CardTransaction, HandoverAct), producing a swarm of rows
+                // pointing at a non-existent contract -1 — which OrphanSweeper
+                // would then null-out on next launch, silently losing the
+                // restored contract's entire financial context. Now we throw
+                // immediately so the db.withTransaction rolls back cleanly.
+                require(contractId != -1L) {
+                    "Contract id collision: contract #${contract.id} already exists in DB — cannot restore from trash"
+                }
 
                 // Re-insert all RentPeriod rows, mapping old period ids to new
                 // ids so PaymentAllocations can be re-linked correctly.

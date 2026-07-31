@@ -233,8 +233,20 @@ class ScooterMaintenanceService(private val db: AppDatabase) {
             ?: throw IllegalArgumentException("Card #$fromCardId does not exist")
         require(!card.isExternal && !card.isArchived) { "Choose an active business card" }
         val amount = BusinessOperation.fromMinor(amountMinor)
-        require(card.balance + 0.005 >= amount) { "Insufficient available balance for repair" }
-        db.virtualCardDao().adjustBalance(fromCardId, -amount)
+        // Batch 15 (was HIGH A3): replaced the read-modify-write balance
+        // check (require(card.balance >= amount) + adjustBalance(-amount))
+        // with an atomic conditional UPDATE. Previously, two concurrent
+        // recordRepairExpense calls for the same card could both read
+        // balance=1000, both pass the require check, and both deduct 700
+        // — sending the card to -400 despite both calls individually
+        // passing the balance check. The db.withTransaction wrapper
+        // didn't help because Room uses BEGIN DEFERRED by default, which
+        // doesn't acquire a write lock until the first write. The atomic
+        // debitIfSufficient UPDATE serializes at the SQLite row level:
+        // the second call sees balance=300 (after the first commit) and
+        // the WHERE balance >= :amount clause fails, returning 0 rows.
+        val debited = db.virtualCardDao().debitIfSufficient(fromCardId, amount)
+        require(debited == 1) { "Insufficient available balance for repair (need $amount on card #$fromCardId)" }
         val cardTxId = db.cardTransactionDao().insertTransaction(CardTransaction(
             timestamp = occurredAt, fromCardId = fromCardId, toCardId = VirtualCard.EXTERNAL_OUT_CARD_ID,
             amount = amount, note = note, type = CardTransaction.TYPE_EXPENSE

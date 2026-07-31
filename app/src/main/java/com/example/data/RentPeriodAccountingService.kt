@@ -58,6 +58,19 @@ class RentPeriodAccountingService(private val db: AppDatabase) {
             // period where paidMinor >= effectiveChargeMinor is correctly
             // marked PAID / CLOSED.
             val effective = period.effectiveChargeMinor
+            // Batch 15 (was LOW A1): defensive invariant — paid must not
+            // exceed effectiveChargeMinor. Today PaymentAllocationPolicy
+            // guarantees this via minOf(remaining, outstandingMinor), but
+            // the invariant is not enforced at the write site. A future
+            // change to the allocator (e.g. rounding, negative
+            // discountMinor) would silently produce paidMinor >
+            // effectiveChargeMinor and mis-classify the period status.
+            // The require throws IllegalArgumentException which the
+            // db.withTransaction wrapper rolls back, leaving no partial
+            // state.
+            require(paid <= effective) {
+                "Over-allocation: paid=$paid exceeds effective=$effective for period ${period.id}"
+            }
             val status = when {
                 paid >= effective && renter.isReturned -> RentPeriod.STATUS_CLOSED
                 paid >= effective -> RentPeriod.STATUS_PAID

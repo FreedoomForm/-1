@@ -56,7 +56,15 @@ class DeletionService(private val db: AppDatabase) {
      * @param contractId the ContractHistoryEntry.id to cascade-delete
      * @param reason     human-readable reason for the trash snapshot
      */
-    suspend fun deleteContractCascade(contractId: Int, reason: String) {
+    // Batch 15 (was HIGH B1): made private. Previously this was public
+    // suspend fun — any future caller that forgets to wrap in
+    // db.withTransaction gets a non-atomic cascade that can leave
+    // half-deleted state. Now all external callers must go through
+    // deleteScooterCascade / deleteRenterCascade / deleteContractWithCascade,
+    // each of which wraps the entire cascade in db.withTransaction.
+    // (Room nests transactions idempotently, so an outer transaction
+    // already wraps the inner calls.)
+    private suspend fun deleteContractCascade(contractId: Int, reason: String) {
         val trashSvc = TrashService(db)
 
         // 1. Reverse + delete CardTransactions tied to this contract.

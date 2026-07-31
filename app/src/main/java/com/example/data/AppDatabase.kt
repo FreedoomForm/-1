@@ -738,20 +738,47 @@ abstract class AppDatabase : RoomDatabase() {
                          */
                         override fun onOpen(db: SupportSQLiteDatabase) {
                             super.onOpen(db)
-                            // 4 системные карты — Selbstheilung при каждом открытии БД.
-                            db.execSQL("""
-                                INSERT OR IGNORE INTO `virtual_cards`
-                                    (id, name, balance, colorHex, info, isDefault, createdAt, kind)
-                                VALUES
-                                    (1, 'Glavnaya', 0.0, '#FF1565C0', 'Asosiy kassa — contract to''lovlari shu yerga tushadi', 1, strftime('%s','now') * 1000, 'REGULAR'),
-                                    (2, 'Vtorostepennaya', 0.0, '#FF2E7D32', 'Qo`shimcha karta', 1, strftime('%s','now') * 1000, 'REGULAR'),
-                                    (3, 'Tashqidan', 0.0, '#FF00838F', 'Tashqidan kirgan pul (bank, naqd va h.k.)', 1, strftime('%s','now') * 1000, 'EXTERNAL_IN'),
-                                    (4, 'Tashqiga',  0.0, '#FFC62828', 'Tashqiga chiqarilgan pul (yechib olish, to''lovlar)', 1, strftime('%s','now') * 1000, 'EXTERNAL_OUT')
-                            """.trimIndent())
-                            // Системный пользователь Owner и главная ветка таймлайна —
-                            // те же гарантии: создаются если их нет, не трогаются если есть.
-                            db.execSQL("INSERT OR IGNORE INTO app_users (id, displayName, role, isActive, createdAt) VALUES (1, 'Owner', 'OWNER', 1, strftime('%s','now') * 1000)")
-                            db.execSQL("INSERT OR IGNORE INTO timeline_branches (id, name, parentBranchId, forkEventId, createdAt, isMain) VALUES (1, 'Main', NULL, NULL, strftime('%s','now') * 1000, 1)")
+                            // Batch 15 (was HIGH H1): wrap each self-healing
+                            // execSQL in its own try/catch. Previously any
+                            // exception (e.g. a future migration renames a
+                            // column, a half-migrated DB has the table but
+                            // not the `kind` column, or strftime returns an
+                            // unexpected type on a custom SQLite build) would
+                            // propagate out of onOpen, Room would mark the
+                            // DB as not-openable, and the app would crash
+                            // on every subsequent launch with no recovery
+                            // path short of clearing app data. The system
+                            // cards / owner user / main branch are
+                            // nice-to-have, not launch-critical — if they
+                            // fail to self-heal, the OrphanSweeper + UI
+                            // guards will surface the issue without
+                            // blocking the app from opening.
+                            try {
+                                // 4 системные карты — Selbstheilung при каждом открытии БД.
+                                db.execSQL("""
+                                    INSERT OR IGNORE INTO `virtual_cards`
+                                        (id, name, balance, colorHex, info, isDefault, createdAt, kind)
+                                    VALUES
+                                        (1, 'Glavnaya', 0.0, '#FF1565C0', 'Asosiy kassa — contract to''lovlari shu yerga tushadi', 1, strftime('%s','now') * 1000, 'REGULAR'),
+                                        (2, 'Vtorostepennaya', 0.0, '#FF2E7D32', 'Qo`shimcha karta', 1, strftime('%s','now') * 1000, 'REGULAR'),
+                                        (3, 'Tashqidan', 0.0, '#FF00838F', 'Tashqidan kirgan pul (bank, naqd va h.k.)', 1, strftime('%s','now') * 1000, 'EXTERNAL_IN'),
+                                        (4, 'Tashqiga',  0.0, '#FFC62828', 'Tashqiga chiqarilgan pul (yechib olish, to''lovlar)', 1, strftime('%s','now') * 1000, 'EXTERNAL_OUT')
+                                """.trimIndent())
+                            } catch (e: Exception) {
+                                android.util.Log.e("AppDatabase", "self-heal: virtual_cards INSERT failed", e)
+                            }
+                            try {
+                                // Системный пользователь Owner и главная ветка таймлайна —
+                                // те же гарантии: создаются если их нет, не трогаются если есть.
+                                db.execSQL("INSERT OR IGNORE INTO app_users (id, displayName, role, isActive, createdAt) VALUES (1, 'Owner', 'OWNER', 1, strftime('%s','now') * 1000)")
+                            } catch (e: Exception) {
+                                android.util.Log.e("AppDatabase", "self-heal: app_users INSERT failed", e)
+                            }
+                            try {
+                                db.execSQL("INSERT OR IGNORE INTO timeline_branches (id, name, parentBranchId, forkEventId, createdAt, isMain) VALUES (1, 'Main', NULL, NULL, strftime('%s','now') * 1000, 1)")
+                            } catch (e: Exception) {
+                                android.util.Log.e("AppDatabase", "self-heal: timeline_branches INSERT failed", e)
+                            }
 
                             // ── Batch 8 (H2): orphan-row / FK-consistency sweep ──────
                             // Runs on EVERY DB open. Previously purged trash items

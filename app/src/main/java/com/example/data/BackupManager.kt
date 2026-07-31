@@ -68,6 +68,28 @@ object BackupManager {
 
     private const val TAG = "BackupManager"
 
+    // ── Batch 15 (was HIGH A5): money sanitization helpers ────────────
+    // All money fields in the .xlsx are parsed with ?.toLong() ?: 0 and
+    // no non-negative check. A malicious or corrupted backup with
+    // amountMinor = -50000 on a TYPE_RENT_PAYMENT row would, after
+    // import, propagate through BusinessOperation.fromMinor and into
+    // adjustBalance(toCardId, amount) — silently SUBTRACTING 50 000
+    // from the destination card when reports recompute balances, or
+    // inflating expense cards. These helpers throw on negative values;
+    // the outer db.withTransaction in importFromExcel rolls back the
+    // entire import on the first negative, so no partial corruption.
+    private fun sanitizeMinor(v: Long, field: String): Long {
+        require(v >= 0) { "Negative money in backup ($field): $v" }
+        return v
+    }
+    private fun sanitizeAmount(v: Double, field: String): Double {
+        require(v >= 0) { "Negative amount in backup ($field): $v" }
+        return v
+    }
+    // Convenience for inline use: cell?.asNumber()?.toLong() ?: 0 → sanitizeMinor(...)
+    private fun moneyMinor(cell: org.dhatim.fastexcel.reader.Cell?, field: String): Long =
+        sanitizeMinor(cell?.asNumber()?.toLong() ?: 0, field)
+
     // ── Имена листов ─────────────────────────────────────────────────────
     private const val SHEET_RENTERS = "Renters"
     private const val SHEET_SCOOTERS = "Scooters"
@@ -984,7 +1006,7 @@ object BackupManager {
                     id = row.getCell(0)?.asNumber()?.toInt() ?: 0,
                     name = row.getCell(1)?.asString() ?: "",
                     phoneNumber = row.getCell(2)?.asString() ?: "",
-                    debtAmount = row.getCell(3)?.asNumber()?.toDouble() ?: 0.0,
+                    debtAmount = sanitizeAmount(row.getCell(3)?.asNumber()?.toDouble() ?: 0.0, "renter.debtAmount"),
                     rentDurationDays = row.getCell(4)?.asNumber()?.toInt() ?: 0,
                     rentStartDateTimestamp = row.getCell(5)?.asNumber()?.toLong() ?: System.currentTimeMillis(),
                     isReturned = row.getCell(6)?.asBoolean() ?: false,
@@ -1044,14 +1066,14 @@ object BackupManager {
                     renterId = row.getCell(1)?.asNumber()?.toInt() ?: 0,
                     timestamp = row.getCell(2)?.asNumber()?.toLong() ?: System.currentTimeMillis(),
                     type = row.getCell(3)?.asString() ?: ContractHistoryEntry.TYPE_CREATED,
-                    amount = row.getCell(4)?.asNumber()?.toDouble() ?: 0.0,
+                    amount = sanitizeAmount(row.getCell(4)?.asNumber()?.toDouble() ?: 0.0, "contract.amount"),
                     notes = row.getCell(5)?.asString(),
                     renterName = row.getCell(6)?.asString() ?: "",
                     renterPhone = row.getCell(7)?.asString() ?: "",
                     scooterName = row.getCell(8)?.asString(),
                     weekStart = row.getCell(9)?.asNumber()?.toLong(),
                     weekEnd = row.getCell(10)?.asNumber()?.toLong(),
-                    weeklyPrice = row.getCell(11)?.asNumber()?.toDouble() ?: 0.0,
+                    weeklyPrice = sanitizeAmount(row.getCell(11)?.asNumber()?.toDouble() ?: 0.0, "contract.weeklyPrice"),
                     passportData = row.getCell(12)?.asString() ?: "",
                     address = row.getCell(13)?.asString() ?: "",
                     pinfl = row.getCell(14)?.asString() ?: "",
@@ -1082,7 +1104,7 @@ object BackupManager {
                     scooterId = row.getCell(3)?.asNumber()?.toInt(),
                     timestamp = row.getCell(4)?.asNumber()?.toLong() ?: System.currentTimeMillis(),
                     type = row.getCell(5)?.asString() ?: Transaction.TYPE_PAYMENT,
-                    amount = row.getCell(6)?.asNumber()?.toDouble() ?: 0.0,
+                    amount = sanitizeAmount(row.getCell(6)?.asNumber()?.toDouble() ?: 0.0, "tx.amount"),
                     notes = row.getCell(7)?.asString(),
                     renterName = row.getCell(8)?.asString() ?: "",
                     renterPhone = row.getCell(9)?.asString() ?: "",
@@ -1132,7 +1154,7 @@ object BackupManager {
                     timestamp = row.getCell(1)?.asNumber()?.toLong() ?: System.currentTimeMillis(),
                     fromCardId = row.getCell(2)?.asNumber()?.toInt() ?: 0,
                     toCardId = row.getCell(3)?.asNumber()?.toInt() ?: 0,
-                    amount = row.getCell(4)?.asNumber()?.toDouble() ?: 0.0,
+                    amount = sanitizeAmount(row.getCell(4)?.asNumber()?.toDouble() ?: 0.0, "cardTx.amount"),
                     note = row.getCell(5)?.asString(),
                     type = row.getCell(6)?.asString() ?: CardTransaction.TYPE_CARD_TRANSFER,
                     // contractId — опциональное поле (добавлено в миграции 14→15).
@@ -1150,7 +1172,7 @@ object BackupManager {
         try { BusinessOperation(
             id=row.getCell(0)?.asNumber()?.toLong() ?: 0, occurredAt=row.getCell(1)?.asNumber()?.toLong() ?: 0,
             type=row.getCell(2)?.asString() ?: BusinessOperation.TYPE_ADJUSTMENT, direction=row.getCell(3)?.asString() ?: BusinessOperation.DIRECTION_TRANSFER,
-            amountMinor=row.getCell(4)?.asNumber()?.toLong() ?: 0, renterId=row.getCell(5)?.asNumber()?.toInt(), scooterId=row.getCell(6)?.asNumber()?.toInt(),
+            amountMinor=moneyMinor(row.getCell(4), "bo.amountMinor"), renterId=row.getCell(5)?.asNumber()?.toInt(), scooterId=row.getCell(6)?.asNumber()?.toInt(),
             contractId=row.getCell(7)?.asNumber()?.toInt(), fromCardId=row.getCell(8)?.asNumber()?.toInt(), toCardId=row.getCell(9)?.asNumber()?.toInt(),
             cardTransactionId=row.getCell(10)?.asNumber()?.toInt(), legacyTransactionId=row.getCell(11)?.asNumber()?.toInt(), note=row.getCell(12)?.asString(),
             status=row.getCell(13)?.asString() ?: BusinessOperation.STATUS_ACTIVE, reversesOperationId=row.getCell(14)?.asNumber()?.toLong(), createdAt=row.getCell(15)?.asNumber()?.toLong() ?: System.currentTimeMillis()
@@ -1161,7 +1183,7 @@ object BackupManager {
         try { RentPeriod(
             id=row.getCell(0)?.asNumber()?.toLong() ?: 0, contractHistoryId=row.getCell(1)?.asNumber()?.toInt(), renterId=row.getCell(2)?.asNumber()?.toInt() ?: 0,
             scooterId=row.getCell(3)?.asNumber()?.toInt(), startsAt=row.getCell(4)?.asNumber()?.toLong() ?: 0, endsAt=row.getCell(5)?.asNumber()?.toLong() ?: 0,
-            chargeMinor=row.getCell(6)?.asNumber()?.toLong() ?: 0, paidMinor=row.getCell(7)?.asNumber()?.toLong() ?: 0,
+            chargeMinor=moneyMinor(row.getCell(6), "rp.chargeMinor"), paidMinor=moneyMinor(row.getCell(7), "rp.paidMinor"),
             status=row.getCell(8)?.asString() ?: RentPeriod.STATUS_ACTIVE, suspendedAt=row.getCell(9)?.asNumber()?.toLong(), suspensionReason=row.getCell(10)?.asString(),
             createdAt=row.getCell(11)?.asNumber()?.toLong() ?: row.getCell(9)?.asNumber()?.toLong() ?: System.currentTimeMillis(), updatedAt=row.getCell(12)?.asNumber()?.toLong() ?: row.getCell(10)?.asNumber()?.toLong() ?: System.currentTimeMillis(),
             // Batch 12 (was HIGH 5.1): read discountMinor + parentPeriodId.
@@ -1169,13 +1191,13 @@ object BackupManager {
             // versions — getCell returns null and we fall back to 0 / null,
             // matching the RentPeriod default values. This keeps the import
             // backward-compatible while preserving the fields for new backups.
-            discountMinor=row.getCell(13)?.asNumber()?.toLong() ?: 0,
+            discountMinor=moneyMinor(row.getCell(13), "rp.discountMinor"),
             parentPeriodId=row.getCell(14)?.asNumber()?.toLong()
         ) } catch (e: Exception) { Log.w(TAG,"Skip period row: ${e.message}"); null }
     }
 
     private fun readPaymentAllocations(sheet: Sheet): List<PaymentAllocationEntity> = sheet.read().drop(1).mapNotNull { row ->
-        try { PaymentAllocationEntity(id=row.getCell(0)?.asNumber()?.toLong() ?: 0, operationId=row.getCell(1)?.asNumber()?.toLong() ?: 0, rentPeriodId=row.getCell(2)?.asNumber()?.toLong() ?: 0, amountMinor=row.getCell(3)?.asNumber()?.toLong() ?: 0, createdAt=row.getCell(4)?.asNumber()?.toLong() ?: System.currentTimeMillis()) }
+        try { PaymentAllocationEntity(id=row.getCell(0)?.asNumber()?.toLong() ?: 0, operationId=row.getCell(1)?.asNumber()?.toLong() ?: 0, rentPeriodId=row.getCell(2)?.asNumber()?.toLong() ?: 0, amountMinor=moneyMinor(row.getCell(3), "pa.amountMinor"), createdAt=row.getCell(4)?.asNumber()?.toLong() ?: System.currentTimeMillis()) }
         catch (e: Exception) { Log.w(TAG,"Skip allocation row: ${e.message}"); null }
     }
 
@@ -1245,8 +1267,8 @@ object BackupManager {
                 diagnosis = row.getCell(7)?.asString() ?: "",
                 performer = row.getCell(8)?.asString(),
                 partsUsed = row.getCell(9)?.asString(),
-                estimatedMinor = row.getCell(10)?.asNumber()?.toLong() ?: 0L,
-                actualMinor = row.getCell(11)?.asNumber()?.toLong() ?: 0L,
+                estimatedMinor = moneyMinor(row.getCell(10), "ro.estimatedMinor"),
+                actualMinor = moneyMinor(row.getCell(11), "ro.actualMinor"),
                 documentNote = row.getCell(12)?.asString(),
                 pauseIntervalsJson = row.getCell(13)?.asString() ?: "[]",
                 totalPauseMs = row.getCell(14)?.asNumber()?.toLong() ?: 0L,
@@ -1265,7 +1287,7 @@ object BackupManager {
                 entityType = row.getCell(1)?.asString() ?: "",
                 entityId = row.getCell(2)?.asNumber()?.toLong() ?: 0L,
                 field = row.getCell(3)?.asString() ?: "",
-                amountMinor = row.getCell(4)?.asNumber()?.toLong() ?: 0L,
+                amountMinor = moneyMinor(row.getCell(4), "lma.amountMinor"),
                 migratedAt = row.getCell(5)?.asNumber()?.toLong() ?: System.currentTimeMillis()
             )
         } catch (e: Exception) {
