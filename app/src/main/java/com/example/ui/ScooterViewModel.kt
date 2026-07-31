@@ -261,95 +261,18 @@ class ScooterViewModel(application: Application) : AndroidViewModel(application)
     fun deleteScooter(scooter: Scooter) {
         viewModelScope.launch(Dispatchers.IO) {
             val db = AppDatabase.getDatabase(getApplication())
-            try {
-                // 1. Snapshot в корзину
-                TrashService(db).snapshotScooter(scooter, "Scooter deleted by user")
-
-                // 2. Разорвать связь с арендаторами (не удаляя их)
-                val rentersWithScooter = db.renterDao().getActiveRenters()
-                    .filter { it.scooterId == scooter.id }
-                rentersWithScooter.forEach { r ->
-                    db.renterDao().updateRenter(r.copy(scooterId = null, scooterName = null))
-                }
-                if (rentersWithScooter.isNotEmpty()) {
-                    Log.d(TAG, "deleteScooter: cleared scooter ref from ${rentersWithScooter.size} renters")
-                }
-
-                // 3. Удалить контракты с этим скутером (snapshot first)
-                //    Для каждого контракта также реверсим и удаляем его
-                //    CardTransaction и Transaction — без этого оставались бы
-                //    осиротевшие финансовые записи со ссылкой на удалённый
-                //    контракт (главная карта врал бы в балансе).
-                val contracts = db.contractHistoryDao().getForScooterOnce(scooter.name)
-                val trashSvc = TrashService(db)
-                contracts.forEach { trashSvc.snapshotContract(it, "Removed with scooter #${scooter.id}") }
-                for (contract in contracts) {
-                    // Reverse + delete CardTransactions tied to this contract
-                    val cardTxs = try { db.cardTransactionDao().getForContractOnce(contract.id) } catch (_: Exception) { emptyList() }
-                    for (cardTx in cardTxs) {
-                        try {
-                            db.virtualCardDao().adjustBalance(cardTx.toCardId, -cardTx.amount)
-                            try { db.businessOperationDao().markReversedByCardTransactionId(cardTx.id) } catch (_: Exception) {}
-                        } catch (e: Exception) {
-                            Log.w(TAG, "deleteScooter: failed to reverse cardTx #${cardTx.id}: ${e.message}")
-                        }
-                    }
-                    if (cardTxs.isNotEmpty()) {
-                        try { db.cardTransactionDao().deleteForContract(contract.id) } catch (_: Exception) {}
-                    }
-
-                    // Snapshot + delete Transaction rows for this contract
-                    val contractTxs = db.transactionDao().getForContractOnce(contract.id)
-                    contractTxs.forEach { trashSvc.snapshotTransaction(it, "Removed with scooter #${scooter.id}") }
-                    if (contractTxs.isNotEmpty()) {
-                        contractTxs.forEach { tx ->
-                            try { db.businessOperationDao().markReversedByLegacyTransactionId(tx.id) } catch (_: Exception) {}
-                        }
-                        db.transactionDao().deleteForContract(contract.id)
-                    }
-
-                    // Per-contract: cancel RentPeriod, delete allocations,
-                    // reverse ops, delete handover acts.
-                    try { db.paymentAllocationDao().deleteByContractViaPeriod(contract.id) } catch (_: Exception) {}
-                    try { db.rentPeriodDao().deleteByContract(contract.id) } catch (_: Exception) {}
-                    try { db.businessOperationDao().markReversedByContract(contract.id) } catch (_: Exception) {}
-                    try { db.handoverActDao().deleteByContract(contract.id) } catch (_: Exception) {}
-                }
-                if (contracts.isNotEmpty()) {
-                    db.contractHistoryDao().deleteForScooter(scooter.name)
-                    Log.d(TAG, "deleteScooter: deleted ${contracts.size} contracts for scooter ${scooter.name}")
-                }
-
-                // 4. Удалить транзакции с этим скутером (snapshot first)
-                val txs = db.transactionDao().forScooterOnce(scooter.id)
-                txs.forEach { trashSvc.snapshotTransaction(it, "Removed with scooter #${scooter.id}") }
-                if (txs.isNotEmpty()) {
-                    txs.forEach { tx ->
-                        try { db.businessOperationDao().markReversedByLegacyTransactionId(tx.id) } catch (_: Exception) {}
-                    }
-                    db.transactionDao().deleteByIds(txs.map { it.id })
-                    Log.d(TAG, "deleteScooter: deleted ${txs.size} transactions for scooter #${scooter.id}")
-                }
-
-                // 4b. Reverse any remaining BusinessOperations tied to this scooter
-                // (e.g., REPAIR ops that were not linked to a Transaction row).
-                try { db.businessOperationDao().markReversedByScooter(scooter.id) } catch (_: Exception) {}
-
-                // 4c. Clean up orphaned PaymentAllocation + RentPeriod rows
-                // (rent-periods created directly via calendar without a contract).
-                try { db.paymentAllocationDao().deleteByScooterViaPeriod(scooter.id) } catch (_: Exception) {}
-                try { db.rentPeriodDao().deleteByScooter(scooter.id) } catch (_: Exception) {}
-
-                // 4d. Clean up HandoverActs + RepairOrders + LegacyMoneyAmount
-                try { db.handoverActDao().deleteByScooter(scooter.id) } catch (_: Exception) {}
-                // RepairOrder: close OPEN ones for history, then delete all rows
-                try { db.repairOrderDao().closeOpenForScooter(scooter.id, "Scooter deleted") } catch (_: Exception) {}
-                try { db.repairOrderDao().deleteByScooter(scooter.id) } catch (_: Exception) {}
-                try { db.legacyMoneyAmountDao().deleteByEntity("SCOOTER", scooter.id.toLong()) } catch (_: Exception) {}
-
-                // 5. (Skipped: RepairOrder cleanup is folded into 4d above.)
-
-                // 6. Timeline critical action
+            // Batch 14 (was HIGH 6.1): delegate the cascade-delete to
+            // DeletionService.deleteScooterCascade. Previously this
+            // method duplicated ~85 lines of cascade logic that was
+            // also copy-pasted (with variations) in RenterViewModel and
+            // ContractHistoryViewModel — each copy had its own bugs.
+            // Now all three ViewModels delegate to the same service,
+            // which wraps the entire cascade in db.withTransaction and
+            // uses field-specific UPDATE queries (Batch 12 pattern).
+            val ok = com.example.data.DeletionService(db).deleteScooterCascade(scooter)
+            if (ok) {
+                // Timeline critical action (kept in the VM because it
+                // needs the application context + _userMessage flow).
                 try {
                     TimelineService(db).recordCriticalAction(
                         actionType = "SCOOTER_DELETE",
@@ -357,22 +280,20 @@ class ScooterViewModel(application: Application) : AndroidViewModel(application)
                         title = "Skuter o'chirildi: ${scooter.name}",
                         entityType = "SCOOTER",
                         entityId = scooter.id.toString(),
-                        payloadJson = "{\"name\":\"${scooter.name}\",\"cascadeContracts\":${contracts.size},\"cascadeTransactions\":${txs.size}}"
+                        payloadJson = "{\"name\":\"${scooter.name}\"}"
                     )
                 } catch (_: Exception) {}
-
-                // 7. Удалить скутер
-                repository.delete(scooter)
                 _userMessage.emit(true to "Skuter o'chirildi: ${scooter.name}")
-
-                // Update widgets
-                try { com.example.widget.WidgetUpdater.updateAll(getApplication()) } catch (_: Exception) {}
-            } catch (e: Exception) {
-                Log.e(TAG, "deleteScooter cascade failed for #${scooter.id}", e)
-                _userMessage.emit(false to "Skuterni o'chirish amalga oshmadi: ${e.message ?: ""}")
-                // Fallback: still try plain delete
+            } else {
+                _userMessage.emit(false to "Skuterni o'chirish amalga oshmadi")
+                // Fallback: still try plain delete (no cascade) so the
+                // scooter row is at least removed from the list — the
+                // dependent rows will be cleaned up by OrphanSweeper
+                // on the next DB open.
                 try { repository.delete(scooter) } catch (_: Exception) {}
             }
+            // Update widgets regardless of cascade success.
+            try { com.example.widget.WidgetUpdater.updateAll(getApplication()) } catch (_: Exception) {}
         }
     }
 

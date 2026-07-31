@@ -955,107 +955,26 @@ class RenterViewModel(application: Application) : AndroidViewModel(application) 
 
     fun deleteRenter(id: Int) {
         viewModelScope.launch {
+            // Batch 14 (was HIGH 6.1): delegate the cascade-delete to
+            // DeletionService.deleteRenterCascade. Previously this
+            // method duplicated ~85 lines of cascade logic that was
+            // also copy-pasted (with variations) in ScooterViewModel
+            // and ContractHistoryViewModel — each copy had its own
+            // bugs (e.g. this one didn't close RepairOrders, while
+            // ScooterViewModel did). Now all three ViewModels delegate
+            // to the same service, which wraps the entire cascade in
+            // db.withTransaction and uses field-specific UPDATE queries
+            // (Batch 12 pattern).
+            val db = AppDatabase.getDatabase(getApplication())
             var deletedContractsCount = 0
-            // ── Каскадное удаление арендатора ──────────────────────────────
-            // Полная цепочка (см. PLAN_UNIVERSAL_ACCOUNTING §3–§6):
-            //   1. Snapshot арендатора в корзину
-            //   2. Для каждого контракта арендатора:
-            //      a) Snapshot контракта в корзину
-            //      b) Реверснуть CardTransaction-ы контракта и удалить их
-            //      c) Реверснуть BusinessOperation-ы, привязанные к этим
-            //         CardTransaction-ам, через markReversedByCardTransactionId
-            //   3. Реверснуть все BusinessOperation-ы арендатора:
-            //      a) По legacyTransactionId для каждой Transaction арендатора
-            //      b) По renterId для операций, не привязанных к Transaction
-            //   4. Удалить все Transaction арендатора (snapshot first)
-            //   5. Удалить RentPeriod арендатора (после PaymentAllocation)
-            //   6. Удалить PaymentAllocation через RentPeriod
-            //   7. Удалить HandoverAct, SmsDelivery, NotificationHistory,
-            //      RepairOrder, LegacyMoneyAmount для этого арендатора
-            //   8. Удалить все ContractHistoryEntry арендатора
-            //   9. Удалить самого арендатора
-            //
-            // AuditEvent / TimelineEvent остаются как историческая аудиторская
-            // запись (by design — never delete audit trails).
             try {
-                val db = AppDatabase.getDatabase(getApplication())
-                repository.getById(id)?.let { renter ->
-                    com.example.data.TrashService(db).snapshotRenter(renter, "Renter deleted with related records")
-                }
-                val contracts = historyRepository.getForRenterOnce(id)
-                deletedContractsCount = contracts.size
-                val trashService = com.example.data.TrashService(db)
-                contracts.forEach { trashService.snapshotContract(it, "Removed with renter #$id") }
-                for (contract in contracts) {
-                    // Реверсим и удаляем CardTransaction для этого контракта
-                    val cardTxList = virtualCardRepository.getCardTxForContract(contract.id)
-                    for (cardTx in cardTxList) {
-                        try {
-                            // cardTx.toCardId обычно = MAIN_CARD_ID (1).
-                            // Реверс: вычитаем amount из баланса карты-получателя.
-                            virtualCardRepository.adjustCardBalance(
-                                cardId = cardTx.toCardId,
-                                delta = -cardTx.amount
-                            )
-                            // Reverse the BusinessOperation linked to this CardTransaction
-                            try {
-                                db.businessOperationDao().markReversedByCardTransactionId(cardTx.id)
-                            } catch (_: Exception) {}
-                        } catch (e: Exception) {
-                            Log.w(TAG, "deleteRenter: failed to reverse cardTx #${cardTx.id}: ${e.message}")
-                        }
-                    }
-                    if (cardTxList.isNotEmpty()) {
-                        virtualCardRepository.deleteCardTxForContract(contract.id)
-                    }
-                }
-
-                // Удаляем все Transaction арендатора (PAYMENT, PENALTY, REPAIR и т.д.)
-                val renterTransactions = transactionRepository.forRenterOnce(id)
-                renterTransactions.forEach { trashService.snapshotTransaction(it, "Removed with renter #$id") }
-                if (renterTransactions.isNotEmpty()) {
-                    // Reverse BusinessOperations linked via legacyTransactionId FIRST
-                    renterTransactions.forEach { tx ->
-                        try {
-                            db.businessOperationDao().markReversedByLegacyTransactionId(tx.id)
-                        } catch (_: Exception) {}
-                    }
-                    transactionRepository.deleteByIds(renterTransactions.map { it.id })
-                    Log.d(TAG, "deleteRenter: deleted ${renterTransactions.size} transactions for renter #$id")
-                }
-
-                // Reverse any remaining BusinessOperations tied to this renter
-                // (e.g., DEPOSIT_RECEIVED, DEBT_FORGIVEN, ADJUSTMENT not linked
-                // to a Transaction).
-                try {
-                    val reversed = db.businessOperationDao().markReversedByRenter(id)
-                    if (reversed > 0) Log.d(TAG, "deleteRenter: reversed $reversed ops by renterId=$id")
-                } catch (_: Exception) {}
-
-                // Clean up PaymentAllocation BEFORE deleting RentPeriod rows
-                // (the allocation table references rentPeriodId).
-                try { db.paymentAllocationDao().deleteByRenterViaPeriod(id) } catch (_: Exception) {}
-
-                // Delete RentPeriod rows for this renter.
-                try { db.rentPeriodDao().deleteByRenter(id) } catch (_: Exception) {}
-
-                // Clean up dependent rows that reference renterId directly.
-                try { db.handoverActDao().deleteByRenter(id) } catch (_: Exception) {}
-                try { db.smsDeliveryDao().deleteByRenter(id) } catch (_: Exception) {}
-                try { db.notificationHistoryDao().deleteByRenter(id) } catch (_: Exception) {}
-                try { db.repairOrderDao().deleteByRenter(id) } catch (_: Exception) {}
-                try { db.legacyMoneyAmountDao().deleteByEntity("RENTER", id.toLong()) } catch (_: Exception) {}
-
-                // Удаляем все контракты арендатора
-                historyRepository.deleteForRenter(id)
-                Log.d(TAG, "deleteRenter: deleted ${contracts.size} contracts for renter #$id")
-
-                // Удаляем самого арендатора
-                repository.delete(id)
-                Log.d(TAG, "deleteRenter: renter #$id deleted with full cascade")
-            } catch (e: Exception) {
-                Log.e(TAG, "deleteRenter cascade failed for #$id", e)
-                // Fallback: хотя бы удалить арендатора (старое поведение)
+                deletedContractsCount = historyRepository.getForRenterOnce(id).size
+            } catch (_: Exception) {}
+            val ok = com.example.data.DeletionService(db).deleteRenterCascade(id)
+            if (!ok) {
+                // Fallback: at least delete the renter row + contracts
+                // (old behavior). Dependent rows will be cleaned up by
+                // OrphanSweeper on the next DB open.
                 try {
                     historyRepository.deleteForRenter(id)
                     repository.delete(id)
@@ -1070,7 +989,6 @@ class RenterViewModel(application: Application) : AndroidViewModel(application) 
             // ── Timeline critical action (§9.0) ────────────────────────────
             // Record renter deletion (with cascade count) for history tree.
             try {
-                val db = com.example.data.AppDatabase.getDatabase(getApplication())
                 com.example.data.TimelineService(db).recordCriticalAction(
                     actionType = "RENTER_DELETE",
                     screen = "RENTERS",

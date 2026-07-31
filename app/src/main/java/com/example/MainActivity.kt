@@ -106,7 +106,10 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
+import androidx.work.BackoffPolicy
+import androidx.work.Constraints
 import androidx.work.ExistingPeriodicWorkPolicy
+import androidx.work.NetworkType
 import androidx.work.PeriodicWorkRequestBuilder
 import androidx.work.WorkManager
 import com.example.data.NotificationHistoryEntity
@@ -222,8 +225,23 @@ class MainActivity : ComponentActivity() {
         }
 
         // Периодическая проверка наступления срока оплаты (раз в час)
+        // Batch 14 (was MEDIUM 4.1): added Constraints (requiresBatteryNotLow)
+        // and exponential BackoffCriteria (5 min). Previously the worker ran
+        // even on low battery, and Result.retry() used the default 30s backoff
+        // which compounded on top of the 1-hour interval — a transient
+        // failure could cause 4+ retries per hour, draining battery. The
+        // exponential backoff (5, 10, 20, 40 min) limits retries to ~3 per
+        // hour max, and the battery constraint skips the run when the user
+        // most needs their phone alive.
+        val paymentCheckConstraints = Constraints.Builder()
+            .setRequiresBatteryNotLow(true)
+            .setRequiredNetworkType(NetworkType.NOT_REQUIRED)
+            .build()
         val paymentCheckRequest =
-            PeriodicWorkRequestBuilder<PaymentCheckWorker>(1, TimeUnit.HOURS).build()
+            PeriodicWorkRequestBuilder<PaymentCheckWorker>(1, TimeUnit.HOURS)
+                .setConstraints(paymentCheckConstraints)
+                .setBackoffCriteria(BackoffPolicy.EXPONENTIAL, 5, TimeUnit.MINUTES)
+                .build()
         WorkManager.getInstance(applicationContext).enqueueUniquePeriodicWork(
             "PaymentCheckWork",
             ExistingPeriodicWorkPolicy.KEEP,
@@ -231,7 +249,15 @@ class MainActivity : ComponentActivity() {
         )
 
         // Daily service due reminders are independent from rental payment checks.
-        val serviceCheckRequest = PeriodicWorkRequestBuilder<ServiceCheckWorker>(24, TimeUnit.HOURS).build()
+        // Batch 14 (was MEDIUM 4.1): same constraints + backoff as above.
+        val serviceCheckConstraints = Constraints.Builder()
+            .setRequiresBatteryNotLow(true)
+            .setRequiredNetworkType(NetworkType.NOT_REQUIRED)
+            .build()
+        val serviceCheckRequest = PeriodicWorkRequestBuilder<ServiceCheckWorker>(24, TimeUnit.HOURS)
+            .setConstraints(serviceCheckConstraints)
+            .setBackoffCriteria(BackoffPolicy.EXPONENTIAL, 5, TimeUnit.MINUTES)
+            .build()
         WorkManager.getInstance(applicationContext).enqueueUniquePeriodicWork(
             "ServiceCheckWork",
             ExistingPeriodicWorkPolicy.KEEP,

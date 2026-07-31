@@ -43,7 +43,13 @@ class TrashViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun updateReason(itemId: Long, reason: String) = viewModelScope.launch {
-        db.deletedItemDao().updateReason(itemId, reason.ifBlank { null })
+        // Batch 14 (was MEDIUM 7.3 follow-up): wrapped in try/catch.
+        // Previously a SQLiteException (e.g. DB full) would propagate to
+        // the coroutine's UncaughtExceptionHandler and crash the app.
+        try { db.deletedItemDao().updateReason(itemId, reason.ifBlank { null }) }
+        catch (e: Exception) {
+            android.util.Log.e("TrashViewModel", "updateReason failed for #$itemId", e)
+        }
     }
 
     /**
