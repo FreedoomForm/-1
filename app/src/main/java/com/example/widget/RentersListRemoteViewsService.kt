@@ -8,6 +8,7 @@ import com.example.R
 import com.example.data.AppDatabase
 import com.example.data.Renter
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withTimeoutOrNull
 
 /**
  * Adapter для виджета-списка арендаторов. Загружает всех арендаторов из БД
@@ -15,6 +16,15 @@ import kotlinx.coroutines.runBlocking
  *
  * onDataSetChanged использует runBlocking — это безопасно, т.к. метод
  * вызывается в background-потоке RemoteViewsService bind-сервиса.
+ *
+ * Batch 13 (was MEDIUM 7.2): wrapped the runBlocking body in
+ * withTimeoutOrNull(5_000). Previously, if the DB query hung (e.g. a
+ * long-running migration held the write lock), the widget would
+ * appear empty/stale indefinitely and the binder thread would be
+ * blocked forever. Now the query is abandoned after 5 seconds and
+ * the widget falls back to whatever renters list it had before
+ * (initially empty, which surfaces as "no renters" rather than
+ * blocking the system_server binder pool).
  */
 class RentersListRemoteViewsService : RemoteViewsService() {
     override fun onGetViewFactory(intent: Intent): RemoteViewsFactory {
@@ -30,10 +40,16 @@ class RentersListFactory(private val context: android.content.Context) : RemoteV
 
     override fun onDataSetChanged() {
         renters = runBlocking {
-            try {
-                AppDatabase.getDatabase(context).renterDao().getAllRentersOnce()
-            } catch (e: Exception) {
-                emptyList()
+            withTimeoutOrNull(5_000L) {
+                try {
+                    AppDatabase.getDatabase(context).renterDao().getAllRentersOnce()
+                } catch (e: Exception) {
+                    android.util.Log.e("RentersWidget", "onDataSetChanged failed", e)
+                    emptyList()
+                }
+            } ?: run {
+                android.util.Log.w("RentersWidget", "onDataSetChanged timed out after 5s — keeping previous list")
+                renters
             }
         }
     }

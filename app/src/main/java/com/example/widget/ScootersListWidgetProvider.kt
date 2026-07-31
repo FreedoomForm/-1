@@ -16,6 +16,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withTimeoutOrNull
 
 /**
  * Нативный виджет «Skuterlar» — список скутеров с кнопкой удаления.
@@ -175,14 +176,17 @@ class ScootersListFactory(private val context: Context) : RemoteViewsService.Rem
 
     override fun onCreate() {}
     override fun onDataSetChanged() {
+        // Batch 13 (was MEDIUM 7.2): bound the DB query with a 5s timeout.
         runBlocking {
-            try {
-                val db = AppDatabase.getDatabase(context)
-                scooters = db.scooterDao().getAllScootersOnce()
-                renters = db.renterDao().getAllRentersOnce()
-            } catch (e: Exception) {
-                android.util.Log.e("ScootersWidget", "onDataSetChanged failed", e)
-            }
+            withTimeoutOrNull(5_000L) {
+                try {
+                    val db = AppDatabase.getDatabase(context)
+                    scooters = db.scooterDao().getAllScootersOnce()
+                    renters = db.renterDao().getAllRentersOnce()
+                } catch (e: Exception) {
+                    android.util.Log.e("ScootersWidget", "onDataSetChanged failed", e)
+                }
+            } ?: android.util.Log.w("ScootersWidget", "onDataSetChanged timed out after 5s — keeping previous list")
         }
     }
     override fun onDestroy() { scooters = emptyList() }

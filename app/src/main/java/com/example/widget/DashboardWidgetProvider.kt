@@ -15,8 +15,9 @@ import com.example.data.AppDatabase
 import com.example.data.VirtualCard
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.GlobalScope
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -108,6 +109,15 @@ class DashboardWidgetProvider : AppWidgetProvider() {
 
     companion object {
         private const val TAG = "DashboardWidget"
+        /** Max wall-clock time for a single updateAll() invocation. */
+        private const val WIDGET_TIMEOUT_MS = 30_000L
+        /**
+         * Process-lifetime scope for widget-update coroutines. Uses
+         * SupervisorJob so a single widget build failure doesn't cancel
+         * siblings (e.g. if 4 widgets are updating and one throws, the
+         * other 3 still complete). Replaces the old GlobalScope usage.
+         */
+        private val widgetScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
         /**
          * Точка входа для принудительного обновления виджета из приложения
@@ -121,13 +131,24 @@ class DashboardWidgetProvider : AppWidgetProvider() {
                 )
                 if (ids.isEmpty()) return
 
-                // Запускаем в IO-диспатчере — этот метод вызывается из UI-потока
-                GlobalScope.launch(Dispatchers.IO) {
-                    try {
-                        ids.forEach { id -> buildAndUpdate(context, mgr, id) }
-                    } catch (e: Exception) {
-                        android.util.Log.e(TAG, "updateAll failed", e)
-                    }
+                // Batch 13 (was HIGH 7.1): replaced GlobalScope.launch
+                // with a process-lifetime bounded CoroutineScope stored in
+                // the companion object. GlobalScope survived the widget
+                // provider's lifetime — if buildAndUpdate hung (e.g. DB
+                // locked by a long migration), the coroutine leaked
+                // forever with no cancellation path. The widgetScope
+                // below uses SupervisorJob (one failure doesn't cancel
+                // siblings) and Dispatchers.IO, plus a 30-second
+                // withTimeoutOrNull per updateAll call so a hung DB query
+                // is abandoned and logged rather than leaked silently.
+                widgetScope.launch {
+                    withTimeoutOrNull(WIDGET_TIMEOUT_MS) {
+                        try {
+                            ids.forEach { id -> buildAndUpdate(context, mgr, id) }
+                        } catch (e: Exception) {
+                            android.util.Log.e(TAG, "updateAll failed", e)
+                        }
+                    } ?: android.util.Log.w(TAG, "updateAll timed out after ${WIDGET_TIMEOUT_MS}ms")
                 }
             } catch (e: Exception) {
                 android.util.Log.e(TAG, "updateAll entry failed", e)

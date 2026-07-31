@@ -17,6 +17,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withTimeoutOrNull
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -179,15 +180,20 @@ class ContractsListFactory(private val context: Context) : RemoteViewsService.Re
 
     override fun onCreate() {}
     override fun onDataSetChanged() {
+        // Batch 13 (was MEDIUM 7.2): bound the DB query with a 5s timeout
+        // so a hung migration / locked DB doesn't block the binder thread
+        // forever. Falls back to the previous list on timeout.
         runBlocking {
-            try {
-                contracts = AppDatabase.getDatabase(context).contractHistoryDao().getAllOnce()
-                    .filter { it.type == ContractHistoryEntry.TYPE_CREATED || it.type == ContractHistoryEntry.TYPE_AUTO_RENEW }
-                    .sortedByDescending { it.weekStart ?: it.timestamp }
-                    .take(20)
-            } catch (e: Exception) {
-                android.util.Log.e("ContractsWidget", "onDataSetChanged failed", e)
-            }
+            withTimeoutOrNull(5_000L) {
+                try {
+                    contracts = AppDatabase.getDatabase(context).contractHistoryDao().getAllOnce()
+                        .filter { it.type == ContractHistoryEntry.TYPE_CREATED || it.type == ContractHistoryEntry.TYPE_AUTO_RENEW }
+                        .sortedByDescending { it.weekStart ?: it.timestamp }
+                        .take(20)
+                } catch (e: Exception) {
+                    android.util.Log.e("ContractsWidget", "onDataSetChanged failed", e)
+                }
+            } ?: android.util.Log.w("ContractsWidget", "onDataSetChanged timed out after 5s — keeping previous list")
         }
     }
     override fun onDestroy() { contracts = emptyList() }

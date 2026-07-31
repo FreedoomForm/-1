@@ -26,10 +26,10 @@ import org.junit.runner.RunWith
  *   ./gradlew :app:assembleDebug — schemas are written during KSP processing.
  *
  * Test categories:
- *   1. `migrateAll` — full chain 11 → 31; creates a v11 DB with seed data
+ *   1. `migrateAll` — full chain 11 → 33; creates a v11 DB with seed data
  *      and verifies migrations preserve core rows.
  *   2. `migrate11to12`, `migrate12to13`, ... — per-step migrations.
- *   3. `freshDbOpensAt31` — confirms the latest schema opens cleanly without
+ *   3. `freshDbOpensAt33` — confirms the latest schema opens cleanly without
  *      running any migrations (verifies @Database declaration correctness).
  *
  * These tests require an emulator/device (instrumented tests). Run with:
@@ -54,9 +54,11 @@ class AppDatabaseMigrationTest {
         allMigrations.first { it.startVersion == from && it.endVersion == to }
 
     @Test
-    fun freshDbOpensAt31() {
+    fun freshDbOpensAt33() {
         // §12: confirms @Database declaration is internally consistent —
         // opens a fresh DB at the latest version without any migration.
+        // Batch 13 (was HIGH 10.2): updated from v31 to v33 — the test was
+        // stale and would have failed on the current schema.
         val db = Room.inMemoryDatabaseBuilder(
             ApplicationProvider.getApplicationContext<Context>(),
             AppDatabase::class.java
@@ -75,10 +77,12 @@ class AppDatabaseMigrationTest {
     }
 
     @Test
-    fun migrateAll_11_to_31_preservesCoreData() {
+    fun migrateAll_11_to_33_preservesCoreData() {
         // Create a v11 DB with a renter + scooter row, then run the full
         // migration chain. After migration, the rows must still be readable
         // through the latest DAOs.
+        // Batch 13 (was HIGH 10.2): updated from v31 to v33 — the test was
+        // stale and would have failed on the current schema.
         helper.createDatabase(dbName, 11).apply {
             execSQL("""
                 INSERT INTO renters (name, phone, passport, address, pinfl,
@@ -103,11 +107,11 @@ class AppDatabaseMigrationTest {
 
         val db = helper.runMigrationsAndValidate(
             name = dbName,
-            version = 31,
+            version = 33,
             migrations = allMigrations
         )
 
-        // Verify the renter row survived all 20 migrations.
+        // Verify the renter row survived all 22 migrations.
         val renters = db.query("SELECT COUNT(*) FROM renters").use { c ->
             c.moveToFirst(); c.getInt(0)
         }
@@ -147,6 +151,72 @@ class AppDatabaseMigrationTest {
             c.moveToFirst(); c.getInt(0)
         }
         assertEquals(0, handoverCount)
+        db.close()
+    }
+
+    @Test
+    fun migrate_31_to_32_adds_discountMinor() {
+        // Batch 13 (was HIGH 10.2): added explicit test for migration 31→32
+        // which adds the `discountMinor` column to rent_periods. Previously
+        // this migration was untested — a typo in the column name or type
+        // would only be caught at runtime on a real upgrade.
+        helper.createDatabase(dbName, 31).apply {
+            // Seed a rent_period so we can verify the column survives.
+            // The exact INSERT column list is the v31 schema (no discountMinor yet).
+            execSQL("""
+                INSERT INTO rent_periods (contractHistoryId, renterId, scooterId,
+                                          startsAt, endsAt, chargeMinor, paidMinor,
+                                          status, suspendedAt, suspensionReason,
+                                          createdAt, updatedAt)
+                VALUES (NULL, 1, 1,
+                        1700000000000, 1700604400000, 50000, 0,
+                        'ACTIVE', NULL, NULL,
+                        1700000000000, 1700000000000)
+            """.trimIndent())
+            close()
+        }
+        val db = helper.runMigrationsAndValidate(
+            name = dbName,
+            version = 32,
+            migrations = arrayOf(migration(31, 32))
+        )
+        // The discountMinor column must exist with the default value 0 on
+        // the pre-existing row.
+        val discount = db.query("SELECT discountMinor FROM rent_periods LIMIT 1").use { c ->
+            c.moveToFirst(); c.getLong(0)
+        }
+        assertEquals(0L, discount)
+        db.close()
+    }
+
+    @Test
+    fun migrate_32_to_33_adds_parentPeriodId() {
+        // Batch 13 (was HIGH 10.2): added explicit test for migration 32→33
+        // which adds the `parentPeriodId` column to rent_periods. Previously
+        // this migration was untested.
+        helper.createDatabase(dbName, 32).apply {
+            execSQL("""
+                INSERT INTO rent_periods (contractHistoryId, renterId, scooterId,
+                                          startsAt, endsAt, chargeMinor, paidMinor,
+                                          discountMinor, status, suspendedAt, suspensionReason,
+                                          createdAt, updatedAt)
+                VALUES (NULL, 1, 1,
+                        1700000000000, 1700604400000, 50000, 0,
+                        0, 'ACTIVE', NULL, NULL,
+                        1700000000000, 1700000000000)
+            """.trimIndent())
+            close()
+        }
+        val db = helper.runMigrationsAndValidate(
+            name = dbName,
+            version = 33,
+            migrations = arrayOf(migration(32, 33))
+        )
+        // The parentPeriodId column must exist and be NULL on the pre-existing row.
+        val parentId = db.query("SELECT parentPeriodId FROM rent_periods LIMIT 1").use { c ->
+            c.moveToFirst(); if (c.isNull(0)) null else c.getLong(0)
+        }
+        assertEquals(null, parentId)
         db.close()
     }
 

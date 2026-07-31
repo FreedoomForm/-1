@@ -1,6 +1,7 @@
 package com.example.ui
 
 import android.app.Application
+import android.util.Log
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.data.AppDatabase
@@ -31,31 +32,51 @@ class HistoryViewModel(application: Application) : AndroidViewModel(application)
 
     fun selectBranch(branchId: Long) { _activeBranchId.value = branchId }
 
+    // Batch 13 (was MEDIUM 7.3): all viewModelScope.launch blocks below
+    // are now wrapped in try/catch. Previously any exception thrown by
+    // TimelineService would propagate to the coroutine's
+    // UncaughtExceptionHandler and crash the app via the thread's default
+    // handler. The launches are fire-and-forget UI actions (no caller
+    // awaits them), so silent failure with a log message is the correct
+    // behavior — the user can retry by tapping the button again.
+
     fun createBranch(atTimestamp: Long, name: String) {
         viewModelScope.launch {
-            val id = service.createBranch(_activeBranchId.value, atTimestamp, name)
-            _activeBranchId.value = id
+            try {
+                val id = service.createBranch(_activeBranchId.value, atTimestamp, name)
+                _activeBranchId.value = id
+            } catch (e: Exception) {
+                Log.e(TAG, "createBranch failed", e)
+            }
         }
     }
 
     /** Immutable timeline edit: append an explicit correction event. */
     fun correctSelected(event: TimelineEvent, note: String) {
         viewModelScope.launch {
-            service.record(
-                branchId = _activeBranchId.value,
-                actionType = "HISTORY_CORRECTION",
-                screen = event.screen,
-                title = "Correction: ${event.title}",
-                entityType = event.entityType,
-                entityId = event.entityId,
-                payloadJson = "{\"sourceEventId\":${event.id},\"note\":\"${note.replace("\"", "\\\"")}\"}"
-            )
+            try {
+                service.record(
+                    branchId = _activeBranchId.value,
+                    actionType = "HISTORY_CORRECTION",
+                    screen = event.screen,
+                    title = "Correction: ${event.title}",
+                    entityType = event.entityType,
+                    entityId = event.entityId,
+                    payloadJson = "{\"sourceEventId\":${event.id},\"note\":\"${note.replace("\"", "\\\"")}\"}"
+                )
+            } catch (e: Exception) {
+                Log.e(TAG, "correctSelected failed", e)
+            }
         }
     }
 
     fun archiveSelected(event: TimelineEvent, reason: String = "Archived from history") {
         viewModelScope.launch {
-            com.example.data.TrashService(db).archiveTimelineEvent(event, reason)
+            try {
+                com.example.data.TrashService(db).archiveTimelineEvent(event, reason)
+            } catch (e: Exception) {
+                Log.e(TAG, "archiveSelected failed", e)
+            }
         }
     }
 
@@ -65,7 +86,10 @@ class HistoryViewModel(application: Application) : AndroidViewModel(application)
      * name on the history screen.
      */
     fun unarchiveSelected(event: TimelineEvent) {
-        viewModelScope.launch { service.unarchiveEvent(event) }
+        viewModelScope.launch {
+            try { service.unarchiveEvent(event) }
+            catch (e: Exception) { Log.e(TAG, "unarchiveSelected failed", e) }
+        }
     }
 
     /**
@@ -82,7 +106,10 @@ class HistoryViewModel(application: Application) : AndroidViewModel(application)
      * block from a non-main branch is selected on the history tree.
      */
     fun renameBranch(branchId: Long, newName: String) {
-        viewModelScope.launch { service.renameBranch(branchId, newName) }
+        viewModelScope.launch {
+            try { service.renameBranch(branchId, newName) }
+            catch (e: Exception) { Log.e(TAG, "renameBranch failed", e) }
+        }
     }
 
     /**
@@ -91,7 +118,10 @@ class HistoryViewModel(application: Application) : AndroidViewModel(application)
      * selected on the history tree.
      */
     fun deleteBranch(branchId: Long) {
-        viewModelScope.launch { service.deleteBranch(branchId) }
+        viewModelScope.launch {
+            try { service.deleteBranch(branchId) }
+            catch (e: Exception) { Log.e(TAG, "deleteBranch failed", e) }
+        }
     }
 
     /** Snapshot lookup for "Вернуться в это время" — exposes the active branch id. */
@@ -110,4 +140,8 @@ class HistoryViewModel(application: Application) : AndroidViewModel(application)
 
     suspend fun nearestSnapshot(timestamp: Long) =
         service.nearestRenderableState(_activeBranchId.value, timestamp)
+
+    companion object {
+        private const val TAG = "HistoryViewModel"
+    }
 }

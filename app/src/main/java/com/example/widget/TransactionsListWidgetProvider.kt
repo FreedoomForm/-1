@@ -18,6 +18,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withTimeoutOrNull
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -177,14 +178,17 @@ class TransactionsListFactory(private val context: Context) : RemoteViewsService
 
     override fun onCreate() {}
     override fun onDataSetChanged() {
+        // Batch 13 (was MEDIUM 7.2): bound the DB query with a 5s timeout.
         runBlocking {
-            try {
-                txs = AppDatabase.getDatabase(context).transactionDao().getAllOnce()
-                    .sortedByDescending { it.timestamp }
-                    .take(20)
-            } catch (e: Exception) {
-                android.util.Log.e("TransactionsWidget", "onDataSetChanged failed", e)
-            }
+            withTimeoutOrNull(5_000L) {
+                try {
+                    txs = AppDatabase.getDatabase(context).transactionDao().getAllOnce()
+                        .sortedByDescending { it.timestamp }
+                        .take(20)
+                } catch (e: Exception) {
+                    android.util.Log.e("TransactionsWidget", "onDataSetChanged failed", e)
+                }
+            } ?: android.util.Log.w("TransactionsWidget", "onDataSetChanged timed out after 5s — keeping previous list")
         }
     }
     override fun onDestroy() { txs = emptyList() }
