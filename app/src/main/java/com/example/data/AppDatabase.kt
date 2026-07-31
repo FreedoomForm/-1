@@ -17,7 +17,7 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         VirtualCard::class,
         CardTransaction::class
     ],
-    version = 15,
+    version = 34,
     exportSchema = false
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -178,6 +178,126 @@ abstract class AppDatabase : RoomDatabase() {
             }
         }
 
+        /**
+         * Migration 15 → 34: no-op.
+         *
+         * Схема БД между v15 и v34 не изменилась — эти две версии идентичны
+         * по структуре таблиц. Этот migration существует только для того,
+         * чтобы Room не упал с `fallbackToDestructiveMigration` для пользователей,
+         * которые были на v15 (коммит 2a862c9) и обновляются до v1.2.135+.
+         *
+         * ВАЖНО: v34 — это не «новая схема», а просто номер версии, выбранный
+         * выше v33 (последнего релиза с batches), чтобы Room воспринял переход
+         * с v33 как upgrade, а не downgrade.
+         */
+        private val MIGRATION_15_34 = object : Migration(15, 34) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                // No-op: схема v15 уже соответствует v34 (entity definitions
+                // не менялись между 2a862c9 и этим коммитом).
+            }
+        }
+
+        /**
+         * Migration 33 → 34: конвертирует БД из v33 (последний релиз с batches,
+         * 19 таблиц + extra колонки) в v34 (7 таблиц, как в 2a862c9).
+         *
+         * Что делает эта миграция:
+         *   1. Удаляет 13 таблиц, которых больше нет в коде:
+         *      app_users, audit_events, business_operations, deleted_items,
+         *      handover_acts, legacy_money_amounts, payment_allocations,
+         *      rent_periods, repair_orders, sms_deliveries,
+         *      timeline_branches, timeline_events, timeline_snapshots.
+         *
+         *   2. Удаляет extra-колонки, добавленные в v16-v33 migrations:
+         *      • virtual_cards.isArchived (added в v17)
+         *      • scooters.lifecycleStatus, lastServiceAt, nextServiceAt (added в v21)
+         *      • scooters.mileageKm (added в v25)
+         *
+         *   SQLite < 3.35 (Android API < 31) не поддерживает ALTER TABLE DROP COLUMN,
+         *   поэтому используем стандартный паттерн CREATE-INSERT-DROP-RENAME.
+         *
+         * После миграции все 7 таблиц (renters, scooters, transactions,
+         * contract_history, virtual_cards, card_transactions, notification_history)
+         * имеют ровно те колонки, которые описаны в entity definitions v15/v34 —
+         * Room проходит schema validation без ошибок.
+         *
+         * Данные в 7 основных таблицах (арендаторы, скутеры, контракты,
+         * транзакции, карты, карточные транзакции, уведомления) сохраняются
+         * полностью — мы только отбрасываем «лишние» колонки и таблицы,
+         * которые v34-код всё равно не использует.
+         */
+        private val MIGRATION_33_34 = object : Migration(33, 34) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                // ── 1. Удаляем 13 extra-таблиц ──
+                val extraTables = listOf(
+                    "timeline_snapshots",
+                    "timeline_events",
+                    "timeline_branches",
+                    "deleted_items",
+                    "legacy_money_amounts",
+                    "repair_orders",
+                    "handover_acts",
+                    "sms_deliveries",
+                    "app_users",
+                    "payment_allocations",
+                    "rent_periods",
+                    "audit_events",
+                    "business_operations"
+                )
+                extraTables.forEach { t ->
+                    db.execSQL("DROP TABLE IF EXISTS `$t`")
+                }
+
+                // ── 2. Удаляем extra-колонки из virtual_cards ──
+                // В v17 добавилась колонка `isArchived` (INTEGER NOT NULL DEFAULT 0).
+                // В v34 entity её не имеет — отбрасываем через CREATE-INSERT-DROP-RENAME.
+                db.execSQL("""
+                    CREATE TABLE IF NOT EXISTS `virtual_cards_new` (
+                        `id` INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
+                        `name` TEXT NOT NULL,
+                        `balance` REAL NOT NULL,
+                        `colorHex` TEXT NOT NULL,
+                        `info` TEXT,
+                        `isDefault` INTEGER NOT NULL,
+                        `createdAt` INTEGER NOT NULL,
+                        `kind` TEXT NOT NULL DEFAULT 'REGULAR'
+                    )
+                """.trimIndent())
+                db.execSQL("""
+                    INSERT INTO `virtual_cards_new` (id, name, balance, colorHex, info, isDefault, createdAt, kind)
+                    SELECT id, name, balance, colorHex, info, isDefault, createdAt, kind FROM `virtual_cards`
+                """.trimIndent())
+                db.execSQL("DROP TABLE `virtual_cards`")
+                db.execSQL("ALTER TABLE `virtual_cards_new` RENAME TO `virtual_cards`")
+
+                // ── 3. Удаляем extra-колонки из scooters ──
+                // В v21 добавлены: lifecycleStatus (TEXT NOT NULL DEFAULT 'AVAILABLE'),
+                //                  lastServiceAt (INTEGER),
+                //                  nextServiceAt (INTEGER).
+                // В v25 добавлен: mileageKm (INTEGER NOT NULL DEFAULT 0).
+                // В v34 entity этих полей нет — отбрасываем.
+                db.execSQL("""
+                    CREATE TABLE IF NOT EXISTS `scooters_new` (
+                        `id` INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
+                        `name` TEXT NOT NULL,
+                        `documentedNumber` TEXT,
+                        `vinNumber` TEXT NOT NULL,
+                        `engineNumber` TEXT NOT NULL,
+                        `scooterSerialNumber` TEXT NOT NULL,
+                        `batteryId1` TEXT NOT NULL,
+                        `batteryId2` TEXT NOT NULL,
+                        `additionalInfo` TEXT NOT NULL
+                    )
+                """.trimIndent())
+                db.execSQL("""
+                    INSERT INTO `scooters_new` (id, name, documentedNumber, vinNumber, engineNumber, scooterSerialNumber, batteryId1, batteryId2, additionalInfo)
+                    SELECT id, name, documentedNumber, vinNumber, engineNumber, scooterSerialNumber, batteryId1, batteryId2, additionalInfo FROM `scooters`
+                """.trimIndent())
+                db.execSQL("DROP TABLE `scooters`")
+                db.execSQL("ALTER TABLE `scooters_new` RENAME TO `scooters`")
+            }
+        }
+
         fun getDatabase(context: Context): AppDatabase {
             return INSTANCE ?: synchronized(this) {
                 val instance = Room.databaseBuilder(
@@ -185,9 +305,15 @@ abstract class AppDatabase : RoomDatabase() {
                     AppDatabase::class.java,
                     "scooter_rent_db"
                 )
-                    .addMigrations(MIGRATION_11_12, MIGRATION_12_13, MIGRATION_13_14, MIGRATION_14_15)
-                    // На случай если кто-то перескакивает через несколько версий —
-                    // лучше потерять локальные данные, чем крашнуться при старте.
+                    .addMigrations(
+                        MIGRATION_11_12, MIGRATION_12_13, MIGRATION_13_14, MIGRATION_14_15,
+                        MIGRATION_15_34, MIGRATION_33_34
+                    )
+                    // На случай если кто-то перескакивает через несколько версий
+                    // (например, был на v16-v32, для которых нет явной миграции
+                    // в эту сборку) — лучше потерять локальные данные, чем
+                    // крашнуться при старте. Пользователь сможет восстановить
+                    // данные из .xlsx-бэкапа через BackupManager.importFromExcel().
                     .fallbackToDestructiveMigration(true)
                     .addCallback(object : RoomDatabase.Callback() {
                         override fun onCreate(db: SupportSQLiteDatabase) {
