@@ -210,13 +210,25 @@ fun ContractCalendar(
 
     val monthTitle = remember(viewYear, viewMonth) {
         val fmt = java.text.SimpleDateFormat("LLLL yyyy", Locale.getDefault())
-        cal.set(viewYear, viewMonth, 1)
+        cal.set(viewYear, viewMonth, 1, 0, 0, 0)
+        cal.set(Calendar.MILLISECOND, 0)
         fmt.format(cal.time).replaceFirstChar { it.uppercase() }
     }
 
     val days = remember(viewYear, viewMonth) {
         buildList {
-            cal.set(viewYear, viewMonth, 1)
+            // ── Нормализация к началу дня ─────────────────────────────────
+            // Ранее cal.set(year, month, 1) НЕ сбрасывал HOUR/MINUTE/SECOND,
+            // поэтому все 42 ячейки несли текущее время (например 14:30).
+            // Это приводило к багу: контракт 04.08→11.08 (с weekStart=00:00)
+            // отображался в календаре как 07.08→11.08, потому что сравнение
+            // dayMs >= g.startMs для ячейки 4 августа (14:30) было TRUE, но
+            // ячейка 6 августа (14:30) >= contract.endMs (23:59:59.999 11.08)
+            // ломалось при пересечении месяцев. Сброс времени к 00:00:00.000
+            // устраняет эту путаницу — все ячейки и контракты сравниваются
+            // по день-начала.
+            cal.set(viewYear, viewMonth, 1, 0, 0, 0)
+            cal.set(Calendar.MILLISECOND, 0)
             val firstDayOfWeek = cal.get(Calendar.DAY_OF_WEEK)
             // Понедельник = первый день недели
             val leadings = (firstDayOfWeek - Calendar.MONDAY + 7) % 7

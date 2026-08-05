@@ -2619,10 +2619,31 @@ fun RenterFormDialog(
                 .filter { it.weekStart != null && it.weekEnd != null }
                 .sortedBy { it.weekStart ?: 0L }
                 .mapIndexed { index, entry ->
+                    // ── Нормализация к началу дня ─────────────────────────
+                    // Контракты в БД могут иметь weekStart с произвольным часом
+                    // (например 14:30, если созданы через календарь в 14:30).
+                    // Это приводило к багу: контракт 04.08→11.08 отображался
+                    // как 07.08→11.08, потому что ячейки календаря теперь имеют
+                    // timestamp = 00:00, и сравнение dayMs >= g.startMs ломалось
+                    // (ячейка 4 авг 00:00 < контракт 4 авг 14:30 → ячейка не
+                    // попадала в период). Нормализуем к началу дня.
+                    val cal = java.util.Calendar.getInstance()
+                    cal.timeInMillis = entry.weekStart!!
+                    cal.set(java.util.Calendar.HOUR_OF_DAY, 0)
+                    cal.set(java.util.Calendar.MINUTE, 0)
+                    cal.set(java.util.Calendar.SECOND, 0)
+                    cal.set(java.util.Calendar.MILLISECOND, 0)
+                    val normStart = cal.timeInMillis
+                    cal.timeInMillis = entry.weekEnd!!
+                    cal.set(java.util.Calendar.HOUR_OF_DAY, 23)
+                    cal.set(java.util.Calendar.MINUTE, 59)
+                    cal.set(java.util.Calendar.SECOND, 59)
+                    cal.set(java.util.Calendar.MILLISECOND, 999)
+                    val normEnd = cal.timeInMillis
                     ContractGroup(
                         id = index + 1,
-                        startMs = entry.weekStart!!,
-                        endMs = entry.weekEnd!!,
+                        startMs = normStart,
+                        endMs = normEnd,
                         isPaid = entry.isPaid,
                         existingContractId = entry.id
                     )

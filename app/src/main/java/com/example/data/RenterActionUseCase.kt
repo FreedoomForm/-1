@@ -117,68 +117,175 @@ class RenterActionUseCase(
         var remainingAmount = paymentAmount
         var contractsPaid = 0
         val dayMs = 24L * 60 * 60 * 1000
+        val scooter: Scooter? = renter.scooterId?.let { fetchScooterById(it) }
 
         for (unpaid in unpaidContracts) {
             if (remainingAmount <= 0) break
 
-            // Гасим этот контракт полностью
-            historyRepository.update(unpaid.copy(isPaid = true))
-            contractsPaid++
-
-            // Сумма, зачтённая за этот контракт (берём amount из контракта,
-            // а не из dailyPrice — контракт мог быть создан с другой ставкой)
+            // Сумма контракта (берём amount из БД, иначе fallback на 7 дней)
             val contractAmount = unpaid.amount.let { if (it > 0) it else dailyPrice * 7 }
-            remainingAmount -= contractAmount
+            // Сколько дней в этом контракте
+            val contractDays = if (unpaid.weekEnd != null && unpaid.weekStart != null) {
+                val diff = (unpaid.weekEnd!! - unpaid.weekStart!!).toDouble() / dayMs
+                kotlin.math.ceil(diff).toInt().coerceAtLeast(1)
+            } else 7
 
-            // PAYMENT-запись в историю контрактов
-            val scooter: Scooter? = renter.scooterId?.let { fetchScooterById(it) }
-            val paymentEntry = ContractHistoryEntry(
-                renterId = renter.id, timestamp = now,
-                type = ContractHistoryEntry.TYPE_PAYMENT, amount = contractAmount,
-                notes = "$notes (qarz yopildi #${unpaid.id})",
-                renterName = renter.name, renterPhone = renter.phoneNumber,
-                scooterName = renter.scooterName,
-                weekStart = unpaid.weekStart, weekEnd = unpaid.weekEnd,
-                weeklyPrice = contractAmount,
-                passportData = renter.passportData, address = renter.address, pinfl = renter.pinfl,
-                vinNumber = scooter?.vinNumber ?: "", engineNumber = scooter?.engineNumber ?: "",
-                scooterSerialNumber = scooter?.scooterSerialNumber ?: "",
-                batteryId1 = scooter?.batteryId1 ?: "", batteryId2 = scooter?.batteryId2 ?: "",
-                additionalInfo = scooter?.additionalInfo ?: ""
-            )
-            historyRepository.insert(paymentEntry)
+            if (remainingAmount >= contractAmount) {
+                // ── Полная оплата контракта ────────────────────────────────
+                historyRepository.update(unpaid.copy(isPaid = true))
+                contractsPaid++
+                remainingAmount -= contractAmount
 
-            // Transaction в таблицу транзакций
-            val dateFmt = java.text.SimpleDateFormat("dd.MM.yyyy", java.util.Locale.getDefault())
-            val wsStr = unpaid.weekStart?.let { dateFmt.format(java.util.Date(it)) } ?: ""
-            val weStr = unpaid.weekEnd?.let { dateFmt.format(java.util.Date(it)) } ?: ""
-            val contractLabel = "#${unpaid.id}  $wsStr → $weStr"
-            try {
-                transactionRepository.insert(
-                    Transaction(
-                        contractId = unpaid.id, renterId = renter.id, scooterId = renter.scooterId,
-                        timestamp = now, type = Transaction.TYPE_PAYMENT, amount = contractAmount,
-                        notes = notes, renterName = renter.name, renterPhone = renter.phoneNumber,
-                        scooterName = renter.scooterName ?: "", contractLabel = contractLabel
+                // PAYMENT-запись в историю
+                val paymentEntry = ContractHistoryEntry(
+                    renterId = renter.id, timestamp = now,
+                    type = ContractHistoryEntry.TYPE_PAYMENT, amount = contractAmount,
+                    notes = "$notes (qarz yopildi #${unpaid.id})",
+                    renterName = renter.name, renterPhone = renter.phoneNumber,
+                    scooterName = renter.scooterName,
+                    weekStart = unpaid.weekStart, weekEnd = unpaid.weekEnd,
+                    weeklyPrice = contractAmount,
+                    passportData = renter.passportData, address = renter.address, pinfl = renter.pinfl,
+                    vinNumber = scooter?.vinNumber ?: "", engineNumber = scooter?.engineNumber ?: "",
+                    scooterSerialNumber = scooter?.scooterSerialNumber ?: "",
+                    batteryId1 = scooter?.batteryId1 ?: "", batteryId2 = scooter?.batteryId2 ?: "",
+                    additionalInfo = scooter?.additionalInfo ?: ""
+                )
+                historyRepository.insert(paymentEntry)
+
+                // Transaction
+                val dateFmt = java.text.SimpleDateFormat("dd.MM.yyyy", java.util.Locale.getDefault())
+                val wsStr = unpaid.weekStart?.let { dateFmt.format(java.util.Date(it)) } ?: ""
+                val weStr = unpaid.weekEnd?.let { dateFmt.format(java.util.Date(it)) } ?: ""
+                val contractLabel = "#${unpaid.id}  $wsStr → $weStr"
+                try {
+                    transactionRepository.insert(
+                        Transaction(
+                            contractId = unpaid.id, renterId = renter.id, scooterId = renter.scooterId,
+                            timestamp = now, type = Transaction.TYPE_PAYMENT, amount = contractAmount,
+                            notes = notes, renterName = renter.name, renterPhone = renter.phoneNumber,
+                            scooterName = renter.scooterName ?: "", contractLabel = contractLabel
+                        )
                     )
-                )
-            } catch (e: Exception) {
-                Log.w(TAG, "Failed to insert transaction: ${e.message}")
-            }
+                } catch (e: Exception) {
+                    Log.w(TAG, "Failed to insert transaction: ${e.message}")
+                }
 
-            // Зачисление на «Glavnaya» карту
-            try {
-                virtualCardRepository.depositContractIncome(
-                    amount = contractAmount,
-                    note = "To'lov: ${renter.name} (qarz #${unpaid.id}) — $notes",
-                    contractId = unpaid.id
+                // Зачисление на «Glavnaya» карту
+                try {
+                    virtualCardRepository.depositContractIncome(
+                        amount = contractAmount,
+                        note = "To'lov: ${renter.name} (qarz #${unpaid.id}) — $notes",
+                        contractId = unpaid.id
+                    )
+                } catch (e: Exception) {
+                    Log.w(TAG, "depositContractIncome failed: ${e.message}")
+                }
+            } else {
+                // ── ЧАСТИЧНАЯ оплата контракта ─────────────────────────────
+                // Платёж меньше суммы контракта. Например: контракт 7 дней
+                // (420000), пользователь платит за 2 дня (120000).
+                //
+                // Логика:
+                //   1. Сколько дней оплачивается: paidDays = floor(remainingAmount / dailyPrice)
+                //   2. Сколько дней остаётся неоплаченными: remainingDays = contractDays - paidDays
+                //   3. Сумма, зачтённая за платёж: actualPaidAmount = paidDays × dailyPrice
+                //   4. Модифицируем исходный контракт: weekStart сдвигаем вперёд
+                //      на paidDays дней, amount уменьшаем на actualPaidAmount.
+                //      Контракт остаётся isPaid=false.
+                //   5. Создаём НОВЫЙ оплаченный контракт (AUTO_RENEW) для
+                //      paidDays дней с исходным weekStart.
+                //   6. Создаём Transaction(actualPaidAmount) + PAYMENT entry +
+                //      depositContractIncome(actualPaidAmount).
+                val paidDays = kotlin.math.floor(remainingAmount / dailyPrice).toInt().coerceAtLeast(1)
+                val actualPaidAmount = paidDays * dailyPrice
+                val remainingDays = (contractDays - paidDays).coerceAtLeast(1)
+
+                // 4. Модифицируем исходный контракт
+                val originalStart = unpaid.weekStart ?: now
+                val newUnpaidStart = originalStart + paidDays * dayMs
+                val updatedUnpaid = unpaid.copy(
+                    weekStart = newUnpaidStart,
+                    amount = contractAmount - actualPaidAmount,
+                    weeklyPrice = contractAmount - actualPaidAmount,
+                    notes = (unpaid.notes ?: "") + " — $paidDays kun to'landi (qoldi $remainingDays kun)"
                 )
-            } catch (e: Exception) {
-                Log.w(TAG, "depositContractIncome failed: ${e.message}")
+                historyRepository.update(updatedUnpaid)
+
+                // 5. Создаём новый оплаченный контракт на paidDays дней
+                val newPaidEnd = originalStart + paidDays * dayMs - 1
+                val newPaidContract = ContractHistoryEntry(
+                    renterId = renter.id, timestamp = now,
+                    type = ContractHistoryEntry.TYPE_AUTO_RENEW, amount = actualPaidAmount,
+                    notes = "Qisman to'lov ($paidDays kun / $contractDays) — $notes",
+                    renterName = renter.name, renterPhone = renter.phoneNumber,
+                    scooterName = renter.scooterName,
+                    weekStart = originalStart, weekEnd = newPaidEnd,
+                    weeklyPrice = actualPaidAmount,
+                    passportData = renter.passportData, address = renter.address, pinfl = renter.pinfl,
+                    vinNumber = scooter?.vinNumber ?: "", engineNumber = scooter?.engineNumber ?: "",
+                    scooterSerialNumber = scooter?.scooterSerialNumber ?: "",
+                    batteryId1 = scooter?.batteryId1 ?: "", batteryId2 = scooter?.batteryId2 ?: "",
+                    additionalInfo = scooter?.additionalInfo ?: "",
+                    isPaid = true
+                )
+                val newContractId = historyRepository.insert(newPaidContract)
+
+                // PAYMENT-запись
+                val paymentEntry = ContractHistoryEntry(
+                    renterId = renter.id, timestamp = now,
+                    type = ContractHistoryEntry.TYPE_PAYMENT, amount = actualPaidAmount,
+                    notes = "$notes (qisman #$unpaid.id → #$newContractId)",
+                    renterName = renter.name, renterPhone = renter.phoneNumber,
+                    scooterName = renter.scooterName,
+                    weekStart = originalStart, weekEnd = newPaidEnd,
+                    weeklyPrice = actualPaidAmount,
+                    passportData = renter.passportData, address = renter.address, pinfl = renter.pinfl,
+                    vinNumber = scooter?.vinNumber ?: "", engineNumber = scooter?.engineNumber ?: "",
+                    scooterSerialNumber = scooter?.scooterSerialNumber ?: "",
+                    batteryId1 = scooter?.batteryId1 ?: "", batteryId2 = scooter?.batteryId2 ?: "",
+                    additionalInfo = scooter?.additionalInfo ?: ""
+                )
+                historyRepository.insert(paymentEntry)
+
+                // Transaction
+                val dateFmt = java.text.SimpleDateFormat("dd.MM.yyyy", java.util.Locale.getDefault())
+                val contractLabel = "#${newContractId}  ${dateFmt.format(java.util.Date(originalStart))} → ${dateFmt.format(java.util.Date(newPaidEnd))}"
+                try {
+                    transactionRepository.insert(
+                        Transaction(
+                            contractId = newContractId.toInt(), renterId = renter.id,
+                            scooterId = renter.scooterId, timestamp = now,
+                            type = Transaction.TYPE_PAYMENT, amount = actualPaidAmount,
+                            notes = "$notes (qisman: $paidDays/$contractDays kun)",
+                            renterName = renter.name, renterPhone = renter.phoneNumber,
+                            scooterName = renter.scooterName ?: "", contractLabel = contractLabel
+                        )
+                    )
+                } catch (e: Exception) {
+                    Log.w(TAG, "Failed to insert partial transaction: ${e.message}")
+                }
+
+                // Зачисление на карту
+                try {
+                    virtualCardRepository.depositContractIncome(
+                        amount = actualPaidAmount,
+                        note = "To'lov: ${renter.name} (qisman $paidDays kun) — $notes",
+                        contractId = newContractId.toInt()
+                    )
+                } catch (e: Exception) {
+                    Log.w(TAG, "depositContractIncome (partial) failed: ${e.message}")
+                }
+
+                Log.d(TAG, "payForDays partial: contract #${unpaid.id} ($contractAmount/$contractDays kun) → paid $paidDays kun ($actualPaidAmount), remaining unpaid $remainingDays kun")
+
+                // После частичной оплаты — выходим из цикла
+                remainingAmount = 0.0
+                break
             }
         }
 
-        // ── Шаг 2: если осталась сдача — создаём новый оплаченный контракт ──
+        // ── Шаг 2: если осталась сдача (все неоплаченные погашены) — новый контракт ──
         if (remainingAmount > 0) {
             val paidDays = (remainingAmount / dailyPrice).toInt().coerceAtLeast(1)
             val actualAmount = paidDays * dailyPrice
@@ -193,7 +300,6 @@ class RenterActionUseCase(
             val newStart = if (shouldStartFromNow) now else effectiveLastEnd
             val newEnd = newStart + paidDays * dayMs
 
-            val scooter: Scooter? = renter.scooterId?.let { fetchScooterById(it) }
             val newContract = ContractHistoryEntry(
                 renterId = renter.id, timestamp = now,
                 type = ContractHistoryEntry.TYPE_AUTO_RENEW, amount = actualAmount,
@@ -258,6 +364,13 @@ class RenterActionUseCase(
         }
 
         // ── Шаг 3: обновляем баланс арендатора ───────────────────────────
+        // ВАЖНО: увеличиваем баланс ровно на сумму платежа (paymentAmount),
+        // а НЕ на сумму погашенных контрактов. Баланс отражает РЕАЛЬНО
+        // полученные деньги. Контракт при создании уменьшил баланс на
+        // свою сумму (долг); при оплате этой суммы баланс возвращается.
+        // При частичной оплате контракт модифицируется (сумма и дата
+        // уменьшаются) — но баланс увеличивается только на actualPaidAmount,
+        // что соответствует фактическим полученным деньгам.
         val newBalance = renter.balance + paymentAmount
         val updated = renter.copy(
             debtAmount = maxOf(0.0, -newBalance),
