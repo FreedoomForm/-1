@@ -11,12 +11,52 @@ class SettingsRepository(context: Context) {
         get() = prefs.getString("sms_template", DEFAULT_TEMPLATE) ?: DEFAULT_TEMPLATE
         set(value) = prefs.edit().putString("sms_template", value).apply()
 
+    /**
+     * Дневная ставка аренды. Это ЕДИНСТВЕННАЯ настраиваемая цена — все
+     * остальные суммы (неделя, месяц, N дней) вычисляются от неё:
+     *   • 7 дней  = dailyPrice × 7
+     *   • 14 дней = dailyPrice × 14
+     *   • 30 дней = dailyPrice × 30
+     *   • N дней  = dailyPrice × N
+     *
+     * Ранее в настройках были раздельные weeklyPrice + monthlyPrice — это
+     * приводило к рассинхрону (например, monthly ≠ 4×weekly) и затрудняло
+     * понимание пользователем, сколько он реально зарабатывает в день.
+     * Теперь ВСЕ расчёты идут от одной цифры.
+     *
+     * Для обратной совместимости: если dailyPrice не задан (0.0), getter
+     * возвращает weeklyPrice / 7 (старая ставка недели), либо дефолт.
+     */
+    var dailyPrice: Double
+        get() {
+            val direct = prefs.getFloat("daily_price", 0f).toDouble()
+            if (direct > 0) return direct
+            // Fallback: вычисляем из старой weeklyPrice
+            val weekly = prefs.getFloat("weekly_price", 0f).toDouble()
+            return if (weekly > 0) weekly / 7.0 else 0.0
+        }
+        set(value) = prefs.edit().putFloat("daily_price", value.toFloat()).apply()
+
+    /** Старая недельная цена. Оставлена только для обратной совместимости. */
     var weeklyPrice: Double
-        get() = prefs.getFloat("weekly_price", 0f).toDouble()
+        get() {
+            val weekly = prefs.getFloat("weekly_price", 0f).toDouble()
+            if (weekly > 0) return weekly
+            // Если weeklyPrice не задан, но dailyPrice задан — вычисляем
+            val daily = prefs.getFloat("daily_price", 0f).toDouble()
+            return if (daily > 0) daily * 7.0 else 0.0
+        }
         set(value) = prefs.edit().putFloat("weekly_price", value.toFloat()).apply()
 
+    /** Старая месячная цена. Оставлена только для обратной совместимости. */
     var monthlyPrice: Double
-        get() = prefs.getFloat("monthly_price", 0f).toDouble()
+        get() {
+            val monthly = prefs.getFloat("monthly_price", 0f).toDouble()
+            if (monthly > 0) return monthly
+            // Если monthlyPrice не задан, но dailyPrice задан — вычисляем
+            val daily = prefs.getFloat("daily_price", 0f).toDouble()
+            return if (daily > 0) daily * 30.0 else 0.0
+        }
         set(value) = prefs.edit().putFloat("monthly_price", value.toFloat()).apply()
 
     /**
@@ -84,6 +124,8 @@ class SettingsRepository(context: Context) {
         set(value) = prefs.edit().putBoolean("auto_restore_attempted", value).apply()
 
     companion object {
+        /** Дневная ставка по умолчанию: 60 000 UZS (420 000 за неделю / 7). */
+        const val DEFAULT_DAILY_PRICE = 60_000.0
         const val DEFAULT_WEEKLY_PRICE = 420_000.0
         const val DEFAULT_MONTHLY_PRICE = 1_680_000.0
         const val DEFAULT_SCOOTER_PRICE_USD = 660.0
@@ -96,13 +138,17 @@ class SettingsRepository(context: Context) {
          * SMS-шаблон по умолчанию.
          *
          * Доступные подстановки:
-         *   {name}  — имя арендатора (с маленькой буквы, как в примере пользователя)
-         *   {days}  — количество дней просрочки
-         *   {debt}  — сумма долга без копеек
-         *   {payme} — ссылка на оплату Payme
-         *   {call}  — номер call-центра
+         *   {name}        — имя арендатора (с маленькой буквы)
+         *   {days}        — количество дней просрочки (минимум 1)
+         *   {unpaidDays}  — сколько дней аренды не оплачено (на основе
+         *                   неоплаченных контрактов, а не elapsed-rentDuration)
+         *   {unpaidCount} — сколько неоплаченных контрактов у арендатора
+         *   {debt}        — сумма долга без копеек (вычисляется как
+         *                   unpaidDays × dailyPrice, а НЕ из balance)
+         *   {payme}       — ссылка на оплату Payme
+         *   {call}        — номер call-центра
          */
-        const val DEFAULT_TEMPLATE = """Assalomu alaykum {name}, sizning skuter ijarangiz {days} kunga kechikdi. Iltimos, to'lovni o'z vaqtida kiriting. Umumiy qarz: {debt}.
+        const val DEFAULT_TEMPLATE = """Assalomu alaykum {name}, sizning skuter ijarangiz {unpaidDays} kun to'lanmagan. Umumiy qarz: {debt} so'm. Iltimos, to'lovni o'z vaqtida kiriting.
 
 {payme}
 

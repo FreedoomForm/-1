@@ -810,13 +810,34 @@ class RenterViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     /**
-     * Пакетная оплата одной недели для выбранных арендаторов.
-     * Баланс каждого увеличивается на weeklyPrice, создаётся запись PAYMENT.
+     * Пакетная оплата одной недели (7 дней) для выбранных арендаторов.
+     * Legacy-метод, оставлен для совместимости со старыми вызовами.
+     * Делегирует в [payForDaysForRenters] с days=7.
      */
     fun payWeeklyForRenters(renterIds: Set<Int>) {
+        payForDaysForRenters(renterIds, 7)
+    }
+
+    /**
+     * Пакетная оплата N дней для выбранных арендаторов.
+     *
+     * Каждый арендатор из [renterIds] оплачивает [days] дней аренды через
+     * единый use-case [com.example.data.RenterActionUseCase.payForDays],
+     * который:
+     *   • Если есть неоплаченные контракты — гасит их по порядку (от раннего).
+     *   • Если осталась сдача — создаёт новый оплаченный контракт на эту сдачу.
+     *   • Если неоплаченных нет — создаёт предоплаченный контракт на N дней.
+     */
+    fun payForDaysForRenters(renterIds: Set<Int>, days: Int) {
         viewModelScope.launch {
             renterIds.forEach { id ->
-                repository.getById(id)?.let { applyWeeklyPayment(it, "Ommaviy to'lov (1 hafta)") }
+                repository.getById(id)?.let { renter ->
+                    actionUseCase.payForDays(
+                        renter = renter,
+                        days = days,
+                        notes = "To'lov ($days kun)"
+                    )
+                }
             }
         }
     }

@@ -14,8 +14,8 @@ android {
     applicationId = "com.aistudio.scooterrent.xyzab"
     minSdk = 24
     targetSdk = 36
-    versionCode = 136
-    versionName = "1.2.136"
+    versionCode = 137
+    versionName = "1.2.137"
 
     testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
   }

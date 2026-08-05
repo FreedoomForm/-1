@@ -270,10 +270,13 @@ class MainActivity : ComponentActivity() {
     }
 
     /**
-     * Обрабатывает intent от нативных виджетов:
+     * Обрабатывает intent от нативных виджетов и уведомлений:
      *   open_tab=N — переключает на вкладку N
      *   widget_action=create_renter/scooter/contract/transaction — открывает диалог создания
      *   widget_action=send_sms + renter_id — открывает экран арендатора для отправки SMS
+     *   widget_action=pay_for_days + renter_id — открывает диалог выбора дней
+     *   renterId (camelCase, из NotificationHelper) — переводится в
+     *   widget_action=pay_for_days + renter_id, чтобы открывался диалог оплаты.
      *
      * Используется статический объект WidgetActionBus, который MainScreen
      * читает в LaunchedEffect для выполнения действий после onCreate/onNewIntent.
@@ -284,10 +287,23 @@ class MainActivity : ComponentActivity() {
         if (openTab in 0..4) {
             WidgetActionBus.openTab = openTab
         }
+        // ── Обработка tap по телу уведомления о наступлении срока оплаты ──
+        // NotificationHelper.putPaymentDueNotification ставит в Intent
+        // extra "renterId" (camelCase) — этот intent открывает MainActivity.
+        // Раньше это extra игнорировалось (читался только "renter_id" snake_case).
+        // Теперь при наличии "renterId" без явного widget_action мы открываем
+        // диалог выбора дней для оплаты — именно этого ожидает пользователь
+        // при тапе на уведомление.
         val action = intent.getStringExtra("widget_action")
         if (action != null) {
             WidgetActionBus.widgetAction = action
             WidgetActionBus.renterId = intent.getIntExtra("renter_id", -1)
+        } else if (intent.hasExtra("renterId")) {
+            val rid = intent.getIntExtra("renterId", -1)
+            if (rid != -1) {
+                WidgetActionBus.widgetAction = "pay_for_days"
+                WidgetActionBus.renterId = rid
+            }
         }
     }
 }
@@ -404,6 +420,13 @@ fun MainScreen(
 
     // ── Навигация ────────────────────────────────────────────────────
     var navState by remember { mutableStateOf<NavigationState>(NavigationState.MainView) }
+
+    // ── ID арендатора для диалога оплаты (открывается из уведомления) ──
+    // Когда пользователь тапает по телу уведомления о наступлении срока
+    // оплаты, MainActivity.handleWidgetIntent ставит widget_action="pay_for_days"
+    // и renter_id. LaunchedEffect выше читает это и записывает ID сюда.
+    // MainScreen отрисовывает DayPickerPaymentDialog, пока это поле не null.
+    var pendingPaymentRenterId by remember { mutableStateOf<Int?>(null) }
 
     var renterSortState by remember { mutableStateOf(TableSortState()) }
     var scooterSortState by remember { mutableStateOf(TableSortState()) }
@@ -598,9 +621,53 @@ fun MainScreen(
                     if (r != null) navState = NavigationState.RenterHistory(r)
                 }
             }
+            "pay_for_days" -> {
+                // ── Открытие диалога выбора дней из уведомления ──────
+                // Пользователь тапнул по телу уведомления о наступлении
+                // срока оплаты. Открываем диалог DayPickerPaymentDialog
+                // для этого арендатора. Используем pendingPaymentRenterId
+                // для хранения ID арендатора до тех пор, пока диалог не
+                // отрисуется в MainScreen (через if (pendingPaymentRenterId != null)).
+                val rid = WidgetActionBus.renterId
+                if (rid != -1) {
+                    pendingPaymentRenterId = rid
+                }
+            }
         }
         WidgetActionBus.widgetAction = null
         WidgetActionBus.renterId = -1
+    }
+
+    // ── Диалог выбора дней для оплаты (открывается из уведомления) ──────
+    // pendingPaymentRenterId != null, когда пользователь тапнул по телу
+    // уведомления о наступлении срока оплаты. Открываем DayPickerPaymentDialog
+    // для этого арендатора. После подтверждения или отмены — сбрасываем в null.
+    if (pendingPaymentRenterId != null) {
+        val rid = pendingPaymentRenterId!!
+        val renterForPayment = renters.firstOrNull { it.id == rid }
+        if (renterForPayment != null) {
+            val repoForDialog = com.example.data.SettingsRepository(localContext)
+            val dailyForDialog = repoForDialog.dailyPrice.let { p ->
+                if (p > 0) p else com.example.data.SettingsRepository.DEFAULT_DAILY_PRICE
+            }
+            DayPickerPaymentDialog(
+                renterName = renterForPayment.name,
+                dailyPrice = dailyForDialog,
+                onConfirm = { days ->
+                    viewModel.payForDaysForRenters(setOf(rid), days)
+                    Toast.makeText(
+                        localContext,
+                        "To'lov qabul qilindi ($days kun) — ${renterForPayment.name}",
+                        Toast.LENGTH_LONG
+                    ).show()
+                    pendingPaymentRenterId = null
+                },
+                onDismiss = { pendingPaymentRenterId = null }
+            )
+        } else {
+            // Арендатор не найден (возможно, удалён) — закрываем диалог
+            pendingPaymentRenterId = null
+        }
     }
 
     // ── Рендер экрана истории контрактов, если активен ─────────────────
@@ -757,13 +824,12 @@ fun MainScreen(
             // страница с TopAppBar, кнопкой «Saqla» в аппбаре и кнопкой
             // «← Orqaga» для возврата.
             val template by settingsViewModel.smsTemplate.collectAsStateWithLifecycle()
-            val weekly by settingsViewModel.weeklyPrice.collectAsStateWithLifecycle()
-            val monthly by settingsViewModel.monthlyPrice.collectAsStateWithLifecycle()
+            val dailyPrice by settingsViewModel.dailyPrice.collectAsStateWithLifecycle()
             val smsAutoSend by settingsViewModel.smsAutoSendEnabled.collectAsStateWithLifecycle()
             SettingsScreen(
                 currentTemplate = template,
-                currentWeeklyPrice = weekly,
-                currentMonthlyPrice = monthly,
+                currentWeeklyPrice = dailyPrice,
+                currentMonthlyPrice = dailyPrice * 30.0,
                 currentSmsAutoSend = smsAutoSend,
                 updateInfo = updateInfo,
                 isCheckingUpdate = isCheckingUpdate,
@@ -1355,15 +1421,40 @@ fun MainScreen(
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     val hasSelection = selectedRenters.isNotEmpty()
+                    // ── Диалог выбора дней для оплаты ──────────────────────
+                    // Пользователь хочет: при нажатии «To'lov» открывается
+                    // диалог, где он выбирает, за сколько дней оплачивает
+                    // (7, 14, 30, 60 или своё число). Раньше оплата всегда
+                    // была фиксирована на 7 дней.
+                    var showDayPickerDialog by remember { mutableStateOf(false) }
+                    if (showDayPickerDialog) {
+                        val repoForDialog = com.example.data.SettingsRepository(localContext)
+                        val dailyPriceForDialog = repoForDialog.dailyPrice.let { p ->
+                            if (p > 0) p else com.example.data.SettingsRepository.DEFAULT_DAILY_PRICE
+                        }
+                        val renterNameForDialog = renters
+                            .firstOrNull { it.id in selectedRenters }?.name ?: "Mijoz"
+                        DayPickerPaymentDialog(
+                            renterName = renterNameForDialog,
+                            dailyPrice = dailyPriceForDialog,
+                            onConfirm = { days ->
+                                viewModel.payForDaysForRenters(selectedRenters, days)
+                                Toast.makeText(
+                                    localContext,
+                                    "To'lov qabul qilindi ($days kun)",
+                                    Toast.LENGTH_SHORT
+                                ).show()
+                                selectedRenters = emptySet()
+                                showDayPickerDialog = false
+                            },
+                            onDismiss = { showDayPickerDialog = false }
+                        )
+                    }
                     SuccessButton(
                         label = "To'lov",
                         icon = Icons.Default.Payments,
                         enabled = hasSelection,
-                        onClick = {
-                            viewModel.payWeeklyForRenters(selectedRenters)
-                            Toast.makeText(localContext, "To'lov qabul qilindi", Toast.LENGTH_SHORT).show()
-                            selectedRenters = emptySet()
-                        },
+                        onClick = { showDayPickerDialog = true },
                         modifier = Modifier.weight(1.4f)
                     )
                     PrimaryButton(
@@ -1383,45 +1474,71 @@ fun MainScreen(
                         icon = Icons.Default.Sms,
                         enabled = hasSelection,
                         onClick = {
+                            // ── Ручная отправка SMS — выносим в корутину ───────
+                            // Раньше цикл отправки работал в main thread, что
+                            // при большом числе арендаторов блокировало UI. Кроме
+                            // того, для расчёта {unpaidDays}/{unpaidCount}/{debt}
+                            // нужно асинхронно читать из БД список неоплаченных
+                            // контрактов (через contractHistoryDao.getUnpaidContractsForRenter).
                             val rentersToSend = renters.filter { it.id in selectedRenters }
-                            var sentCount = 0
-                            var failCount = 0
-                            rentersToSend.forEach { renter ->
-                                val settingsRepo = com.example.data.SettingsRepository(localContext)
-                                val currentTime = System.currentTimeMillis()
-                                val elapsedDays = ((currentTime - renter.rentStartDateTimestamp) / (1000L * 60 * 60 * 24)).toInt()
-                                val daysOverdue = elapsedDays - renter.rentDurationDays
-                                val phone = com.example.worker.SimHelper.normalizePhoneNumber(renter.phoneNumber)
-                                // Долг = -balance (balance < 0). debtAmount может быть рассинхронизирован.
-                                val debt = maxOf(0.0, -renter.balance)
-                                val message = settingsRepo.smsTemplate
-                                    .replace("{name}", renter.name.trim().lowercase())
-                                    .replace("{days}", maxOf(1, daysOverdue).toString())
-                                    .replace("{debt}", debt.toLong().toString())
-                                    .replace("{payme}", settingsRepo.paymeLink)
-                                    .replace("{call}", settingsRepo.callCenter)
-                                val smsManager = com.example.worker.SimHelper.getSmsManagerForSim(localContext)
-                                if (smsManager != null) {
-                                    try {
-                                        com.example.worker.SimHelper.sendSmsAuto(smsManager, phone, message, null, null)
-                                        if (daysOverdue > 0 && !renter.isOverdueSmsSent) {
-                                            viewModel.updateRenter(renter.copy(isOverdueSmsSent = true))
+                            coroutineScope.launch {
+                                var sentCount = 0
+                                var failCount = 0
+                                val db = com.example.data.AppDatabase.getDatabase(localContext)
+                                val contractDao = db.contractHistoryDao()
+                                for (renter in rentersToSend) {
+                                    val settingsRepo = com.example.data.SettingsRepository(localContext)
+                                    val phone = com.example.worker.SimHelper.normalizePhoneNumber(renter.phoneNumber)
+
+                                    // ── Расчёт реального долга на основе неоплаченных контрактов ──
+                                    val unpaidContracts = contractDao.getUnpaidContractsForRenter(renter.id)
+                                    val unpaidCount = unpaidContracts.size
+                                    val dayMs = 24L * 60 * 60 * 1000
+                                    val unpaidDays = unpaidContracts.sumOf { c ->
+                                        val ws = c.weekStart ?: return@sumOf 0L
+                                        val we = c.weekEnd ?: return@sumOf 0L
+                                        val diff = we - ws
+                                        if (diff <= 0) 1L else ((diff + dayMs - 1) / dayMs)
+                                    }.toInt().coerceAtLeast(1)
+
+                                    // Долг = unpaidDays × dailyPrice (а НЕ -balance)
+                                    val dailyPrice = settingsRepo.dailyPrice.let {
+                                        if (it > 0) it else com.example.data.SettingsRepository.DEFAULT_DAILY_PRICE
+                                    }
+                                    val debt = unpaidDays * dailyPrice
+
+                                    val message = settingsRepo.smsTemplate
+                                        .replace("{name}", renter.name.trim().lowercase())
+                                        .replace("{unpaidDays}", unpaidDays.toString())
+                                        .replace("{unpaidCount}", unpaidCount.toString())
+                                        .replace("{days}", unpaidDays.toString())  // legacy alias
+                                        .replace("{debt}", debt.toLong().toString())
+                                        .replace("{payme}", settingsRepo.paymeLink)
+                                        .replace("{call}", settingsRepo.callCenter)
+
+                                    val smsManager = com.example.worker.SimHelper.getSmsManagerForSim(localContext)
+                                    if (smsManager != null) {
+                                        try {
+                                            com.example.worker.SimHelper.sendSmsAuto(smsManager, phone, message, null, null)
+                                            if (unpaidCount > 0 && !renter.isOverdueSmsSent) {
+                                                viewModel.updateRenter(renter.copy(isOverdueSmsSent = true))
+                                            }
+                                            sentCount++
+                                        } catch (e: Exception) {
+                                            Log.w("SMS", "Failed for ${renter.name}: ${e.message}")
+                                            failCount++
                                         }
-                                        sentCount++
-                                    } catch (e: Exception) {
-                                        Log.w("SMS", "Failed for ${renter.name}: ${e.message}")
+                                    } else {
                                         failCount++
                                     }
-                                } else {
-                                    failCount++
                                 }
+                                if (sentCount > 0) {
+                                    Toast.makeText(localContext, "$sentCount ta SMS yuborildi${if (failCount > 0) ", $failCount ta xato" else ""}", Toast.LENGTH_SHORT).show()
+                                } else {
+                                    Toast.makeText(localContext, "SMS yuborib bo'lmadi", Toast.LENGTH_SHORT).show()
+                                }
+                                selectedRenters = emptySet()
                             }
-                            if (sentCount > 0) {
-                                Toast.makeText(localContext, "$sentCount ta SMS yuborildi${if (failCount > 0) ", $failCount ta xato" else ""}", Toast.LENGTH_SHORT).show()
-                            } else {
-                                Toast.makeText(localContext, "SMS yuborib bo'lmadi", Toast.LENGTH_SHORT).show()
-                            }
-                            selectedRenters = emptySet()
                         },
                         variant = UnifiedButtonVariant.PRIMARY,
                         modifier = Modifier.weight(1.0f)
@@ -1721,13 +1838,12 @@ fun MainScreen(
                 // Раньше была отдельная страница, открываемая через кнопку
                 // в TopAppBar. Теперь — 7-я вкладка нижней навигации.
                 val template by settingsViewModel.smsTemplate.collectAsStateWithLifecycle()
-                val weekly by settingsViewModel.weeklyPrice.collectAsStateWithLifecycle()
-                val monthly by settingsViewModel.monthlyPrice.collectAsStateWithLifecycle()
+                val dailyPrice by settingsViewModel.dailyPrice.collectAsStateWithLifecycle()
                 val smsAutoSend by settingsViewModel.smsAutoSendEnabled.collectAsStateWithLifecycle()
                 SettingsScreen(
                     currentTemplate = template,
-                    currentWeeklyPrice = weekly,
-                    currentMonthlyPrice = monthly,
+                    currentWeeklyPrice = dailyPrice,
+                    currentMonthlyPrice = dailyPrice * 30.0,
                     currentSmsAutoSend = smsAutoSend,
                     updateInfo = updateInfo,
                     isCheckingUpdate = isCheckingUpdate,
@@ -2402,16 +2518,12 @@ fun RenterFormDialog(
     // заполняются в ScooterFormDialog — это атрибуты скутера, а не арендатора.
     // При создании контракта они автоматически подтягиваются из БД по scooterId.
 
-    val durationOptions = listOf(
-        "1 Hafta" to 7, "2 Hafta" to 14, "3 Hafta" to 21,
-        "1 Oy" to 30, "2 Oy" to 60, "3 Oy" to 90, "4 Oy" to 120
-    )
-    var selectedDurationText by remember {
-        mutableStateOf(
-            durationOptions.find { it.second.toString() == duration }?.first ?: "1 Hafta"
-        )
-    }
-    var expandedDuration by remember { mutableStateOf(false) }
+    // ── ПОЛЕ «КОЛИЧЕСТВО НЕДЕЛЬ» УДАЛЕНО ──────────────────────────────────
+    // Раньше durationOptions / selectedDurationText / expandedDuration
+    // использовались для dropdown-меню «Ijara muddati» (1 Hafta / 2 Hafta /
+    // 1 Oy / ...). Удалено по просьбе пользователя — срок аренды теперь
+    // задаётся только через календарь контрактов ниже. Поле `duration`
+    // остаётся для совместимости с RenterFormResult (по умолчанию "7").
 
     var selectedScooterId by remember { mutableStateOf<Int?>(initialRenter?.scooterId) }
     var expandedScooter by remember { mutableStateOf(false) }
@@ -2562,37 +2674,13 @@ fun RenterFormDialog(
                     )
                 }
 
-                ExposedDropdownMenuBox(
-                    expanded = expandedDuration,
-                    onExpandedChange = { expandedDuration = !expandedDuration }
-                ) {
-                    OutlinedTextField(
-                        value = selectedDurationText,
-                        onValueChange = {},
-                        readOnly = true,
-                        label = { Text("Ijara muddati") },
-                        trailingIcon = {
-                            ExposedDropdownMenuDefaults.TrailingIcon(expanded = expandedDuration)
-                        },
-                        modifier = Modifier.menuAnchor().fillMaxWidth(),
-                        shape = RoundedCornerShape(8.dp)
-                    )
-                    ExposedDropdownMenu(
-                        expanded = expandedDuration,
-                        onDismissRequest = { expandedDuration = false }
-                    ) {
-                        durationOptions.forEach { (label, days) ->
-                            DropdownMenuItem(
-                                text = { Text(label) },
-                                onClick = {
-                                    selectedDurationText = label
-                                    duration = days.toString()
-                                    expandedDuration = false
-                                }
-                            )
-                        }
-                    }
-                }
+                // ── ПОЛЕ «КОЛИЧЕСТВО НЕДЕЛЬ» УДАЛЕНО ──────────────────────────
+                // Раньше здесь был ExposedDropdownMenuBox с выбором «1 Hafta»
+                // (7 дней), «2 Hafta», «1 Oy» и т.д. Пользователь явно попросил
+                // убрать это поле — теперь срок аренды определяется только
+                // периодами, выбранными в календаре контрактов ниже.
+                // Если пользователь не выбрал ни одного периода в календаре,
+                // используется startDate по умолчанию + 7 дней (legacy behavior).
 
                 val selectedScooter = availableScooters.find { it.id == selectedScooterId }
                     ?: scooters.find { it.id == selectedScooterId }
@@ -2932,9 +3020,6 @@ fun SettingsScreen(
     var weekly by remember {
         mutableStateOf(if (currentWeeklyPrice > 0) currentWeeklyPrice.toString() else "")
     }
-    var monthly by remember {
-        mutableStateOf(if (currentMonthlyPrice > 0) currentMonthlyPrice.toString() else "")
-    }
     // SMS avto-yuborish rejimi — darhol saqlanadi (Save bosishni kutmaydi).
     var smsAutoSend by remember { mutableStateOf(currentSmsAutoSend) }
     val settingsContext = LocalContext.current
@@ -2955,9 +3040,8 @@ fun SettingsScreen(
 
     // ── Автосохранение — поля сохраняются автоматически при изменении,
     // отдельные кнопки «Saqla» больше не нужны (форма живая).
-    LaunchedEffect(template, weekly, monthly, paymeLink, callCenter, scooterPriceUsd, usdToUzsRate) {
-        val wPrice = weekly.toDoubleOrNull() ?: 0.0
-        val mPrice = monthly.toDoubleOrNull() ?: 0.0
+    LaunchedEffect(template, weekly, paymeLink, callCenter, scooterPriceUsd, usdToUzsRate) {
+        val dailyPrice = weekly.toDoubleOrNull() ?: 0.0
         settingsRepo.paymeLink = paymeLink.trim().ifBlank {
             com.example.data.SettingsRepository.DEFAULT_PAYME_LINK
         }
@@ -2969,7 +3053,14 @@ fun SettingsScreen(
             ?: com.example.data.SettingsRepository.DEFAULT_SCOOTER_PRICE_USD
         settingsRepo.usdToUzsRate = usdToUzsRate.toDoubleOrNull()
             ?: com.example.data.SettingsRepository.DEFAULT_USD_TO_UZS_RATE
-        onSave(template, wPrice, mPrice, paymeLink, callCenter)
+        // Передаём dailyPrice как weekly (метод onSave() ожидает 2 double,
+        // но SettingsViewModel.updatePrices(weekly, monthly) внутри делит на 7
+        // и берёт daily = weekly/7). Передаём weekly=daily*7 и monthly=daily*30
+        // для совместимости со старой сигнатурой — SettingsViewModel корректно
+        // извлечёт dailyPrice из weekly/7.
+        val weeklyFromDaily = dailyPrice * 7.0
+        val monthlyFromDaily = dailyPrice * 30.0
+        onSave(template, weeklyFromDaily, monthlyFromDaily, paymeLink, callCenter)
     }
 
     // ── Storage Access Framework launchers для экспорта/импорта Excel ────
@@ -3033,20 +3124,28 @@ fun SettingsScreen(
                     OutlinedTextField(
                         value = weekly,
                         onValueChange = { weekly = it },
-                        label = { Text("Haftalik tarif narxi") },
+                        label = { Text("1 kunlik narx (so'm)") },
                         keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
                         modifier = Modifier.fillMaxWidth(),
                         shape = RoundedCornerShape(8.dp)
                     )
                     Spacer(modifier = Modifier.height(8.dp))
-                    OutlinedTextField(
-                        value = monthly,
-                        onValueChange = { monthly = it },
-                        label = { Text("Oylik tarif narxi") },
-                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                        modifier = Modifier.fillMaxWidth(),
-                        shape = RoundedCornerShape(8.dp)
-                    )
+                    // ── Подсказка: автоматически рассчитанные ставки ─────────
+                    // Показываем, сколько будет стоить неделя/месяц исходя из
+                    // введённой дневной ставки. Помогает пользователю убедиться,
+                    // что он ввёл правильную цифру (например, 60 000/день =
+                    // 420 000/неделя = 1 800 000/месяц).
+                    val dailyNum = weekly.toDoubleOrNull() ?: 0.0
+                    if (dailyNum > 0) {
+                        val week = dailyNum * 7
+                        val month = dailyNum * 30
+                        Text(
+                            "Hisoblanadi: 1 hafta = ${week.toLong()} so'm, 1 oy = ${month.toLong()} so'm",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = ClaudeTextSecondary,
+                            modifier = Modifier.padding(start = 4.dp, top = 2.dp)
+                        )
+                    }
                     Spacer(modifier = Modifier.height(8.dp))
                     OutlinedTextField(
                         value = scooterPriceUsd,
@@ -3070,7 +3169,7 @@ fun SettingsScreen(
                 Column {
                     Text("SMS Shabloni", style = MaterialTheme.typography.labelMedium, color = ClaudeText)
                     Text(
-                        "Mavjud teglar: {name}, {days}, {debt}, {payme}, {call}",
+                        "Mavjud teglar: {name}, {days}, {unpaidDays}, {unpaidCount}, {debt}, {payme}, {call}",
                         style = MaterialTheme.typography.bodyMedium,
                         color = ClaudeTextSecondary
                     )

@@ -95,7 +95,7 @@ object NotificationHelper {
             .setContentIntent(openPendingIntent)
             .addAction(
                 android.R.drawable.ic_menu_save,
-                "To'lov qabul qilindi",
+                "To'lov (7 kun)",
                 paymentPendingIntent
             )
             .addAction(

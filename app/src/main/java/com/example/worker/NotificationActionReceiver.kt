@@ -87,9 +87,14 @@ class NotificationActionReceiver : BroadcastReceiver() {
                 }
 
                 val useCase = RenterActionUseCase.fromContext(context)
-                useCase.payWeekly(
+                // Из уведомления оплата по умолчанию за 7 дней (неделя).
+                // Если пользователь хочет другую длительность — он должен
+                // открыть приложение тапом по телу уведомления, тогда
+                // откроется DayPickerPaymentDialog.
+                useCase.payForDays(
                     renter = renter,
-                    notes = "To'lov qabul qilindi (bildirishnoma)"
+                    days = 7,
+                    notes = "To'lov qabul qilindi (bildirishnoma, 7 kun)"
                 )
 
                 NotificationManagerCompat.from(context).cancel(renterId)

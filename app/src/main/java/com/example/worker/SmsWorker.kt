@@ -6,6 +6,7 @@ import android.util.Log
 import androidx.work.CoroutineWorker
 import androidx.work.WorkerParameters
 import com.example.data.AppDatabase
+import com.example.data.ContractHistoryEntry
 import com.example.data.RenterRepository
 import com.example.data.SettingsRepository
 import kotlinx.coroutines.Dispatchers
@@ -20,9 +21,20 @@ import kotlinx.coroutines.withContext
  *  • Одноразово — сразу после создания арендатора с просроченной
  *    датой (RenterViewModel.addRenter ставит задачу в очередь).
  *
- * Для отправки требуется разрешение android.permission.SEND_SMS,
- * которое автоматически запрашивается при первом запуске приложения.
- * На эмуляторах Android SMS-отправка не работает вовсе.
+ * Для отправки требуется разрешение android.permission.SEND_SMS.
+ *
+ * Расчёт долга и просрочки:
+ *  • unpaidDays — суммарное количество дней из ВСЕХ неоплаченных
+ *    контрактов (CREATED, AUTO_RENEW с isPaid=false). Это точная
+ *    цифра: если у арендатора 2 неоплаченных контракта по 7 дней,
+ *    unpaidDays = 14.
+ *  • unpaidCount — количество неоплаченных контрактов (для плейсхолдера
+ *    {unpaidCount} в шаблоне).
+ *  • debt = unpaidDays × dailyPrice — реальная сумма долга, основанная
+ *    на дневной ставке, а не на -balance (который может быть
+ *    рассинхронизирован при ручных правках).
+ *  • days (legacy) — старый плейсхолдер, равен max(1, unpaidDays).
+ *    Оставлен для совместимости со старыми пользовательскими шаблонами.
  */
 class SmsWorker(
     appContext: Context,
@@ -33,10 +45,6 @@ class SmsWorker(
         try {
             val settingsRepo = SettingsRepository(applicationContext)
 
-            // ── Qo'llanma rejimi: avto-yuborish o'chirilgan ───────────────
-            // Foydalanuvchi Settingsda "Qo'llanma" rejimini tanlagan bo'lsa,
-            // SmsWorker hech narsa yubormaydi — SMS faqat "SMS" tugmasi orqali
-            // yuboriladi. Bildirishnomalar va boshqa logika ishlayveradi.
             if (!settingsRepo.smsAutoSendEnabled) {
                 Log.d(TAG, "SmsWorker skipped: manual mode is on (smsAutoSendEnabled=false)")
                 return@withContext Result.success()
@@ -45,43 +53,65 @@ class SmsWorker(
             val db = AppDatabase.getDatabase(applicationContext)
             val repository = RenterRepository(db.renterDao())
             val activeRenters = repository.getActiveRenters()
-            val currentTime = System.currentTimeMillis()
+            val contractDao = db.contractHistoryDao()
 
-            Log.d(TAG, "SmsWorker started: ${activeRenters.size} active renters")
+            Log.d(TAG, "SmsWorker started: ${activeRenters.size} active renters, template='${settingsRepo.smsTemplate.take(40)}...'")
 
             var sentCount = 0
             var skippedCount = 0
 
             activeRenters.forEach { renter ->
-                val elapsedMillis = currentTime - renter.rentStartDateTimestamp
-                val elapsedDays = (elapsedMillis / (1000 * 60 * 60 * 24)).toInt()
-
                 if (renter.isOverdueSmsSent) {
                     skippedCount++
                     return@forEach
                 }
 
-                if (elapsedDays > renter.rentDurationDays) {
-                    val daysOverdue = elapsedDays - renter.rentDurationDays
-                    // Долг = -balance (если balance < 0). debtAmount может рассинхронизироваться,
-                    // поэтому всегда вычисляем из balance — это источник истины.
-                    val debt = maxOf(0.0, -renter.balance)
-                    val message = settingsRepo.smsTemplate
-                        .replace("{name}", renter.name.trim().lowercase())
-                        .replace("{days}", maxOf(1, daysOverdue).toString())
-                        .replace("{debt}", debt.toLong().toString())
-                        .replace("{payme}", settingsRepo.paymeLink)
-                        .replace("{call}", settingsRepo.callCenter)
+                // ── Считаем неоплаченные контракты ──────────────────────
+                // Запрашиваем все неоплаченные контракты (CREATED/AUTO_RENEW
+                // с isPaid=false) для этого арендатора. Каждый контракт имеет
+                // weekStart/weekEnd — по ним считаем суммарное число дней.
+                val unpaidContracts = contractDao.getUnpaidContractsForRenter(renter.id)
+                if (unpaidContracts.isEmpty()) {
+                    // Нет неоплаченных контрактов — SMS не нужен
+                    return@forEach
+                }
 
-                    val ok = sendSms(renter.phoneNumber, message)
-                    if (ok) {
-                        repository.update(renter.copy(isOverdueSmsSent = true))
-                        sentCount++
-                        Log.d(TAG, "SMS sent for renter #${renter.id} (${renter.name}), " +
-                            "$daysOverdue days overdue")
-                    } else {
-                        Log.w(TAG, "SMS failed for renter #${renter.id} (${renter.name})")
-                    }
+                val unpaidDays = unpaidContracts.sumOf { c ->
+                    val ws = c.weekStart ?: return@sumOf 0L
+                    val we = c.weekEnd ?: return@sumOf 0L
+                    val dayMs = 24L * 60 * 60 * 1000
+                    // Округляем вверх: если контракт длится 7 дней (полная
+                    // неделя), получим 7. Если частичный день — тоже 1.
+                    val diff = we - ws
+                    if (diff <= 0) 1L else ((diff + dayMs - 1) / dayMs)
+                }.toInt().coerceAtLeast(1)
+
+                val unpaidCount = unpaidContracts.size
+
+                // Долг = unpaidDays × dailyPrice (а НЕ -balance!)
+                val dailyPrice = settingsRepo.dailyPrice.let {
+                    if (it > 0) it else SettingsRepository.DEFAULT_DAILY_PRICE
+                }
+                val debt = unpaidDays * dailyPrice
+
+                // ── Подставляем плейсхолдеры в шаблон ────────────────────
+                val message = settingsRepo.smsTemplate
+                    .replace("{name}", renter.name.trim().lowercase())
+                    .replace("{unpaidDays}", unpaidDays.toString())
+                    .replace("{unpaidCount}", unpaidCount.toString())
+                    .replace("{days}", unpaidDays.toString())  // legacy alias
+                    .replace("{debt}", debt.toLong().toString())
+                    .replace("{payme}", settingsRepo.paymeLink)
+                    .replace("{call}", settingsRepo.callCenter)
+
+                val ok = sendSms(renter.phoneNumber, message)
+                if (ok) {
+                    repository.update(renter.copy(isOverdueSmsSent = true))
+                    sentCount++
+                    Log.d(TAG, "SMS sent for renter #${renter.id} (${renter.name}), " +
+                        "unpaidDays=$unpaidDays, unpaidCount=$unpaidCount, debt=$debt")
+                } else {
+                    Log.w(TAG, "SMS failed for renter #${renter.id} (${renter.name})")
                 }
             }
 
@@ -93,11 +123,6 @@ class SmsWorker(
         }
     }
 
-    /**
-     * Возвращает true, если SMS успешно отправлено (или поставлено в очередь
-     * системой). Возвращает false при любой ошибке — чтобы в логах был виден
-     * конкретный renter, который не удалось оповестить.
-     */
     private fun sendSms(phone: String, message: String): Boolean {
         return try {
             val smsManager = getSmsManager(applicationContext)
@@ -106,7 +131,6 @@ class SmsWorker(
             Log.d(TAG, "SmsManager.sendSmsAuto OK to $phone (${message.length} chars)")
             true
         } catch (e: SecurityException) {
-            // Нет разрешения SEND_SMS — пользователь не дал
             Log.e(TAG, "SecurityException: SEND_SMS permission not granted", e)
             false
         } catch (e: Exception) {
@@ -115,14 +139,6 @@ class SmsWorker(
         }
     }
 
-    /**
-     * SmsManager ni dual-SIM qo'llab-quvvatlash bilan olish.
-     *
-     * SimHelper orqali:
-     * 1. Saqlangan SIM subscription ID tekshiriladi
-     * 2. Agar tanlanmagan bo'lsa, birinchi faol SIM tanlanadi
-     * 3. Oxirgi chora: getDefault() (GENERIC_FAILURE xavfi bor!)
-     */
     private fun getSmsManager(context: Context): SmsManager? {
         return SimHelper.getSmsManagerForSim(context)
     }

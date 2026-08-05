@@ -188,8 +188,14 @@ fun ContractCalendar(
 
     // ── Текущий статус для новых групп (To'langan / To'lanmagan) ───────
     // По умолчанию "To'langan" (оплаченный). Пользователь может переключить
-    // кнопками в шапке календаря перед выбором периода.
+    // большими квадратными кнопками в шапке календаря перед выбором периода.
     var newGroupIsPaid by remember { mutableStateOf(true) }
+
+    // ── Пользователь явно нажал кнопку статуса? ────────────────────────
+    // Только после этого можно тапать по дням календаря для выбора периода.
+    // Пользователь явно попросил: «сделай большими квадратными и только после
+    // нажатия одного из можно будет выбрать период в календаре иначе нельзя».
+    var hasSelectedStatus by remember { mutableStateOf(false) }
 
     val monthTitle = remember(viewYear, viewMonth) {
         val fmt = java.text.SimpleDateFormat("LLLL yyyy", Locale.getDefault())
@@ -300,10 +306,20 @@ fun ContractCalendar(
                     groups = groups,
                     activeGroupId = activeGroupId,
                     newGroupIsPaid = newGroupIsPaid,
-                    onNewGroupStatusChange = { newGroupIsPaid = it },
+                    onNewGroupStatusChange = {
+                        newGroupIsPaid = it
+                        // Пользователь выбрал статус → теперь можно выбирать
+                        // период в календаре.
+                        hasSelectedStatus = true
+                        // Сбрасываем частично выбранный период, если он был,
+                        // чтобы начать заново с новым статусом.
+                        pendingStartMs = null
+                        onActiveGroupChange(null)
+                    },
                     onActiveGroupChange = onActiveGroupChange,
                     onAddGroup = {
-                        // Кнопка "+" — начинает новую группу
+                        // Больше не используется — выбор статуса автоматически
+                        // переводит календарь в режим выбора периода.
                         onActiveGroupChange(null)
                         pendingStartMs = null
                     },
@@ -358,6 +374,15 @@ fun ContractCalendar(
                                 pendingStartMs = pendingStartMs,
                                 dayStatusFor = dayStatusFor,
                                 onDayClick = { ms ->
+                                    // ── Блокировка выбора периода до выбора статуса ──
+                                    // Пользователь должен сначала нажать большую
+                                    // квадратную кнопку «To'langan» или «To'lanmagan»
+                                    // (это установит hasSelectedStatus = true), и
+                                    // только потом он сможет тапать по дням для
+                                    // выбора периода.
+                                    if (editable && !hasSelectedStatus && activeGroupId == null) {
+                                        return@DayCell  // игнорируем тап
+                                    }
                                     if (editable) {
                                         handleDayClick(
                                             ms = ms,
@@ -367,7 +392,8 @@ fun ContractCalendar(
                                             groups = groups,
                                             newGroupIsPaid = newGroupIsPaid,
                                             onGroupsChange = onGroupsChange,
-                                            onActiveGroupChange = onActiveGroupChange
+                                            onActiveGroupChange = onActiveGroupChange,
+                                            onPeriodCreated = { hasSelectedStatus = false }
                                         )
                                     } else if (onAddGroup != null) {
                                         // Режим просмотра с возможностью добавления —
@@ -418,16 +444,19 @@ fun ContractCalendar(
             } else {
                 Spacer(Modifier.height(8.dp))
                 val hint = when {
-                    activeGroupId != null -> "Guruh ${groups.indexOfFirst { it.id == activeGroupId } + 1} tanlandi (ko'rish)"
+                    activeGroupId != null -> "Kontrakt ${groups.indexOfFirst { it.id == activeGroupId } + 1} tanlandi"
+                    !hasSelectedStatus && editable -> {
+                        // Подсказка для пользователя: сначала выбери статус
+                        "Yuqoridagi «To'langan» yoki «To'lanmagan» tugmasini bosing"
+                    }
                     pendingStartMs == null -> {
-                        // Разный текст для режима формы и режима деталей
                         if (!editable && onAddGroup != null) {
-                            "«+» bilan yangi kontrakt boshlang — yoki mavjud sanani bosib tahrirlang"
+                            "«To'langan» / «To'lanmagan» tugmasini bosing — yangi kontrakt boshlash uchun"
                         } else {
-                            "«+» tugmasi bilan yangi guruh boshlang — birinchi sanani tanlang"
+                            "Birinchi sanani tanlang — davr boshlanishi"
                         }
                     }
-                    else -> "Ikkinchi sanani tanling — davr yopiladi (yoki shu sanani qayt tanlang — 1 haftalik kontrakt)"
+                    else -> "Ikkinchi sanani tanling — davr yopiladi"
                 }
                 Text(
                     text = hint,
@@ -451,7 +480,8 @@ private fun handleDayClick(
     groups: List<ContractGroup>,
     newGroupIsPaid: Boolean,
     onGroupsChange: (List<ContractGroup>) -> Unit,
-    onActiveGroupChange: (Int?) -> Unit
+    onActiveGroupChange: (Int?) -> Unit,
+    onPeriodCreated: () -> Unit = {}
 ) {
     // Если открыта существующая группа — ничего не делаем (только просмотр).
     if (activeGroupId != null) return
@@ -464,20 +494,8 @@ private fun handleDayClick(
         setPendingStart(ms)
     } else {
         // ── Старая логика однодневного выбора (legacy) ──────────────────
-        // В старом календаре (DatePickerDialog в форме создания арендатора)
-        // пользователь выбирал ОДНУ дату. Система АВТОМАТИЧЕСКИ определяла
-        // статус контракта по этой дате:
-        //   • Если дата была БОЛЕЕ НЕДЕЛИ назад (now - date > 7 дней) →
-        //     неоплаченный контракт (долг), isPaid = false.
-        //   • Если дата менее недели назад или сегодня/в будущем →
-        //     оплаченный контракт (предоплата), isPaid = true.
-        // Период всегда был [date, date + 7 дней] (одна неделя).
-        //
-        // При двойном клике на одну и ту же дату в новом календаре мы
-        // применяем ЭТУ ЖЕ логику — автоопределение статуса по дате,
-        // игнорируя пользовательский toggle (To'langan/To'lanmagan).
-        // Toggle используется только при выборе диапазона из двух РАЗНЫХ
-        // дат (это новая возможность, которой в старом календаре не было).
+        // При двойном клике на одну и ту же дату — автоопределение статуса
+        // по возрасту даты (старше недели = неоплаченный, иначе оплаченный).
         val isSameDayTap = isSameDay(pendingStartMs, ms)
         if (isSameDayTap) {
             // ── Двойной клик на одну дату → недельный контракт с авто-статусом ──
@@ -493,6 +511,7 @@ private fun handleDayClick(
             onGroupsChange(groups + newGroup)
             onActiveGroupChange(newId)
             setPendingStart(null)
+            onPeriodCreated()  // сбрасываем hasSelectedStatus — нужно снова выбрать
         } else {
             // ── Два разных дня → диапазон с пользовательским статусом ──
             val start = minOf(pendingStartMs, ms)
@@ -504,6 +523,7 @@ private fun handleDayClick(
             onGroupsChange(groups + newGroup)
             onActiveGroupChange(newId)
             setPendingStart(null)
+            onPeriodCreated()  // сбрасываем hasSelectedStatus — нужно снова выбрать
         }
     }
 }
@@ -644,7 +664,7 @@ private fun RowScope.DayCell(
     }
 }
 
-/* ── Панель групп: «+», кнопки статуса и вкладки (1, 2, 3...) с «x» ──── */
+/* ── Панель групп: большие квадратные кнопки статуса + список контрактов ── */
 @Composable
 private fun GroupsPanel(
     groups: List<ContractGroup>,
@@ -656,154 +676,202 @@ private fun GroupsPanel(
     onRemoveGroup: (Int) -> Unit
 ) {
     Column(modifier = Modifier.fillMaxWidth()) {
-        // ── Ряд 1: «+» и кнопки статуса ────────────────────────────────
+        // ── Ряд 1: БОЛЬШИЕ КВАДРАТНЫЕ кнопки статуса ─────────────────
+        // Пользователь явно попросил сделать кнопки «To'langan» /
+        // «To'lanmagan» большими и квадратными. Только после выбора одной
+        // из них можно выбирать период в календаре.
+        //
+        // Кнопка «+» удалена — она больше не нужна: пользователь сразу
+        // выбирает статус (оплаченный/неоплаченный), а затем тапает по
+        // двум датам в календаре. Не нужно отдельное действие «начать
+        // новую группу».
         Row(
             modifier = Modifier
                 .fillMaxWidth()
                 .wrapContentHeight(),
             verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(6.dp)
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
         ) {
-            // Кнопка «+» — начать новую группу
-            Box(
-                modifier = Modifier
-                    .size(28.dp)
-                    .clip(CircleShape)
-                    .background(if (activeGroupId == null) ClaudeAccent else ClaudeAccentBg)
-                    .border(1.dp, ClaudeAccent, CircleShape)
-                    .clickable { onAddGroup() },
-                contentAlignment = Alignment.Center
-            ) {
-                Icon(
-                    Icons.Default.Add,
-                    contentDescription = "Yangi guruh",
-                    tint = if (activeGroupId == null) ClaudeCard else ClaudeAccent,
-                    modifier = Modifier.size(18.dp)
-                )
-            }
-
-            Spacer(Modifier.width(4.dp))
-
-            // Кнопка статуса «To'langan» (оплаченный)
-            StatusToggleChip(
+            // Кнопка статуса «To'langan» (оплаченный) — большая квадратная
+            BigStatusTile(
                 label = "To'langan",
                 selected = newGroupIsPaid,
-                bg = StatusOk,
-                bgAlpha = 0.35f,
-                onClick = { onNewGroupStatusChange(true) }
+                color = StatusOk,
+                modifier = Modifier.weight(1f),
+                onClick = {
+                    onNewGroupStatusChange(true)
+                    onAddGroup()  // переводит календарь в режим выбора периода
+                }
             )
 
-            // Кнопка статуса «To'lanmagan» (неоплаченный)
-            StatusToggleChip(
+            // Кнопка статуса «To'lanmagan» (неоплаченный) — большая квадратная
+            BigStatusTile(
                 label = "To'lanmagan",
                 selected = !newGroupIsPaid,
-                bg = StatusOverdue,
-                bgAlpha = 0.35f,
-                onClick = { onNewGroupStatusChange(false) }
+                color = StatusOverdue,
+                modifier = Modifier.weight(1f),
+                onClick = {
+                    onNewGroupStatusChange(false)
+                    onAddGroup()  // переводит календарь в режим выбора периода
+                }
             )
         }
 
-        Spacer(Modifier.height(6.dp))
+        Spacer(Modifier.height(10.dp))
 
-        // ── Ряд 2: вкладки существующих групп ──────────────────────────
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .wrapContentHeight(),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(6.dp)
-        ) {
-            groups.forEachIndexed { idx, g ->
-                val color = if (g.isPaid) StatusOk else StatusOverdue
-                val isActive = g.id == activeGroupId
-                Row(
-                    modifier = Modifier
-                        .height(28.dp)
-                        .clip(RoundedCornerShape(14.dp))
-                        .background(if (isActive) color.copy(alpha = 0.35f) else ClaudeAccentBg)
-                        .border(1.dp, color, RoundedCornerShape(14.dp))
-                        .clickable { onActiveGroupChange(if (isActive) null else g.id) }
-                        .padding(horizontal = 8.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(4.dp)
-                ) {
-                    Box(
-                        modifier = Modifier
-                            .size(10.dp)
-                            .clip(CircleShape)
-                            .background(color)
-                    )
-                    Text(
-                        text = "${idx + 1}",
-                        fontSize = 12.sp,
-                        color = ClaudeText,
-                        fontWeight = FontWeight.SemiBold
-                    )
-                    Icon(
-                        Icons.Default.Close,
-                        contentDescription = "Guruhni o'chirish",
-                        tint = ClaudeTextSecondary,
-                        modifier = Modifier
-                            .size(14.dp)
-                            .clickable { onRemoveGroup(g.id) }
+        // ── Ряд 2: список существующих контрактов ─────────────────────
+        // Каждый контракт показан как отдельная карточка со:
+        //   • индикатором статуса (зелёная/красная полоса слева),
+        //   • датами начала и окончания,
+        //   • кнопкой «O'chir» (удалить).
+        // Список вертикальный — у каждой карточки своя строка, без
+        // горизонтальной прокрутки. Если контрактов нет — показываем
+        // подсказку, призывающую выбрать статус выше.
+        if (groups.isEmpty()) {
+            Text(
+                text = "Kontraktlar yo'q — yuqoridagi tugmalardan birini bosing",
+                fontSize = 12.sp,
+                color = ClaudeTextSecondary,
+                modifier = Modifier.padding(vertical = 4.dp)
+            )
+        } else {
+            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                groups.forEach { g ->
+                    ContractListItem(
+                        group = g,
+                        isActive = g.id == activeGroupId,
+                        onClick = { onActiveGroupChange(if (g.id == activeGroupId) null else g.id) },
+                        onRemove = { onRemoveGroup(g.id) }
                     )
                 }
             }
+        }
+    }
+}
 
-            if (groups.isEmpty()) {
-                Text(
-                    text = "Hali guruh yo'q — «+» bilan boshlang",
-                    fontSize = 11.sp,
-                    color = ClaudeTextSecondary,
-                    modifier = Modifier.padding(start = 4.dp)
+/* ── Большая квадратная плитка статуса ─────────────────────────────────── */
+@Composable
+private fun BigStatusTile(
+    label: String,
+    selected: Boolean,
+    color: Color,
+    modifier: Modifier = Modifier,
+    onClick: () -> Unit
+) {
+    Box(
+        modifier = modifier
+            .height(64.dp)  // большая высота → квадратная форма при weight(1f)
+            .clip(RoundedCornerShape(10.dp))
+            .background(if (selected) color.copy(alpha = 0.35f) else ClaudeAccentBg)
+            .border(
+                width = if (selected) 2.dp else 1.dp,
+                color = color,
+                shape = RoundedCornerShape(10.dp)
+            )
+            .clickable { onClick() }
+            .padding(8.dp),
+        contentAlignment = Alignment.Center
+    ) {
+        Column(
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(4.dp)
+        ) {
+            // Цветной кружок-индикатор статуса
+            Box(
+                modifier = Modifier
+                    .size(14.dp)
+                    .clip(CircleShape)
+                    .background(color)
+            )
+            Text(
+                text = label,
+                fontSize = 13.sp,
+                color = if (selected) ClaudeText else ClaudeTextSecondary,
+                fontWeight = if (selected) FontWeight.Bold else FontWeight.Normal,
+                textAlign = TextAlign.Center
+            )
+            if (selected) {
+                Icon(
+                    Icons.Default.Check,
+                    contentDescription = null,
+                    tint = color,
+                    modifier = Modifier.size(14.dp)
                 )
             }
         }
     }
 }
 
-/* ── Чип статуса для новой группы ────────────────────────────────────── */
+/* ── Карточка контракта в списке под календарём ────────────────────────── */
 @Composable
-private fun StatusToggleChip(
-    label: String,
-    selected: Boolean,
-    bg: Color,
-    bgAlpha: Float,
-    onClick: () -> Unit
+private fun ContractListItem(
+    group: ContractGroup,
+    isActive: Boolean,
+    onClick: () -> Unit,
+    onRemove: () -> Unit
 ) {
+    val color = if (group.isPaid) StatusOk else StatusOverdue
+    val dateFmt = remember {
+        java.text.SimpleDateFormat("dd.MM.yyyy", java.util.Locale.getDefault())
+    }
+    val startStr = dateFmt.format(java.util.Date(group.startMs))
+    val endStr = dateFmt.format(java.util.Date(group.endMs))
+
     Row(
         modifier = Modifier
-            .height(28.dp)
-            .clip(RoundedCornerShape(14.dp))
-            .background(if (selected) bg.copy(alpha = bgAlpha) else ClaudeAccentBg)
-            .border(1.dp, bg, RoundedCornerShape(14.dp))
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(8.dp))
+            .background(if (isActive) color.copy(alpha = 0.15f) else ClaudeAccentBg)
+            .border(1.dp, color.copy(alpha = 0.5f), RoundedCornerShape(8.dp))
             .clickable { onClick() }
-            .padding(horizontal = 10.dp),
+            .padding(horizontal = 10.dp, vertical = 8.dp),
         verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(4.dp)
+        horizontalArrangement = Arrangement.spacedBy(8.dp)
     ) {
+        // Левая цветная полоса-индикатор статуса
         Box(
             modifier = Modifier
-                .size(10.dp)
+                .size(width = 4.dp, height = 32.dp)
+                .clip(RoundedCornerShape(2.dp))
+                .background(color)
+        )
+
+        // Даты начала → окончания
+        Column(modifier = Modifier.weight(1f)) {
+            Text(
+                text = "$startStr → $endStr",
+                fontSize = 13.sp,
+                color = ClaudeText,
+                fontWeight = FontWeight.SemiBold
+            )
+            Text(
+                text = if (group.isPaid) "To'langan" else "To'lanmagan",
+                fontSize = 11.sp,
+                color = color,
+                fontWeight = FontWeight.Bold
+            )
+        }
+
+        // Кнопка удаления контракта
+        Box(
+            modifier = Modifier
+                .size(32.dp)
                 .clip(CircleShape)
-                .background(bg)
-        )
-        Text(
-            text = label,
-            fontSize = 11.sp,
-            color = if (selected) ClaudeText else ClaudeTextSecondary,
-            fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal
-        )
-        if (selected) {
+                .background(ClaudeAccentBg)
+                .border(1.dp, ClaudeDivider, CircleShape)
+                .clickable { onRemove() },
+            contentAlignment = Alignment.Center
+        ) {
             Icon(
-                Icons.Default.Check,
-                contentDescription = null,
-                tint = bg,
-                modifier = Modifier.size(12.dp)
+                Icons.Default.Close,
+                contentDescription = "Kontraktni o'chirish",
+                tint = StatusOverdue,
+                modifier = Modifier.size(16.dp)
             )
         }
     }
 }
+
 
 /* ── Легенда ────────────────────────────────────────────────────────────── */
 @Composable

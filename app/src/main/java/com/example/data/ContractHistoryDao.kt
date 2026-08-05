@@ -44,6 +44,26 @@ interface ContractHistoryDao {
     suspend fun getEarliestUnpaidContract(renterId: Int): ContractHistoryEntry?
 
     /**
+     * Возвращает ВСЕ неоплаченные контракты арендатора (CREATED/AUTO_RENEW
+     * с isPaid=false), отсортированные по weekStart ASC.
+     *
+     * Используется в SmsWorker для расчёта реальной суммы долга:
+     *   unpaidDays = Σ (weekEnd - weekStart) / dayMs по всем неоплаченным
+     *   debt = unpaidDays × dailyPrice
+     *
+     * Также используется в диалоге выбора дней для оплаты — показываем
+     * пользователю, сколько недель он должен погасить.
+     */
+    @Query("""
+        SELECT * FROM contract_history
+        WHERE renterId = :renterId
+          AND isPaid = 0
+          AND type IN ('CREATED', 'AUTO_RENEW')
+        ORDER BY weekStart ASC
+    """)
+    suspend fun getUnpaidContractsForRenter(renterId: Int): List<ContractHistoryEntry>
+
+    /**
      * Возвращает самый поздний оплаченный контракт арендатора
      * (используется при предоплате для вычисления начала нового контракта).
      */
