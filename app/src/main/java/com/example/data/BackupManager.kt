@@ -3,6 +3,10 @@ package com.example.data
 import android.content.Context
 import android.net.Uri
 import android.util.Log
+import androidx.work.ExistingWorkPolicy
+import androidx.work.OneTimeWorkRequestBuilder
+import androidx.work.WorkManager
+import com.example.worker.PaymentCheckWorker
 import org.dhatim.fastexcel.Workbook
 import org.dhatim.fastexcel.reader.ReadableWorkbook
 import org.dhatim.fastexcel.reader.Sheet
@@ -455,6 +459,28 @@ object BackupManager {
 
             val total = rentersCount + scootersCount + contractsCount +
                 transactionsCount + cardsCount + cardTxCount + notifCount
+
+            // ── После импорта запускаем PaymentCheckWorker немедленно ───────
+            // Когда пользователь импортирует старую резервную копию, у многих
+            // арендаторов срок аренды уже истёк (последний контракт закончился
+            // в прошлом). Периодический Worker (раз в час) не запустится сразу —
+            // Android может отложить его на час или дольше (Doze mode). Чтобы
+            // авто-продление контрактов сработало незамедлительно, ставим
+            // одноразовый WorkRequest с уникальным именем "post_import_renew".
+            // ExistingWorkPolicy.KEEP — если предыдущий импорт ещё в работе,
+            // не создаём второй параллельный.
+            try {
+                val work = OneTimeWorkRequestBuilder<PaymentCheckWorker>().build()
+                WorkManager.getInstance(context).enqueueUniqueWork(
+                    "post_import_renew",
+                    ExistingWorkPolicy.KEEP,
+                    work
+                )
+                Log.d(TAG, "Triggered post-import PaymentCheckWorker to auto-renew overdue renters")
+            } catch (e: Exception) {
+                Log.w(TAG, "Could not trigger post-import PaymentCheckWorker: ${e.message}")
+            }
+
             "Import tayyor: $total ta yozuv qo'shildi"
         } catch (e: Exception) {
             Log.e(TAG, "Import failed", e)

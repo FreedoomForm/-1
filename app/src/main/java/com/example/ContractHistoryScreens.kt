@@ -161,10 +161,21 @@ fun RenterContractHistoryScreen(
                             renter.name,
                             style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold)
                         )
+                        // ── Цвет баланса в подзаголовке ───────────────────────
+                        // Пользователь ожидает: баланс в минусе → красный,
+                        // в плюсе → зелёный, ровно ноль → серый (нейтрально).
+                        // Ранее подзаголовок всегда был серым (ClaudeTextSecondary),
+                        // из-за чего казалось, что функция «не работает».
+                        val subtitleBalanceColor = when {
+                            renter.balance < 0 -> StatusOverdue
+                            renter.balance > 0 -> StatusOk
+                            else -> ClaudeTextSecondary
+                        }
                         Text(
                             "${renter.phoneNumber}  •  Balans: ${renter.balance.toLong()} UZS",
                             style = MaterialTheme.typography.labelSmall,
-                            color = ClaudeTextSecondary
+                            color = subtitleBalanceColor,
+                            fontWeight = FontWeight.Bold
                         )
                     }
                 },

@@ -98,6 +98,8 @@ import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.work.ExistingPeriodicWorkPolicy
+import androidx.work.ExistingWorkPolicy
+import androidx.work.OneTimeWorkRequestBuilder
 import androidx.work.PeriodicWorkRequestBuilder
 import androidx.work.WorkManager
 import com.example.data.NotificationHistoryEntity
@@ -210,6 +212,25 @@ class MainActivity : ComponentActivity() {
             ExistingPeriodicWorkPolicy.KEEP,
             paymentCheckRequest
         )
+
+        // ── Немедленный однократный запуск PaymentCheckWorker при старте ──
+        // Периодический Worker срабатывает раз в час, но первый запуск может
+        // быть отложен Android'ом на час или дольше (Doze mode). При открытии
+        // приложения пользователем мы хотим сразу проверить, не истёк ли срок
+        // аренды у каких-либо активных арендаторов, и при необходимости создать
+        // новые контракты AUTO_RENEW на +7 дней.
+        // ExistingWorkPolicy.KEEP — если предыдущий one-time запуск ещё в работе
+        // (или уже в очереди), не плодим параллельные. Уникальное имя
+        // "app_start_renew" отличает его от "post_import_renew" (который
+        // ставится после импорта резервной копии).
+        try {
+            val oneTimeCheck = OneTimeWorkRequestBuilder<PaymentCheckWorker>().build()
+            WorkManager.getInstance(applicationContext).enqueueUniqueWork(
+                "app_start_renew",
+                ExistingWorkPolicy.KEEP,
+                oneTimeCheck
+            )
+        } catch (_: Exception) { /* WorkManager не критичен для запуска UI */ }
 
         // ── Принудительное обновление нативных виджетов при старте приложения ──
         // Виджеты на главном экране Android могут показывать "не удалось загрузить

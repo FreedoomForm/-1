@@ -123,6 +123,22 @@ class PaymentCheckWorker(
         val newWeekStart = renter.rentStartDateTimestamp +
             renter.rentDurationDays * 24L * 60 * 60 * 1000
         val newWeekEnd = newWeekStart + sevenDays
+
+        // ── Защита от дубликатов ───────────────────────────────────────────
+        // Если для этой недели уже существует контракт (CREATED или AUTO_RENEW),
+        // НЕ создаём второй. Это критично после импорта старой базы: у
+        // пользователя может быть 11+ просроченных арендаторов, и если Worker
+        // запустится дважды (например, после импорта и сразу при старте приложения),
+        // без этой проверки каждый получил бы по 2 контракта на одну и ту же
+        // неделю — ровно та проблема, на которую жалуется пользователь
+        // («отрицательный и положительный контракт на одну и ту же дату»).
+        val existing = db.contractHistoryDao().getContractForWeek(renter.id, newWeekStart)
+        if (existing != null) {
+            Log.d(TAG, "Skip auto-renew for renter #${renter.id}: contract #${existing.id} " +
+                "for weekStart=$newWeekStart already exists")
+            return newBalance
+        }
+
         db.contractHistoryDao().insert(
             ContractHistoryEntry(
                 renterId = renter.id,

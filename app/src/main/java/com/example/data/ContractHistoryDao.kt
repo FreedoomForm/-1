@@ -85,6 +85,27 @@ interface ContractHistoryDao {
     """)
     suspend fun getContractsForRenterOnce(renterId: Int): List<ContractHistoryEntry>
 
+    /**
+     * Проверяет, есть ли уже контракт у арендатора с указанным weekStart.
+     * Используется в PaymentCheckWorker.autoRenew() для защиты от дубликатов:
+     * если для этой недели уже создан контракт (CREATED или AUTO_RENEW),
+     * новый AUTO_RENEW не создаём — иначе при многократном запуске Worker'а
+     * (например, после импорта старой базы, где сроки уже просрочены) мы бы
+     * получили по 2-3 контракта на одну и ту же неделю.
+     *
+     * Сравнение weekStart = :weekStart — точное. У старой v33-базы weekStart
+     * мог храниться как старт аренды (а не начало недели), поэтому при поиске
+     * дубликата мы смотрим точное совпадение, а не «та же календарная неделя».
+     */
+    @Query("""
+        SELECT * FROM contract_history
+        WHERE renterId = :renterId
+          AND type IN ('CREATED', 'AUTO_RENEW')
+          AND weekStart = :weekStart
+        LIMIT 1
+    """)
+    suspend fun getContractForWeek(renterId: Int, weekStart: Long): ContractHistoryEntry?
+
     @Insert(onConflict = OnConflictStrategy.IGNORE)
     suspend fun insert(entry: ContractHistoryEntry): Long
 
