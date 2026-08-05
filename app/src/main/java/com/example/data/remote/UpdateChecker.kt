@@ -26,7 +26,15 @@ data class UpdateInfo(
     val downloadUrl: String,
     val releaseNotes: String,
     val fileSize: Long,
-    val publishDate: String
+    val publishDate: String,
+    /**
+     * Название релиза (release name/title) на GitHub — обычно это заголовок
+     * коммита, который был указан при создании релиза. Отображается в списке
+     * версий на странице настроек как «название коммита версии».
+     * Может быть пустым, если релиз создан без названия — тогда UI покажет
+     * только versionName.
+     */
+    val releaseName: String = ""
 )
 
 /**
@@ -78,6 +86,7 @@ class UpdateChecker(
             val release = JSONObject(json)
 
             val tagName = release.optString("tag_name", "").removePrefix("v")
+            val releaseName = release.optString("name", "")
             val releaseNotes = release.optString("body", "")
             val publishDate = release.optString("published_at", "")
 
@@ -131,7 +140,8 @@ class UpdateChecker(
                     downloadUrl = downloadUrl,
                     releaseNotes = releaseNotes,
                     fileSize = fileSize,
-                    publishDate = publishDate
+                    publishDate = publishDate,
+                    releaseName = releaseName
                 )
             )
         } catch (e: Exception) {
@@ -311,6 +321,92 @@ class UpdateChecker(
      */
     private fun normalizeVersion(version: String): String {
         return version.replace('-', '.')
+    }
+
+    /**
+     * Получает СПИСОК всех релизов из GitHub Releases (не только последний).
+     *
+     * Используется на странице настроек, где пользователь сам выбирает версию
+     * из списка для скачивания. Каждый элемент содержит:
+     *   - versionName (например "1.2.152")
+     *   - releaseName (название релиза — обычно заголовок коммита)
+     *   - publishDate (время публикации в формате ISO 8601: "2025-01-15T12:34:56Z")
+     *   - downloadUrl (прямая ссылка на APK-asset)
+     *   - fileSize (размер APK в байтах, если указан)
+     *
+     * Возвращает пустой список при ошибке сети/API. Список отсортирован
+     * по убыванию versionCode (новые сверху).
+     */
+    suspend fun fetchAllReleases(): List<UpdateInfo> = withContext(Dispatchers.IO) {
+        try {
+            val apiUrl = "https://api.github.com/repos/$REPO_OWNER/$REPO_NAME/releases?per_page=50"
+            val connection = URL(apiUrl).openConnection() as java.net.HttpURLConnection
+            connection.setRequestProperty("Accept", "application/vnd.github.v3+json")
+            connection.setRequestProperty("User-Agent", "ScooterRent-App-Update-Checker")
+            connection.connectTimeout = 10_000
+            connection.readTimeout = 15_000
+            connection.instanceFollowRedirects = true
+
+            val responseCode = connection.responseCode
+            if (responseCode != 200) {
+                val errorBody = connection.errorStream?.bufferedReader()?.use { it.readText() } ?: ""
+                Log.e(TAG, "GitHub API returned HTTP $responseCode: $errorBody")
+                return@withContext emptyList()
+            }
+
+            val json = connection.inputStream.bufferedReader().use { it.readText() }
+            val releases = org.json.JSONArray(json)
+            val result = mutableListOf<UpdateInfo>()
+
+            for (i in 0 until releases.length()) {
+                try {
+                    val release = releases.getJSONObject(i)
+                    val tagName = release.optString("tag_name", "").removePrefix("v")
+                    val releaseName = release.optString("name", "")
+                    val releaseNotes = release.optString("body", "")
+                    val publishDate = release.optString("published_at", "")
+
+                    // Ищем APK asset
+                    val assets = release.optJSONArray("assets") ?: continue
+                    var downloadUrl: String? = null
+                    var fileSize: Long = 0
+                    for (j in 0 until assets.length()) {
+                        val asset = assets.getJSONObject(j)
+                        val name = asset.optString("name", "")
+                        if (name.endsWith(".apk")) {
+                            downloadUrl = asset.optString("browser_download_url", "")
+                            fileSize = asset.optLong("size", 0)
+                            break
+                        }
+                    }
+                    if (downloadUrl == null) continue
+
+                    val versionCode = parseVersionCode(tagName, releaseNotes)
+                        ?: tagName.split(".").lastOrNull()?.toIntOrNull()
+                        ?: (i + 1)
+
+                    result.add(
+                        UpdateInfo(
+                            versionName = tagName,
+                            versionCode = versionCode,
+                            downloadUrl = downloadUrl,
+                            releaseNotes = releaseNotes,
+                            fileSize = fileSize,
+                            publishDate = publishDate,
+                            releaseName = releaseName
+                        )
+                    )
+                } catch (e: Exception) {
+                    Log.w(TAG, "Failed to parse release at index $i", e)
+                }
+            }
+
+            // Сортируем по убыванию versionCode (новые версии сверху)
+            result.sortedByDescending { it.versionCode }
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to fetch all releases", e)
+            emptyList()
+        }
     }
 
     companion object {

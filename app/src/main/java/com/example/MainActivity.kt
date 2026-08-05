@@ -41,6 +41,9 @@ import androidx.compose.material.icons.filled.List
 import androidx.compose.material.icons.filled.DirectionsBike
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.FileDownload
+import androidx.compose.material.icons.filled.ExpandMore
+import androidx.compose.material.icons.filled.Check
 import androidx.compose.foundation.border
 import androidx.compose.material.icons.filled.DateRange
 import androidx.compose.material.icons.filled.Notifications
@@ -476,7 +479,7 @@ private fun CompactSearchPanel(
     }
 }
 
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
 @Composable
 fun MainScreen(
     viewModel: RenterViewModel = viewModel(),
@@ -622,6 +625,11 @@ fun MainScreen(
     var updateInfo by remember { mutableStateOf<UpdateInfo?>(null) }
     var isCheckingUpdate by remember { mutableStateOf(false) }
     var isUpToDate by remember { mutableStateOf(false) } // Приложение актуально — не показываем уведомление
+    // ── Список всех релизов для страницы настроек ────────────────────────
+    // Пользователь выбирает версию из списка (а не получает только «latest»).
+    // Загружается по требованию — когда пользователь открывает список версий.
+    var allReleases by remember { mutableStateOf<List<UpdateInfo>>(emptyList()) }
+    var isLoadingReleases by remember { mutableStateOf(false) }
     val localContext = LocalContext.current
     val updateManager = remember { InAppUpdateManager(localContext) }
     val updateState by updateManager.state.collectAsStateWithLifecycle()
@@ -1067,6 +1075,18 @@ fun MainScreen(
                                 }
                             }
                             isCheckingUpdate = false
+                        }
+                    }
+                },
+                allReleases = allReleases,
+                isLoadingReleases = isLoadingReleases,
+                onLoadReleases = {
+                    if (!isLoadingReleases) {
+                        isLoadingReleases = true
+                        coroutineScope.launch {
+                            val checker = UpdateChecker(localContext)
+                            allReleases = checker.fetchAllReleases()
+                            isLoadingReleases = false
                         }
                     }
                 },
@@ -2170,6 +2190,18 @@ fun MainScreen(
                                     }
                                 }
                                 isCheckingUpdate = false
+                            }
+                        }
+                    },
+                    allReleases = allReleases,
+                    isLoadingReleases = isLoadingReleases,
+                    onLoadReleases = {
+                        if (!isLoadingReleases) {
+                            isLoadingReleases = true
+                            coroutineScope.launch {
+                                val checker = UpdateChecker(localContext)
+                                allReleases = checker.fetchAllReleases()
+                                isLoadingReleases = false
                             }
                         }
                     },
@@ -3910,6 +3942,31 @@ private fun SectionLabel(text: String) {
     )
 }
 
+/**
+ * Форматирует ISO 8601 дату публикации релиза GitHub в человекочитаемый вид.
+ *
+ * GitHub API возвращает время в формате "2025-01-15T12:34:56Z".
+ * Преобразуем в "15.01.2025 12:34" (день.месяц.год часы:минуты).
+ * При ошибке парсинга возвращает исходную строку.
+ */
+private fun formatReleaseDate(isoDate: String): String {
+    return try {
+        // Убираем суффикс 'Z' и парсим как LocalDateTime
+        val cleaned = isoDate.replace("Z", "")
+        val ldt = java.time.LocalDateTime.parse(cleaned)
+        val day = ldt.dayOfMonth.toString().padStart(2, '0')
+        val month = ldt.monthValue.toString().padStart(2, '0')
+        val year = ldt.year
+        val hour = ldt.hour.toString().padStart(2, '0')
+        val minute = ldt.minute.toString().padStart(2, '0')
+        "$day.$month.$year $hour:$minute"
+    } catch (_: Exception) {
+        // Fallback: если формат не такой — возвращаем первые 16 символов
+        // ("2025-01-15T12:34" — тоже читаемо) или всю строку если короче.
+        isoDate.take(16).replace("T", " ")
+    }
+}
+
 data class RenterFormResult(
     val name: String,
     val phone: String,
@@ -3971,7 +4028,7 @@ data class RenterFormContractGroup(
     val isPaid: Boolean
 )
 
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
 @Composable
 fun SettingsScreen(
     currentTemplate: String,
@@ -3989,6 +4046,13 @@ fun SettingsScreen(
     onSmsAutoSendChange: (Boolean) -> Unit = {},
     onLogout: () -> Unit = {},
     onCheckUpdate: () -> Unit = {},
+    // ── Список всех релизов для выбора версии ─────────────────────────────
+    // Старый поток «проверить обновление → показать latest → нажать Update»
+    // заменён на: пользователь сам выбирает версию из списка всех релизов
+    // GitHub. Список загружается по требованию через onLoadReleases().
+    allReleases: List<UpdateInfo> = emptyList(),
+    isLoadingReleases: Boolean = false,
+    onLoadReleases: () -> Unit = {},
     onExportBackup: (android.net.Uri) -> Unit = {},
     onImportBackup: (android.net.Uri) -> Unit = {},
     // ── showTopBar ───────────────────────────────────────────────────────
@@ -4015,6 +4079,14 @@ fun SettingsScreen(
     val settingsRepo = remember { com.example.data.SettingsRepository(settingsContext) }
     var paymeLink by remember { mutableStateOf(settingsRepo.paymeLink) }
     var callCenter by remember { mutableStateOf(settingsRepo.callCenter) }
+
+    // ── Состояние выбора версии для обновления ───────────────────────────
+    // Старый поток «проверить → latest → обновить» заменён на выбор версии
+    // из списка всех релизов GitHub.
+    //   isVersionListOpen — раскрыт ли dropdown со списком версий
+    //   selectedRelease   — выбранная пользователем версия (или null)
+    var isVersionListOpen by remember { mutableStateOf(false) }
+    var selectedRelease by remember { mutableStateOf<UpdateInfo?>(null) }
     // ── Поля для страницы Отчёты: стоимость скутера и курс USD ──────────
     var scooterPriceUsd by remember {
         mutableStateOf(settingsRepo.scooterPriceUsd.let {
@@ -4420,71 +4492,190 @@ fun SettingsScreen(
                             }
                         }
                         else -> {
-                            // Idle / ReadyToInstall
-                            if (updateInfo != null) {
-                                // Доступно обновление
-                                Card(
-                                    modifier = Modifier.fillMaxWidth(),
-                                    colors = CardDefaults.cardColors(containerColor = Color(0xFFF0F0F0)),
-                                    shape = RoundedCornerShape(8.dp)
-                                ) {
-                                    Column(modifier = Modifier.padding(12.dp)) {
-                                        Text(
-                                            "Yangi versiya: v${updateInfo.versionName}",
-                                            style = MaterialTheme.typography.labelMedium,
-                                            color = Color(0xFF000000)
-                                        )
-                                        if (updateInfo.releaseNotes.isNotBlank()) {
-                                            Text(
-                                                updateInfo.releaseNotes.take(200),
-                                                style = MaterialTheme.typography.bodySmall,
-                                                color = Color(0xFF000000)
-                                            )
+                            // Idle / ReadyToInstall — выбор версии из списка
+                            // ──────────────────────────────────────────────
+                            // Старый поток «проверить обновление → показать
+                            // latest → нажать Yangila» удалён. Теперь пользова-
+                            // тель сам выбирает версию из списка всех релизов
+                            // GitHub. Список загружается по требованию при
+                            // первом раскрытии.
+                            //
+                            // Визуально всё в одной строке:
+                            //   1) Кнопка «Выберите версию» (если ничего не
+                            //      выбрано) → клик раскрывает список версий
+                            //      ниже.
+                            //   2) После выбора версии кнопка показывает имя
+                            //      выбранной версии, а рядом появляется кнопка
+                            //      «Загрузить».
+                            //   3) Клик по кнопке с выбранной версией снова
+                            //      раскрывает список — можно поменять выбор.
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                // ── Кнопка выбора версии (или отображения выбранной)
+                                OutlinedButton(
+                                    onClick = {
+                                        isVersionListOpen = !isVersionListOpen
+                                        // Ленивая загрузка: подгружаем список
+                                        // только при первом раскрытии, если он
+                                        // ещё пуст и не загружается прямо сейчас.
+                                        if (isVersionListOpen &&
+                                            allReleases.isEmpty() &&
+                                            !isLoadingReleases
+                                        ) {
+                                            onLoadReleases()
                                         }
-                                        Spacer(modifier = Modifier.height(8.dp))
-                                        SuccessButton(
-                                            label = "Yangila",
-                                            icon = Icons.Default.Refresh,
-                                            onClick = { onStartUpdate(updateInfo) },
-                                            modifier = Modifier.fillMaxWidth()
+                                    },
+                                    modifier = Modifier.weight(1f),
+                                    shape = RoundedCornerShape(8.dp),
+                                    colors = androidx.compose.material3.ButtonDefaults.outlinedButtonColors(
+                                        contentColor = Color(0xFF000000)
+                                    ),
+                                    border = androidx.compose.foundation.BorderStroke(
+                                        1.dp,
+                                        Color(0xFF000000)
+                                    )
+                                ) {
+                                    if (selectedRelease != null) {
+                                        // Внутри кнопки — имя выбранной версии
+                                        Text(
+                                            "v${selectedRelease!!.versionName}",
+                                            style = MaterialTheme.typography.bodyMedium,
+                                            fontWeight = FontWeight.Medium,
+                                            maxLines = 1
+                                        )
+                                    } else {
+                                        Text(
+                                            if (isLoadingReleases) "Yuklanmoqda…"
+                                            else "Versiyani tanlang",
+                                            style = MaterialTheme.typography.bodyMedium,
+                                            maxLines = 1
                                         )
                                     }
+                                    Spacer(modifier = Modifier.width(4.dp))
+                                    Icon(
+                                        imageVector = Icons.Default.ExpandMore,
+                                        contentDescription = null,
+                                        modifier = Modifier.size(18.dp)
+                                    )
                                 }
-                            } else if (isUpToDate) {
-                                // Приложение актуально
+                                // ── Кнопка «Загрузить» — появляется только
+                                // после выбора версии. Рядом с кнопкой выбора.
+                                if (selectedRelease != null) {
+                                    SuccessButton(
+                                        label = "Yuklab olish",
+                                        icon = Icons.Default.FileDownload,
+                                        onClick = { onStartUpdate(selectedRelease!!) }
+                                    )
+                                }
+                            }
+                            // ── Dropdown-список версий ───────────────────
+                            if (isVersionListOpen) {
+                                Spacer(modifier = Modifier.height(4.dp))
                                 Card(
                                     modifier = Modifier.fillMaxWidth(),
-                                    colors = CardDefaults.cardColors(containerColor = Color(0xFFF0F0F0)),
+                                    colors = CardDefaults.cardColors(containerColor = Color(0xFFF7F7F7)),
                                     shape = RoundedCornerShape(8.dp)
                                 ) {
-                                    Row(
-                                        modifier = Modifier.padding(12.dp),
-                                        verticalAlignment = Alignment.CenterVertically
-                                    ) {
-                                        Icon(
-                                            Icons.Default.Refresh,
-                                            contentDescription = null,
-                                            tint = Color(0xFF000000),
-                                            modifier = Modifier.size(18.dp)
-                                        )
-                                        Spacer(modifier = Modifier.width(8.dp))
-                                        Text(
-                                            "Ilova eng so'nggi versiyada",
-                                            color = Color(0xFF000000),
-                                            style = MaterialTheme.typography.bodySmall
-                                        )
+                                    Column(modifier = Modifier.padding(4.dp)) {
+                                        when {
+                                            isLoadingReleases -> {
+                                                Row(
+                                                    modifier = Modifier
+                                                        .fillMaxWidth()
+                                                        .padding(12.dp),
+                                                    verticalAlignment = Alignment.CenterVertically,
+                                                    horizontalArrangement = Arrangement.Center
+                                                ) {
+                                                    CircularProgressIndicator(
+                                                        modifier = Modifier.size(18.dp),
+                                                        color = Color(0xFF000000),
+                                                        strokeWidth = 2.dp
+                                                    )
+                                                    Spacer(modifier = Modifier.width(8.dp))
+                                                    Text(
+                                                        "Versiyalar ro'yxati yuklanmoqda…",
+                                                        style = MaterialTheme.typography.bodySmall,
+                                                        color = Color(0xFF000000)
+                                                    )
+                                                }
+                                            }
+                                            allReleases.isEmpty() -> {
+                                                Text(
+                                                    "Versiyalar topilmadi. Internet aloqasini tekshiring.",
+                                                    modifier = Modifier.padding(12.dp),
+                                                    style = MaterialTheme.typography.bodySmall,
+                                                    color = Color(0xFF666666)
+                                                )
+                                            }
+                                            else -> {
+                                                allReleases.forEach { release ->
+                                                    val isSelected =
+                                                        selectedRelease?.versionCode == release.versionCode
+                                                    Row(
+                                                        modifier = Modifier
+                                                            .fillMaxWidth()
+                                                            .background(
+                                                                if (isSelected) Color(0xFFE5E5E5)
+                                                                else Color.Transparent
+                                                            )
+                                                            .clickable {
+                                                                selectedRelease = release
+                                                                isVersionListOpen = false
+                                                            }
+                                                            .padding(horizontal = 12.dp, vertical = 8.dp),
+                                                        verticalAlignment = Alignment.CenterVertically
+                                                    ) {
+                                                        // Галочка для выбранной версии
+                                                        if (isSelected) {
+                                                            Icon(
+                                                                imageVector = Icons.Default.Check,
+                                                                contentDescription = null,
+                                                                tint = Color(0xFF000000),
+                                                                modifier = Modifier.size(16.dp)
+                                                            )
+                                                            Spacer(modifier = Modifier.width(8.dp))
+                                                        }
+                                                        Column(modifier = Modifier.weight(1f)) {
+                                                            // Строка 1: номер версии + дата
+                                                            Row(
+                                                                verticalAlignment = Alignment.CenterVertically
+                                                            ) {
+                                                                Text(
+                                                                    "v${release.versionName}",
+                                                                    style = MaterialTheme.typography.bodyMedium,
+                                                                    fontWeight = FontWeight.Bold,
+                                                                    color = Color(0xFF000000)
+                                                                )
+                                                                Spacer(modifier = Modifier.width(8.dp))
+                                                                if (release.publishDate.isNotBlank()) {
+                                                                    Text(
+                                                                        formatReleaseDate(release.publishDate),
+                                                                        style = MaterialTheme.typography.bodySmall,
+                                                                        color = Color(0xFF666666)
+                                                                    )
+                                                                }
+                                                            }
+                                                            // Строка 2: название коммита (release name)
+                                                            if (release.releaseName.isNotBlank() &&
+                                                                release.releaseName != release.versionName
+                                                            ) {
+                                                                Text(
+                                                                    release.releaseName,
+                                                                    style = MaterialTheme.typography.bodySmall,
+                                                                    color = Color(0xFF444444),
+                                                                    maxLines = 2
+                                                                )
+                                                            }
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        }
                                     }
                                 }
-                            } else {
-                                // Ещё не проверяли или ошибка
-                                SecondaryButton(
-                                    label = if (isCheckingUpdate) "Kutish" else "Tekshir",
-                                    icon = Icons.Default.Refresh,
-                                    onClick = onCheckUpdate,
-                                    enabled = !isCheckingUpdate,
-                                    loading = isCheckingUpdate,
-                                    modifier = Modifier.fillMaxWidth()
-                                )
                             }
                         }
                     }
