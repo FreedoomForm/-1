@@ -967,58 +967,17 @@ fun MainScreen(
         NavigationState.MainView -> { /* продолжаем — основной Scaffold ниже */ }
     }
 
-    // ── Динамическая верхняя панель (TopAppBar) ────────────────────────
+    // ── Статичная верхняя панель (TopAppBar) ───────────────────────────
     // Пользователь хочет: верхняя полоса с универсальными кнопками (TopAppBar)
-    // должна быть ДИНАМИЧЕСКОЙ — при свайпе вниз уходит вверх и исчезает,
-    // при свайпе вверх появляется сверху. Полоса поиска и полоса кнопок
-    // To'lov/Uzish/SMS — СТАТИЧЕСКИЕ (замирают на месте).
-    //
-    // Реализация: измеряем высоту TopAppBar через onGloballyPositioned,
-    // отслеживаем направление скролла через nestedScroll на content Column,
-    // анимируем offset TopAppBar между 0 (видна) и -height (скрыта).
-    // Scaffold reserves space for topBar всегда — поэтому когда TopAppBar
-    // смещается вверх, на её месте остаётся пустой фон (ClaudeBackground),
-    // а полоса поиска остаётся на месте (статичная).
-    val topBarHeightPx = remember { mutableFloatStateOf(0f) }
-    var topBarTarget by remember { mutableFloatStateOf(0f) }
-
-    val nestedScrollConnection = remember {
-        object : NestedScrollConnection {
-            override fun onPreScroll(available: Offset, source: NestedScrollSource): Offset {
-                val delta = available.y
-                if (delta > 2f && topBarTarget > -topBarHeightPx.floatValue) {
-                    // Свайп вниз → скрыть TopAppBar
-                    topBarTarget = -topBarHeightPx.floatValue
-                } else if (delta < -2f && topBarTarget < 0f) {
-                    // Свайп вверх → показать TopAppBar
-                    topBarTarget = 0f
-                }
-                return Offset.Zero
-            }
-        }
-    }
-
-    val topBarOffset by animateFloatAsState(
-        targetValue = topBarTarget,
-        animationSpec = spring(
-            dampingRatio = Spring.DampingRatioNoBouncy,
-            stiffness = Spring.StiffnessMedium
-        ),
-        label = "topBarOffset"
-    )
-
+    // должна быть ВСЕГДА ВИДНА сверху экрана (закреплена в Scaffold.topBar).
+    // А полоса поиска и полоса доп.кнопок (To'lov/Uzish/SMS) — скроллятся
+    // вместе с таблицей (часть контента), уходят под TopAppBar при скролле.
+    // TopAppBar перекрывает их когда они оказываются под ней.
     Scaffold(
         modifier = Modifier.fillMaxSize(),
         containerColor = ClaudeBackground,
         topBar = {
             TopAppBar(
-                modifier = Modifier
-                    .offset { IntOffset(0, topBarOffset.roundToInt()) }
-                    .onGloballyPositioned { coords ->
-                        if (topBarHeightPx.floatValue == 0f) {
-                            topBarHeightPx.floatValue = coords.size.height.toFloat()
-                        }
-                    },
                 title = {
                     Text(
                         "Skuter Ijarasi",
@@ -1320,7 +1279,6 @@ fun MainScreen(
             modifier = Modifier
                 .padding(innerPadding)
                 .fillMaxSize()
-                .nestedScroll(nestedScrollConnection)
         ) {
             // ── Баннер обновления (ТОЛЬКО если есть обновление) ──
             when (val st = updateState) {
@@ -1473,202 +1431,16 @@ fun MainScreen(
             }
 
             if (currentTab == 0) {
-                // Unified search bar with calendar + filter buttons
-                UnifiedSearchBar(
-                    query = searchQuery,
-                    onQueryChange = { searchQuery = it },
-                    placeholder = "Mijoz yoki skuter qidirish",
-                    onCalendarClick = { showDateRangePicker = true },
-                    calendarActive = dateRangePickerState.selectedStartDateMillis != null,
-                    onFilterClick = { showRenterFilterPanel = true },
-                    filterActive = renterFilterValues.any { it.value.isNotBlank() }
-                )
-
-                // Filter side panel
-                FilterSidePanel(
-                    columns = renterFilterColumns,
-                    filterValues = renterFilterValues,
-                    onFilterChange = { colId, value ->
-                        renterFilterValues = renterFilterValues.toMutableMap().apply { put(colId, value) }
-                    },
-                    onSearch = { /* filters already applied reactively */ },
-                    onReset = { renterFilterValues = emptyMap() },
-                    onDismiss = { showRenterFilterPanel = false },
-                    visible = showRenterFilterPanel,
-                    columnVisibility = renterColumnVisibility,
-                    onColumnVisibilityChange = { colId, isVisible ->
-                        renterColumnVisibility = renterColumnVisibility.toMutableMap().apply { put(colId, isVisible) }
-                    }
-                )
-
-                // ── Панель действий — ВСЕГДА ВИДНА (Task 3) ─────────────
-                // Кнопки To'lov / Uzish / SMS / O'chir всегда присутствуют.
-                // Чтобы выполнить действие, нужно выбрать хотя бы 1 арендатора
-                // (долгое нажатие по строке). Без выбора кнопки отображаются
-                // серыми (disabled) — но они видны всегда. Текст "X ta
-                // tanlandi" убран по просьбе пользователя.
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 16.dp, vertical = 8.dp),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    val hasSelection = selectedRenters.isNotEmpty()
-                    // ── Диалог выбора дней для оплаты ──────────────────────
-                    // Пользователь хочет: при нажатии «To'lov» открывается
-                    // диалог, где он выбирает, за сколько дней оплачивает
-                    // (7, 14, 30, 60 или своё число). Раньше оплата всегда
-                    // была фиксирована на 7 дней.
-                    var showDayPickerDialog by remember { mutableStateOf(false) }
-                    if (showDayPickerDialog) {
-                        val repoForDialog = com.example.data.SettingsRepository(localContext)
-                        val dailyPriceForDialog = repoForDialog.dailyPrice.let { p ->
-                            if (p > 0) p else com.example.data.SettingsRepository.DEFAULT_DAILY_PRICE
-                        }
-                        val renterNameForDialog = renters
-                            .firstOrNull { it.id in selectedRenters }?.name ?: "Mijoz"
-                        // ── Загружаем суммарное количество неоплаченных дней ──
-                        // Суммируем по ВСЕМ выбранным арендаторам. Используем
-                        // produceState с ключом selectedRenters — при изменении
-                        // выбора перезагружаем. Значение 0 = нет неоплаченных
-                        // дней, кнопка «Barcha to'lanmagan kunlarni tanlash»
-                        // в этом случае не показывается.
-                        val unpaidDaysForDialog by androidx.compose.runtime.produceState(
-                            initialValue = 0,
-                            selectedRenters
-                        ) {
-                            value = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
-                                val db = com.example.data.AppDatabase.getDatabase(localContext)
-                                val dayMs = 24L * 60 * 60 * 1000
-                                selectedRenters.sumOf { rid ->
-                                    val unpaid = db.contractHistoryDao().getUnpaidContractsForRenter(rid)
-                                    unpaid.sumOf { c ->
-                                        val ws = c.weekStart ?: return@sumOf 0L
-                                        val we = c.weekEnd ?: return@sumOf 0L
-                                        val diff = we - ws
-                                        if (diff <= 0) 1L else ((diff + dayMs - 1) / dayMs)
-                                    }
-                                }.toInt().coerceAtLeast(0)
-                            }
-                        }
-                        DayPickerPaymentDialog(
-                            renterName = renterNameForDialog,
-                            dailyPrice = dailyPriceForDialog,
-                            unpaidDays = unpaidDaysForDialog,
-                            onConfirm = { days ->
-                                viewModel.payForDaysForRenters(selectedRenters, days)
-                                Toast.makeText(
-                                    localContext,
-                                    "To'lov qabul qilindi ($days kun)",
-                                    Toast.LENGTH_SHORT
-                                ).show()
-                                selectedRenters = emptySet()
-                                showDayPickerDialog = false
-                            },
-                            onDismiss = { showDayPickerDialog = false }
-                        )
-                    }
-                    SuccessButton(
-                        label = "To'lov",
-                        icon = Icons.Default.Payments,
-                        enabled = hasSelection,
-                        onClick = { showDayPickerDialog = true },
-                        modifier = Modifier.weight(1.4f)
-                    )
-                    PrimaryButton(
-                        label = "Uzish",
-                        icon = Icons.Default.PowerOff,
-                        enabled = hasSelection,
-                        onClick = {
-                            viewModel.terminateRenters(selectedRenters)
-                            Toast.makeText(localContext, "Kontrakt tugatildi", Toast.LENGTH_SHORT).show()
-                            selectedRenters = emptySet()
-                        },
-                        modifier = Modifier.weight(1.2f)
-                    )
-                    // SMS yuborish tugmasi — tanlangan mijozlarga
-                    UnifiedButton(
-                        label = "SMS",
-                        icon = Icons.Default.Sms,
-                        enabled = hasSelection,
-                        onClick = {
-                            // ── Ручная отправка SMS — выносим в корутину ───────
-                            // Раньше цикл отправки работал в main thread, что
-                            // при большом числе арендаторов блокировало UI. Кроме
-                            // того, для расчёта {unpaidDays}/{unpaidCount}/{debt}
-                            // нужно асинхронно читать из БД список неоплаченных
-                            // контрактов (через contractHistoryDao.getUnpaidContractsForRenter).
-                            val rentersToSend = renters.filter { it.id in selectedRenters }
-                            coroutineScope.launch {
-                                var sentCount = 0
-                                var failCount = 0
-                                val db = com.example.data.AppDatabase.getDatabase(localContext)
-                                val contractDao = db.contractHistoryDao()
-                                for (renter in rentersToSend) {
-                                    val settingsRepo = com.example.data.SettingsRepository(localContext)
-                                    val phone = com.example.worker.SimHelper.normalizePhoneNumber(renter.phoneNumber)
-
-                                    // ── Расчёт реального долга на основе неоплаченных контрактов ──
-                                    val unpaidContracts = contractDao.getUnpaidContractsForRenter(renter.id)
-                                    val unpaidCount = unpaidContracts.size
-                                    val dayMs = 24L * 60 * 60 * 1000
-                                    val unpaidDays = unpaidContracts.sumOf { c ->
-                                        val ws = c.weekStart ?: return@sumOf 0L
-                                        val we = c.weekEnd ?: return@sumOf 0L
-                                        val diff = we - ws
-                                        if (diff <= 0) 1L else ((diff + dayMs - 1) / dayMs)
-                                    }.toInt().coerceAtLeast(1)
-
-                                    // Долг = unpaidDays × dailyPrice (а НЕ -balance)
-                                    val dailyPrice = settingsRepo.dailyPrice.let {
-                                        if (it > 0) it else com.example.data.SettingsRepository.DEFAULT_DAILY_PRICE
-                                    }
-                                    val debt = unpaidDays * dailyPrice
-
-                                    val message = settingsRepo.smsTemplate
-                                        .replace("{name}", renter.name.trim().lowercase())
-                                        .replace("{unpaidDays}", unpaidDays.toString())
-                                        .replace("{unpaidCount}", unpaidCount.toString())
-                                        .replace("{days}", unpaidDays.toString())  // legacy alias
-                                        .replace("{debt}", debt.toLong().toString())
-                                        .replace("{payme}", settingsRepo.paymeLink)
-                                        .replace("{call}", settingsRepo.callCenter)
-
-                                    val smsManager = com.example.worker.SimHelper.getSmsManagerForSim(localContext)
-                                    if (smsManager != null) {
-                                        try {
-                                            com.example.worker.SimHelper.sendSmsAuto(smsManager, phone, message, null, null)
-                                            if (unpaidCount > 0 && !renter.isOverdueSmsSent) {
-                                                viewModel.updateRenter(renter.copy(isOverdueSmsSent = true))
-                                            }
-                                            sentCount++
-                                        } catch (e: Exception) {
-                                            Log.w("SMS", "Failed for ${renter.name}: ${e.message}")
-                                            failCount++
-                                        }
-                                    } else {
-                                        failCount++
-                                    }
-                                }
-                                if (sentCount > 0) {
-                                    Toast.makeText(localContext, "$sentCount ta SMS yuborildi${if (failCount > 0) ", $failCount ta xato" else ""}", Toast.LENGTH_SHORT).show()
-                                } else {
-                                    Toast.makeText(localContext, "SMS yuborib bo'lmadi", Toast.LENGTH_SHORT).show()
-                                }
-                                selectedRenters = emptySet()
-                            }
-                        },
-                        variant = UnifiedButtonVariant.PRIMARY,
-                        modifier = Modifier.weight(1.0f)
-                    )
-                    // Кнопка "O'chir" удалена — её заменяет универсальная 🗑
-                    // в верхней панели (TopAppBar), которая теперь работает для
-                    // всех вкладок. To'lov / Uzish / SMS остаются — это уникальные
-                    // действия, которых нет в верхней панели.
-                }
-
                 // ===== ТАБЛИЦА АРЕНДАТОРОВ =====
+                // Полоса поиска (UnifiedSearchBar) и панель доп.кнопок (To'lov/
+                // Uzish/SMS) больше НЕ рендерятся отдельно в Column контента —
+                // они переданы в RenterTable как `header` и рендерятся как
+                // ПЕРВЫЙ item LazyColumn. Это нужно чтобы они скроллились
+                // вместе с таблицей и уходили под статичную TopAppBar при
+                // скролте вниз (по запросу пользователя: универсальные кнопки
+                // всегда видны сверху, а поиск/доп.кнопки — часть контента).
+                // FilterSidePanel остаётся в Column (это overlay, не часть
+                // скроллящегося контента).
                 val dateFmtLocal = remember { SimpleDateFormat("dd.MM.yyyy", Locale.getDefault()) }
 
                 // ── Latest contract per renter ─────────────────────────────────
@@ -1791,6 +1563,152 @@ fun MainScreen(
                     columnVisibility = renterColumnVisibility,
                     latestContractByRenter = latestContractByRenter,
                     contractsByRenter = contractsByRenter,
+                    header = {
+                        // ── Полоса поиска — скроллится вместе с таблицей ──
+                        UnifiedSearchBar(
+                            query = searchQuery,
+                            onQueryChange = { searchQuery = it },
+                            placeholder = "Mijoz yoki skuter qidirish",
+                            onCalendarClick = { showDateRangePicker = true },
+                            calendarActive = dateRangePickerState.selectedStartDateMillis != null,
+                            onFilterClick = { showRenterFilterPanel = true },
+                            filterActive = renterFilterValues.any { it.value.isNotBlank() }
+                        )
+
+                        // ── Панель действий (To'lov / Uzish / SMS) ──────────
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 16.dp, vertical = 8.dp),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            val hasSelection = selectedRenters.isNotEmpty()
+                            var showDayPickerDialog by remember { mutableStateOf(false) }
+                            if (showDayPickerDialog) {
+                                val repoForDialog = com.example.data.SettingsRepository(localContext)
+                                val dailyPriceForDialog = repoForDialog.dailyPrice.let { p ->
+                                    if (p > 0) p else com.example.data.SettingsRepository.DEFAULT_DAILY_PRICE
+                                }
+                                val renterNameForDialog = renters
+                                    .firstOrNull { it.id in selectedRenters }?.name ?: "Mijoz"
+                                val unpaidDaysForDialog by androidx.compose.runtime.produceState(
+                                    initialValue = 0,
+                                    selectedRenters
+                                ) {
+                                    value = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                                        val db = com.example.data.AppDatabase.getDatabase(localContext)
+                                        val dayMs = 24L * 60 * 60 * 1000
+                                        selectedRenters.sumOf { rid ->
+                                            val unpaid = db.contractHistoryDao().getUnpaidContractsForRenter(rid)
+                                            unpaid.sumOf { c ->
+                                                val ws = c.weekStart ?: return@sumOf 0L
+                                                val we = c.weekEnd ?: return@sumOf 0L
+                                                val diff = we - ws
+                                                if (diff <= 0) 1L else ((diff + dayMs - 1) / dayMs)
+                                            }
+                                        }.toInt().coerceAtLeast(0)
+                                    }
+                                }
+                                DayPickerPaymentDialog(
+                                    renterName = renterNameForDialog,
+                                    dailyPrice = dailyPriceForDialog,
+                                    unpaidDays = unpaidDaysForDialog,
+                                    onConfirm = { days ->
+                                        viewModel.payForDaysForRenters(selectedRenters, days)
+                                        Toast.makeText(
+                                            localContext,
+                                            "To'lov qabul qilindi ($days kun)",
+                                            Toast.LENGTH_SHORT
+                                        ).show()
+                                        selectedRenters = emptySet()
+                                        showDayPickerDialog = false
+                                    },
+                                    onDismiss = { showDayPickerDialog = false }
+                                )
+                            }
+                            SuccessButton(
+                                label = "To'lov",
+                                icon = Icons.Default.Payments,
+                                enabled = hasSelection,
+                                onClick = { showDayPickerDialog = true },
+                                modifier = Modifier.weight(1.4f)
+                            )
+                            PrimaryButton(
+                                label = "Uzish",
+                                icon = Icons.Default.PowerOff,
+                                enabled = hasSelection,
+                                onClick = {
+                                    viewModel.terminateRenters(selectedRenters)
+                                    Toast.makeText(localContext, "Kontrakt tugatildi", Toast.LENGTH_SHORT).show()
+                                    selectedRenters = emptySet()
+                                },
+                                modifier = Modifier.weight(1.2f)
+                            )
+                            UnifiedButton(
+                                label = "SMS",
+                                icon = Icons.Default.Sms,
+                                enabled = hasSelection,
+                                onClick = {
+                                    val rentersToSend = renters.filter { it.id in selectedRenters }
+                                    coroutineScope.launch {
+                                        var sentCount = 0
+                                        var failCount = 0
+                                        val db = com.example.data.AppDatabase.getDatabase(localContext)
+                                        val contractDao = db.contractHistoryDao()
+                                        for (renter in rentersToSend) {
+                                            val settingsRepo = com.example.data.SettingsRepository(localContext)
+                                            val phone = com.example.worker.SimHelper.normalizePhoneNumber(renter.phoneNumber)
+                                            val unpaidContracts = contractDao.getUnpaidContractsForRenter(renter.id)
+                                            val unpaidCount = unpaidContracts.size
+                                            val dayMs = 24L * 60 * 60 * 1000
+                                            val unpaidDays = unpaidContracts.sumOf { c ->
+                                                val ws = c.weekStart ?: return@sumOf 0L
+                                                val we = c.weekEnd ?: return@sumOf 0L
+                                                val diff = we - ws
+                                                if (diff <= 0) 1L else ((diff + dayMs - 1) / dayMs)
+                                            }.toInt().coerceAtLeast(1)
+                                            val dailyPrice = settingsRepo.dailyPrice.let {
+                                                if (it > 0) it else com.example.data.SettingsRepository.DEFAULT_DAILY_PRICE
+                                            }
+                                            val debt = unpaidDays * dailyPrice
+                                            val message = settingsRepo.smsTemplate
+                                                .replace("{name}", renter.name.trim().lowercase())
+                                                .replace("{unpaidDays}", unpaidDays.toString())
+                                                .replace("{unpaidCount}", unpaidCount.toString())
+                                                .replace("{days}", unpaidDays.toString())
+                                                .replace("{debt}", debt.toLong().toString())
+                                                .replace("{payme}", settingsRepo.paymeLink)
+                                                .replace("{call}", settingsRepo.callCenter)
+                                            val smsManager = com.example.worker.SimHelper.getSmsManagerForSim(localContext)
+                                            if (smsManager != null) {
+                                                try {
+                                                    com.example.worker.SimHelper.sendSmsAuto(smsManager, phone, message, null, null)
+                                                    if (unpaidCount > 0 && !renter.isOverdueSmsSent) {
+                                                        viewModel.updateRenter(renter.copy(isOverdueSmsSent = true))
+                                                    }
+                                                    sentCount++
+                                                } catch (e: Exception) {
+                                                    Log.w("SMS", "Failed for ${renter.name}: ${e.message}")
+                                                    failCount++
+                                                }
+                                            } else {
+                                                failCount++
+                                            }
+                                        }
+                                        if (sentCount > 0) {
+                                            Toast.makeText(localContext, "$sentCount ta SMS yuborildi${if (failCount > 0) ", $failCount ta xato" else ""}", Toast.LENGTH_SHORT).show()
+                                        } else {
+                                            Toast.makeText(localContext, "SMS yuborib bo'lmadi", Toast.LENGTH_SHORT).show()
+                                        }
+                                        selectedRenters = emptySet()
+                                    }
+                                },
+                                variant = UnifiedButtonVariant.PRIMARY,
+                                modifier = Modifier.weight(1.0f)
+                            )
+                        }
+                    },
                     onSortClick = { colId ->
                         renterSortState = renterSortState.click(colId)
                     },
@@ -1802,6 +1720,23 @@ fun MainScreen(
                     onClick = { renter ->
                         // Клик по строке → экран истории контрактов
                         navState = NavigationState.RenterHistory(renter)
+                    }
+                )
+
+                // Filter side panel — overlay, не часть скроллящегося контента.
+                FilterSidePanel(
+                    columns = renterFilterColumns,
+                    filterValues = renterFilterValues,
+                    onFilterChange = { colId, value ->
+                        renterFilterValues = renterFilterValues.toMutableMap().apply { put(colId, value) }
+                    },
+                    onSearch = { /* filters already applied reactively */ },
+                    onReset = { renterFilterValues = emptyMap() },
+                    onDismiss = { showRenterFilterPanel = false },
+                    visible = showRenterFilterPanel,
+                    columnVisibility = renterColumnVisibility,
+                    onColumnVisibilityChange = { colId, isVisible ->
+                        renterColumnVisibility = renterColumnVisibility.toMutableMap().apply { put(colId, isVisible) }
                     }
                 )
             } else if (currentTab == 1) {
@@ -2261,6 +2196,14 @@ fun RenterTable(
      * в первом столбце). Сортировка — ASC по weekStart.
      */
     contractsByRenter: Map<Int, List<com.example.data.ContractHistoryEntry>> = emptyMap(),
+    /**
+     * Опциональный header-блок, который рендерится как ПЕРВЫЙ элемент
+     * LazyColumn (перед строками арендаторов). Используется чтобы полоса
+     * поиска и панель доп.кнопок (To'lov/Uzish/SMS) скроллились вместе с
+     * таблицей и уходили под статичную TopAppBar при скролле вниз.
+     * Если не передан — ничего не рендерится (обратная совместимость).
+     */
+    header: @Composable () -> Unit = {},
     onSortClick: (String) -> Unit,
     onSelect: (Int, Boolean) -> Unit,
     onClick: (Renter) -> Unit
@@ -2354,6 +2297,12 @@ fun RenterTable(
         }
 
         LazyColumn(modifier = Modifier.fillMaxSize()) {
+            // ── Header (поиск + доп.кнопки) — скроллится вместе с таблицей ──
+            // Рендерится как первый item LazyColumn. При скролле вниз уходит
+            // под статичную TopAppBar (Scaffold.topBar), которая перекрывает его.
+            item {
+                header()
+            }
             itemsIndexed(renters, key = { _, it -> it.id }) { idx, renter ->
                 val isSelected = selected.contains(renter.id)
                 val isExpanded = expandedRenterIds.contains(renter.id)
