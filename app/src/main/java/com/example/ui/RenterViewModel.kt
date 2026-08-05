@@ -646,8 +646,17 @@ class RenterViewModel(application: Application) : AndroidViewModel(application) 
         viewModelScope.launch(Dispatchers.IO) {
             // ── Новый режим: реконсиалирование контрактов из формы ────────
             // Применяется, когда пользователь редактирует арендатора через
-            // RenterFormDialog с календарём контрактов и список групп не пуст.
-            // Старая логика по date-shift/duration-shift пропускается.
+            // RenterFormDialog с календарём контрактов.
+            //
+            // ВАЖНО: reconcile вызывается в двух случаях:
+            //   1. contractGroupsWithIds не пуст — обычное редактирование
+            //      (пользователь добавил/изменил/удалил часть контрактов).
+            //   2. contractGroupsWithIds пуст, НО у арендатора в БД есть
+            //      контракты — это означает, что пользователь удалил ВСЕ
+            //      контракты через кнопку «х» в списке под календарём.
+            //      Без этой ветки сработала бы старая логика по date-shift,
+            //      которая НЕ удаляет контракты каскадно, и они остались
+            //      бы в БД как «осиротевшие».
             if (contractGroupsWithIds.isNotEmpty()) {
                 reconcileContractsFromGroups(
                     existing = existing,
@@ -661,6 +670,31 @@ class RenterViewModel(application: Application) : AndroidViewModel(application) 
                     address = address,
                     pinfl = pinfl,
                     groups = contractGroupsWithIds
+                )
+                return@launch
+            }
+
+            // ── Проверка: есть ли у арендатора контракты в БД? ────────────
+            // Если да, а contractGroupsWithIds пуст → пользователь удалил все
+            // контракты. Вызываем reconcile с пустым списком, чтобы каскадно
+            // удалить все контракты (с реверсом баланса, Transaction, CardTx).
+            val existingContractsForReconcile = historyRepository.contractsForRenterOnce(existing.id)
+            if (existingContractsForReconcile.isNotEmpty()) {
+                Log.d(TAG, "updateRenterWithContracts: contractGroupsWithIds is empty but " +
+                        "renter #${existing.id} has ${existingContractsForReconcile.size} " +
+                        "contract(s) in DB — calling reconcile with empty groups to cascade-delete")
+                reconcileContractsFromGroups(
+                    existing = existing,
+                    newName = newName,
+                    newPhone = newPhone,
+                    newScooterId = newScooterId,
+                    newScooterName = newScooterName,
+                    newIsActive = newIsActive,
+                    weeklyPrice = weeklyPrice,
+                    passportData = passportData,
+                    address = address,
+                    pinfl = pinfl,
+                    groups = emptyList()
                 )
                 return@launch
             }

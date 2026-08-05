@@ -2891,19 +2891,33 @@ fun RenterFormDialog(
                                     style = MaterialTheme.typography.bodySmall,
                                     modifier = Modifier.weight(1f)
                                 )
-                                // Кнопка удаления
-                                IconButton(
-                                    onClick = {
-                                        contractGroups = contractGroups.filterNot { it.id == group.id }
-                                        if (activeGroupId == group.id) activeGroupId = null
-                                    },
-                                    modifier = Modifier.size(28.dp)
+                                // ── Кнопка удаления контракта ──────────────────────
+                                // Используем Box + clickable вместо IconButton, чтобы:
+                                //   1. Увеличить тап-таргет (36dp вместо 28dp) — по
+                                //      гайдлайнам Material минимальный тап-таргет 48dp,
+                                //      но в плотном списке 36dp приемлемо.
+                                //   2. Избежать возможных проблем с перехватом кликов
+                                //      соседними Surface/Row. Box с явным clickable
+                                //      и ripple — более надёжный вариант.
+                                //   3. Явный фон (ClaudeAccentBg) и форма (CircleShape)
+                                //      делают кнопку визуально заметнее.
+                                Box(
+                                    modifier = Modifier
+                                        .size(36.dp)
+                                        .clip(CircleShape)
+                                        .background(ClaudeAccentBg)
+                                        .border(1.dp, ClaudeDivider, CircleShape)
+                                        .clickable {
+                                            contractGroups = contractGroups.filterNot { it.id == group.id }
+                                            if (activeGroupId == group.id) activeGroupId = null
+                                        },
+                                    contentAlignment = Alignment.Center
                                 ) {
                                     Icon(
                                         imageVector = Icons.Default.Close,
                                         contentDescription = "Kontraktni o'chirish",
                                         tint = StatusOverdue,
-                                        modifier = Modifier.size(18.dp)
+                                        modifier = Modifier.size(20.dp)
                                     )
                                 }
                             }
