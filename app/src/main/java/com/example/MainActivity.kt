@@ -1976,12 +1976,37 @@ fun MainScreen(
             val weekly by settingsViewModel.weeklyPrice.collectAsStateWithLifecycle()
             val monthly by settingsViewModel.monthlyPrice.collectAsStateWithLifecycle()
 
+            // ── Загружаем существующие контракты арендатора для календаря ──
+            // В режиме редактирования календарь в RenterFormDialog должен
+            // показывать все текущие контракты (как цветные периоды) и список
+            // под календарём. Для этого родитель собирает StateFlow через
+            // contractHistoryViewModel.contractsForRenter(renterId).
+            //
+            // Раньше этого не было — календарь показывал «Kontraktlar yo'q»
+            // даже если у арендатора были контракты в БД. Это был баг.
+            //
+            // ВАЖНО: collectAsStateWithLifecycle должен вызываться безусловно
+            // (правила Compose — хуки нельзя вызывать в ветках if). Поэтому
+            // используем renterToEdit?.id ?: -1 — для id=-1 репозиторий вернёт
+            // пустой список (нет арендатора с таким id), что и нужно в режиме
+            // создания.
+            val editRenterId = renterToEdit?.id ?: -1
+            val existingContractsForForm by contractHistoryViewModel
+                .contractsForRenter(editRenterId)
+                .collectAsStateWithLifecycle()
+            // В режиме создания (renterToEdit == null) принудительно пустой список,
+            // чтобы не показать «фантомные» контракты для id=-1 (на случай если
+            // репозиторий что-то вернёт).
+            val existingContractsForFormSafe: List<com.example.data.ContractHistoryEntry> =
+                if (renterToEdit != null) existingContractsForForm else emptyList()
+
             RenterFormDialog(
                 initialRenter = renterToEdit,
                 weeklyPrice = weekly,
                 monthlyPrice = monthly,
                 scooters = scooters,
                 activeRenters = renters,
+                existingContracts = existingContractsForFormSafe,
                 onDismiss = {
                     showAddDialog = false
                     renterToEdit = null
@@ -1989,7 +2014,10 @@ fun MainScreen(
                 onSave = { result ->
                     if (isEdit) {
                         renterToEdit?.let {
-                            // Используем новую функцию с авто-корректировкой контрактов
+                            // Используем новую функцию с авто-корректировкой контрактов.
+                            // Передаём также contractGroupsWithIds — это позволяет
+                            // функции реконсиалировать контракты: удалить отсутствующие,
+                            // добавить новые, обновить статус оплаты.
                             viewModel.updateRenterWithContracts(
                                 existing = it,
                                 newName = result.name,
@@ -2003,7 +2031,8 @@ fun MainScreen(
                                 weeklyPrice = weekly,
                                 passportData = result.passportData,
                                 address = result.address,
-                                pinfl = result.pinfl
+                                pinfl = result.pinfl,
+                                contractGroupsWithIds = result.contractGroupsWithIds
                             )
                         }
                     } else {
@@ -2510,6 +2539,19 @@ fun RenterFormDialog(
     monthlyPrice: Double,
     scooters: List<Scooter> = emptyList(),
     activeRenters: List<Renter> = emptyList(),
+    /**
+     * Существующие контракты арендатора (ContractHistoryEntry с type=CREATED/AUTO_RENEW).
+     * Передаются родителем из contractHistoryViewModel.contractsForRenter(renterId).
+     *
+     * Используются для инициализации календаря в режиме редактирования: каждый
+     * контракт отображается как цветная группа в календаре (зелёная = оплачен,
+     * красная = долг) и как элемент в списке под календарём. Пользователь может
+     * удалять существующие контракты и добавлять новые — все изменения
+     * применяются при сохранении формы.
+     *
+     * В режиме создания (initialRenter == null) список должен быть пустым.
+     */
+    existingContracts: List<com.example.data.ContractHistoryEntry> = emptyList(),
     onDismiss: () -> Unit,
     onSave: (RenterFormResult) -> Unit,
     // ── Inline-создание скутера ────────────────────────────────────────────
@@ -2552,7 +2594,30 @@ fun RenterFormDialog(
     // ── Группы контрактов (новый календарь) ───────────────────────────
     // Список групп, выбранных пользователем в календаре. Если список не пуст,
     // он имеет приоритет над автоматической логикой по выбранной дате.
-    var contractGroups by remember { mutableStateOf<List<ContractGroup>>(emptyList()) }
+    //
+    // В режиме редактирования инициализируется из existingContracts (загружаются
+    // родителем из БД через contractHistoryViewModel.contractsForRenter). Каждый
+    // существующий контракт становится группой с existingContractId — это
+    // позволяет при сохранении отличить «удалить существующий» от «добавить новый».
+    //
+    // В режиме создания список пуст — пользователь собирает группы с нуля.
+    var contractGroups by remember(initialRenter?.id, existingContracts) {
+        val initial: List<ContractGroup> = if (initialRenter != null) {
+            existingContracts
+                .filter { it.weekStart != null && it.weekEnd != null }
+                .sortedBy { it.weekStart ?: 0L }
+                .mapIndexed { index, entry ->
+                    ContractGroup(
+                        id = index + 1,
+                        startMs = entry.weekStart!!,
+                        endMs = entry.weekEnd!!,
+                        isPaid = entry.isPaid,
+                        existingContractId = entry.id
+                    )
+                }
+        } else emptyList()
+        mutableStateOf(initial)
+    }
     var activeGroupId by remember { mutableStateOf<Int?>(null) }
 
     // ── PDF-реквизиты арендатора ────────────────────────────────────────
@@ -2711,6 +2776,107 @@ fun RenterFormDialog(
                     onGroupsChange = { contractGroups = it },
                     onActiveGroupChange = { activeGroupId = it }
                 )
+
+                // ── Список контрактов под календарём ──────────────────────────
+                // Показывает все группы (как существующие из БД, так и новые,
+                // только что созданные пользователем в календаре). Каждая строка:
+                //   [статус-пилюля] [дата начала → дата окончания] [✕ удалить]
+                //
+                // Существующие контракты помечаются «№<id>», новые — «Yangi».
+                // Это нужно, чтобы пользователь видел, какие контракты уже есть
+                // в БД (и будут сохранены как есть или удалены), а какие только
+                // что добавлены (и будут созданы при сохранении формы).
+                //
+                // Раньше календарь в режиме редактирования показывал «Kontraktlar
+                // yo'q» даже если у арендатора были контракты в БД — это был баг:
+                // contractGroups инициализировался пустым списком и никогда не
+                // загружался из existingContracts. Теперь список загружается
+                // родителем через contractHistoryViewModel.contractsForRenter.
+                if (contractGroups.isNotEmpty()) {
+                    val dateFmtList = remember { SimpleDateFormat("dd.MM.yyyy", Locale.getDefault()) }
+                    Text(
+                        text = "Kontraktlar ro'yxati (${contractGroups.size})",
+                        style = MaterialTheme.typography.titleSmall,
+                        color = ClaudeAccent,
+                        fontWeight = FontWeight.SemiBold,
+                        modifier = Modifier.padding(top = 4.dp)
+                    )
+                    contractGroups.forEachIndexed { idx, group ->
+                        val startDate = dateFmtList.format(java.util.Date(group.startMs))
+                        val endDate = dateFmtList.format(java.util.Date(group.endMs))
+                        val statusLabel = if (group.isPaid) "To'langan" else "To'lanmagan"
+                        val statusColor = if (group.isPaid) StatusOk else StatusOverdue
+                        val statusBg = if (group.isPaid) StatusOkBg else StatusOverdueBg
+                        val idLabel = group.existingContractId?.let { "№$it" } ?: "Yangi"
+
+                        Surface(
+                            shape = RoundedCornerShape(8.dp),
+                            color = ClaudeCard,
+                            border = androidx.compose.foundation.BorderStroke(
+                                1.dp,
+                                if (group.isPaid) StatusOk.copy(alpha = 0.4f)
+                                else StatusOverdue.copy(alpha = 0.4f)
+                            ),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(horizontal = 10.dp, vertical = 8.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                // Статус-пилюля
+                                Surface(
+                                    shape = RoundedCornerShape(6.dp),
+                                    color = statusBg
+                                ) {
+                                    Text(
+                                        text = statusLabel,
+                                        color = statusColor,
+                                        style = MaterialTheme.typography.labelSmall,
+                                        fontWeight = FontWeight.SemiBold,
+                                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp)
+                                    )
+                                }
+                                // ID-пилюля (существующий контракт №id или «Yangi»)
+                                Surface(
+                                    shape = RoundedCornerShape(6.dp),
+                                    color = ClaudeDivider.copy(alpha = 0.4f)
+                                ) {
+                                    Text(
+                                        text = idLabel,
+                                        color = ClaudeTextSecondary,
+                                        style = MaterialTheme.typography.labelSmall,
+                                        modifier = Modifier.padding(horizontal = 6.dp, vertical = 3.dp)
+                                    )
+                                }
+                                // Даты
+                                Text(
+                                    text = "$startDate → $endDate",
+                                    color = ClaudeText,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    modifier = Modifier.weight(1f)
+                                )
+                                // Кнопка удаления
+                                IconButton(
+                                    onClick = {
+                                        contractGroups = contractGroups.filterNot { it.id == group.id }
+                                        if (activeGroupId == group.id) activeGroupId = null
+                                    },
+                                    modifier = Modifier.size(28.dp)
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.Close,
+                                        contentDescription = "Kontraktni o'chirish",
+                                        tint = StatusOverdue,
+                                        modifier = Modifier.size(18.dp)
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
 
                 if (isEdit) {
                     Text(
@@ -2984,7 +3150,19 @@ fun RenterFormDialog(
                             passportData = passportData.trim(),
                             address = address.trim(),
                             pinfl = pinfl.trim(),
-                            contractGroups = contractGroups.map { Triple(it.startMs, it.endMs, it.isPaid) }
+                            contractGroups = contractGroups.map { Triple(it.startMs, it.endMs, it.isPaid) },
+                            // Передаём полный список групп с existingContractId —
+                            // updateRenterWithContracts использует его для
+                            // корректного реконсиалирования (удаление существующих,
+                            // добавление новых, обновление статуса оплаты).
+                            contractGroupsWithIds = contractGroups.map {
+                                RenterFormContractGroup(
+                                    existingId = it.existingContractId,
+                                    startMs = it.startMs,
+                                    endMs = it.endMs,
+                                    isPaid = it.isPaid
+                                )
+                            }
                         )
                     )
                 }
@@ -3025,7 +3203,39 @@ data class RenterFormResult(
     // Группы контрактов, выбранные в календаре (если пусто — используется
     // автоматическая логика по выбранной дате). Каждая группа =
     // Triple<startMs, endMs, isPaid>.
-    val contractGroups: List<Triple<Long, Long, Boolean>> = emptyList()
+    //
+    // ВАЖНО: для существующих контрактов (загруженных из БД при редактировании)
+    // existingContractId содержит ID контракта в БД — это позволяет
+    // updateRenterWithContracts отличить «удалить существующий» от «добавить новый».
+    // Для новых контрактов (созданных пользователем в календаре) existingContractId = null.
+    val contractGroups: List<Triple<Long, Long, Boolean>> = emptyList(),
+    /**
+     * Полная информация о группах контрактов с existingContractId.
+     * Используется в режиме редактирования (updateRenterWithContracts) для
+     * корректного применения изменений: удаления существующих, добавления новых,
+     * обновления статуса оплаты. Каждый элемент: existingId / startMs / endMs / isPaid.
+     *
+     * В режиме создания (addRenter) этот список игнорируется — там используются
+     * только contractGroups (старый формат Triple).
+     */
+    val contractGroupsWithIds: List<RenterFormContractGroup> = emptyList()
+)
+
+/**
+ * Одна группа контрактов из формы арендатора с привязкой к существующему контракту.
+ *
+ * @param existingId ID контракта в БД (ContractHistoryEntry.id), если группа
+ *                   загружена из существующего контракта. null — для новых групп,
+ *                   созданных пользователем в календаре (их нужно вставить в БД).
+ * @param startMs    Начало периода (миллисекунды).
+ * @param endMs      Конец периода (миллисекунды).
+ * @param isPaid     true = оплачен (зелёный), false = долг (красный).
+ */
+data class RenterFormContractGroup(
+    val existingId: Int?,
+    val startMs: Long,
+    val endMs: Long,
+    val isPaid: Boolean
 )
 
 @OptIn(ExperimentalMaterial3Api::class)

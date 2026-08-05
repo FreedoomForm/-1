@@ -89,7 +89,18 @@ data class ContractGroup(
     val startMs: Long,
     val endMs: Long,
     /** true = оплаченная группа (зелёная), false = долг (красная). */
-    val isPaid: Boolean = true
+    val isPaid: Boolean = true,
+    /**
+     * ID существующего контракта в БД (ContractHistoryEntry.id).
+     * - null = новая группа, созданная пользователем в календаре (ещё не сохранена).
+     * - non-null = группа загружена из существующего контракта арендатора.
+     *
+     * Используется в RenterFormDialog при редактировании арендатора:
+     * календарь показывает все существующие контракты, и пользователь может
+     * их удалять/редактировать. При сохранении формы existingContractId позволяет
+     * корректно различить «удалить существующий» от «добавить новый».
+     */
+    val existingContractId: Int? = null
 ) {
     /** Цветовая метка группы (циклический выбор по id). */
     val colorIndex: Int get() = ((id - 1).coerceAtLeast(0)) % 6

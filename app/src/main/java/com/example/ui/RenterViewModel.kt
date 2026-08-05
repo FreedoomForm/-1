@@ -21,6 +21,7 @@ import com.example.data.Renter
 import com.example.data.RenterRepository
 import com.example.data.SettingsRepository
 import com.example.data.Scooter
+import com.example.data.Transaction
 import com.example.worker.NotificationHelper
 import com.example.worker.PaymentCheckWorker
 import com.example.worker.SimHelper
@@ -591,9 +592,50 @@ class RenterViewModel(application: Application) : AndroidViewModel(application) 
         // PDF-реквизиты арендатора
         passportData: String = existing.passportData,
         address: String = existing.address,
-        pinfl: String = existing.pinfl
+        pinfl: String = existing.pinfl,
+        /**
+         * Полный список групп контрактов из формы (с existingContractId).
+         *
+         * Если список не пуст — функция переключается в НОВЫЙ режим
+         * реконсиалирования: старая логика по датам/длительности пропускается,
+         * и вместо неё выполняется:
+         *   1. Загрузка всех текущих контрактов арендатора из БД.
+         *   2. Удаление контрактов, которых нет в новом списке (каскадно —
+         *      с реверсом баланса, удалением Transaction и CardTransaction).
+         *   3. Добавление новых контрактов (existingId == null) как AUTO_RENEW
+         *      с балансом и Transaction.
+         *   4. Для контрактов с изменившимся isPaid или датами — удалить старый
+         *      и создать новый с обновлёнными полями.
+         *   5. Обновление renter.rentStartDateTimestamp и rentDurationDays
+         *      на основе самого раннего startMs и общего диапазона из groups.
+         *
+         * Если список пуст — выполняется старая логика по date-shift/duration-shift
+         * (для обратной совместимости со старыми вызовами без групп).
+         */
+        contractGroupsWithIds: List<com.example.RenterFormContractGroup> = emptyList()
     ) {
         viewModelScope.launch(Dispatchers.IO) {
+            // ── Новый режим: реконсиалирование контрактов из формы ────────
+            // Применяется, когда пользователь редактирует арендатора через
+            // RenterFormDialog с календарём контрактов и список групп не пуст.
+            // Старая логика по date-shift/duration-shift пропускается.
+            if (contractGroupsWithIds.isNotEmpty()) {
+                reconcileContractsFromGroups(
+                    existing = existing,
+                    newName = newName,
+                    newPhone = newPhone,
+                    newScooterId = newScooterId,
+                    newScooterName = newScooterName,
+                    newIsActive = newIsActive,
+                    weeklyPrice = weeklyPrice,
+                    passportData = passportData,
+                    address = address,
+                    pinfl = pinfl,
+                    groups = contractGroupsWithIds
+                )
+                return@launch
+            }
+
             val effectivePrice = if (weeklyPrice > 0) weeklyPrice else SettingsRepository.DEFAULT_WEEKLY_PRICE
             val settingsRepo = SettingsRepository(getApplication())
             val realWeeklyPrice = if (settingsRepo.weeklyPrice > 0) settingsRepo.weeklyPrice else effectivePrice
@@ -735,6 +777,257 @@ class RenterViewModel(application: Application) : AndroidViewModel(application) 
     /** Подгружает скутер из БД по его id (для денормализации в ContractHistoryEntry). */
     private suspend fun fetchScooterById(id: Int): Scooter? {
         return AppDatabase.getDatabase(getApplication()).scooterDao().getScooterById(id)
+    }
+
+    /**
+     * Реконсиалирование контрактов арендатора на основе групп из формы.
+     *
+     * Вызывается из [updateRenterWithContracts] когда пользователь редактирует
+     * арендатора через RenterFormDialog с календарём контрактов. Алгоритм:
+     *
+     * 1. Загружаем все текущие контракты (CREATED + AUTO_RENEW) из БД.
+     * 2. Сравниваем с новым списком групп:
+     *    - Контракты, которых НЕТ в новом списке → каскадно удаляем (с реверсом
+     *      баланса, Transaction, CardTransaction).
+     *    - Контракты с изменившимся isPaid или датами → удаляем старый и
+     *      создаём новый с обновлёнными полями (баланс и Transaction создаются
+     *      заново для нового контракта).
+     *    - Контракты без изменений → пропускаем.
+     *    - Новые группы (existingId == null) → вставляем как AUTO_RENEW.
+     * 3. Обновляем renter.rentStartDateTimestamp и rentDurationDays на основе
+     *    самого раннего startMs и общего диапазона из groups.
+     * 4. Обновляем остальные поля арендатора (имя, телефон, скутер и т.д.).
+     *
+     * Все операции выполняются последовательно в одной coroutine на Dispatchers.IO.
+     * Если что-то упадёт посередине, останутся «осиротевшие» записи, но UI
+     * фильтрует их по contractId/renterId, поэтому критичных ошибок не будет.
+     */
+    private suspend fun reconcileContractsFromGroups(
+        existing: Renter,
+        newName: String,
+        newPhone: String,
+        newScooterId: Int?,
+        newScooterName: String?,
+        newIsActive: Boolean,
+        weeklyPrice: Double,
+        passportData: String,
+        address: String,
+        pinfl: String,
+        groups: List<com.example.RenterFormContractGroup>
+    ) {
+        val effectivePrice = if (weeklyPrice > 0) weeklyPrice else SettingsRepository.DEFAULT_WEEKLY_PRICE
+        val settingsRepo = SettingsRepository(getApplication())
+        val realWeeklyPrice = if (settingsRepo.weeklyPrice > 0) settingsRepo.weeklyPrice else effectivePrice
+        val now = System.currentTimeMillis()
+
+        // ── 1. Загружаем все текущие контракты арендатора ──────────────
+        val currentContracts = historyRepository.contractsForRenterOnce(existing.id)
+
+        // ── 2. Разделяем на удаление / обновление / добавление ─────────
+        val keepIds = groups.mapNotNull { it.existingId }.toSet()
+        val toDelete = currentContracts.filter { it.id !in keepIds }
+
+        // Для обновления: existingId есть в groups, но isPaid или даты изменились.
+        // Логика: удалить старый + создать новый (баланс и Transaction пересоздаются).
+        data class UpdatePair(
+            val oldContract: ContractHistoryEntry,
+            val newGroup: com.example.RenterFormContractGroup
+        )
+        val toUpdate = mutableListOf<UpdatePair>()
+        for (g in groups) {
+            val exId = g.existingId ?: continue
+            val existingContract = currentContracts.find { it.id == exId } ?: continue
+            val statusChanged = existingContract.isPaid != g.isPaid
+            val datesChanged = existingContract.weekStart != g.startMs || existingContract.weekEnd != g.endMs
+            if (statusChanged || datesChanged) {
+                toUpdate.add(UpdatePair(existingContract, g))
+            }
+        }
+
+        // Добавляем: existingId == null (новые группы, созданные в календаре)
+        val toAdd = groups.filter { it.existingId == null }
+
+        // ── 3. Удаляем контракты с каскадом ────────────────────────────
+        // Сначала удаляем, потом добавляем — чтобы не было временного дублирования
+        // периодов. Каскад: реверс баланса арендатора, удаление Transaction,
+        // реверс CardTransaction на главной карте.
+        for (contract in toDelete) {
+            deleteContractWithCascadeInternal(contract)
+            Log.d(TAG, "reconcile: deleted contract #${contract.id} (renter=${existing.id})")
+        }
+        for (pair in toUpdate) {
+            deleteContractWithCascadeInternal(pair.oldContract)
+            Log.d(TAG, "reconcile: deleted (for update) contract #${pair.oldContract.id}")
+        }
+
+        // ── 4. Перечитываем арендатора — баланс мог измениться после удалений ─
+        var renter = repository.getById(existing.id) ?: existing
+
+        // ── 5. Добавляем новые контракты (включая обновлённые) ──────────
+        // Все они создаются как TYPE_AUTO_RENEW с актуальными isPaid и датами.
+        // Если isPaid=true → создаём Transaction и зачисляем на главную карту.
+        val scooter: Scooter? = newScooterId?.let { fetchScooterById(it) }
+        val allToAdd: List<com.example.RenterFormContractGroup> = toAdd + toUpdate.map { it.newGroup }
+
+        for (g in allToAdd) {
+            val entry = ContractHistoryEntry(
+                renterId = existing.id,
+                timestamp = now,
+                type = ContractHistoryEntry.TYPE_AUTO_RENEW,
+                amount = realWeeklyPrice,
+                notes = "Kalendar orqali tahrirlandi${if (g.isPaid) " (to'langan)" else " (to'lanmagan)"}",
+                renterName = newName,
+                renterPhone = newPhone,
+                scooterName = newScooterName ?: scooter?.name ?: "",
+                weekStart = g.startMs,
+                weekEnd = g.endMs,
+                weeklyPrice = realWeeklyPrice,
+                passportData = passportData,
+                address = address,
+                pinfl = pinfl,
+                vinNumber = scooter?.vinNumber ?: "",
+                engineNumber = scooter?.engineNumber ?: "",
+                scooterSerialNumber = scooter?.scooterSerialNumber ?: "",
+                batteryId1 = scooter?.batteryId1 ?: "",
+                batteryId2 = scooter?.batteryId2 ?: "",
+                additionalInfo = scooter?.additionalInfo ?: "",
+                isPaid = g.isPaid
+            )
+            val newContractId = historyRepository.insert(entry).toInt()
+
+            // Если оплачен — создаём Transaction и зачисляем на карту
+            if (g.isPaid && newContractId > 0) {
+                try {
+                    transactionRepository.insert(
+                        Transaction(
+                            contractId = newContractId,
+                            renterId = existing.id,
+                            scooterId = newScooterId,
+                            timestamp = now,
+                            type = Transaction.TYPE_PAYMENT,
+                            amount = realWeeklyPrice,
+                            notes = "Tahrir orqali to'lov",
+                            renterName = newName,
+                            renterPhone = newPhone,
+                            scooterName = newScooterName ?: "",
+                            contractLabel = "#$newContractId"
+                        )
+                    )
+                } catch (e: Exception) {
+                    Log.w(TAG, "reconcile: Transaction insert failed: ${e.message}")
+                }
+                try {
+                    virtualCardRepository.depositContractIncome(
+                        amount = realWeeklyPrice,
+                        note = "To'lov: $newName (tahrir) — #$newContractId",
+                        contractId = newContractId
+                    )
+                } catch (e: Exception) {
+                    Log.w(TAG, "reconcile: depositContractIncome failed: ${e.message}")
+                }
+            }
+
+            // Обновляем баланс арендатора
+            val balanceDelta = if (g.isPaid) realWeeklyPrice else -realWeeklyPrice
+            val newBalance = renter.balance + balanceDelta
+            renter = renter.copy(
+                balance = newBalance,
+                debtAmount = maxOf(0.0, -newBalance),
+                lastPaymentTimestamp = if (g.isPaid) now else renter.lastPaymentTimestamp
+            )
+            Log.d(TAG, "reconcile: added/updated contract #$newContractId (isPaid=${g.isPaid})")
+        }
+
+        // ── 6. Сохраняем актуальный баланс арендатора в БД ─────────────
+        // (он мог измениться в шаге 3 через каскад и в шаге 5 через вставку)
+        repository.update(renter)
+
+        // ── 7. Обновляем остальные поля арендатора + start/duration ────
+        // Вычисляем новые startDate и duration на основе групп.
+        val sortedGroups = groups.sortedBy { it.startMs }
+        val newStart = sortedGroups.firstOrNull()?.startMs ?: existing.rentStartDateTimestamp
+        val newEnd = sortedGroups.lastOrNull()?.endMs ?: (newStart + 7L * 24 * 60 * 60 * 1000)
+        val newDurationDays = ((newEnd - newStart) / (24L * 60 * 60 * 1000))
+            .toInt().coerceAtLeast(1)
+
+        // Перечитываем ещё раз — вдруг баланс изменился между шагами 5 и 6
+        val finalRenter = repository.getById(existing.id) ?: renter
+        val updated = finalRenter.copy(
+            name = newName,
+            phoneNumber = newPhone,
+            rentDurationDays = newDurationDays,
+            rentStartDateTimestamp = newStart,
+            scooterId = newScooterId,
+            scooterName = newScooterName,
+            isReturned = !newIsActive,
+            passportData = passportData,
+            address = address,
+            pinfl = pinfl
+        )
+        repository.update(updated)
+
+        // ── 8. Обновляем виджеты ───────────────────────────────────────
+        try {
+            com.example.widget.WidgetUpdater.updateAll(getApplication())
+        } catch (_: Exception) {}
+
+        Log.d(TAG, "reconcile: completed for renter #${existing.id}, " +
+                "deleted=${toDelete.size}, updated=${toUpdate.size}, added=${toAdd.size}")
+    }
+
+    /**
+     * Каскадное удаление одного контракта — упрощённая версия для reconcile.
+     *
+     * Делает то же самое, что и ContractHistoryViewModel.deleteContractWithCascade,
+     * но в приватном виде внутри RenterViewModel (чтобы не плодить меж-VM вызовы).
+     *
+     * Шаги:
+     * 1. Удаляет все Transaction с contractId = contract.id.
+     * 2. Реверсит баланс главной карты для каждой CardTransaction с этим contractId
+     *    и удаляет сами CardTransaction.
+     * 3. Корректирует баланс арендатора: если контракт был isPaid → balance -= amount,
+     *    если долг → balance += amount.
+     * 4. Удаляет сам контракт.
+     *
+     * @param contract Контракт для удаления (должен быть загружен из БД).
+     */
+    private suspend fun deleteContractWithCascadeInternal(contract: ContractHistoryEntry) {
+        // ── 1. Удаляем Transaction-записи ──────────────────────────────
+        val relatedTx = transactionRepository.forContractOnce(contract.id)
+        if (relatedTx.isNotEmpty()) {
+            transactionRepository.deleteForContract(contract.id)
+        }
+
+        // ── 2. Реверсим и удаляем CardTransaction-записи ───────────────
+        val relatedCardTx = virtualCardRepository.getCardTxForContract(contract.id)
+        for (cardTx in relatedCardTx) {
+            try {
+                virtualCardRepository.adjustCardBalance(
+                    cardId = cardTx.toCardId,
+                    delta = -cardTx.amount
+                )
+            } catch (e: Exception) {
+                Log.w(TAG, "deleteContractWithCascadeInternal: cardTx reverse failed: ${e.message}")
+            }
+        }
+        if (relatedCardTx.isNotEmpty()) {
+            virtualCardRepository.deleteCardTxForContract(contract.id)
+        }
+
+        // ── 3. Корректируем баланс арендатора ──────────────────────────
+        // isPaid=true → balance -= amount (платёж был зачислен, откатываем).
+        // isPaid=false → balance += amount (долг списывается, контракт удалён).
+        val renter = repository.getById(contract.renterId) ?: return
+        val balanceDelta = if (contract.isPaid) -contract.amount else contract.amount
+        val newBalance = renter.balance + balanceDelta
+        val updatedRenter = renter.copy(
+            balance = newBalance,
+            debtAmount = maxOf(0.0, -newBalance)
+        )
+        repository.update(updatedRenter)
+
+        // ── 4. Удаляем сам контракт ────────────────────────────────────
+        historyRepository.deleteById(contract.id)
     }
 
     fun deleteRenter(id: Int) {
