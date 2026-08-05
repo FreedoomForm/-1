@@ -36,7 +36,6 @@ import com.example.ui.RenterViewModel
 import com.example.ui.ScooterViewModel
 import com.example.ui.TransactionViewModel
 import com.example.ui.components.*
-import com.example.ui.components.UnifiedSearchBar
 import com.example.ui.theme.*
 import java.text.SimpleDateFormat
 import java.util.Calendar
@@ -95,7 +94,16 @@ fun ReportsScreen(
     scooterViewModel: ScooterViewModel = viewModel(),
     contractHistoryViewModel: ContractHistoryViewModel = viewModel(),
     transactionViewModel: TransactionViewModel = viewModel(),
-    finansiViewModel: com.example.ui.FinansiViewModel = viewModel()
+    finansiViewModel: com.example.ui.FinansiViewModel = viewModel(),
+    // ── Поиск и триггеры календаря/фильтра из TopAppBar ──────────────
+    // Раньше searchQuery был внутренним state этого экрана, а поисковая
+    // панель (UnifiedSearchBar) рендерилась в Column контента. Теперь поиск
+    // живёт в TopAppBar MainActivity (CompactSearchPanel), поэтому query
+    // и колбэки поднимаются сюда.
+    searchQuery: String = "",
+    onSearchQueryChange: (String) -> Unit = {},
+    calendarTrigger: Int = 0,
+    filterTrigger: Int = 0
 ) {
     val context = LocalContext.current
 
@@ -142,7 +150,21 @@ fun ReportsScreen(
     val dateRangePickerState = rememberDateRangePickerState()
     val dateFmt = remember { SimpleDateFormat("dd.MM.yyyy", Locale.getDefault()) }
 
-    var searchQuery by remember { mutableStateOf("") }
+    // ── Реакция на триггеры календаря/фильтра из TopAppBar ──────────
+    // Когда пользователь нажал кнопку календаря или фильтров в
+    // CompactSearchPanel, MainActivity увеличивает соответствующий триггер.
+    var lastCalendarTrigger by remember { mutableStateOf(calendarTrigger) }
+    var lastFilterTrigger by remember { mutableStateOf(filterTrigger) }
+    LaunchedEffect(calendarTrigger) {
+        if (calendarTrigger > lastCalendarTrigger) showDateRangePicker = true
+        lastCalendarTrigger = calendarTrigger
+    }
+    LaunchedEffect(filterTrigger) {
+        if (filterTrigger > lastFilterTrigger) showFilterPanel = true
+        lastFilterTrigger = filterTrigger
+    }
+
+    // searchQuery больше не внутренний state — поднят в MainActivity.
 
     // ── Расчёт данных за выбранный период ─────────────────────────────
     val startMillis = dateRangePickerState.selectedStartDateMillis
@@ -428,15 +450,10 @@ fun ReportsScreen(
     }
 
     Column(modifier = Modifier.fillMaxSize()) {
-        UnifiedSearchBar(
-            query = searchQuery,
-            onQueryChange = { searchQuery = it },
-            placeholder = "Qidirish",
-            onCalendarClick = { showDateRangePicker = true },
-            calendarActive = dateRangePickerState.selectedStartDateMillis != null,
-            onFilterClick = { showFilterPanel = true },
-            filterActive = hiddenWidgets.isNotEmpty()
-        )
+        // ── Поисковая панель удалена из контента ─────────────────────
+        // Теперь поиск живёт в TopAppBar MainActivity (CompactSearchPanel).
+        // Календарь и фильтры открываются кнопками оттуда же через
+        // calendarTrigger / filterTrigger, см. LaunchedEffect выше.
 
         if (showFilterPanel) {
             AlertDialog(

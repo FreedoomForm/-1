@@ -121,6 +121,10 @@ class RenterViewModel(application: Application) : AndroidViewModel(application) 
         passportData: String = "",
         address: String = "",
         pinfl: String = "",
+        // ── Режим авто-продления контракта ────────────────────────────────
+        // MANUAL (по умолчанию) — система НЕ создаёт контракты автоматически.
+        // AUTO — система создаёт AUTO_RENEW при окончании последнего контракта.
+        autoRenewMode: String = com.example.data.RenterAutoRenewMode.MANUAL,
         // ── Группы контрактов (из календаря формы) ────────────────────────
         // Если список не пуст — он имеет приоритет над автогенерацией по
         // выбранной дате. Каждая группа = один контракт с weekStart/weekEnd
@@ -234,7 +238,8 @@ class RenterViewModel(application: Application) : AndroidViewModel(application) 
                 name = name, phoneNumber = phone, debtAmount = finalDebt,
                 rentDurationDays = duration, rentStartDateTimestamp = startTimestamp,
                 scooterId = scooterId, scooterName = scooterName, balance = initialBalance,
-                passportData = passportData, address = address, pinfl = pinfl
+                passportData = passportData, address = address, pinfl = pinfl,
+                autoRenewMode = autoRenewMode
             )
 
             val localId = repository.insert(provisional).toInt()
@@ -622,6 +627,10 @@ class RenterViewModel(application: Application) : AndroidViewModel(application) 
         passportData: String = existing.passportData,
         address: String = existing.address,
         pinfl: String = existing.pinfl,
+        // ── Режим авто-продления контракта ────────────────────────────────
+        // MANUAL (по умолчанию) — система НЕ создаёт контракты автоматически.
+        // AUTO — система создаёт AUTO_RENEW при окончании последнего контракта.
+        autoRenewMode: String = existing.autoRenewMode,
         /**
          * Полный список групп контрактов из формы (с existingContractId).
          *
@@ -669,6 +678,7 @@ class RenterViewModel(application: Application) : AndroidViewModel(application) 
                     passportData = passportData,
                     address = address,
                     pinfl = pinfl,
+                    autoRenewMode = autoRenewMode,
                     groups = contractGroupsWithIds
                 )
                 return@launch
@@ -694,6 +704,7 @@ class RenterViewModel(application: Application) : AndroidViewModel(application) 
                     passportData = passportData,
                     address = address,
                     pinfl = pinfl,
+                    autoRenewMode = autoRenewMode,
                     groups = emptyList()
                 )
                 return@launch
@@ -831,7 +842,8 @@ class RenterViewModel(application: Application) : AndroidViewModel(application) 
                 isOverdueSmsSent = if (newIsActive && newStart != oldStart) false else existing.isOverdueSmsSent,
                 passportData = passportData,
                 address = address,
-                pinfl = pinfl
+                pinfl = pinfl,
+                autoRenewMode = autoRenewMode
             )
             repository.update(updated)
         }
@@ -876,6 +888,7 @@ class RenterViewModel(application: Application) : AndroidViewModel(application) 
         passportData: String,
         address: String,
         pinfl: String,
+        autoRenewMode: String,
         groups: List<com.example.RenterFormContractGroup>
     ) {
         val settingsRepo = SettingsRepository(getApplication())
@@ -1039,7 +1052,8 @@ class RenterViewModel(application: Application) : AndroidViewModel(application) 
             isReturned = !newIsActive,
             passportData = passportData,
             address = address,
-            pinfl = pinfl
+            pinfl = pinfl,
+            autoRenewMode = autoRenewMode
         )
         repository.update(updated)
 

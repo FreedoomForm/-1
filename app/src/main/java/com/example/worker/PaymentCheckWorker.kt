@@ -52,6 +52,19 @@ class PaymentCheckWorker(
 
             val activeRenters = db.renterDao().getActiveRenters()
             for (renter in activeRenters) {
+                // ── Пропускаем арендаторов в режиме MANUAL ───────────────────
+                // Пользователь добавил переключатель «Статус» в форму арендатора:
+                //   • MANUAL — система НЕ создаёт контракты автоматически при
+                //     окончании последнего контракта по дате.
+                //   • AUTO   — система автоматически продлевает контракт на 1
+                //     неделю при наступлении дня окончания (прежнее поведение).
+                // Значение по умолчанию для всех арендаторов — MANUAL, поэтому
+                // авто-продление выполняется только для тех, кого пользователь
+                // явно переключил в AUTO.
+                if (renter.autoRenewMode != com.example.data.RenterAutoRenewMode.AUTO) {
+                    continue
+                }
+
                 val expiryTime = renter.rentStartDateTimestamp +
                     (renter.rentDurationDays * 24L * 60 * 60 * 1000)
 

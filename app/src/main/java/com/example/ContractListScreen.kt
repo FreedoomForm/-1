@@ -48,7 +48,6 @@ import com.example.ui.components.SortableHeaderCell
 import com.example.ui.components.SortableHeaderCellFixed
 import com.example.ui.components.SortState
 import com.example.ui.components.TableSortState
-import com.example.ui.components.UnifiedSearchBar
 import com.example.ui.components.PrimaryButton
 import com.example.ui.components.SecondaryButton
 import com.example.ui.components.DangerButton
@@ -100,7 +99,16 @@ fun ContractListScreen(
     // Клик по строке контракта (одиночный, не long-click) — открывает экран
     // истории транзакций этого контракта. Long-click по-прежнему выделяет
     // строку для универсальных ✎/🗑 в TopAppBar.
-    onContractClick: (ContractHistoryEntry) -> Unit = {}
+    onContractClick: (ContractHistoryEntry) -> Unit = {},
+    // ── Поиск и триггеры календаря/фильтра из TopAppBar ──────────────
+    // Раньше searchQuery был внутренним state этого экрана, а поисковая
+    // панель (UnifiedSearchBar) рендерилась в Column контента. Теперь поиск
+    // живёт в TopAppBar MainActivity (CompactSearchPanel), поэтому query
+    // и колбэки поднимаются сюда.
+    searchQuery: String = "",
+    onSearchQueryChange: (String) -> Unit = {},
+    calendarTrigger: Int = 0,
+    filterTrigger: Int = 0
 ) {
     val allHistory by contractHistoryViewModel.history.collectAsStateWithLifecycle()
     val allRenters by renterViewModel.rentersList.collectAsStateWithLifecycle()
@@ -108,7 +116,8 @@ fun ContractListScreen(
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
 
-    var searchQuery by remember { mutableStateOf("") }
+    // searchQuery больше не внутренний state — поднят в MainActivity и
+    // передаётся параметром. См. searchQuery / onSearchQueryChange выше.
     var editingContract by remember { mutableStateOf<ContractHistoryEntry?>(null) }
     var showDeleteConfirm by remember { mutableStateOf(false) }
     var showCreateDialog by remember { mutableStateOf(false) }
@@ -119,6 +128,9 @@ fun ContractListScreen(
     var lastCreateTrigger by remember { mutableStateOf(createTrigger) }
     var lastEditTrigger by remember { mutableStateOf(editTrigger) }
     var lastDeleteTrigger by remember { mutableStateOf(deleteTrigger) }
+    // Последние обработанные значения триггеров календаря/фильтра.
+    var lastCalendarTrigger by remember { mutableStateOf(calendarTrigger) }
+    var lastFilterTrigger by remember { mutableStateOf(filterTrigger) }
 
     // ── Реакция на внешний триггер создания контракта ─────────────────
     // Срабатывает ТОЛЬКО при реальном увеличении значения, а не при входе.
@@ -165,6 +177,22 @@ fun ContractListScreen(
     // Calendar (DateRange) — фильтр по weekStart
     var showDateRangePicker by remember { mutableStateOf(false) }
     val dateRangePickerState = rememberDateRangePickerState()
+
+    // ── Реакция на триггер календаря из TopAppBar ───────────────────
+    // Когда пользователь нажал кнопку календаря в CompactSearchPanel,
+    // MainActivity увеличивает calendarTrigger — открываем DateRangePicker.
+    LaunchedEffect(calendarTrigger) {
+        if (calendarTrigger > lastCalendarTrigger) showDateRangePicker = true
+        lastCalendarTrigger = calendarTrigger
+    }
+
+    // ── Реакция на триггер фильтра из TopAppBar ─────────────────────
+    // Когда пользователь нажал кнопку фильтров в CompactSearchPanel,
+    // MainActivity увеличивает filterTrigger — открываем FilterSidePanel.
+    LaunchedEffect(filterTrigger) {
+        if (filterTrigger > lastFilterTrigger) showFilterPanel = true
+        lastFilterTrigger = filterTrigger
+    }
 
     val dateFmt = remember { SimpleDateFormat("dd.MM.yyyy", Locale.getDefault()) }
 
@@ -286,16 +314,10 @@ fun ContractListScreen(
         modifier = Modifier
             .fillMaxSize()
     ) {
-            // ── Unified search bar с календарём и фильтром ─────────────
-            UnifiedSearchBar(
-                query = searchQuery,
-                onQueryChange = { searchQuery = it },
-                placeholder = "Qidirish",
-                onCalendarClick = { showDateRangePicker = true },
-                calendarActive = dateRangePickerState.selectedStartDateMillis != null,
-                onFilterClick = { showFilterPanel = true },
-                filterActive = filterValues.any { it.value.isNotBlank() }
-            )
+            // ── Поисковая панель удалена из контента ─────────────────────
+            // Теперь поиск живёт в TopAppBar MainActivity (CompactSearchPanel).
+            // Календарь и фильтры открываются кнопками оттуда же через
+            // calendarTrigger / filterTrigger, см. LaunchedEffect выше.
 
             FilterSidePanel(
                 columns = filterColumns,

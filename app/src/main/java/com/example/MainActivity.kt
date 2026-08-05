@@ -17,8 +17,10 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.horizontalScroll
@@ -92,6 +94,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
 import androidx.compose.ui.input.nestedscroll.NestedScrollSource
 import androidx.compose.ui.input.nestedscroll.nestedScroll
@@ -145,7 +148,6 @@ import com.example.ui.theme.StatusOverdue
 import com.example.ui.theme.StatusOverdueBg
 import com.example.ui.theme.StatusReturned
 import com.example.ui.theme.StatusReturnedBg
-import com.example.ui.components.UnifiedSearchBar
 import com.example.ui.components.FilterSidePanel
 import com.example.ui.components.FilterColumn
 import com.example.ui.components.PhoneReceiverSortIcon
@@ -383,6 +385,97 @@ private fun statusLabel(s: RenterStatus): String = when (s) {
     RenterStatus.OK       -> "Faol"
 }
 
+/* ============================================================================
+   КОМПАКТНАЯ ПОИСКОВАЯ ПАНЕЛЬ ДЛЯ TOPAPPBAR
+   ============================================================================
+   Квадратная (RoundedCornerShape(8.dp)) панель, которая показывается в actions
+   TopAppBar когда пользователь нажал круглую кнопку «Поиск». Заменяет собой
+   все универсальные кнопки (scanner / SMS / + / ✎ / 🗑). Содержит:
+     • иконку-лупу (leading)
+     • поле ввода (BasicTextField, placeholder «Поиск»)
+     • кнопку фильтров (Icons.Default.Tune)
+     • кнопку календаря (Icons.Default.DateRange)
+   Долгое нажатие на панель возвращает универсальные кнопки (onLongClickDismiss).
+   Обычный тап не делает ничего — текст набирается в поле, иконки срабатывают
+   по своему onClick.
+   ============================================================================ */
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
+@Composable
+private fun CompactSearchPanel(
+    query: String,
+    onQueryChange: (String) -> Unit,
+    onCalendarClick: () -> Unit,
+    calendarActive: Boolean,
+    onFilterClick: () -> Unit,
+    filterActive: Boolean,
+    onLongClickDismiss: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val panelInteractionSource = remember { MutableInteractionSource() }
+    Surface(
+        modifier = modifier
+            .padding(end = 12.dp, start = 4.dp)
+            .height(40.dp)
+            .width(240.dp)
+            .combinedClickable(
+                interactionSource = panelInteractionSource,
+                indication = null,
+                onClick = {},
+                onLongClick = onLongClickDismiss
+            ),
+        shape = RoundedCornerShape(8.dp),  // Квадратная форма (углы 8dp)
+        color = Color.White,
+        border = BorderStroke(1.dp, ClaudeDivider)
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = 6.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Icon(
+                Icons.Default.Search,
+                contentDescription = null,
+                tint = ClaudeTextSecondary,
+                modifier = Modifier.size(18.dp)
+            )
+            Spacer(Modifier.width(4.dp))
+            BasicTextField(
+                value = query,
+                onValueChange = onQueryChange,
+                modifier = Modifier.weight(1f),
+                singleLine = true,
+                textStyle = MaterialTheme.typography.bodyMedium.copy(color = ClaudeText),
+                cursorBrush = SolidColor(ClaudeAccent),
+                decorationBox = { innerTextField ->
+                    if (query.isEmpty()) {
+                        Text(
+                            "Поиск",
+                            color = ClaudeTextSecondary,
+                            style = MaterialTheme.typography.bodyMedium
+                        )
+                    }
+                    innerTextField()
+                }
+            )
+            IconButton(onClick = onFilterClick, modifier = Modifier.size(32.dp)) {
+                Icon(
+                    Icons.Default.Tune,
+                    contentDescription = "Filtrlash",
+                    tint = if (filterActive) ClaudeAccent else ClaudeTextSecondary,
+                    modifier = Modifier.size(18.dp)
+                )
+            }
+            IconButton(onClick = onCalendarClick, modifier = Modifier.size(32.dp)) {
+                Icon(
+                    Icons.Default.DateRange,
+                    contentDescription = "Sana",
+                    tint = if (calendarActive) ClaudeAccent else ClaudeTextSecondary,
+                    modifier = Modifier.size(18.dp)
+                )
+            }
+        }
+    }
+}
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun MainScreen(
@@ -448,6 +541,46 @@ fun MainScreen(
     var showScooterFilterPanel by remember { mutableStateOf(false) }
     var renterFilterValues by remember { mutableStateOf(mapOf<String, String>()) }
     var scooterFilterValues by remember { mutableStateOf(mapOf<String, String>()) }
+
+    // ── Режим поиска в TopAppBar ───────────────────────────────────────
+    // Пользователь просил убрать «Skuter Ijarasi» из верхней панели и
+    // добавить круглую кнопку-иконку «Поиск» в группу универсальных кнопок.
+    // Тап по ней скрывает ВСЕ универсальные кнопки и показывает вместо них
+    // квадратную поисковую панель (с кнопками календарь + фильтры).
+    // Долгое нажатие на эту панель возвращает универсальные кнопки на место.
+    var isSearchMode by remember { mutableStateOf(false) }
+
+    // ── Диалог предупреждения о включении авто-отправки SMS ────────────
+    // Показывается при ДОЛГОМ нажатии на универсальную кнопку SMS, когда
+    // авто-отправка ещё выключена. В диалоге две кнопки:
+    //   • «Orqaga» (Back) — закрыть диалог, ничего не меняя.
+    //   • «Tasdiqlash» (Confirm) — включить авто-отправку SMS.
+    // Краткое нажатие на ту же кнопку при включённой авто-отправке —
+    // выключает её без дополнительного предупреждения (безопасное действие).
+    // Краткое нажатие при выключенной авто-отправке — отправляет SMS
+    // выбранным арендаторам (selectedRenters) на вкладке «Ijarachilar».
+    var showSmsAutoSendConfirmDialog by remember { mutableStateOf(false) }
+
+    // ── Поднятые состояния поиска для вложенных экранов ────────────────
+    // Раньше каждый экран (Kontraktlar / Tranzaksiya / Otchetlar / Finansi)
+    // держал свой searchQuery во внутреннем state. Теперь поиск живёт
+    // в TopAppBar, поэтому поднимаем по одному searchQuery на каждую вкладку.
+    var contractSearchQuery by remember { mutableStateOf("") }
+    var transactionSearchQuery by remember { mutableStateOf("") }
+    var reportSearchQuery by remember { mutableStateOf("") }
+    var finansiSearchQuery by remember { mutableStateOf("") }
+
+    // Триггеры для открытия календаря/фильтра вложенных экранов из TopAppBar.
+    // Та же механика, что и у createTrigger/editTrigger/deleteTrigger:
+    // MainActivity увеличивает значение → вложенный экран реагирует.
+    var contractCalendarTrigger by remember { mutableStateOf(0) }
+    var contractFilterTrigger by remember { mutableStateOf(0) }
+    var transactionCalendarTrigger by remember { mutableStateOf(0) }
+    var transactionFilterTrigger by remember { mutableStateOf(0) }
+    var reportCalendarTrigger by remember { mutableStateOf(0) }
+    var reportFilterTrigger by remember { mutableStateOf(0) }
+    var finansiCalendarTrigger by remember { mutableStateOf(0) }
+    var finansiFilterTrigger by remember { mutableStateOf(0) }
     // Column visibility state (default: all visible). When user unchecks a
     // column in the filter side panel, the column disappears from the table
     // even if it has data — this replaces the old "auto-hide empty columns"
@@ -467,6 +600,7 @@ fun MainScreen(
             FilterColumn("col_end",      "Tugash sanasi",    "dd.MM.yyyy"),
             FilterColumn("col_balance",  "Balans",           "summa"),
             FilterColumn("col_status",   "Holat",            "Faol / Qaytgan / Qarzdor"),
+            FilterColumn("col_renewal",  "Status",           "Qo'llanma / Avtomatik"),
             FilterColumn("col_passport", "Pasport",          "AA 1234567"),
             FilterColumn("col_address",  "Manzil",           "Manzil bo'yicha"),
             FilterColumn("col_pinfl",    "JSHSHIR",          "14 raqam")
@@ -749,6 +883,7 @@ fun MainScreen(
                                 passportData = result.passportData,
                                 address = result.address,
                                 pinfl = result.pinfl,
+                                autoRenewMode = result.autoRenewMode,
                                 contractGroupsWithIds = result.contractGroupsWithIds
                             )
                         }
@@ -973,206 +1108,408 @@ fun MainScreen(
     // А полоса поиска и полоса доп.кнопок (To'lov/Uzish/SMS) — скроллятся
     // вместе с таблицей (часть контента), уходят под TopAppBar при скролле.
     // TopAppBar перекрывает их когда они оказываются под ней.
+    //
+    // ВАЖНО: по просьбе пользователя убран текст «Skuter Ijarasi» из заголовка
+    // и добавлена круглая кнопка-иконка «Поиск». Тап по ней скрывает ВСЕ
+    // универсальные кнопки и показывает квадратную поисковую панель с
+    // календарём и фильтрами. Долгое нажатие на эту панель возвращает
+    // универсальные кнопки на место.
     Scaffold(
         modifier = Modifier.fillMaxSize(),
         containerColor = ClaudeBackground,
         topBar = {
             TopAppBar(
-                title = {
-                    Text(
-                        "Skuter Ijarasi",
-                        style = MaterialTheme.typography.headlineMedium.copy(fontWeight = FontWeight.Bold)
-                    )
-                },
+                title = {},
                 colors = TopAppBarDefaults.topAppBarColors(
                     containerColor = ClaudeBackground,
                     titleContentColor = ClaudeText,
                     actionIconContentColor = ClaudeText
                 ),
                 actions = {
-                    // ── Кнопка сканера (Mistral OCR) ──────────────────────────────
-                    // Иконка камеры, доступна с любой вкладки. Открывает экран
-                    // сканера документов: пользователь фотографирует список
-                    // (арендаторы / скутеры / транзакции / контракты / карты),
-                    // фото уходит в Mistral OCR → Mistral Large → JSON-команды,
-                    // которые автоматически создают сущности в БД.
-                    IconButton(
-                        onClick = { navState = NavigationState.Scanner },
-                        modifier = Modifier
-                            .padding(end = 6.dp)
-                            .size(40.dp)
-                            .background(ClaudeAccentBg, CircleShape)
-                            .border(1.dp, ClaudeAccent, CircleShape)
-                    ) {
-                        Icon(
-                            Icons.Default.CameraAlt,
-                            contentDescription = "Skaner",
-                            tint = ClaudeAccent,
-                            modifier = Modifier.size(20.dp)
-                        )
-                    }
+                    if (!isSearchMode) {
+                        // ── ОБЫЧНЫЙ РЕЖИМ: универсальные кнопки + кнопка «Поиск» ──
 
-                    // ── Кнопка-переключатель режима SMS ───────────────────────────
-                    // Круглая, рядом с «+». Красная = QO'LLANMA (ручной),
-                    // зелёная = AVTO (автоматический). Тап переключает режим.
-                    val smsAutoSend by settingsViewModel.smsAutoSendEnabled.collectAsStateWithLifecycle()
-                    IconButton(
-                        onClick = {
-                            val newValue = !smsAutoSend
-                            settingsViewModel.updateSmsAutoSend(newValue)
-                            Toast.makeText(
-                                localContext,
-                                if (newValue) "SMS avto-yuborish yoqildi"
-                                else "SMS qo'llanma rejimiga o'tdi",
-                                Toast.LENGTH_SHORT
-                            ).show()
-                        },
-                        modifier = Modifier
-                            .padding(end = 6.dp)
-                            .size(40.dp)
-                            .background(
-                                if (smsAutoSend) StatusOk else StatusOverdue,
-                                CircleShape
-                            )
-                    ) {
-                        Icon(
-                            Icons.Default.Sms,
-                            contentDescription = if (smsAutoSend) "SMS avto" else "SMS qo'llanma",
-                            tint = Color.White,
-                            modifier = Modifier.size(20.dp)
-                        )
-                    }
-
-                    // ── Универсальные кнопки верхнего бара ──────────────────────
-                    // +  — добавление сущности для текущей вкладки (всегда активна)
-                    // ✎  — редактирование выбранной строки (активна при выборе 1)
-                    // 🗑  — удаление выбранных строк (активна при выборе ≥1)
-                    // Все три — одного размера, без текста, круглые, единый стиль.
-                    // Кнопка + — залитая акцентом, ✎ и 🗑 — outlined.
-                    // На вкладке «Отчёты» (4) кнопка + НЕ показывается — там нет
-                    // сущностей для создания (только виджеты). Edit/delete там тоже
-                    // не показываются — нет строк для выбора.
-                    // ── Кнопка «+» — скрыта на «Отчётах» (4) и «Sozlamalar» (6) ─
-                    if (currentTab != 4 && currentTab != 6) {
+                        // ── Кнопка сканера (Mistral OCR) ──────────────────────────────
+                        // Иконка камеры, доступна с любой вкладки. Открывает экран
+                        // сканера документов: пользователь фотографирует список
+                        // (арендаторы / скутеры / транзакции / контракты / карты),
+                        // фото уходит в Mistral OCR → Mistral Large → JSON-команды,
+                        // которые автоматически создают сущности в БД.
                         IconButton(
-                            onClick = {
-                                when (currentTab) {
-                                    0 -> showAddDialog = true
-                                    1 -> showAddScooterDialog = true
-                                    2 -> contractCreateTrigger++
-                                    3 -> transactionCreateTrigger++
-                                    5 -> cardCreateTrigger++
-                                }
-                            },
+                            onClick = { navState = NavigationState.Scanner },
                             modifier = Modifier
-                                .padding(end = 6.dp, start = 4.dp)
+                                .padding(end = 6.dp)
                                 .size(40.dp)
-                                .background(ClaudeAccent, CircleShape)
+                                .background(ClaudeAccentBg, CircleShape)
+                                .border(1.dp, ClaudeAccent, CircleShape)
                         ) {
                             Icon(
-                                Icons.Default.Add,
-                                contentDescription = "Qo'shish",
+                                Icons.Default.CameraAlt,
+                                contentDescription = "Skaner",
+                                tint = ClaudeAccent,
+                                modifier = Modifier.size(20.dp)
+                            )
+                        }
+
+                        // ── Кнопка-переключатель режима SMS (редизайн) ────────────────
+                        // Круглая, рядом с «+». Красная = QO'LLANMA (авто-отправка
+                        // выключена), зелёная = AVTO (авто-отправка включена).
+                        //
+                        // Поведение (по запросу пользователя):
+                        //   • Краткое нажатие при ВЫКЛЮЧЕННОЙ авто-отправке:
+                        //     отправляет SMS выбранным арендаторам (selectedRenters)
+                        //     на вкладке «Ijarachilar» (currentTab == 0). На других
+                        //     вкладках кнопка неактивна (но визуально остаётся).
+                        //   • Краткое нажатие при ВКЛЮЧЁННОЙ авто-отправке:
+                        //     выключает авто-отправку БЕЗ дополнительного диалога
+                        //     (это безопасное действие, не требующее подтверждения).
+                        //   • Долгое нажатие при ВЫКЛЮЧЕННОЙ авто-отправке:
+                        //     показывает диалог предупреждения с двумя кнопками:
+                        //       – «Orqaga» (Back) — закрыть диалог без изменений.
+                        //       – «Tasdiqlash» (Confirm) — включает авто-отправку.
+                        //   • Долгое нажатие при ВКЛЮЧЁННОЙ авто-отправке:
+                        //     также выключает её (симметрично с кратким нажатием).
+                        val smsAutoSend by settingsViewModel.smsAutoSendEnabled.collectAsStateWithLifecycle()
+                        Box(
+                            modifier = Modifier
+                                .padding(end = 6.dp)
+                                .size(40.dp)
+                                .background(
+                                    if (smsAutoSend) StatusOk else StatusOverdue,
+                                    CircleShape
+                                )
+                                .combinedClickable(
+                                    onClick = {
+                                        if (smsAutoSend) {
+                                            // Авто-отправка включена → выключаем без диалога.
+                                            settingsViewModel.updateSmsAutoSend(false)
+                                            Toast.makeText(
+                                                localContext,
+                                                "SMS avto-yuborish o'chirildi",
+                                                Toast.LENGTH_SHORT
+                                            ).show()
+                                        } else {
+                                            // Авто-отправка выключена → отправляем SMS
+                                            // выбранным арендаторам. Работает только на
+                                            // вкладке «Ijarachilar» (currentTab == 0),
+                                            // где у нас есть selectedRenters. На других
+                                            // вкладках показываем подсказку.
+                                            if (currentTab == 0) {
+                                                if (selectedRenters.isEmpty()) {
+                                                    Toast.makeText(
+                                                        localContext,
+                                                        "Avval mijozni tanlang",
+                                                        Toast.LENGTH_SHORT
+                                                    ).show()
+                                                } else {
+                                                    val rentersToSend = renters.filter { it.id in selectedRenters }
+                                                    coroutineScope.launch {
+                                                        var sentCount = 0
+                                                        var failCount = 0
+                                                        val db = com.example.data.AppDatabase.getDatabase(localContext)
+                                                        val contractDao = db.contractHistoryDao()
+                                                        for (renter in rentersToSend) {
+                                                            val settingsRepo = com.example.data.SettingsRepository(localContext)
+                                                            val phone = com.example.worker.SimHelper.normalizePhoneNumber(renter.phoneNumber)
+                                                            val unpaidContracts = contractDao.getUnpaidContractsForRenter(renter.id)
+                                                            val unpaidCount = unpaidContracts.size
+                                                            val dayMs = 24L * 60 * 60 * 1000
+                                                            val unpaidDays = unpaidContracts.sumOf { c ->
+                                                                val ws = c.weekStart ?: return@sumOf 0L
+                                                                val we = c.weekEnd ?: return@sumOf 0L
+                                                                val diff = we - ws
+                                                                if (diff <= 0) 1L else ((diff + dayMs - 1) / dayMs)
+                                                            }.toInt().coerceAtLeast(1)
+                                                            val dailyPrice = settingsRepo.dailyPrice.let {
+                                                                if (it > 0) it else com.example.data.SettingsRepository.DEFAULT_DAILY_PRICE
+                                                            }
+                                                            val debt = unpaidDays * dailyPrice
+                                                            val message = settingsRepo.smsTemplate
+                                                                .replace("{name}", renter.name.trim().lowercase())
+                                                                .replace("{unpaidDays}", unpaidDays.toString())
+                                                                .replace("{unpaidCount}", unpaidCount.toString())
+                                                                .replace("{days}", unpaidDays.toString())
+                                                                .replace("{debt}", debt.toLong().toString())
+                                                                .replace("{payme}", settingsRepo.paymeLink)
+                                                                .replace("{call}", settingsRepo.callCenter)
+                                                            val smsManager = com.example.worker.SimHelper.getSmsManagerForSim(localContext)
+                                                            if (smsManager != null) {
+                                                                try {
+                                                                    com.example.worker.SimHelper.sendSmsAuto(smsManager, phone, message, null, null)
+                                                                    if (unpaidCount > 0 && !renter.isOverdueSmsSent) {
+                                                                        viewModel.updateRenter(renter.copy(isOverdueSmsSent = true))
+                                                                    }
+                                                                    sentCount++
+                                                                } catch (e: Exception) {
+                                                                    Log.w("SMS", "Failed for ${renter.name}: ${e.message}")
+                                                                    failCount++
+                                                                }
+                                                            } else {
+                                                                failCount++
+                                                            }
+                                                        }
+                                                        if (sentCount > 0) {
+                                                            Toast.makeText(localContext, "$sentCount ta SMS yuborildi${if (failCount > 0) ", $failCount ta xato" else ""}", Toast.LENGTH_SHORT).show()
+                                                        } else {
+                                                            Toast.makeText(localContext, "SMS yuborib bo'lmadi", Toast.LENGTH_SHORT).show()
+                                                        }
+                                                        selectedRenters = emptySet()
+                                                    }
+                                                }
+                                            } else {
+                                                Toast.makeText(
+                                                    localContext,
+                                                    "SMS yuborish uchun «Ijarachilar» varaqiga o'ting",
+                                                    Toast.LENGTH_SHORT
+                                                ).show()
+                                            }
+                                        }
+                                    },
+                                    onLongClick = {
+                                        if (smsAutoSend) {
+                                            // Уже включено → долгое нажатие тоже выключает.
+                                            settingsViewModel.updateSmsAutoSend(false)
+                                            Toast.makeText(
+                                                localContext,
+                                                "SMS avto-yuborish o'chirildi",
+                                                Toast.LENGTH_SHORT
+                                            ).show()
+                                        } else {
+                                            // Выключено → показываем диалог подтверждения.
+                                            showSmsAutoSendConfirmDialog = true
+                                        }
+                                    }
+                                ),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Icon(
+                                Icons.Default.Sms,
+                                contentDescription = if (smsAutoSend) "SMS avto" else "SMS qo'llanma",
                                 tint = Color.White,
-                                modifier = Modifier.size(22.dp)
-                            )
-                        }
-                    }
-
-                    // ── Кнопка «✎ Tahrirlash» — скрыта на «Отчётах» (4) и «Sozlamalar» (6)
-                    if (currentTab != 4 && currentTab != 6) {
-                        val editEnabled = when (currentTab) {
-                            0 -> selectedRenters.size == 1
-                            1 -> selectedScooters.size == 1
-                            2 -> selectedContracts.size == 1
-                            3 -> selectedTxs.size == 1
-                            5 -> selectedCardIds.size == 1
-                            else -> false
-                        }
-                        IconButton(
-                            onClick = {
-                                when (currentTab) {
-                                    0 -> {
-                                        selectedRenters.firstOrNull()?.let { id ->
-                                            renterToEdit = renters.firstOrNull { it.id == id }
-                                        }
-                                    }
-                                    1 -> {
-                                        selectedScooters.firstOrNull()?.let { id ->
-                                            scooterToEdit = scooters.firstOrNull { it.id == id }
-                                        }
-                                    }
-                                    2 -> contractEditTrigger++
-                                    3 -> transactionEditTrigger++
-                                    5 -> cardEditTrigger++
-                                }
-                            },
-                            enabled = editEnabled,
-                            modifier = Modifier
-                                .padding(end = 6.dp)
-                                .size(40.dp)
-                                .background(
-                                    if (editEnabled) Color.White else Color.White.copy(alpha = 0.5f),
-                                    CircleShape
-                                )
-                                .border(1.dp, ClaudeDivider, CircleShape)
-                        ) {
-                            Icon(
-                                Icons.Default.Edit,
-                                contentDescription = "Tahrirlash",
-                                tint = if (editEnabled) ClaudeAccent else ClaudeTextSecondary,
                                 modifier = Modifier.size(20.dp)
                             )
                         }
 
-                        // ── Кнопка «🗑 O'chir» — универсальная ──────────────────
-                        val deleteEnabled = when (currentTab) {
-                            0 -> selectedRenters.isNotEmpty()
-                            1 -> selectedScooters.isNotEmpty()
-                            2 -> selectedContracts.isNotEmpty()
-                            3 -> selectedTxs.isNotEmpty()
-                            5 -> selectedCardIds.isNotEmpty()
-                            else -> false
-                        }
-                        IconButton(
-                            onClick = {
-                                when (currentTab) {
-                                    0 -> {
-                                        selectedRenters.forEach { id -> viewModel.deleteRenter(id) }
-                                        selectedRenters = emptySet()
+                        // ── Универсальные кнопки верхнего бара ──────────────────────
+                        // +  — добавление сущности для текущей вкладки (всегда активна)
+                        // ✎  — редактирование выбранной строки (активна при выборе 1)
+                        // 🗑  — удаление выбранных строк (активна при выборе ≥1)
+                        // Все три — одного размера, без текста, круглые, единый стиль.
+                        // Кнопка + — залитая акцентом, ✎ и 🗑 — outlined.
+                        // На вкладке «Отчёты» (4) кнопка + НЕ показывается — там нет
+                        // сущностей для создания (только виджеты). Edit/delete там тоже
+                        // не показываются — нет строк для выбора.
+                        // ── Кнопка «+» — скрыта на «Отчётах» (4) и «Sozlamalar» (6) ─
+                        if (currentTab != 4 && currentTab != 6) {
+                            IconButton(
+                                onClick = {
+                                    when (currentTab) {
+                                        0 -> showAddDialog = true
+                                        1 -> showAddScooterDialog = true
+                                        2 -> contractCreateTrigger++
+                                        3 -> transactionCreateTrigger++
+                                        5 -> cardCreateTrigger++
                                     }
-                                    1 -> {
-                                        scooters.filter { it.id in selectedScooters }.forEach {
-                                            scooterViewModel.deleteScooter(it)
-                                        }
-                                        selectedScooters = emptySet()
-                                    }
-                                    2 -> contractDeleteTrigger++
-                                    3 -> transactionDeleteTrigger++
-                                    5 -> cardDeleteTrigger++
-                                }
-                            },
-                            enabled = deleteEnabled,
-                            modifier = Modifier
-                                .padding(end = 6.dp)
-                                .size(40.dp)
-                                .background(
-                                    if (deleteEnabled) Color.White else Color.White.copy(alpha = 0.5f),
-                                    CircleShape
+                                },
+                                modifier = Modifier
+                                    .padding(end = 6.dp, start = 4.dp)
+                                    .size(40.dp)
+                                    .background(ClaudeAccent, CircleShape)
+                            ) {
+                                Icon(
+                                    Icons.Default.Add,
+                                    contentDescription = "Qo'shish",
+                                    tint = Color.White,
+                                    modifier = Modifier.size(22.dp)
                                 )
-                                .border(1.dp, if (deleteEnabled) StatusOverdue else ClaudeDivider, CircleShape)
-                        ) {
-                            Icon(
-                                Icons.Default.Delete,
-                                contentDescription = "O'chirish",
-                                tint = if (deleteEnabled) StatusOverdue else ClaudeTextSecondary,
-                                modifier = Modifier.size(20.dp)
+                            }
+                        }
+
+                        // ── Кнопка «✎ Tahrirlash» — скрыта на «Отчётах» (4) и «Sozlamalar» (6)
+                        if (currentTab != 4 && currentTab != 6) {
+                            val editEnabled = when (currentTab) {
+                                0 -> selectedRenters.size == 1
+                                1 -> selectedScooters.size == 1
+                                2 -> selectedContracts.size == 1
+                                3 -> selectedTxs.size == 1
+                                5 -> selectedCardIds.size == 1
+                                else -> false
+                            }
+                            IconButton(
+                                onClick = {
+                                    when (currentTab) {
+                                        0 -> {
+                                            selectedRenters.firstOrNull()?.let { id ->
+                                                renterToEdit = renters.firstOrNull { it.id == id }
+                                            }
+                                        }
+                                        1 -> {
+                                            selectedScooters.firstOrNull()?.let { id ->
+                                                scooterToEdit = scooters.firstOrNull { it.id == id }
+                                            }
+                                        }
+                                        2 -> contractEditTrigger++
+                                        3 -> transactionEditTrigger++
+                                        5 -> cardEditTrigger++
+                                    }
+                                },
+                                enabled = editEnabled,
+                                modifier = Modifier
+                                    .padding(end = 6.dp)
+                                    .size(40.dp)
+                                    .background(
+                                        if (editEnabled) Color.White else Color.White.copy(alpha = 0.5f),
+                                        CircleShape
+                                    )
+                                    .border(1.dp, ClaudeDivider, CircleShape)
+                            ) {
+                                Icon(
+                                    Icons.Default.Edit,
+                                    contentDescription = "Tahrirlash",
+                                    tint = if (editEnabled) ClaudeAccent else ClaudeTextSecondary,
+                                    modifier = Modifier.size(20.dp)
+                                )
+                            }
+
+                            // ── Кнопка «🗑 O'chir» — универсальная ──────────────────
+                            val deleteEnabled = when (currentTab) {
+                                0 -> selectedRenters.isNotEmpty()
+                                1 -> selectedScooters.isNotEmpty()
+                                2 -> selectedContracts.isNotEmpty()
+                                3 -> selectedTxs.isNotEmpty()
+                                5 -> selectedCardIds.isNotEmpty()
+                                else -> false
+                            }
+                            IconButton(
+                                onClick = {
+                                    when (currentTab) {
+                                        0 -> {
+                                            selectedRenters.forEach { id -> viewModel.deleteRenter(id) }
+                                            selectedRenters = emptySet()
+                                        }
+                                        1 -> {
+                                            scooters.filter { it.id in selectedScooters }.forEach {
+                                                scooterViewModel.deleteScooter(it)
+                                            }
+                                            selectedScooters = emptySet()
+                                        }
+                                        2 -> contractDeleteTrigger++
+                                        3 -> transactionDeleteTrigger++
+                                        5 -> cardDeleteTrigger++
+                                    }
+                                },
+                                enabled = deleteEnabled,
+                                modifier = Modifier
+                                    .padding(end = 6.dp)
+                                    .size(40.dp)
+                                    .background(
+                                        if (deleteEnabled) Color.White else Color.White.copy(alpha = 0.5f),
+                                        CircleShape
+                                    )
+                                    .border(1.dp, if (deleteEnabled) StatusOverdue else ClaudeDivider, CircleShape)
+                            ) {
+                                Icon(
+                                    Icons.Default.Delete,
+                                    contentDescription = "O'chirish",
+                                    tint = if (deleteEnabled) StatusOverdue else ClaudeTextSecondary,
+                                    modifier = Modifier.size(20.dp)
+                                )
+                            }
+                        }
+
+                        // ── Кнопка «Поиск» (новая) ──────────────────────────────
+                        // Круглая, с иконкой-лупой. Тап скрывает ВСЕ универсальные
+                        // кнопки и показывает квадратную поисковую панель на их месте.
+                        // Не показывается на вкладке «Sozlamalar» (6) — там нет поиска.
+                        if (currentTab != 6) {
+                            IconButton(
+                                onClick = { isSearchMode = true },
+                                modifier = Modifier
+                                    .padding(end = 8.dp)
+                                    .size(40.dp)
+                                    .background(ClaudeAccentBg, CircleShape)
+                                    .border(1.dp, ClaudeAccent, CircleShape)
+                            ) {
+                                Icon(
+                                    Icons.Default.Search,
+                                    contentDescription = "Qidiruv",
+                                    tint = ClaudeAccent,
+                                    modifier = Modifier.size(20.dp)
+                                )
+                            }
+                        }
+                        // Кнопка «Настройки» удалена из TopAppBar — теперь
+                        // настройки доступны как 7-я вкладка нижней навигации
+                        // (Tab 6 = Sozlamalar), на одной линии с остальными
+                        // главными страницами.
+                    } else {
+                        // ── РЕЖИМ ПОИСКА: квадратная поисковая панель ──────────
+                        // Все универсальные кнопки скрыты. Показываем компактную
+                        // квадратную панель с полем ввода, кнопкой календаря и
+                        // кнопкой фильтров. Долгое нажатие на панель возвращает
+                        // универсальные кнопки.
+                        when (currentTab) {
+                            0 -> CompactSearchPanel(
+                                query = searchQuery,
+                                onQueryChange = { searchQuery = it },
+                                onCalendarClick = { showDateRangePicker = true },
+                                calendarActive = dateRangePickerState.selectedStartDateMillis != null,
+                                onFilterClick = { showRenterFilterPanel = true },
+                                filterActive = renterFilterValues.any { it.value.isNotBlank() },
+                                onLongClickDismiss = { isSearchMode = false }
                             )
+                            1 -> CompactSearchPanel(
+                                query = searchQuery,
+                                onQueryChange = { searchQuery = it },
+                                onCalendarClick = { showScooterDateRangePicker = true },
+                                calendarActive = scooterDateRangePickerState.selectedStartDateMillis != null,
+                                onFilterClick = { showScooterFilterPanel = true },
+                                filterActive = scooterFilterValues.any { it.value.isNotBlank() },
+                                onLongClickDismiss = { isSearchMode = false }
+                            )
+                            2 -> CompactSearchPanel(
+                                query = contractSearchQuery,
+                                onQueryChange = { contractSearchQuery = it },
+                                onCalendarClick = { contractCalendarTrigger++ },
+                                calendarActive = false,
+                                onFilterClick = { contractFilterTrigger++ },
+                                filterActive = false,
+                                onLongClickDismiss = { isSearchMode = false }
+                            )
+                            3 -> CompactSearchPanel(
+                                query = transactionSearchQuery,
+                                onQueryChange = { transactionSearchQuery = it },
+                                onCalendarClick = { transactionCalendarTrigger++ },
+                                calendarActive = false,
+                                onFilterClick = { transactionFilterTrigger++ },
+                                filterActive = false,
+                                onLongClickDismiss = { isSearchMode = false }
+                            )
+                            4 -> CompactSearchPanel(
+                                query = reportSearchQuery,
+                                onQueryChange = { reportSearchQuery = it },
+                                onCalendarClick = { reportCalendarTrigger++ },
+                                calendarActive = false,
+                                onFilterClick = { reportFilterTrigger++ },
+                                filterActive = false,
+                                onLongClickDismiss = { isSearchMode = false }
+                            )
+                            5 -> CompactSearchPanel(
+                                query = finansiSearchQuery,
+                                onQueryChange = { finansiSearchQuery = it },
+                                onCalendarClick = { finansiCalendarTrigger++ },
+                                calendarActive = false,
+                                onFilterClick = { finansiFilterTrigger++ },
+                                filterActive = false,
+                                onLongClickDismiss = { isSearchMode = false }
+                            )
+                            // На вкладке «Sozlamalar» (6) поиска нет — выходим
+                            // из режима поиска автоматически.
+                            else -> {
+                                LaunchedEffect(Unit) { isSearchMode = false }
+                            }
                         }
                     }
-                    // Кнопка «Настройки» удалена из TopAppBar — теперь
-                    // настройки доступны как 7-я вкладка нижней навигации
-                    // (Tab 6 = Sozlamalar), на одной линии с остальными
-                    // главными страницами.
                 }
             )
         },
@@ -1524,6 +1861,14 @@ fun MainScreen(
                                 val s = statusOf(renter)
                                 statusLabel(s).contains(filterText, ignoreCase = true)
                             }
+                            "col_renewal" -> {
+                                // Qo'llanma / Avtomatik — режим авто-продления
+                                // контракта. Используется для фильтрации по статусу
+                                // контракта (Manual / Auto).
+                                val label = if (renter.autoRenewMode == com.example.data.RenterAutoRenewMode.AUTO)
+                                    "Avtomatik" else "Qo'llanma"
+                                label.contains(filterText, ignoreCase = true)
+                            }
                             "col_passport" -> renter.passportData.contains(filterText, ignoreCase = true)
                             "col_address" -> renter.address.contains(filterText, ignoreCase = true)
                             "col_pinfl" -> renter.pinfl.contains(filterText, ignoreCase = true)
@@ -1563,152 +1908,14 @@ fun MainScreen(
                     columnVisibility = renterColumnVisibility,
                     latestContractByRenter = latestContractByRenter,
                     contractsByRenter = contractsByRenter,
-                    header = {
-                        // ── Полоса поиска — скроллится вместе с таблицей ──
-                        UnifiedSearchBar(
-                            query = searchQuery,
-                            onQueryChange = { searchQuery = it },
-                            placeholder = "Qidirish",
-                            onCalendarClick = { showDateRangePicker = true },
-                            calendarActive = dateRangePickerState.selectedStartDateMillis != null,
-                            onFilterClick = { showRenterFilterPanel = true },
-                            filterActive = renterFilterValues.any { it.value.isNotBlank() }
-                        )
-
-                        // ── Панель действий (To'lov / Uzish / SMS) ──────────
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(horizontal = 16.dp, vertical = 8.dp),
-                            horizontalArrangement = Arrangement.spacedBy(8.dp),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            val hasSelection = selectedRenters.isNotEmpty()
-                            var showDayPickerDialog by remember { mutableStateOf(false) }
-                            if (showDayPickerDialog) {
-                                val repoForDialog = com.example.data.SettingsRepository(localContext)
-                                val dailyPriceForDialog = repoForDialog.dailyPrice.let { p ->
-                                    if (p > 0) p else com.example.data.SettingsRepository.DEFAULT_DAILY_PRICE
-                                }
-                                val renterNameForDialog = renters
-                                    .firstOrNull { it.id in selectedRenters }?.name ?: "Mijoz"
-                                val unpaidDaysForDialog by androidx.compose.runtime.produceState(
-                                    initialValue = 0,
-                                    selectedRenters
-                                ) {
-                                    value = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
-                                        val db = com.example.data.AppDatabase.getDatabase(localContext)
-                                        val dayMs = 24L * 60 * 60 * 1000
-                                        selectedRenters.sumOf { rid ->
-                                            val unpaid = db.contractHistoryDao().getUnpaidContractsForRenter(rid)
-                                            unpaid.sumOf { c ->
-                                                val ws = c.weekStart ?: return@sumOf 0L
-                                                val we = c.weekEnd ?: return@sumOf 0L
-                                                val diff = we - ws
-                                                if (diff <= 0) 1L else ((diff + dayMs - 1) / dayMs)
-                                            }
-                                        }.toInt().coerceAtLeast(0)
-                                    }
-                                }
-                                DayPickerPaymentDialog(
-                                    renterName = renterNameForDialog,
-                                    dailyPrice = dailyPriceForDialog,
-                                    unpaidDays = unpaidDaysForDialog,
-                                    onConfirm = { days ->
-                                        viewModel.payForDaysForRenters(selectedRenters, days)
-                                        Toast.makeText(
-                                            localContext,
-                                            "To'lov qabul qilindi ($days kun)",
-                                            Toast.LENGTH_SHORT
-                                        ).show()
-                                        selectedRenters = emptySet()
-                                        showDayPickerDialog = false
-                                    },
-                                    onDismiss = { showDayPickerDialog = false }
-                                )
-                            }
-                            SuccessButton(
-                                label = "To'lov",
-                                icon = Icons.Default.Payments,
-                                enabled = hasSelection,
-                                onClick = { showDayPickerDialog = true },
-                                modifier = Modifier.weight(1.4f)
-                            )
-                            PrimaryButton(
-                                label = "Uzish",
-                                icon = Icons.Default.PowerOff,
-                                enabled = hasSelection,
-                                onClick = {
-                                    viewModel.terminateRenters(selectedRenters)
-                                    Toast.makeText(localContext, "Kontrakt tugatildi", Toast.LENGTH_SHORT).show()
-                                    selectedRenters = emptySet()
-                                },
-                                modifier = Modifier.weight(1.2f)
-                            )
-                            UnifiedButton(
-                                label = "SMS",
-                                icon = Icons.Default.Sms,
-                                enabled = hasSelection,
-                                onClick = {
-                                    val rentersToSend = renters.filter { it.id in selectedRenters }
-                                    coroutineScope.launch {
-                                        var sentCount = 0
-                                        var failCount = 0
-                                        val db = com.example.data.AppDatabase.getDatabase(localContext)
-                                        val contractDao = db.contractHistoryDao()
-                                        for (renter in rentersToSend) {
-                                            val settingsRepo = com.example.data.SettingsRepository(localContext)
-                                            val phone = com.example.worker.SimHelper.normalizePhoneNumber(renter.phoneNumber)
-                                            val unpaidContracts = contractDao.getUnpaidContractsForRenter(renter.id)
-                                            val unpaidCount = unpaidContracts.size
-                                            val dayMs = 24L * 60 * 60 * 1000
-                                            val unpaidDays = unpaidContracts.sumOf { c ->
-                                                val ws = c.weekStart ?: return@sumOf 0L
-                                                val we = c.weekEnd ?: return@sumOf 0L
-                                                val diff = we - ws
-                                                if (diff <= 0) 1L else ((diff + dayMs - 1) / dayMs)
-                                            }.toInt().coerceAtLeast(1)
-                                            val dailyPrice = settingsRepo.dailyPrice.let {
-                                                if (it > 0) it else com.example.data.SettingsRepository.DEFAULT_DAILY_PRICE
-                                            }
-                                            val debt = unpaidDays * dailyPrice
-                                            val message = settingsRepo.smsTemplate
-                                                .replace("{name}", renter.name.trim().lowercase())
-                                                .replace("{unpaidDays}", unpaidDays.toString())
-                                                .replace("{unpaidCount}", unpaidCount.toString())
-                                                .replace("{days}", unpaidDays.toString())
-                                                .replace("{debt}", debt.toLong().toString())
-                                                .replace("{payme}", settingsRepo.paymeLink)
-                                                .replace("{call}", settingsRepo.callCenter)
-                                            val smsManager = com.example.worker.SimHelper.getSmsManagerForSim(localContext)
-                                            if (smsManager != null) {
-                                                try {
-                                                    com.example.worker.SimHelper.sendSmsAuto(smsManager, phone, message, null, null)
-                                                    if (unpaidCount > 0 && !renter.isOverdueSmsSent) {
-                                                        viewModel.updateRenter(renter.copy(isOverdueSmsSent = true))
-                                                    }
-                                                    sentCount++
-                                                } catch (e: Exception) {
-                                                    Log.w("SMS", "Failed for ${renter.name}: ${e.message}")
-                                                    failCount++
-                                                }
-                                            } else {
-                                                failCount++
-                                            }
-                                        }
-                                        if (sentCount > 0) {
-                                            Toast.makeText(localContext, "$sentCount ta SMS yuborildi${if (failCount > 0) ", $failCount ta xato" else ""}", Toast.LENGTH_SHORT).show()
-                                        } else {
-                                            Toast.makeText(localContext, "SMS yuborib bo'lmadi", Toast.LENGTH_SHORT).show()
-                                        }
-                                        selectedRenters = emptySet()
-                                    }
-                                },
-                                variant = UnifiedButtonVariant.PRIMARY,
-                                modifier = Modifier.weight(1.0f)
-                            )
-                        }
-                    },
+                    // ── Поисковая панель и панель действий (To'lov/Uzish/SMS)
+                    // полностью удалены из контента таблицы арендаторов.
+                    // Поиск живёт в TopAppBar (CompactSearchPanel), который
+                    // переключается кнопкой «Поиск» в группе универсальных
+                    // кнопок. Панель действий (To'lov / Uzish / SMS) тоже
+                    // удалена — все эти действия выполняются через
+                    // универсальные кнопки TopAppBar или экран истории
+                    // контрактов арендатора.
                     onSortClick = { colId ->
                         renterSortState = renterSortState.click(colId)
                     },
@@ -1740,18 +1947,9 @@ fun MainScreen(
                     }
                 )
             } else if (currentTab == 1) {
-                // Вкладка «Скутеры» — unified search bar с календарём
-                // (фильтр по дате начала активного контракта скутера) и фильтром.
-                UnifiedSearchBar(
-                    query = searchQuery,
-                    onQueryChange = { searchQuery = it },
-                    placeholder = "Qidirish",
-                    onCalendarClick = { showScooterDateRangePicker = true },
-                    calendarActive = scooterDateRangePickerState.selectedStartDateMillis != null,
-                    onFilterClick = { showScooterFilterPanel = true },
-                    filterActive = scooterFilterValues.any { it.value.isNotBlank() }
-                )
-
+                // Вкладка «Скутеры» — поиск теперь в TopAppBar (CompactSearchPanel),
+                // фильтры и календарь открываются оттуда же. FilterSidePanel
+                // остаётся здесь (overlay, не часть скроллящегося контента).
                 // Filter side panel
                 FilterSidePanel(
                     columns = scooterFilterColumns,
@@ -1849,7 +2047,11 @@ fun MainScreen(
                     onSelectedContractsChange = { selectedContracts = it },
                     onContractClick = { entry ->
                         navState = NavigationState.ContractTransactionHistory(entry)
-                    }
+                    },
+                    searchQuery = contractSearchQuery,
+                    onSearchQueryChange = { contractSearchQuery = it },
+                    calendarTrigger = contractCalendarTrigger,
+                    filterTrigger = contractFilterTrigger
                 )
             } else if (currentTab == 3) {
                 // ── Вкладка «Tranzaksiya» — все транзакции ──────────────
@@ -1865,7 +2067,11 @@ fun MainScreen(
                     editTrigger = transactionEditTrigger,
                     deleteTrigger = transactionDeleteTrigger,
                     selectedTxs = selectedTxs,
-                    onSelectedTxsChange = { selectedTxs = it }
+                    onSelectedTxsChange = { selectedTxs = it },
+                    searchQuery = transactionSearchQuery,
+                    onSearchQueryChange = { transactionSearchQuery = it },
+                    calendarTrigger = transactionCalendarTrigger,
+                    filterTrigger = transactionFilterTrigger
                 )
             } else if (currentTab == 4) {
                 // ── Вкладка «Otchetlar» — дашборд с инфографикой ────────
@@ -1874,7 +2080,11 @@ fun MainScreen(
                     scooterViewModel = scooterViewModel,
                     contractHistoryViewModel = contractHistoryViewModel,
                     transactionViewModel = transactionViewModel,
-                    finansiViewModel = finansiViewModel
+                    finansiViewModel = finansiViewModel,
+                    searchQuery = reportSearchQuery,
+                    onSearchQueryChange = { reportSearchQuery = it },
+                    calendarTrigger = reportCalendarTrigger,
+                    filterTrigger = reportFilterTrigger
                 )
             } else if (currentTab == 5) {
                 // ── Вкладка «Finansi» — виртуальные карты + переводы ────
@@ -1887,7 +2097,11 @@ fun MainScreen(
                     onSelectedCardIdsChange = { selectedCardIds = it },
                     onCardClick = { card ->
                         navState = NavigationState.CardHistory(card)
-                    }
+                    },
+                    searchQuery = finansiSearchQuery,
+                    onSearchQueryChange = { finansiSearchQuery = it },
+                    calendarTrigger = finansiCalendarTrigger,
+                    filterTrigger = finansiFilterTrigger
                 )
             } else if (currentTab == 6) {
                 // ── Вкладка «Sozlamalar» ─────────────────────────────────
@@ -2042,6 +2256,7 @@ fun MainScreen(
                                 passportData = result.passportData,
                                 address = result.address,
                                 pinfl = result.pinfl,
+                                autoRenewMode = result.autoRenewMode,
                                 contractGroupsWithIds = result.contractGroupsWithIds
                             )
                         }
@@ -2058,6 +2273,7 @@ fun MainScreen(
                             passportData = result.passportData,
                             address = result.address,
                             pinfl = result.pinfl,
+                            autoRenewMode = result.autoRenewMode,
                             contractGroups = result.contractGroups
                         )
                     }
@@ -2152,6 +2368,63 @@ fun MainScreen(
                 }
             }
         }
+
+        // ── Диалог подтверждения включения авто-отправки SMS ──────────────
+        // Появляется при долгом нажатии на универсальную кнопку SMS.
+        // Содержит две кнопки: «Orqaga» (Back) и «Tasdiqlash» (Confirm).
+        // Подтверждение включает авто-отправку SMS, после чего краткое
+        // нажатие на ту же кнопку выключит её без диалога (безопасно).
+        if (showSmsAutoSendConfirmDialog) {
+            AlertDialog(
+                onDismissRequest = { showSmsAutoSendConfirmDialog = false },
+                title = {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Icon(
+                            Icons.Default.Notifications,
+                            contentDescription = null,
+                            tint = StatusOverdue
+                        )
+                        Spacer(Modifier.width(8.dp))
+                        Text(
+                            "SMS avto-yuborishni yoqish",
+                            style = MaterialTheme.typography.titleLarge
+                        )
+                    }
+                },
+                text = {
+                    Text(
+                        "Siz avto-yuborishni yoqishga tayyorsiz. " +
+                            "Yoqilgandan so'ng, tizim mijozlarga SMS " +
+                            "xabarlarini avtomatik yuboradi.\n\n" +
+                            "Davom etish uchun «Tasdiqlash» tugmasini bosing.",
+                        style = MaterialTheme.typography.bodyMedium
+                    )
+                },
+                containerColor = ClaudeCard,
+                confirmButton = {
+                    PrimaryButton(
+                        label = "Tasdiqlash",
+                        icon = Icons.Default.Check,
+                        onClick = {
+                            settingsViewModel.updateSmsAutoSend(true)
+                            Toast.makeText(
+                                localContext,
+                                "SMS avto-yuborish yoqildi",
+                                Toast.LENGTH_SHORT
+                            ).show()
+                            showSmsAutoSendConfirmDialog = false
+                        }
+                    )
+                },
+                dismissButton = {
+                    SecondaryButton(
+                        label = "Orqaga",
+                        icon = Icons.Default.Close,
+                        onClick = { showSmsAutoSendConfirmDialog = false }
+                    )
+                }
+            )
+        }
     }
 }
 
@@ -2201,6 +2474,7 @@ fun RenterTable(
     val showStart    = isColVisible("col_start")
     val showEnd      = isColVisible("col_end")
     val showBalance  = isColVisible("col_balance")
+    val showRenewal  = isColVisible("col_renewal")
     val showPassport = isColVisible("col_passport")
     val showAddress  = isColVisible("col_address")
     val showPinfl    = isColVisible("col_pinfl")
@@ -2222,6 +2496,7 @@ fun RenterTable(
     val wStart    = 90.dp
     val wEnd      = 90.dp
     val wDebt     = 80.dp
+    val wRenewal  = 110.dp   // Status — Qo'llanma / Avtomatik
     val wPassport = 115.dp
     val wAddress  = 150.dp
     val wPinfl    = 110.dp
@@ -2254,6 +2529,7 @@ fun RenterTable(
                 if (showStart)    SortableHeaderCellFixed(Icons.Default.CalendarToday,        wStart,    "col_start",    sortState) { onSortClick("col_start") }
                 if (showEnd)      SortableHeaderCellFixed(Icons.Default.Event,                wEnd,      "col_end",      sortState) { onSortClick("col_end") }
                 if (showBalance)  SortableHeaderCellFixed(Icons.Default.AccountBalanceWallet, wDebt,     "col_balance",  sortState) { onSortClick("col_balance") }
+                if (showRenewal)  NonSortableHeaderCellFixed(Icons.Default.Refresh,            wRenewal,  "Status")
                 if (showPassport) SortableHeaderCellFixed(Icons.Default.CreditCard,           wPassport, "col_passport", sortState) { onSortClick("col_passport") }
                 if (showAddress)  SortableHeaderCellFixed(Icons.Default.Home,                 wAddress,  "col_address",  sortState) { onSortClick("col_address") }
                 if (showPinfl)    SortableHeaderCellFixed(Icons.Default.Fingerprint,          wPinfl,    "col_pinfl",    sortState) { onSortClick("col_pinfl") }
@@ -2475,6 +2751,38 @@ fun RenterTable(
                                 softWrap = true,
                                 overflow = TextOverflow.Visible
                             )
+                        }
+                        // ── Status (Manual / Auto) ──────────────────────────────
+                        // Показывает режим авто-продления контракта:
+                        //   • «Avtomatik» (зелёным) — система создаёт контракты
+                        //     автоматически при окончании последнего.
+                        //   • «Qo'llanma» (серым) — система НЕ создаёт контракты,
+                        //     пользователь создаёт их вручную.
+                        if (showRenewal) {
+                            val isAuto = renter.autoRenewMode == com.example.data.RenterAutoRenewMode.AUTO
+                            val renewalLabel = if (isAuto) "Avtomatik" else "Qo'llanma"
+                            val renewalColor = if (isAuto) StatusOk else ClaudeTextSecondary
+                            Row(
+                                modifier = Modifier
+                                    .width(wRenewal)
+                                    .padding(horizontal = 4.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Box(
+                                    modifier = Modifier
+                                        .size(8.dp)
+                                        .background(renewalColor, CircleShape)
+                                )
+                                Spacer(Modifier.width(6.dp))
+                                Text(
+                                    renewalLabel,
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = renewalColor,
+                                    fontWeight = FontWeight.SemiBold,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                            }
                         }
                         // ── Опциональные колонки (показываются если включены) ─
                         if (showPassport) {
@@ -2862,6 +3170,15 @@ fun RenterFormDialog(
         mutableStateOf(initialRenter?.rentStartDateTimestamp ?: System.currentTimeMillis())
     }
 
+    // ── Режим авто-продления контракта (Manual / Auto) ─────────────────
+    // По умолчанию MANUAL (безопасное поведение: система не создаёт
+    // контракты автоматически). В режиме редактирования подставляется
+    // текущее значение из БД. Пользователь может переключаться между
+    // MANUAL и AUTO через две кнопки-«таблетки» ниже.
+    var autoRenewMode by remember {
+        mutableStateOf(initialRenter?.autoRenewMode ?: com.example.data.RenterAutoRenewMode.MANUAL)
+    }
+
     // ── Группы контрактов (новый календарь) ───────────────────────────
     // Список групп, выбранных пользователем в календаре. Если список не пуст,
     // он имеет приоритет над автоматической логикой по выбранной дате.
@@ -3192,6 +3509,104 @@ fun RenterFormDialog(
                     )
                 }
 
+                // ── Переключатель «Статус» (Manual / Auto) ──────────────────
+                // Определяет, будет ли система автоматически создавать новый
+                // контракт при наступлении дня окончания последнего контракта.
+                //   • «Qo'llanma» (Manual) — система НЕ создаёт автоматически.
+                //   • «Avtomatik» (Auto) — система создаёт AUTO_RENEW при
+                //     окончании последнего контракта по дате.
+                // По умолчанию Manual (безопасное поведение). Пользователь
+                // может переключаться в любой момент — изменение сохраняется
+                // в Renter.autoRenewMode при сохранении формы.
+                SectionLabel("Status (kontrakt avtomatik yaratilishi)")
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    // ── Кнопка «Qo'llanma» (MANUAL) ──
+                    Surface(
+                        onClick = { autoRenewMode = com.example.data.RenterAutoRenewMode.MANUAL },
+                        shape = RoundedCornerShape(50),
+                        color = if (autoRenewMode == com.example.data.RenterAutoRenewMode.MANUAL)
+                            ClaudeAccentBg else ClaudeCard,
+                        border = BorderStroke(
+                            1.dp,
+                            if (autoRenewMode == com.example.data.RenterAutoRenewMode.MANUAL)
+                                ClaudeAccent else ClaudeDivider
+                        ),
+                        modifier = Modifier.weight(1f)
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(vertical = 10.dp, horizontal = 12.dp),
+                            horizontalArrangement = Arrangement.Center,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Icon(
+                                Icons.Default.Person,
+                                contentDescription = null,
+                                tint = if (autoRenewMode == com.example.data.RenterAutoRenewMode.MANUAL)
+                                    ClaudeAccent else ClaudeTextSecondary,
+                                modifier = Modifier.size(18.dp)
+                            )
+                            Spacer(Modifier.width(6.dp))
+                            Text(
+                                "Qo'llanma",
+                                color = if (autoRenewMode == com.example.data.RenterAutoRenewMode.MANUAL)
+                                    ClaudeAccent else ClaudeTextSecondary,
+                                fontWeight = FontWeight.SemiBold,
+                                style = MaterialTheme.typography.labelLarge
+                            )
+                        }
+                    }
+                    // ── Кнопка «Avtomatik» (AUTO) ──
+                    Surface(
+                        onClick = { autoRenewMode = com.example.data.RenterAutoRenewMode.AUTO },
+                        shape = RoundedCornerShape(50),
+                        color = if (autoRenewMode == com.example.data.RenterAutoRenewMode.AUTO)
+                            StatusOkBg else ClaudeCard,
+                        border = BorderStroke(
+                            1.dp,
+                            if (autoRenewMode == com.example.data.RenterAutoRenewMode.AUTO)
+                                StatusOk else ClaudeDivider
+                        ),
+                        modifier = Modifier.weight(1f)
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(vertical = 10.dp, horizontal = 12.dp),
+                            horizontalArrangement = Arrangement.Center,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Icon(
+                                Icons.Default.Refresh,
+                                contentDescription = null,
+                                tint = if (autoRenewMode == com.example.data.RenterAutoRenewMode.AUTO)
+                                    StatusOk else ClaudeTextSecondary,
+                                modifier = Modifier.size(18.dp)
+                            )
+                            Spacer(Modifier.width(6.dp))
+                            Text(
+                                "Avtomatik",
+                                color = if (autoRenewMode == com.example.data.RenterAutoRenewMode.AUTO)
+                                    StatusOk else ClaudeTextSecondary,
+                                fontWeight = FontWeight.SemiBold,
+                                style = MaterialTheme.typography.labelLarge
+                            )
+                        }
+                    }
+                }
+                // ── Подсказка-описание текущего режима ──────────────────────
+                Text(
+                    text = when (autoRenewMode) {
+                        com.example.data.RenterAutoRenewMode.AUTO ->
+                            "Avtomatik: oxirgi kontrakt tugaganda tizim yangi kontrakt yaratadi."
+                        else ->
+                            "Qo'llanma: kontrakt tugaganda tizim yangi kontrakt yaratmaydi."
+                    },
+                    style = MaterialTheme.typography.labelSmall,
+                    color = ClaudeTextSecondary,
+                    modifier = Modifier.padding(top = 2.dp)
+                )
+
                 // ── ПОЛЕ «КОЛИЧЕСТВО НЕДЕЛЬ» УДАЛЕНО ──────────────────────────
                 // Раньше здесь был ExposedDropdownMenuBox с выбором «1 Hafta»
                 // (7 дней), «2 Hafta», «1 Oy» и т.д. Пользователь явно попросил
@@ -3456,6 +3871,7 @@ fun RenterFormDialog(
                             passportData = passportData.trim(),
                             address = address.trim(),
                             pinfl = pinfl.trim(),
+                            autoRenewMode = autoRenewMode,
                             contractGroups = contractGroups.map { Triple(it.startMs, it.endMs, it.isPaid) },
                             // Передаём полный список групп с existingContractId —
                             // updateRenterWithContracts использует его для
@@ -3506,6 +3922,17 @@ data class RenterFormResult(
     val passportData: String,
     val address: String,
     val pinfl: String,
+    /**
+     * Режим авто-продления контракта:
+     *   • [com.example.data.RenterAutoRenewMode.MANUAL] — система НЕ создаёт
+     *     контракты автоматически при окончании последнего контракта.
+     *   • [com.example.data.RenterAutoRenewMode.AUTO] — система автоматически
+     *     создаёт новый контракт (AUTO_RENEW) при наступлении дня окончания
+     *     последнего контракта.
+     *
+     * По умолчанию MANUAL — безопасное поведение для новых арендаторов.
+     */
+    val autoRenewMode: String = com.example.data.RenterAutoRenewMode.MANUAL,
     // Группы контрактов, выбранные в календаре (если пусто — используется
     // автоматическая логика по выбранной дате). Каждая группа =
     // Triple<startMs, endMs, isPaid>.

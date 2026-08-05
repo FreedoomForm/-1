@@ -45,7 +45,6 @@ import com.example.data.isExternalOut
 import com.example.ui.FinansiViewModel
 import com.example.ui.components.FilterColumn
 import com.example.ui.components.FilterSidePanel
-import com.example.ui.components.UnifiedSearchBar
 import com.example.ui.theme.ClaudeAccent
 import com.example.ui.theme.ClaudeBackground
 import com.example.ui.theme.ClaudeCard
@@ -830,7 +829,17 @@ fun FinansiPanel(
     externalDeleteTrigger: Int = 0,
     selectedCardIds: Set<Int> = emptySet(),
     onSelectedCardIdsChange: (Set<Int>) -> Unit = {},
-    onCardClick: (VirtualCard) -> Unit = {}
+    onCardClick: (VirtualCard) -> Unit = {},
+    // ── Поиск и триггеры календаря/фильтра из TopAppBar ──────────────
+    // Раньше searchQuery был внутренним state этого экрана, а поисковая
+    // панель (UnifiedSearchBar) рендерилась в Column контента. Теперь поиск
+    // живёт в TopAppBar MainActivity (CompactSearchPanel), поэтому query
+    // и колбэки поднимаются сюда. (Календарь на этой вкладке не используется
+    // — у карт нет даты; calendarTrigger остаётcя для симметрии API.)
+    searchQuery: String = "",
+    onSearchQueryChange: (String) -> Unit = {},
+    calendarTrigger: Int = 0,
+    filterTrigger: Int = 0
 ) {
     val cards by viewModel.cards.collectAsStateWithLifecycle()
     val context = LocalContext.current
@@ -859,11 +868,21 @@ fun FinansiPanel(
     // ── Поиск + фильтр колонок ─────────────────────────────────────────────
     // Раньше на вкладке «Finansi» не было ни поиска, ни фильтра — в отличие
     // от остальных вкладок (Ijarachilar / Skuterlar / Kontraktlar / Tranzaksiya).
-    // Теперь добавлены UnifiedSearchBar и FilterSidePanel с 4 колонками:
-    // имя, баланс, тип (REGULAR/EXTERNAL_IN/EXTERNAL_OUT), инфо.
-    var searchQuery by remember { mutableStateOf("") }
+    // Теперь поиск и фильтр живут в TopAppBar MainActivity (CompactSearchPanel),
+    // а state поднят и передаётся параметрами. (Календарь здесь не нужен —
+    // у карт нет даты.)
+    // searchQuery / onSearchQueryChange приходят параметрами.
     var showFilterPanel by remember { mutableStateOf(false) }
     var filterValues by remember { mutableStateOf(mapOf<String, String>()) }
+
+    // ── Реакция на триггер фильтра из TopAppBar ─────────────────────
+    // Когда пользователь нажал кнопку фильтров в CompactSearchPanel,
+    // MainActivity увеличивает filterTrigger — открываем FilterSidePanel.
+    var lastFilterTrigger by remember { mutableStateOf(filterTrigger) }
+    LaunchedEffect(filterTrigger) {
+        if (filterTrigger > lastFilterTrigger) showFilterPanel = true
+        lastFilterTrigger = filterTrigger
+    }
     val cardFilterColumns = remember {
         listOf(
             FilterColumn("col_name",    "Nomi",     "Karta nomi"),
@@ -997,19 +1016,11 @@ fun FinansiPanel(
     // в CardsGrid как header — первый full-span item в LazyVerticalGrid —
     // и скроллится вместе с картами естественным образом.
     //
-    // Сверху над сеткой добавлены UnifiedSearchBar + FilterSidePanel —
-    // такие же, как в остальных вкладках. Фильтр применяется к
-    // filteredOrderedCards (по имени, балансу, типу, инфо).
+    // Поиск живёт в TopAppBar MainActivity (CompactSearchPanel).
+    // FilterSidePanel остаётся здесь (overlay, не часть скроллящегося
+    // контента). Открывается кнопкой фильтров из CompactSearchPanel через
+    // filterTrigger, см. LaunchedEffect выше.
     Column(modifier = Modifier.fillMaxSize()) {
-        UnifiedSearchBar(
-            query = searchQuery,
-            onQueryChange = { searchQuery = it },
-            placeholder = "Qidirish",
-            onCalendarClick = { /* у карт нет календаря — кнопка скрыта */ },
-            calendarActive = false,
-            onFilterClick = { showFilterPanel = true },
-            filterActive = filterValues.any { it.value.isNotBlank() }
-        )
         FilterSidePanel(
             columns = cardFilterColumns,
             filterValues = filterValues,
