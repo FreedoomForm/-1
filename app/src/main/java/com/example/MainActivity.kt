@@ -650,9 +650,30 @@ fun MainScreen(
             val dailyForDialog = repoForDialog.dailyPrice.let { p ->
                 if (p > 0) p else com.example.data.SettingsRepository.DEFAULT_DAILY_PRICE
             }
+            // ── Загружаем суммарное количество неоплаченных дней ──────
+            // Нужно для кнопки «Barcha to'lanmagan kunlarni tanlash (N)»
+            // в DayPickerPaymentDialog. Используем produceState для асинхронной
+            // загрузки из БД — иначе Main thread заблокируется на I/O.
+            val unpaidDaysForDialog by androidx.compose.runtime.produceState(
+                initialValue = 0,
+                rid
+            ) {
+                value = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                    val db = com.example.data.AppDatabase.getDatabase(localContext)
+                    val unpaid = db.contractHistoryDao().getUnpaidContractsForRenter(rid)
+                    val dayMs = 24L * 60 * 60 * 1000
+                    unpaid.sumOf { c ->
+                        val ws = c.weekStart ?: return@sumOf 0L
+                        val we = c.weekEnd ?: return@sumOf 0L
+                        val diff = we - ws
+                        if (diff <= 0) 1L else ((diff + dayMs - 1) / dayMs)
+                    }.toInt().coerceAtLeast(0)
+                }
+            }
             DayPickerPaymentDialog(
                 renterName = renterForPayment.name,
                 dailyPrice = dailyForDialog,
+                unpaidDays = unpaidDaysForDialog,
                 onConfirm = { days ->
                     viewModel.payForDaysForRenters(setOf(rid), days)
                     Toast.makeText(
@@ -1434,9 +1455,34 @@ fun MainScreen(
                         }
                         val renterNameForDialog = renters
                             .firstOrNull { it.id in selectedRenters }?.name ?: "Mijoz"
+                        // ── Загружаем суммарное количество неоплаченных дней ──
+                        // Суммируем по ВСЕМ выбранным арендаторам. Используем
+                        // produceState с ключом selectedRenters — при изменении
+                        // выбора перезагружаем. Значение 0 = нет неоплаченных
+                        // дней, кнопка «Barcha to'lanmagan kunlarni tanlash»
+                        // в этом случае не показывается.
+                        val unpaidDaysForDialog by androidx.compose.runtime.produceState(
+                            initialValue = 0,
+                            selectedRenters
+                        ) {
+                            value = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                                val db = com.example.data.AppDatabase.getDatabase(localContext)
+                                val dayMs = 24L * 60 * 60 * 1000
+                                selectedRenters.sumOf { rid ->
+                                    val unpaid = db.contractHistoryDao().getUnpaidContractsForRenter(rid)
+                                    unpaid.sumOf { c ->
+                                        val ws = c.weekStart ?: return@sumOf 0L
+                                        val we = c.weekEnd ?: return@sumOf 0L
+                                        val diff = we - ws
+                                        if (diff <= 0) 1L else ((diff + dayMs - 1) / dayMs)
+                                    }
+                                }.toInt().coerceAtLeast(0)
+                            }
+                        }
                         DayPickerPaymentDialog(
                             renterName = renterNameForDialog,
                             dailyPrice = dailyPriceForDialog,
+                            unpaidDays = unpaidDaysForDialog,
                             onConfirm = { days ->
                                 viewModel.payForDaysForRenters(selectedRenters, days)
                                 Toast.makeText(

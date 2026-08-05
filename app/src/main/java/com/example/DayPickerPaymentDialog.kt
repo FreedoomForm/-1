@@ -54,12 +54,22 @@ import com.example.ui.theme.StatusOk
  * оплатить: 7 (неделя), 14 (2 недели), 30 (месяц), 60 (2 месяца) или
  * произвольное число дней через поле ввода.
  *
+ * Дополнительно: снизу поля ввода есть кнопка «Barcha to'lanmagan kunlarni
+ * tanlash (N)» — она автоматически подставляет в поле ввода суммарное
+ * количество неоплаченных дней по выбранным арендаторам. Удобно, когда
+ * у арендатора накопился долг за несколько недель: один тап — и поле
+ * заполнено правильным числом.
+ *
  * Показывает итоговую сумму: days × dailyPrice.
  *
  * При подтверждении вызывает [onConfirm] с выбранным числом дней.
  *
  * @param renterName имя арендатора (для заголовка диалога).
  * @param dailyPrice дневная ставка (для расчёта суммы).
+ * @param unpaidDays суммарное количество неоплаченных дней по выбранному
+ *                   арендатору (или по всем выбранным, если их несколько).
+ *                   Используется для кнопки «Barcha to'lanmagan kunlarni
+ *                   tanlash (N)». Если 0 — кнопка не показывается.
  * @param onConfirm callback с выбранным числом дней.
  * @param onDismiss callback закрытия диалога.
  */
@@ -67,6 +77,7 @@ import com.example.ui.theme.StatusOk
 fun DayPickerPaymentDialog(
     renterName: String,
     dailyPrice: Double,
+    unpaidDays: Int = 0,
     onConfirm: (Int) -> Unit,
     onDismiss: () -> Unit
 ) {
@@ -145,6 +156,56 @@ fun DayPickerPaymentDialog(
                     shape = RoundedCornerShape(8.dp),
                     singleLine = true
                 )
+
+                // ── Кнопка «Barcha to'lanmagan kunlarni tanlash (N)» ────
+                // Показывается только если у арендатора(ов) есть неоплаченные
+                // дни (unpaidDays > 0). При нажатии — подставляет unpaidDays
+                // в поле ввода, чтобы пользователь сразу увидел итоговую сумму
+                // и мог нажать «To'lash».
+                if (unpaidDays > 0) {
+                    Spacer(Modifier.height(8.dp))
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(8.dp))
+                            .background(ClaudeAccentBg)
+                            .border(1.dp, ClaudeAccent.copy(alpha = 0.4f), RoundedCornerShape(8.dp))
+                            .clickable {
+                                // Подставляем unpaidDays в поле ввода и
+                                // обновляем selectedDays для подсчёта суммы.
+                                customDaysText = unpaidDays.toString()
+                                selectedDays = unpaidDays
+                            }
+                            .padding(horizontal = 12.dp, vertical = 10.dp)
+                    ) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                text = "Barcha to'lanmagan kunlarni tanlash",
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = ClaudeAccent,
+                                fontWeight = FontWeight.SemiBold
+                            )
+                            // Бейдж с количеством неоплаченных дней
+                            Box(
+                                modifier = Modifier
+                                    .clip(CircleShape)
+                                    .background(ClaudeAccent)
+                                    .padding(horizontal = 8.dp, vertical = 2.dp)
+                            ) {
+                                Text(
+                                    text = "$unpaidDays",
+                                    color = ClaudeCard,
+                                    fontWeight = FontWeight.Bold,
+                                    fontSize = 12.sp
+                                )
+                            }
+                        }
+                    }
+                }
 
                 Spacer(Modifier.height(12.dp))
 
