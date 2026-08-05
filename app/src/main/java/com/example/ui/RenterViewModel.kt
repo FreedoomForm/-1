@@ -135,6 +135,26 @@ class RenterViewModel(application: Application) : AndroidViewModel(application) 
             val expiryTime = startTimestamp + duration * dayMs
 
             val effectiveWeeklyPrice = if (weeklyPrice > 0) weeklyPrice else SettingsRepository.DEFAULT_WEEKLY_PRICE
+            // ── Дневная ставка для сценария календаря (scenario 4) ──────────
+            // Контракты из календаря могут быть любой длины (5, 9, 14 дней),
+            // поэтому их сумма должна вычисляться по фактическим дням:
+            //   contractAmount = dailyPrice × ceil((endMs - startMs) / dayMs)
+            // Ранее использовался effectiveWeeklyPrice (= 7 дней), что приводило
+            // к багу: контракт на 9 дней получал сумму 7 дней.
+            val settingsRepoForDaily = SettingsRepository(getApplication())
+            val effectiveDailyPrice = if (settingsRepoForDaily.dailyPrice > 0)
+                settingsRepoForDaily.dailyPrice else SettingsRepository.DEFAULT_DAILY_PRICE
+
+            // Хелпер: вычисляет сумму контракта по его длине в днях.
+            // Для scenario 4 (календарные группы) — по дням.
+            // Для остальных сценариев — effectiveWeeklyPrice (совместимость).
+            fun contractAmountFor(startMs: Long, endMs: Long, isCalendarGroup: Boolean): Double {
+                if (!isCalendarGroup) return effectiveWeeklyPrice
+                val days = if (endMs > startMs) {
+                    kotlin.math.ceil((endMs - startMs).toDouble() / dayMs).toInt()
+                } else 1
+                return effectiveDailyPrice * days
+            }
 
             // ── Определяем сценарий создания ──────────────────────────────
             //   SCENARIO_OVERDUE   — выбранная дата была более недели назад
@@ -201,7 +221,8 @@ class RenterViewModel(application: Application) : AndroidViewModel(application) 
             //                        isPaid=false → -weeklyPrice (долг)
             // Также учитываем явный debt из формы (если указан).
             val contractsBalance = specs.fold(0.0) { acc, s ->
-                acc + if (s.isPaid) effectiveWeeklyPrice else -effectiveWeeklyPrice
+                val amt = contractAmountFor(s.weekStart, s.weekEnd, isCalendarGroup = (scenario == 4))
+                acc + if (s.isPaid) amt else -amt
             }
             val initialBalance = when {
                 debt > 0 -> -debt + contractsBalance
@@ -258,18 +279,26 @@ class RenterViewModel(application: Application) : AndroidViewModel(application) 
                                 "${calendarMarker}Kechikkan holda yaratildi (qarz)"
                         }
 
+                        // ── Сумма контракта зависит от сценария ──────────────
+                        // Для scenario 4 (календарь) — по дням.
+                        // Для остальных — effectiveWeeklyPrice (7 дней).
+                        val contractAmount = contractAmountFor(
+                            startMs = spec.weekStart,
+                            endMs = spec.weekEnd,
+                            isCalendarGroup = (scenario == 4)
+                        )
                         val contractId = historyRepository.insert(ContractHistoryEntry(
                             renterId = savedRenter.id,
                             timestamp = now,
                             type = contractType,
-                            amount = effectiveWeeklyPrice,
+                            amount = contractAmount,
                             notes = notes,
                             renterName = savedRenter.name,
                             renterPhone = savedRenter.phoneNumber,
                             scooterName = savedRenter.scooterName,
                             weekStart = spec.weekStart,
                             weekEnd = spec.weekEnd,
-                            weeklyPrice = effectiveWeeklyPrice,
+                            weeklyPrice = contractAmount,
                             passportData = savedRenter.passportData,
                             address = savedRenter.address,
                             pinfl = savedRenter.pinfl,
@@ -298,7 +327,7 @@ class RenterViewModel(application: Application) : AndroidViewModel(application) 
                                         scooterId = savedRenter.scooterId,
                                         timestamp = now,
                                         type = com.example.data.Transaction.TYPE_PAYMENT,
-                                        amount = effectiveWeeklyPrice,
+                                        amount = contractAmount,
                                         notes = notes,
                                         renterName = savedRenter.name,
                                         renterPhone = savedRenter.phoneNumber,
@@ -312,7 +341,7 @@ class RenterViewModel(application: Application) : AndroidViewModel(application) 
 
                             try {
                                 virtualCardRepository.depositContractIncome(
-                                    amount = effectiveWeeklyPrice,
+                                    amount = contractAmount,
                                     note = "To'lov: ${savedRenter.name} — #$contractId",
                                     contractId = contractId
                                 )
@@ -815,9 +844,15 @@ class RenterViewModel(application: Application) : AndroidViewModel(application) 
         pinfl: String,
         groups: List<com.example.RenterFormContractGroup>
     ) {
-        val effectivePrice = if (weeklyPrice > 0) weeklyPrice else SettingsRepository.DEFAULT_WEEKLY_PRICE
         val settingsRepo = SettingsRepository(getApplication())
-        val realWeeklyPrice = if (settingsRepo.weeklyPrice > 0) settingsRepo.weeklyPrice else effectivePrice
+        // ── Дневная ставка — ЕДИНСТВЕННЫЙ источник истины для суммы контракта ──
+        // Ранее здесь использовался realWeeklyPrice (= daily × 7), что приводило
+        // к багу: контракт на 9 дней получал сумму 7 дней (420000 вместо 540000).
+        // Теперь сумма вычисляется ПО ФАКТИЧЕСКОЙ ДЛИНЕ контракта в днях:
+        //   amount = dailyPrice × ceil((endMs - startMs) / dayMs)
+        val dailyPrice = if (settingsRepo.dailyPrice > 0) settingsRepo.dailyPrice
+                         else SettingsRepository.DEFAULT_DAILY_PRICE
+        val dayMs = 24L * 60 * 60 * 1000
         val now = System.currentTimeMillis()
 
         // ── 1. Загружаем все текущие контракты арендатора ──────────────
@@ -870,18 +905,26 @@ class RenterViewModel(application: Application) : AndroidViewModel(application) 
         val allToAdd: List<com.example.RenterFormContractGroup> = toAdd + toUpdate.map { it.newGroup }
 
         for (g in allToAdd) {
+            // ── Вычисляем сумму по фактической длине контракта в днях ──────
+            // 9 дней × 60000 = 540000, 7 дней × 60000 = 420000, и т.д.
+            // Используем ceil: даже 1 час на 8-й день = полные 8 дней.
+            val daysCount = if (g.endMs > g.startMs) {
+                kotlin.math.ceil((g.endMs - g.startMs).toDouble() / dayMs).toInt()
+            } else 1
+            val contractAmount = dailyPrice * daysCount
+
             val entry = ContractHistoryEntry(
                 renterId = existing.id,
                 timestamp = now,
                 type = ContractHistoryEntry.TYPE_AUTO_RENEW,
-                amount = realWeeklyPrice,
-                notes = "Kalendar orqali tahrirlandi${if (g.isPaid) " (to'langan)" else " (to'lanmagan)"}",
+                amount = contractAmount,
+                notes = "Kalendar orqali tahrirlandi${if (g.isPaid) " (to'langan)" else " (to'lanmagan)"} — $daysCount kun",
                 renterName = newName,
                 renterPhone = newPhone,
                 scooterName = newScooterName ?: scooter?.name ?: "",
                 weekStart = g.startMs,
                 weekEnd = g.endMs,
-                weeklyPrice = realWeeklyPrice,
+                weeklyPrice = contractAmount,
                 passportData = passportData,
                 address = address,
                 pinfl = pinfl,
@@ -905,8 +948,8 @@ class RenterViewModel(application: Application) : AndroidViewModel(application) 
                             scooterId = newScooterId,
                             timestamp = now,
                             type = Transaction.TYPE_PAYMENT,
-                            amount = realWeeklyPrice,
-                            notes = "Tahrir orqali to'lov",
+                            amount = contractAmount,
+                            notes = "Tahrir orqali to'lov ($daysCount kun)",
                             renterName = newName,
                             renterPhone = newPhone,
                             scooterName = newScooterName ?: "",
@@ -918,8 +961,8 @@ class RenterViewModel(application: Application) : AndroidViewModel(application) 
                 }
                 try {
                     virtualCardRepository.depositContractIncome(
-                        amount = realWeeklyPrice,
-                        note = "To'lov: $newName (tahrir) — #$newContractId",
+                        amount = contractAmount,
+                        note = "To'lov: $newName (tahrir) — #$newContractId ($daysCount kun)",
                         contractId = newContractId
                     )
                 } catch (e: Exception) {
@@ -928,7 +971,7 @@ class RenterViewModel(application: Application) : AndroidViewModel(application) 
             }
 
             // Обновляем баланс арендатора
-            val balanceDelta = if (g.isPaid) realWeeklyPrice else -realWeeklyPrice
+            val balanceDelta = if (g.isPaid) contractAmount else -contractAmount
             val newBalance = renter.balance + balanceDelta
             renter = renter.copy(
                 balance = newBalance,

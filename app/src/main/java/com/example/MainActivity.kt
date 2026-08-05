@@ -707,12 +707,23 @@ fun MainScreen(
             if (renterToEdit != null) {
                 val weekly by settingsViewModel.weeklyPrice.collectAsStateWithLifecycle()
                 val monthly by settingsViewModel.monthlyPrice.collectAsStateWithLifecycle()
+                // ── Загружаем существующие контракты арендатора для календаря ──
+                // Без этого календарь в RenterFormDialog показывает «Kontraktlar yo'q»,
+                // хотя у арендатора в БД есть контракты. Аналогично коду ниже
+                // (строка ~1993) для формы из главного списка.
+                val editRenterIdForHistory = renterToEdit?.id ?: -1
+                val existingContractsForHistory by contractHistoryViewModel
+                    .contractsForRenter(editRenterIdForHistory)
+                    .collectAsStateWithLifecycle()
+                val existingContractsForHistorySafe: List<com.example.data.ContractHistoryEntry> =
+                    if (renterToEdit != null) existingContractsForHistory else emptyList()
                 RenterFormDialog(
                     initialRenter = renterToEdit,
                     weeklyPrice = weekly,
                     monthlyPrice = monthly,
                     scooters = scooters,
                     activeRenters = renters,
+                    existingContracts = existingContractsForHistorySafe,
                     onDismiss = { renterToEdit = null },
                     onSave = { result ->
                         renterToEdit?.let {
@@ -724,7 +735,8 @@ fun MainScreen(
                                 newIsActive = result.isActive, weeklyPrice = weekly,
                                 passportData = result.passportData,
                                 address = result.address,
-                                pinfl = result.pinfl
+                                pinfl = result.pinfl,
+                                contractGroupsWithIds = result.contractGroupsWithIds
                             )
                         }
                         renterToEdit = null
