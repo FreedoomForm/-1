@@ -23,6 +23,7 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.material.icons.Icons
@@ -1636,6 +1637,26 @@ fun MainScreen(
                             }
                     }
 
+                // ── Все контракты по арендаторам (для раскрывающейся таблицы) ──
+                // Группировка по renterId, только CREATED + AUTO_RENEW (без PAYMENT/
+                // TERMINATED/RETURNED — это транзакции, не контракты). Сортировка
+                // ASC по weekStart — чтобы в раскрывающейся таблице контракты шли
+                // в хронологическом порядке.
+                val contractsByRenter: Map<Int, List<com.example.data.ContractHistoryEntry>> =
+                    remember(contractHistory) {
+                        contractHistory
+                            .asSequence()
+                            .filter {
+                                it.type == com.example.data.ContractHistoryEntry.TYPE_CREATED ||
+                                it.type == com.example.data.ContractHistoryEntry.TYPE_AUTO_RENEW
+                            }
+                            .filter { it.renterId > 0 }
+                            .groupBy { it.renterId }
+                            .mapValues { (_, entries) ->
+                                entries.sortedBy { it.weekStart ?: it.timestamp }
+                            }
+                    }
+
                 // Helper: даты последнего контракта (с fallback на поля Renter).
                 fun latestStartTs(r: Renter): Long =
                     latestContractByRenter[r.id]?.weekStart ?: r.rentStartDateTimestamp
@@ -1709,6 +1730,7 @@ fun MainScreen(
                     sortState = renterSortState,
                     columnVisibility = renterColumnVisibility,
                     latestContractByRenter = latestContractByRenter,
+                    contractsByRenter = contractsByRenter,
                     onSortClick = { colId ->
                         renterSortState = renterSortState.click(colId)
                     },
@@ -2172,6 +2194,13 @@ fun RenterTable(
     sortState: TableSortState,
     columnVisibility: Map<String, Boolean>,
     latestContractByRenter: Map<Int, com.example.data.ContractHistoryEntry>,
+    /**
+     * Все контракты арендаторов, сгруппированные по renterId.
+     * Используется для отображения раскрывающейся таблицы контрактов под
+     * строкой арендатора (когда пользователь нажимает на стрелку раскрытия
+     * в первом столбце). Сортировка — ASC по weekStart.
+     */
+    contractsByRenter: Map<Int, List<com.example.data.ContractHistoryEntry>> = emptyMap(),
     onSortClick: (String) -> Unit,
     onSelect: (Int, Boolean) -> Unit,
     onClick: (Renter) -> Unit
@@ -2201,6 +2230,7 @@ fun RenterTable(
     // а пользователь скроллит таблицу по горизонтали если колонок много.
     val hasAnyExtraVisible = showPassport || showAddress || showPinfl
 
+    val wExpand   = 40.dp    // ← стрелка раскрытия контрактов (новая колонка перед №)
     val wNum      = 40.dp    // № — порядковый номер строки
     val wName     = 200.dp   // увеличено с 160 — вмещает «Имя Фамилия Отчество» без обрезки
     val wPhone    = 115.dp
@@ -2215,6 +2245,13 @@ fun RenterTable(
     val dateFmt = remember { SimpleDateFormat("dd.MM.yyyy", Locale.getDefault()) }
     val hScrollState = rememberScrollState()
 
+    // ── Раскрытые строки ───────────────────────────────────────────────
+    // Множество ID арендаторов, у которых раскрыта встроенная таблица
+    // контрактов. Управляется кнопкой-стрелкой в первом столбце. Локальный
+    // state — не персистится между перезапусками, что приемлемо: это
+    // вспомогательная навигация, а не пользовательские данные.
+    var expandedRenterIds by remember { mutableStateOf<Set<Int>>(emptySet()) }
+
     Column(modifier = Modifier.fillMaxSize()) {
         // ── Заголовок ────────────────────────────────────────────────────
         Surface(color = ClaudeCard, modifier = Modifier.fillMaxWidth()) {
@@ -2224,6 +2261,8 @@ fun RenterTable(
                     .padding(horizontal = 8.dp, vertical = 4.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
+                // Пустая ячейка в столбце стрелки раскрытия (шапка)
+                Spacer(modifier = Modifier.width(wExpand))
                 NonSortableHeaderCellFixed(Icons.Default.Numbers, wNum, "№")
                 if (showName)     SortableHeaderCellFixed(Icons.Default.Person,               wName,     "col_name",     sortState) { onSortClick("col_name") }
                 if (showPhone)    SortableHeaderCellFixed(Icons.Default.Phone,                wPhone,    "col_phone",    sortState) { onSortClick("col_phone") }
@@ -2257,32 +2296,85 @@ fun RenterTable(
         LazyColumn(modifier = Modifier.fillMaxSize()) {
             itemsIndexed(renters, key = { _, it -> it.id }) { idx, renter ->
                 val isSelected = selected.contains(renter.id)
+                val isExpanded = expandedRenterIds.contains(renter.id)
                 val status = statusOf(renter)
                 val sColor = statusColor(status)
 
-                Row(
+                Column(
                     modifier = Modifier
                         .fillMaxWidth()
                         .padding(horizontal = 8.dp, vertical = 4.dp)
                 ) {
                     Row(
                         modifier = Modifier
-                            .horizontalScroll(hScrollState)
-                            .border(
-                                width = if (isSelected) 2.dp else 1.5.dp,
-                                color = sColor,
-                                shape = RoundedCornerShape(8.dp)
-                            )
-                            .background(
-                                if (isSelected) Color(0xFFF3F4F6) else Color.White
-                            )
-                            .combinedClickable(
-                                onClick = { if (isSelected) onSelect(renter.id, false) else onClick(renter) },
-                                onLongClick = { onSelect(renter.id, !isSelected) }
-                            )
-                            .padding(horizontal = 8.dp, vertical = 10.dp),
+                            .fillMaxWidth()
+                            .horizontalScroll(hScrollState),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
+                        // ── Стрелка раскрытия контрактов ──────────────────
+                        // Поведение (по запросу пользователя):
+                        //   • Обычное состояние → стрелка ВПРАВО (KeyboardArrowRight).
+                        //   • Раскрыто (isExpanded) → стрелка ВНИЗ (повёрнута на 90°).
+                        //   • Выбран (isSelected) → стрелка ВВЕРХ (повёрнута на -90°).
+                        //     Это визуальный индикатор выбора, дополняющий цветную
+                        //     рамку и серый фон строки.
+                        // Логика приоритета: isSelected > isExpanded (если арендатор
+                        // выбран и одновременно раскрыт — показываем стрелку вверх,
+                        // т.к. выбор важнее для пользователя).
+                        val arrowRotation = when {
+                            isSelected -> -90f   // вверх
+                            isExpanded -> 90f    // вниз
+                            else -> 0f           // вправо (исходное состояние иконки)
+                        }
+                        val arrowTint = when {
+                            isSelected -> ClaudeAccent
+                            isExpanded -> ClaudeAccent
+                            else -> ClaudeTextSecondary
+                        }
+                        Box(
+                            modifier = Modifier
+                                .width(wExpand)
+                                .height(40.dp)
+                                .clickable {
+                                    // Переключаем раскрытие. Клик по стрелке НЕ
+                                    // вызывает onClick строки и НЕ переключает
+                                    // выбор — это отдельное действие.
+                                    expandedRenterIds = if (isExpanded) {
+                                        expandedRenterIds - renter.id
+                                    } else {
+                                        expandedRenterIds + renter.id
+                                    }
+                                },
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.KeyboardArrowRight,
+                                contentDescription = if (isExpanded) "Yig'ish" else "Kontraktlar",
+                                tint = arrowTint,
+                                modifier = Modifier
+                                    .size(24.dp)
+                                    .rotate(arrowRotation)
+                            )
+                        }
+
+                        // ── Основная строка арендатора (№ + Mijoz + Tel + ...) ──
+                        Row(
+                            modifier = Modifier
+                                .border(
+                                    width = if (isSelected) 2.dp else 1.5.dp,
+                                    color = sColor,
+                                    shape = RoundedCornerShape(8.dp)
+                                )
+                                .background(
+                                    if (isSelected) Color(0xFFF3F4F6) else Color.White
+                                )
+                                .combinedClickable(
+                                    onClick = { if (isSelected) onSelect(renter.id, false) else onClick(renter) },
+                                    onLongClick = { onSelect(renter.id, !isSelected) }
+                                )
+                                .padding(horizontal = 8.dp, vertical = 10.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
                         // ── № — порядковый номер строки ──
                         Text(
                             "${idx + 1}",
@@ -2428,6 +2520,161 @@ fun RenterTable(
                                 softWrap = true,
                                 overflow = TextOverflow.Visible
                             )
+                        }
+                        } // ── конец основной строки (inner Row с combinedClickable) ──
+                    } // ── конец outer Row (стрелка + основная строка) ──
+
+                    // ── Раскрывающаяся таблица контрактов ──────────────────
+                    // Показывается под строкой арендатора, когда пользователь
+                    // нажал на стрелку раскрытия (isExpanded = true).
+                    // Отступ слева = wExpand + wNum + 8.dp (стрелка + № + padding),
+                    // чтобы таблица визуально начиналась со 2-го столбца после
+                    // номера арендатора (как просил пользователь: «на два столбцов
+                    // вправо после столбца номер арендатора»).
+                    if (isExpanded) {
+                        val contracts = contractsByRenter[renter.id].orEmpty()
+                            .filter {
+                                it.type == com.example.data.ContractHistoryEntry.TYPE_CREATED ||
+                                it.type == com.example.data.ContractHistoryEntry.TYPE_AUTO_RENEW
+                            }
+                            .sortedBy { it.weekStart ?: it.timestamp }
+
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .horizontalScroll(hScrollState)
+                                .padding(top = 2.dp, bottom = 4.dp)
+                        ) {
+                            // Отступ: стрелка (wExpand) + № (wNum) + 8dp
+                            Spacer(modifier = Modifier.width(wExpand + wNum + 8.dp))
+                            // ── Карточка с таблицей контрактов ──────────────
+                            Surface(
+                                shape = RoundedCornerShape(8.dp),
+                                color = Color(0xFFFAFAF7),
+                                border = androidx.compose.foundation.BorderStroke(
+                                    1.dp,
+                                    ClaudeDivider
+                                ),
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Column(
+                                    modifier = Modifier.padding(8.dp),
+                                    verticalArrangement = Arrangement.spacedBy(4.dp)
+                                ) {
+                                    Text(
+                                        text = "Kontraktlar (${contracts.size})",
+                                        style = MaterialTheme.typography.titleSmall,
+                                        color = ClaudeAccent,
+                                        fontWeight = FontWeight.SemiBold
+                                    )
+                                    if (contracts.isEmpty()) {
+                                        Text(
+                                            text = "Kontraktlar yo'q",
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = ClaudeTextSecondary
+                                        )
+                                    } else {
+                                        // ── Заголовок мини-таблицы ─────────────
+                                        Row(
+                                            modifier = Modifier.fillMaxWidth(),
+                                            horizontalArrangement = Arrangement.spacedBy(6.dp)
+                                        ) {
+                                            Text(
+                                                "ID",
+                                                modifier = Modifier.width(40.dp),
+                                                style = MaterialTheme.typography.labelSmall,
+                                                color = ClaudeTextSecondary,
+                                                fontWeight = FontWeight.SemiBold
+                                            )
+                                            Text(
+                                                "Holat",
+                                                modifier = Modifier.width(80.dp),
+                                                style = MaterialTheme.typography.labelSmall,
+                                                color = ClaudeTextSecondary,
+                                                fontWeight = FontWeight.SemiBold
+                                            )
+                                            Text(
+                                                "Boshlanish",
+                                                modifier = Modifier.width(90.dp),
+                                                style = MaterialTheme.typography.labelSmall,
+                                                color = ClaudeTextSecondary,
+                                                fontWeight = FontWeight.SemiBold
+                                            )
+                                            Text(
+                                                "Tugash",
+                                                modifier = Modifier.width(90.dp),
+                                                style = MaterialTheme.typography.labelSmall,
+                                                color = ClaudeTextSecondary,
+                                                fontWeight = FontWeight.SemiBold
+                                            )
+                                            Text(
+                                                "Summa",
+                                                modifier = Modifier.width(80.dp),
+                                                style = MaterialTheme.typography.labelSmall,
+                                                color = ClaudeTextSecondary,
+                                                fontWeight = FontWeight.SemiBold,
+                                                textAlign = TextAlign.End
+                                            )
+                                        }
+                                        HorizontalDivider(color = ClaudeDivider, thickness = 1.dp)
+                                        // ── Строки контрактов ──────────────────
+                                        contracts.forEach { c ->
+                                            val cColor = if (c.isPaid) StatusOk else StatusOverdue
+                                            val cStatus = if (c.isPaid) "To'langan" else "To'lanmagan"
+                                            val startStr = c.weekStart?.let { dateFmt.format(Date(it)) } ?: "—"
+                                            val endStr = c.weekEnd?.let { dateFmt.format(Date(it)) } ?: "—"
+                                            Row(
+                                                modifier = Modifier
+                                                    .fillMaxWidth()
+                                                    .padding(vertical = 2.dp),
+                                                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                                                verticalAlignment = Alignment.CenterVertically
+                                            ) {
+                                                Text(
+                                                    "#${c.id}",
+                                                    modifier = Modifier.width(40.dp),
+                                                    style = MaterialTheme.typography.bodySmall,
+                                                    color = ClaudeTextSecondary
+                                                )
+                                                Surface(
+                                                    shape = RoundedCornerShape(4.dp),
+                                                    color = if (c.isPaid) StatusOkBg else StatusOverdueBg
+                                                ) {
+                                                    Text(
+                                                        cStatus,
+                                                        modifier = Modifier
+                                                            .width(80.dp)
+                                                            .padding(horizontal = 4.dp, vertical = 2.dp),
+                                                        style = MaterialTheme.typography.labelSmall,
+                                                        color = cColor,
+                                                        fontWeight = FontWeight.SemiBold
+                                                    )
+                                                }
+                                                Text(
+                                                    startStr,
+                                                    modifier = Modifier.width(90.dp),
+                                                    style = MaterialTheme.typography.bodySmall,
+                                                    color = ClaudeText
+                                                )
+                                                Text(
+                                                    endStr,
+                                                    modifier = Modifier.width(90.dp),
+                                                    style = MaterialTheme.typography.bodySmall,
+                                                    color = ClaudeText
+                                                )
+                                                Text(
+                                                    c.amount.toLong().toString(),
+                                                    modifier = Modifier.width(80.dp),
+                                                    style = MaterialTheme.typography.bodySmall,
+                                                    color = cColor,
+                                                    fontWeight = FontWeight.Bold,
+                                                    textAlign = TextAlign.End
+                                                )
+                                            }
+                                        }
+                                    }
+                                }
+                            }
                         }
                     }
                 }
