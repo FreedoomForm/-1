@@ -740,35 +740,14 @@ private fun GroupsPanel(
             )
         }
 
-        Spacer(Modifier.height(10.dp))
-
-        // ── Ряд 2: список существующих контрактов ─────────────────────
-        // Каждый контракт показан как отдельная карточка со:
-        //   • индикатором статуса (зелёная/красная полоса слева),
-        //   • датами начала и окончания,
-        //   • кнопкой «O'chir» (удалить).
-        // Список вертикальный — у каждой карточки своя строка, без
-        // горизонтальной прокрутки. Если контрактов нет — показываем
-        // подсказку, призывающую выбрать статус выше.
-        if (groups.isEmpty()) {
-            Text(
-                text = "Kontraktlar yo'q — yuqoridagi tugmalardan birini bosing",
-                fontSize = 12.sp,
-                color = ClaudeTextSecondary,
-                modifier = Modifier.padding(vertical = 4.dp)
-            )
-        } else {
-            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                groups.forEach { g ->
-                    ContractListItem(
-                        group = g,
-                        isActive = g.id == activeGroupId,
-                        onClick = { onActiveGroupChange(if (g.id == activeGroupId) null else g.id) },
-                        onRemove = { onRemoveGroup(g.id) }
-                    )
-                }
-            }
-        }
+        // ── Список существующих контрактов удалён из GroupsPanel ───────
+        // Раньше список контрактов дублировался: один раз здесь (внутри
+        // календаря, под кнопками статуса) и второй раз — в MainActivity.kt
+        // в блоке «Kontraktlar ro'yxati (N)» под календарём. Пользователь
+        // просил оставить только нижний список. Подсказка о пустом списке
+        // тоже убрана — её заменяет текст-хелп в самом календаре ниже
+        // (см. блок «Yuqoridagi «To'langan» yoki «To'lanmagan» tugmasini
+        // bosing» в строках ~469-490).
     }
 }
 
@@ -825,75 +804,9 @@ private fun BigStatusTile(
     }
 }
 
-/* ── Карточка контракта в списке под календарём ────────────────────────── */
-@Composable
-private fun ContractListItem(
-    group: ContractGroup,
-    isActive: Boolean,
-    onClick: () -> Unit,
-    onRemove: () -> Unit
-) {
-    val color = if (group.isPaid) StatusOk else StatusOverdue
-    val dateFmt = remember {
-        java.text.SimpleDateFormat("dd.MM.yyyy", java.util.Locale.getDefault())
-    }
-    val startStr = dateFmt.format(java.util.Date(group.startMs))
-    val endStr = dateFmt.format(java.util.Date(group.endMs))
 
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clip(RoundedCornerShape(8.dp))
-            .background(if (isActive) color.copy(alpha = 0.15f) else ClaudeAccentBg)
-            .border(1.dp, color.copy(alpha = 0.5f), RoundedCornerShape(8.dp))
-            .clickable { onClick() }
-            .padding(horizontal = 10.dp, vertical = 8.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(8.dp)
-    ) {
-        // Левая цветная полоса-индикатор статуса
-        Box(
-            modifier = Modifier
-                .size(width = 4.dp, height = 32.dp)
-                .clip(RoundedCornerShape(2.dp))
-                .background(color)
-        )
-
-        // Даты начала → окончания
-        Column(modifier = Modifier.weight(1f)) {
-            Text(
-                text = "$startStr → $endStr",
-                fontSize = 13.sp,
-                color = ClaudeText,
-                fontWeight = FontWeight.SemiBold
-            )
-            Text(
-                text = if (group.isPaid) "To'langan" else "To'lanmagan",
-                fontSize = 11.sp,
-                color = color,
-                fontWeight = FontWeight.Bold
-            )
-        }
-
-        // Кнопка удаления контракта
-        Box(
-            modifier = Modifier
-                .size(32.dp)
-                .clip(CircleShape)
-                .background(ClaudeAccentBg)
-                .border(1.dp, ClaudeDivider, CircleShape)
-                .clickable { onRemove() },
-            contentAlignment = Alignment.Center
-        ) {
-            Icon(
-                Icons.Default.Close,
-                contentDescription = "Kontraktni o'chirish",
-                tint = StatusOverdue,
-                modifier = Modifier.size(16.dp)
-            )
-        }
-    }
-}
+/* ── Карточка контракта в списке (удалена — список теперь рисуется только
+   в MainActivity.kt в блоке «Kontraktlar ro'yxati» под календарём). ──── */
 
 
 /* ── Легенда ────────────────────────────────────────────────────────────── */
