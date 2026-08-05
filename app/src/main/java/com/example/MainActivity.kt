@@ -2531,6 +2531,20 @@ fun RenterTable(
                     // чтобы таблица визуально начиналась со 2-го столбца после
                     // номера арендатора (как просил пользователь: «на два столбцов
                     // вправо после столбца номер арендатора»).
+                    //
+                    // ВАЖНО: используем СОБСТВЕННЫЙ ScrollState (contractsScrollState),
+                    // а НЕ общий hScrollState с основной строкой. Раньше общий
+                    // state ломал горизонтальный скролл основной таблицы: оба
+                    // scrollable-блока с разной шириной контента конфликтовали
+                    // за maxValue общего ScrollState, и пользователь «упирался
+                    // в стену» контрактов, не мог свайпнуть вправо чтобы увидеть
+                    // остальные столбцы арендатора. Теперь каждый блок скроллится
+                    // независимо — «стены» нет.
+                    //
+                    // Ширина Surface фиксирована (= сумма колонок + padding),
+                    // а не fillMaxWidth() — fillMaxWidth в horizontalScroll
+                    // растягивает Surface на viewport, что ещё больше ломало
+                    // расчёт scrollable-ширины.
                     if (isExpanded) {
                         val contracts = contractsByRenter[renter.id].orEmpty()
                             .filter {
@@ -2539,10 +2553,19 @@ fun RenterTable(
                             }
                             .sortedBy { it.weekStart ?: it.timestamp }
 
+                        // Собственный scroll-state для блока контрактов.
+                        // rememberScrollState() в scope элемента LazyColumn →
+                        // у каждого раскрытого арендатора свой независимый state.
+                        val contractsScrollState = rememberScrollState()
+                        // Фиксированная ширина карточки: ID(40) + Holat(80) +
+                        // Boshlanish(90) + Tugash(90) + Summa(80) + spacing(6×4=24)
+                        // + inner padding(8×2=16) = 420dp. Берём 440dp с запасом.
+                        val wContractsCard = 440.dp
+
                         Row(
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .horizontalScroll(hScrollState)
+                                .horizontalScroll(contractsScrollState)
                                 .padding(top = 2.dp, bottom = 4.dp)
                         ) {
                             // Отступ: стрелка (wExpand) + № (wNum) + 8dp
@@ -2555,7 +2578,7 @@ fun RenterTable(
                                     1.dp,
                                     ClaudeDivider
                                 ),
-                                modifier = Modifier.fillMaxWidth()
+                                modifier = Modifier.width(wContractsCard)
                             ) {
                                 Column(
                                     modifier = Modifier.padding(8.dp),
