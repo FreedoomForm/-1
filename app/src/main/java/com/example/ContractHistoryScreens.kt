@@ -332,7 +332,7 @@ fun RenterContractHistoryScreen(
                     UnifiedSearchBar(
                         query = searchQuery,
                         onQueryChange = { searchQuery = it },
-                        placeholder = "Kontrakt qidirish...",
+                        placeholder = "Qidirish",
                         onCalendarClick = { showDateRangePicker = true },
                         calendarActive = dateRangePickerState.selectedStartDateMillis != null,
                         onFilterClick = { showFilterPanel = true },
@@ -435,11 +435,6 @@ fun RenterContractHistoryScreen(
                                         selectedContracts = if (isSelected) selectedContracts - entry.id
                                         else selectedContracts + entry.id
                                     }
-                                )
-                                .border(
-                                    width = if (isSelected) 2.dp else 1.5.dp,
-                                    color = statusColor,
-                                    shape = RoundedCornerShape(10.dp)
                                 )
                                 .padding(horizontal = 8.dp, vertical = 10.dp),
                             verticalAlignment = Alignment.CenterVertically
@@ -612,7 +607,7 @@ fun RenterContractHistoryScreen(
                     UnifiedSearchBar(
                         query = searchQuery,
                         onQueryChange = { searchQuery = it },
-                        placeholder = "Tranzaksiya qidirish...",
+                        placeholder = "Qidirish",
                         onCalendarClick = { showDateRangePicker = true },
                         calendarActive = dateRangePickerState.selectedStartDateMillis != null,
                         onFilterClick = { showFilterPanel = true },
@@ -1841,8 +1836,7 @@ fun ScooterContractHistoryScreen(
             UnifiedSearchBar(
                 query = searchQuery,
                 onQueryChange = { searchQuery = it },
-                placeholder = if (selectedTab == 0) "Kontrakt qidirish..."
-                               else "Tranzaksiya qidirish...",
+                placeholder = "Qidirish",
                 onCalendarClick = { showDateRangePicker = true },
                 calendarActive = dateRangePickerState.selectedStartDateMillis != null,
                 onFilterClick = { showFilterPanel = true },

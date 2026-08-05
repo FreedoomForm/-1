@@ -290,7 +290,7 @@ fun ContractListScreen(
             UnifiedSearchBar(
                 query = searchQuery,
                 onQueryChange = { searchQuery = it },
-                placeholder = "Mijoz, skuter yoki kontrakt qidirish",
+                placeholder = "Qidirish",
                 onCalendarClick = { showDateRangePicker = true },
                 calendarActive = dateRangePickerState.selectedStartDateMillis != null,
                 onFilterClick = { showFilterPanel = true },
@@ -312,26 +312,6 @@ fun ContractListScreen(
                     columnVisibility = columnVisibility.toMutableMap().apply { put(colId, isVisible) }
                 }
             )
-
-            // ── Счётчик контрактов ────────────────────────────────────
-            // Раньше здесь была панель с кнопками "Tahrirlash / O'chir",
-            // но они дублировали универсальные ✎/🗑 в верхней панели (TopAppBar).
-            // Неуниверсальные кнопки-дубликаты удалены — остался только счётчик.
-            // Создание/редактирование/удаление теперь управляются универсальными
-            // +/✎/🗑 в верхней панели.
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 16.dp, vertical = 6.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Spacer(Modifier.weight(1f))
-                Text(
-                    "Jami: ${filteredContracts.size}",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = ClaudeTextSecondary
-                )
-            }
 
             // ── Заголовок таблицы ───────────────────────────────────────
             // В этой таблице всегда много колонок (9+), поэтому всегда
@@ -394,14 +374,6 @@ fun ContractListScreen(
                                     .horizontalScroll(hScrollState)
                                     .clip(RoundedCornerShape(8.dp))
                                     .background(if (isSelected) ClaudeAccentBg else ClaudeCard)
-                                    .drawBehind {
-                                        val stripeW = if (isSelected) 5.dp.toPx() else 4.dp.toPx()
-                                        drawRect(
-                                            color = statusColor,
-                                            topLeft = Offset.Zero,
-                                            size = Size(stripeW, size.height)
-                                        )
-                                    }
                                     .combinedClickable(
                                         onClick = {
                                             // Один клик = открыть экран истории транзакций

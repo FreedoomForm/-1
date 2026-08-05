@@ -163,12 +163,6 @@ fun RenterTransactionListSection(
                 enabled = selectedTxs.isNotEmpty(),
                 onClick = { showDeleteConfirm = true }
             )
-            Spacer(Modifier.weight(1f))
-            Text(
-                "Jami: ${filteredTxs.size}",
-                style = MaterialTheme.typography.bodySmall,
-                color = ClaudeTextSecondary
-            )
         }
 
         // ── Заголовок таблицы ───────────────────────────────────────────
@@ -224,11 +218,6 @@ fun RenterTransactionListSection(
                         Row(
                             modifier = Modifier
                                 .horizontalScroll(hScrollState)
-                                .border(
-                                    width = if (isSelected) 2.dp else 1.5.dp,
-                                    color = statusColor,
-                                    shape = RoundedCornerShape(8.dp)
-                                )
                                 .background(if (isSelected) ClaudeAccentBg else ClaudeCard)
                                 .combinedClickable(
                                     onClick = {
@@ -487,12 +476,6 @@ fun ScooterTransactionListSection(
                 enabled = selectedTxs.isNotEmpty(),
                 onClick = { showDeleteConfirm = true }
             )
-            Spacer(Modifier.weight(1f))
-            Text(
-                "Jami: ${filteredTxs.size}",
-                style = MaterialTheme.typography.bodySmall,
-                color = ClaudeTextSecondary
-            )
         }
 
         // ── Заголовок таблицы ───────────────────────────────────────────
@@ -549,11 +532,6 @@ fun ScooterTransactionListSection(
                         Row(
                             modifier = Modifier
                                 .horizontalScroll(hScrollState)
-                                .border(
-                                    width = if (isSelected) 2.dp else 1.5.dp,
-                                    color = statusColor,
-                                    shape = RoundedCornerShape(8.dp)
-                                )
                                 .background(if (isSelected) ClaudeAccentBg else ClaudeCard)
                                 .combinedClickable(
                                     onClick = {

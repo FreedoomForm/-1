@@ -247,7 +247,7 @@ fun ContractTransactionHistoryScreen(
             UnifiedSearchBar(
                 query = searchQuery,
                 onQueryChange = { searchQuery = it },
-                placeholder = "Tranzaksiya qidirish...",
+                placeholder = "Qidirish",
                 onCalendarClick = { showDateRangePicker = true },
                 calendarActive = dateRangePickerState.selectedStartDateMillis != null,
                 onFilterClick = { showFilterPanel = true },

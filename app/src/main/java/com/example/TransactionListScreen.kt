@@ -298,7 +298,7 @@ fun TransactionListScreen(
             UnifiedSearchBar(
                 query = searchQuery,
                 onQueryChange = { searchQuery = it },
-                placeholder = "Mijoz, skuter, kontrakt qidirish",
+                placeholder = "Qidirish",
                 onCalendarClick = { showDateRangePicker = true },
                 calendarActive = dateRangePickerState.selectedStartDateMillis != null,
                 onFilterClick = { showFilterPanel = true },
@@ -320,34 +320,6 @@ fun TransactionListScreen(
                     columnVisibility = columnVisibility.toMutableMap().apply { put(colId, isVisible) }
                 }
             )
-
-            // ── Счётчик транзакций ────────────────────────────────────
-            // Раньше здесь была панель с кнопками "Tahrirlash / O'chir",
-            // но они дублировали универсальные ✎/🗑 в верхней панели (TopAppBar).
-            // Неуниверсальные кнопки-дубликаты удалены — остался только счётчик.
-            // Создание/редактирование/удаление теперь управляются универсальными
-            // +/✎/🗑 в верхней панели.
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 16.dp, vertical = 6.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Spacer(Modifier.weight(1f))
-                val totalCount = filteredTxs.size + filteredCardTxs.size
-                val parts = buildString {
-                    if (filteredTxs.isNotEmpty()) append("Kontrakt: ${filteredTxs.size}")
-                    if (filteredCardTxs.isNotEmpty()) {
-                        if (isNotEmpty()) append(" • ")
-                        append("Karta: ${filteredCardTxs.size}")
-                    }
-                }
-                Text(
-                    "Jami: $totalCount" + if (parts.isNotEmpty()) " ($parts)" else "",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = ClaudeTextSecondary
-                )
-            }
 
             // ── Заголовок таблицы ───────────────────────────────────────
             Surface(color = ClaudeCard, modifier = Modifier.fillMaxWidth()) {
@@ -418,14 +390,6 @@ fun TransactionListScreen(
                                             .horizontalScroll(hScrollState)
                                             .clip(RoundedCornerShape(8.dp))
                                             .background(if (isSelected) ClaudeAccentBg else ClaudeCard)
-                                            .drawBehind {
-                                                val stripeW = if (isSelected) 5.dp.toPx() else 4.dp.toPx()
-                                                drawRect(
-                                                    color = statusColor,
-                                                    topLeft = Offset.Zero,
-                                                    size = Size(stripeW, size.height)
-                                                )
-                                            }
                                             .combinedClickable(
                                                 onClick = {
                                                     onSelectedTxsChange(
@@ -589,13 +553,6 @@ fun TransactionListScreen(
                                             .horizontalScroll(hScrollState)
                                             .clip(RoundedCornerShape(8.dp))
                                             .background(ClaudeCard)
-                                            .drawBehind {
-                                                drawRect(
-                                                    color = statusColor,
-                                                    topLeft = Offset.Zero,
-                                                    size = Size(4.dp.toPx(), size.height)
-                                                )
-                                            }
                                             .padding(horizontal = 8.dp, vertical = 10.dp),
                                         verticalAlignment = Alignment.CenterVertically
                                     ) {

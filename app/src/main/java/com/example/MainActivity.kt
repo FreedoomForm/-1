@@ -1568,7 +1568,7 @@ fun MainScreen(
                         UnifiedSearchBar(
                             query = searchQuery,
                             onQueryChange = { searchQuery = it },
-                            placeholder = "Mijoz yoki skuter qidirish",
+                            placeholder = "Qidirish",
                             onCalendarClick = { showDateRangePicker = true },
                             calendarActive = dateRangePickerState.selectedStartDateMillis != null,
                             onFilterClick = { showRenterFilterPanel = true },
@@ -1745,7 +1745,7 @@ fun MainScreen(
                 UnifiedSearchBar(
                     query = searchQuery,
                     onQueryChange = { searchQuery = it },
-                    placeholder = "Skuter qidirish",
+                    placeholder = "Qidirish",
                     onCalendarClick = { showScooterDateRangePicker = true },
                     calendarActive = scooterDateRangePickerState.selectedStartDateMillis != null,
                     onFilterClick = { showScooterFilterPanel = true },
@@ -1768,25 +1768,6 @@ fun MainScreen(
                         scooterColumnVisibility = scooterColumnVisibility.toMutableMap().apply { put(colId, isVisible) }
                     }
                 )
-
-                // ── Счётчик скутеров ────────────────────────────────
-                // Раньше здесь была панель с кнопками "Tahrirlash / O'chir",
-                // но они дублировали универсальные ✎/🗑 в верхней панели.
-                // Неуниверсальные кнопки-дубликаты удалены — остался только
-                // счётчик количества скутеров.
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 16.dp, vertical = 6.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Spacer(Modifier.weight(1f))
-                    Text(
-                        "Jami: ${scooters.size}",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = ClaudeTextSecondary
-                    )
-                }
 
                 val filteredScooters = scooters.filter { scooter ->
                     val textMatch = scooter.name.contains(searchQuery, ignoreCase = true)
@@ -2306,8 +2287,6 @@ fun RenterTable(
             itemsIndexed(renters, key = { _, it -> it.id }) { idx, renter ->
                 val isSelected = selected.contains(renter.id)
                 val isExpanded = expandedRenterIds.contains(renter.id)
-                val status = statusOf(renter)
-                val sColor = statusColor(status)
 
                 Column(
                     modifier = Modifier
@@ -2367,24 +2346,15 @@ fun RenterTable(
                         }
 
                         // ── Основная строка арендатора (№ + Mijoz + Tel + ...) ──
-                        // Раньше строка имела полную рамку (.border) со всех 4 сторон
-                        // в цвете статуса. Это создавало тонкие вертикальные линии
-                        // слева и справа таблицы (по просьбе пользователя — убраны).
-                        // Теперь: только левая цветная полоса (статус) + фон (выбор).
+                        // Раньше строка имела цветную вертикальную полосу статуса
+                        // слева (drawBehind). По просьбе пользователя — убрана,
+                        // теперь строка без статус-полосы: только фон (выбор).
                         Row(
                             modifier = Modifier
                                 .clip(RoundedCornerShape(8.dp))
                                 .background(
                                     if (isSelected) Color(0xFFF3F4F6) else Color.White
                                 )
-                                .drawBehind {
-                                    val stripeW = if (isSelected) 5.dp.toPx() else 4.dp.toPx()
-                                    drawRect(
-                                        color = sColor,
-                                        topLeft = Offset.Zero,
-                                        size = Size(stripeW, size.height)
-                                    )
-                                }
                                 .combinedClickable(
                                     onClick = { if (isSelected) onSelect(renter.id, false) else onClick(renter) },
                                     onLongClick = { onSelect(renter.id, !isSelected) }
@@ -4397,14 +4367,6 @@ fun ScooterTable(
                             .horizontalScroll(hScrollState)
                             .clip(RoundedCornerShape(8.dp))
                             .background(if (isSelected) Color(0xFFF3F4F6) else Color.White)
-                            .drawBehind {
-                                val stripeW = if (isSelected) 5.dp.toPx() else 4.dp.toPx()
-                                drawRect(
-                                    color = sColor,
-                                    topLeft = Offset.Zero,
-                                    size = Size(stripeW, size.height)
-                                )
-                            }
                             .combinedClickable(
                                 onClick = { if (isSelected) onSelect(scooter.id, false) else onClick(scooter) },
                                 onLongClick = { onSelect(scooter.id, !isSelected) }

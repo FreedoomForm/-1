@@ -1004,7 +1004,7 @@ fun FinansiPanel(
         UnifiedSearchBar(
             query = searchQuery,
             onQueryChange = { searchQuery = it },
-            placeholder = "Karta qidirish",
+            placeholder = "Qidirish",
             onCalendarClick = { /* у карт нет календаря — кнопка скрыта */ },
             calendarActive = false,
             onFilterClick = { showFilterPanel = true },
