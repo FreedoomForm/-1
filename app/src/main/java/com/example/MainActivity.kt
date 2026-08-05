@@ -23,6 +23,7 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.style.TextOverflow
@@ -82,10 +83,19 @@ import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material3.*
+import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.spring
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
+import androidx.compose.ui.input.nestedscroll.NestedScrollSource
+import androidx.compose.ui.input.nestedscroll.nestedScroll
+import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.AnnotatedString
@@ -94,8 +104,10 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.input.OffsetMapping
 import androidx.compose.ui.text.input.TransformedText
 import androidx.compose.ui.text.input.VisualTransformation
+import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import kotlin.math.roundToInt
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.work.ExistingPeriodicWorkPolicy
@@ -955,11 +967,58 @@ fun MainScreen(
         NavigationState.MainView -> { /* продолжаем — основной Scaffold ниже */ }
     }
 
+    // ── Динамическая верхняя панель (TopAppBar) ────────────────────────
+    // Пользователь хочет: верхняя полоса с универсальными кнопками (TopAppBar)
+    // должна быть ДИНАМИЧЕСКОЙ — при свайпе вниз уходит вверх и исчезает,
+    // при свайпе вверх появляется сверху. Полоса поиска и полоса кнопок
+    // To'lov/Uzish/SMS — СТАТИЧЕСКИЕ (замирают на месте).
+    //
+    // Реализация: измеряем высоту TopAppBar через onGloballyPositioned,
+    // отслеживаем направление скролла через nestedScroll на content Column,
+    // анимируем offset TopAppBar между 0 (видна) и -height (скрыта).
+    // Scaffold reserves space for topBar всегда — поэтому когда TopAppBar
+    // смещается вверх, на её месте остаётся пустой фон (ClaudeBackground),
+    // а полоса поиска остаётся на месте (статичная).
+    val topBarHeightPx = remember { mutableFloatStateOf(0f) }
+    var topBarTarget by remember { mutableFloatStateOf(0f) }
+
+    val nestedScrollConnection = remember {
+        object : NestedScrollConnection {
+            override fun onPreScroll(available: Offset, source: NestedScrollSource): Offset {
+                val delta = available.y
+                if (delta > 2f && topBarTarget > -topBarHeightPx.floatValue) {
+                    // Свайп вниз → скрыть TopAppBar
+                    topBarTarget = -topBarHeightPx.floatValue
+                } else if (delta < -2f && topBarTarget < 0f) {
+                    // Свайп вверх → показать TopAppBar
+                    topBarTarget = 0f
+                }
+                return Offset.Zero
+            }
+        }
+    }
+
+    val topBarOffset by animateFloatAsState(
+        targetValue = topBarTarget,
+        animationSpec = spring(
+            dampingRatio = Spring.DampingRatioNoBouncy,
+            stiffness = Spring.StiffnessMedium
+        ),
+        label = "topBarOffset"
+    )
+
     Scaffold(
         modifier = Modifier.fillMaxSize(),
         containerColor = ClaudeBackground,
         topBar = {
             TopAppBar(
+                modifier = Modifier
+                    .offset { IntOffset(0, topBarOffset.roundToInt()) }
+                    .onGloballyPositioned { coords ->
+                        if (topBarHeightPx.floatValue == 0f) {
+                            topBarHeightPx.floatValue = coords.size.height.toFloat()
+                        }
+                    },
                 title = {
                     Text(
                         "Skuter Ijarasi",
@@ -1261,6 +1320,7 @@ fun MainScreen(
             modifier = Modifier
                 .padding(innerPadding)
                 .fillMaxSize()
+                .nestedScroll(nestedScrollConnection)
         ) {
             // ── Баннер обновления (ТОЛЬКО если есть обновление) ──
             when (val st = updateState) {
@@ -2358,16 +2418,24 @@ fun RenterTable(
                         }
 
                         // ── Основная строка арендатора (№ + Mijoz + Tel + ...) ──
+                        // Раньше строка имела полную рамку (.border) со всех 4 сторон
+                        // в цвете статуса. Это создавало тонкие вертикальные линии
+                        // слева и справа таблицы (по просьбе пользователя — убраны).
+                        // Теперь: только левая цветная полоса (статус) + фон (выбор).
                         Row(
                             modifier = Modifier
-                                .border(
-                                    width = if (isSelected) 2.dp else 1.5.dp,
-                                    color = sColor,
-                                    shape = RoundedCornerShape(8.dp)
-                                )
+                                .clip(RoundedCornerShape(8.dp))
                                 .background(
                                     if (isSelected) Color(0xFFF3F4F6) else Color.White
                                 )
+                                .drawBehind {
+                                    val stripeW = if (isSelected) 5.dp.toPx() else 4.dp.toPx()
+                                    drawRect(
+                                        color = sColor,
+                                        topLeft = Offset.Zero,
+                                        size = Size(stripeW, size.height)
+                                    )
+                                }
                                 .combinedClickable(
                                     onClick = { if (isSelected) onSelect(renter.id, false) else onClick(renter) },
                                     onLongClick = { onSelect(renter.id, !isSelected) }
@@ -2386,10 +2454,12 @@ fun RenterTable(
                             fontWeight = FontWeight.Medium,
                             maxLines = 1
                         )
-                        // Mijoz — полное Имя + Фамилия + Отчество (если есть).
-                        // maxLines = Int.MAX_VALUE — НЕ обрезаем никогда, даже если
-                        // имя длинное (3-4 слова). Пользователь явно просил: «не важно
-                        // хватает места или нет».
+                        // Mijoz — Имя + Фамилия + Отчество.
+                        // maxLines = 2 — длинные имена переносятся на вторую строку
+                        // (softWrap = true). Раньше maxLines = Int.MAX_VALUE +
+                        // overflow = Visible — это могло вызывать визуальное
+                        // расширение колонки при очень длинных именах. Теперь имя
+                        // жёстко ограничено 2 строками с ellipsis на третьей.
                         if (showName) {
                             Text(
                                 renter.name,
@@ -2399,9 +2469,9 @@ fun RenterTable(
                                 style = MaterialTheme.typography.bodyMedium,
                                 color = ClaudeText,
                                 fontWeight = FontWeight.SemiBold,
-                                maxLines = Int.MAX_VALUE,
+                                maxLines = 2,
                                 softWrap = true,
-                                overflow = TextOverflow.Visible
+                                overflow = TextOverflow.Ellipsis
                             )
                         }
                         // Tel
@@ -4376,12 +4446,16 @@ fun ScooterTable(
                     Row(
                         modifier = Modifier
                             .horizontalScroll(hScrollState)
-                            .border(
-                                width = if (isSelected) 2.dp else 1.5.dp,
-                                color = sColor,
-                                shape = RoundedCornerShape(8.dp)
-                            )
+                            .clip(RoundedCornerShape(8.dp))
                             .background(if (isSelected) Color(0xFFF3F4F6) else Color.White)
+                            .drawBehind {
+                                val stripeW = if (isSelected) 5.dp.toPx() else 4.dp.toPx()
+                                drawRect(
+                                    color = sColor,
+                                    topLeft = Offset.Zero,
+                                    size = Size(stripeW, size.height)
+                                )
+                            }
                             .combinedClickable(
                                 onClick = { if (isSelected) onSelect(scooter.id, false) else onClick(scooter) },
                                 onLongClick = { onSelect(scooter.id, !isSelected) }

@@ -22,6 +22,9 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
@@ -389,12 +392,16 @@ fun ContractListScreen(
                             Row(
                                 modifier = Modifier
                                     .horizontalScroll(hScrollState)
-                                    .border(
-                                        width = if (isSelected) 2.dp else 1.5.dp,
-                                        color = statusColor,
-                                        shape = RoundedCornerShape(8.dp)
-                                    )
+                                    .clip(RoundedCornerShape(8.dp))
                                     .background(if (isSelected) ClaudeAccentBg else ClaudeCard)
+                                    .drawBehind {
+                                        val stripeW = if (isSelected) 5.dp.toPx() else 4.dp.toPx()
+                                        drawRect(
+                                            color = statusColor,
+                                            topLeft = Offset.Zero,
+                                            size = Size(stripeW, size.height)
+                                        )
+                                    }
                                     .combinedClickable(
                                         onClick = {
                                             // Один клик = открыть экран истории транзакций
