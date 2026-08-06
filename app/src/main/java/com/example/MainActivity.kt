@@ -82,6 +82,7 @@ import androidx.compose.material.icons.filled.Bolt
 import androidx.compose.material.icons.filled.Description
 import androidx.compose.material.icons.filled.Receipt
 import androidx.compose.material.icons.filled.RequestQuote
+import androidx.compose.material.icons.filled.Assessment
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.outlined.Notifications
 import androidx.compose.material.icons.outlined.Settings
@@ -99,6 +100,7 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
 import androidx.compose.ui.input.nestedscroll.NestedScrollSource
 import androidx.compose.ui.input.nestedscroll.nestedScroll
@@ -138,12 +140,15 @@ import com.example.ui.ScooterViewModel
 import com.example.ui.TransactionViewModel
 import com.example.ui.theme.ClaudeAccent
 import com.example.ui.theme.ClaudeAccentBg
+import com.example.ui.theme.ClaudeAccentDark
 import com.example.ui.theme.ClaudeAccentMuted
 import com.example.ui.theme.ClaudeBackground
 import com.example.ui.theme.ClaudeCard
 import com.example.ui.theme.ClaudeDivider
+import com.example.ui.theme.ClaudeGold
 import com.example.ui.theme.ClaudeText
 import com.example.ui.theme.ClaudeTextSecondary
+import com.example.ui.theme.ClaudeTeal
 import com.example.ui.theme.MyApplicationTheme
 import com.example.ui.theme.StatusInfo
 import com.example.ui.theme.StatusOk
@@ -387,6 +392,89 @@ private fun statusLabel(s: RenterStatus): String = when (s) {
     RenterStatus.RETURNED -> "Qaytgan"
     RenterStatus.OVERDUE  -> "Qarzdor"
     RenterStatus.OK       -> "Faol"
+}
+
+/**
+ * Форматирует сумму контракта в узбекском стиле: разделитель тысяч — пробел.
+ *   420000L  → "420 000"
+ *   1250000L → "1 250 000"
+ *   0L       → "0"
+ *
+ * Используется в карточке скутера (вложенные контракты) и в карточке
+ * арендатора. Раньше в карточке скутера сумма выводилась как «${cAmount} so'm»
+ * с фиксированной шириной 100dp — при крупных суммах текст переносился по
+ * символам и превращался в вертикальный столбец («4\n2\n0\n0\n0\n0\n…»).
+ * Форматирование с пробелом + убирание «so'm» в отдельную строку ниже
+ * полностью устраняет этот артефакт.
+ */
+private fun formatContractAmount(amount: Long): String {
+    val s = amount.toString()
+    if (s.length <= 3) return s
+    val sb = StringBuilder(s.length + s.length / 3)
+    val firstGroupLen = s.length % 3
+    if (firstGroupLen > 0) {
+        sb.append(s, 0, firstGroupLen)
+        if (s.length > firstGroupLen) sb.append(' ')
+    }
+    var i = firstGroupLen
+    while (i < s.length) {
+        sb.append(s, i, i + 3)
+        i += 3
+        if (i < s.length) sb.append(' ')
+    }
+    return sb.toString()
+}
+
+/**
+ * Иконка вкладки нижней навигации — визуально идентичная «универсальным
+ * кнопкам» из TopAppBar (Camera / Add / Edit / Delete / Search): квадрат
+ * 56dp со скруглением 8dp, цветной фон, цветная иконка 28dp.
+ *
+ * Каждая вкладка имеет СОБСТВЕННЫЙ акцентный цвет [accent] — как у верхних
+ * универсальных кнопок, где Camera = бежевый, Add = оранжевый, Delete =
+ * зелёный/красный и т. д. Это устраняет прежний «бледный» вид нижней
+ * навигации, когда все невыбранные вкладки выглядели одинаково белыми
+ * с серой рамкой.
+ *
+ * Состояния:
+ *   • Выбрано:     фон accent@22%, рамка accent@100%, иконка accent@100%.
+ *   • Невыбрано:   фон accent@10%, рамка accent@45%,  иконка accent@75%.
+ *
+ * Прозрачности подобраны так, чтобы даже невыбранная вкладка сохраняла
+ * узнаваемый цвет (акцентный «маяк»), но не конкурировала за внимание
+ * с выбранной.
+ *
+ * @param isSelected     выбрана ли вкладка (currentTab == index)
+ * @param accent         акцентный цвет вкладки (ClaudeAccent, StatusOk,
+ *                       ClaudeGold, ClaudeAccentDark, ClaudeTeal,
+ *                       StatusOverdue, ClaudeTextSecondary)
+ * @param icon           Material-иконка вкладки
+ * @param contentDescription описание для screen-reader'а
+ */
+@Composable
+private fun NavTabIcon(
+    isSelected: Boolean,
+    accent: Color,
+    icon: ImageVector,
+    contentDescription: String
+) {
+    val bgAlpha = if (isSelected) 0.22f else 0.10f
+    val borderAlpha = if (isSelected) 1.0f else 0.45f
+    val iconAlpha = if (isSelected) 1.0f else 0.75f
+    Box(
+        modifier = Modifier
+            .size(56.dp)
+            .background(accent.copy(alpha = bgAlpha), RoundedCornerShape(8.dp))
+            .border(1.dp, accent.copy(alpha = borderAlpha), RoundedCornerShape(8.dp)),
+        contentAlignment = Alignment.Center
+    ) {
+        Icon(
+            icon,
+            contentDescription = contentDescription,
+            tint = accent.copy(alpha = iconAlpha),
+            modifier = Modifier.size(28.dp)
+        )
+    }
 }
 
 /* ============================================================================
@@ -1729,224 +1817,108 @@ fun MainScreen(
         },
         bottomBar = {
             // ── Нижняя навигация — иконки визуально идентичны ───────────────
-            // универсальным кнопкам TopAppBar (Camera/Search/Add/Edit/Delete):
-            //   • Размер Box-а 56dp — ТОЧНО как сверху (раньше было 48dp).
+            // универсальным кнопкам TopAppBar (Camera/Add/Edit/Delete/Search):
+            //   • Размер Box-а 56dp — ТОЧНО как сверху.
             //   • Форма — RoundedCornerShape(8.dp) (квадратная, как сверху).
-            //   • Выбранная вкладка: ClaudeAccentBg fill + 1dp ClaudeAccent
-            //     border, иконка 28dp ClaudeAccent — ТОЧНО как кнопки Camera /
-            //     Search в TopAppBar.
-            //   • Невыбранная: Color.White fill + 1dp ClaudeDivider border,
-            //     иконка 28dp ClaudeTextSecondary — как outlined-кнопка Edit
-            //     в disabled-состоянии сверху.
             //   • БЕЗ текстовых подписей (как и универсальные кнопки TopAppBar).
             //     Имя вкладки сохранено только в contentDescription иконки
             //     для screen-reader'а.
             //   • Дефолтный Material 3 pill-индикатор скрыт (indicatorColor =
             //     Color.Transparent), чтобы не было двух фонов подряд.
+            //
+            // КАЖДАЯ вкладка имеет свой акцентный цвет — как у верхних
+            // универсальных кнопок, где Camera = бежевый, Add = оранжевый,
+            // Delete = зелёный/красный и т. д. Это устраняет прежний
+            // «бледный» вид, когда все невыбранные вкладки были одинаково
+            // белыми с серой рамкой и выглядели «мертвыми» по сравнению с
+            // цветными кнопками верхнего бара.
+            //
+            // Палитра (соответствует semantic роли вкладки):
+            //   0 Ijarachilar  → ClaudeAccent        (terracotta — главная CTA)
+            //   1 Skuterlar    → StatusOk           (green — активная аренда)
+            //   2 Kontraktlar  → ClaudeGold          (gold — официальный документ)
+            //   3 Tranzaksiya  → ClaudeAccentDark    (dark terracotta — записи)
+            //   4 Otchetlar    → ClaudeTeal          (teal — альт-акцент, отчёты)
+            //   5 Finansi      → StatusOverdue       (red — деньги/финансы)
+            //   6 Sozlamalar   → ClaudeTextSecondary (muted brown — утилитарное)
             NavigationBar(containerColor = ClaudeCard, contentColor = ClaudeText) {
                 NavigationBarItem(
                     selected = currentTab == 0,
                     onClick = { currentTab = 0 },
                     icon = {
-                        Box(
-                            modifier = Modifier
-                                .size(56.dp)
-                                .background(
-                                    if (currentTab == 0) ClaudeAccentBg else Color.White,
-                                    RoundedCornerShape(8.dp)
-                                )
-                                .border(
-                                    width = 1.dp,
-                                    color = if (currentTab == 0) ClaudeAccent else ClaudeDivider,
-                                    shape = RoundedCornerShape(8.dp)
-                                ),
-                            contentAlignment = Alignment.Center
-                        ) {
-                            Icon(
-                                Icons.Default.List,
-                                contentDescription = "Ijarachilar",
-                                tint = if (currentTab == 0) ClaudeAccent else ClaudeTextSecondary,
-                                modifier = Modifier.size(28.dp)
-                            )
-                        }
+                        NavTabIcon(
+                            isSelected = currentTab == 0,
+                            accent = ClaudeAccent,
+                            icon = Icons.Default.List,
+                            contentDescription = "Ijarachilar"
+                        )
                     },
-                    colors = NavigationBarItemDefaults.colors(
-                        selectedIconColor = ClaudeAccent,
-                        unselectedIconColor = ClaudeTextSecondary,
-                        selectedTextColor = ClaudeAccent,
-                        unselectedTextColor = ClaudeTextSecondary,
-                        indicatorColor = Color.Transparent
-                    )
+                    colors = NavigationBarItemDefaults.colors(indicatorColor = Color.Transparent)
                 )
                 NavigationBarItem(
                     selected = currentTab == 1,
                     onClick = { currentTab = 1 },
                     icon = {
-                        Box(
-                            modifier = Modifier
-                                .size(56.dp)
-                                .background(
-                                    if (currentTab == 1) ClaudeAccentBg else Color.White,
-                                    RoundedCornerShape(8.dp)
-                                )
-                                .border(
-                                    width = 1.dp,
-                                    color = if (currentTab == 1) ClaudeAccent else ClaudeDivider,
-                                    shape = RoundedCornerShape(8.dp)
-                                ),
-                            contentAlignment = Alignment.Center
-                        ) {
-                            Icon(
-                                Icons.Default.DirectionsBike,
-                                contentDescription = "Skuterlar",
-                                tint = if (currentTab == 1) ClaudeAccent else ClaudeTextSecondary,
-                                modifier = Modifier.size(28.dp)
-                            )
-                        }
+                        NavTabIcon(
+                            isSelected = currentTab == 1,
+                            accent = StatusOk,
+                            icon = Icons.Default.DirectionsBike,
+                            contentDescription = "Skuterlar"
+                        )
                     },
-                    colors = NavigationBarItemDefaults.colors(
-                        selectedIconColor = ClaudeAccent,
-                        unselectedIconColor = ClaudeTextSecondary,
-                        selectedTextColor = ClaudeAccent,
-                        unselectedTextColor = ClaudeTextSecondary,
-                        indicatorColor = Color.Transparent
-                    )
+                    colors = NavigationBarItemDefaults.colors(indicatorColor = Color.Transparent)
                 )
                 NavigationBarItem(
                     selected = currentTab == 2,
                     onClick = { currentTab = 2 },
                     icon = {
-                        Box(
-                            modifier = Modifier
-                                .size(56.dp)
-                                .background(
-                                    if (currentTab == 2) ClaudeAccentBg else Color.White,
-                                    RoundedCornerShape(8.dp)
-                                )
-                                .border(
-                                    width = 1.dp,
-                                    color = if (currentTab == 2) ClaudeAccent else ClaudeDivider,
-                                    shape = RoundedCornerShape(8.dp)
-                                ),
-                            contentAlignment = Alignment.Center
-                        ) {
-                            Icon(
-                                Icons.Default.Description,
-                                contentDescription = "Kontraktlar",
-                                tint = if (currentTab == 2) ClaudeAccent else ClaudeTextSecondary,
-                                modifier = Modifier.size(28.dp)
-                            )
-                        }
+                        NavTabIcon(
+                            isSelected = currentTab == 2,
+                            accent = ClaudeGold,
+                            icon = Icons.Default.Description,
+                            contentDescription = "Kontraktlar"
+                        )
                     },
-                    colors = NavigationBarItemDefaults.colors(
-                        selectedIconColor = ClaudeAccent,
-                        unselectedIconColor = ClaudeTextSecondary,
-                        selectedTextColor = ClaudeAccent,
-                        unselectedTextColor = ClaudeTextSecondary,
-                        indicatorColor = Color.Transparent
-                    )
+                    colors = NavigationBarItemDefaults.colors(indicatorColor = Color.Transparent)
                 )
                 NavigationBarItem(
                     selected = currentTab == 3,
                     onClick = { currentTab = 3 },
                     icon = {
-                        Box(
-                            modifier = Modifier
-                                .size(56.dp)
-                                .background(
-                                    if (currentTab == 3) ClaudeAccentBg else Color.White,
-                                    RoundedCornerShape(8.dp)
-                                )
-                                .border(
-                                    width = 1.dp,
-                                    color = if (currentTab == 3) ClaudeAccent else ClaudeDivider,
-                                    shape = RoundedCornerShape(8.dp)
-                                ),
-                            contentAlignment = Alignment.Center
-                        ) {
-                            Icon(
-                                Icons.Default.RequestQuote,
-                                contentDescription = "Tranzaksiyalar",
-                                tint = if (currentTab == 3) ClaudeAccent else ClaudeTextSecondary,
-                                modifier = Modifier.size(28.dp)
-                            )
-                        }
+                        NavTabIcon(
+                            isSelected = currentTab == 3,
+                            accent = ClaudeAccentDark,
+                            icon = Icons.Default.RequestQuote,
+                            contentDescription = "Tranzaksiyalar"
+                        )
                     },
-                    colors = NavigationBarItemDefaults.colors(
-                        selectedIconColor = ClaudeAccent,
-                        unselectedIconColor = ClaudeTextSecondary,
-                        selectedTextColor = ClaudeAccent,
-                        unselectedTextColor = ClaudeTextSecondary,
-                        indicatorColor = Color.Transparent
-                    )
+                    colors = NavigationBarItemDefaults.colors(indicatorColor = Color.Transparent)
                 )
                 NavigationBarItem(
                     selected = currentTab == 4,
                     onClick = { currentTab = 4 },
                     icon = {
-                        Box(
-                            modifier = Modifier
-                                .size(56.dp)
-                                .background(
-                                    if (currentTab == 4) ClaudeAccentBg else Color.White,
-                                    RoundedCornerShape(8.dp)
-                                )
-                                .border(
-                                    width = 1.dp,
-                                    color = if (currentTab == 4) ClaudeAccent else ClaudeDivider,
-                                    shape = RoundedCornerShape(8.dp)
-                                ),
-                            contentAlignment = Alignment.Center
-                        ) {
-                            Icon(
-                                Icons.Default.RequestQuote,
-                                contentDescription = "Otchetlar",
-                                tint = if (currentTab == 4) ClaudeAccent else ClaudeTextSecondary,
-                                modifier = Modifier.size(28.dp)
-                            )
-                        }
+                        NavTabIcon(
+                            isSelected = currentTab == 4,
+                            accent = ClaudeTeal,
+                            icon = Icons.Default.Assessment,
+                            contentDescription = "Otchetlar"
+                        )
                     },
-                    colors = NavigationBarItemDefaults.colors(
-                        selectedIconColor = ClaudeAccent,
-                        unselectedIconColor = ClaudeTextSecondary,
-                        selectedTextColor = ClaudeAccent,
-                        unselectedTextColor = ClaudeTextSecondary,
-                        indicatorColor = Color.Transparent
-                    )
+                    colors = NavigationBarItemDefaults.colors(indicatorColor = Color.Transparent)
                 )
                 NavigationBarItem(
                     selected = currentTab == 5,
                     onClick = { currentTab = 5 },
                     icon = {
-                        Box(
-                            modifier = Modifier
-                                .size(56.dp)
-                                .background(
-                                    if (currentTab == 5) ClaudeAccentBg else Color.White,
-                                    RoundedCornerShape(8.dp)
-                                )
-                                .border(
-                                    width = 1.dp,
-                                    color = if (currentTab == 5) ClaudeAccent else ClaudeDivider,
-                                    shape = RoundedCornerShape(8.dp)
-                                ),
-                            contentAlignment = Alignment.Center
-                        ) {
-                            Icon(
-                                Icons.Default.AccountBalanceWallet,
-                                contentDescription = "Finansi",
-                                tint = if (currentTab == 5) ClaudeAccent else ClaudeTextSecondary,
-                                modifier = Modifier.size(28.dp)
-                            )
-                        }
+                        NavTabIcon(
+                            isSelected = currentTab == 5,
+                            accent = StatusOverdue,
+                            icon = Icons.Default.AccountBalanceWallet,
+                            contentDescription = "Finansi"
+                        )
                     },
-                    colors = NavigationBarItemDefaults.colors(
-                        selectedIconColor = ClaudeAccent,
-                        unselectedIconColor = ClaudeTextSecondary,
-                        selectedTextColor = ClaudeAccent,
-                        unselectedTextColor = ClaudeTextSecondary,
-                        indicatorColor = Color.Transparent
-                    )
+                    colors = NavigationBarItemDefaults.colors(indicatorColor = Color.Transparent)
                 )
                 // ── 7-я вкладка: Sozlamalar ──────────────────────────────────
                 // Раньше была кнопка-иконка в TopAppBar. Теперь — полноценная
@@ -1955,35 +1927,14 @@ fun MainScreen(
                     selected = currentTab == 6,
                     onClick = { currentTab = 6 },
                     icon = {
-                        Box(
-                            modifier = Modifier
-                                .size(56.dp)
-                                .background(
-                                    if (currentTab == 6) ClaudeAccentBg else Color.White,
-                                    RoundedCornerShape(8.dp)
-                                )
-                                .border(
-                                    width = 1.dp,
-                                    color = if (currentTab == 6) ClaudeAccent else ClaudeDivider,
-                                    shape = RoundedCornerShape(8.dp)
-                                ),
-                            contentAlignment = Alignment.Center
-                        ) {
-                            Icon(
-                                Icons.Outlined.Settings,
-                                contentDescription = "Sozlamalar",
-                                tint = if (currentTab == 6) ClaudeAccent else ClaudeTextSecondary,
-                                modifier = Modifier.size(28.dp)
-                            )
-                        }
+                        NavTabIcon(
+                            isSelected = currentTab == 6,
+                            accent = ClaudeTextSecondary,
+                            icon = Icons.Outlined.Settings,
+                            contentDescription = "Sozlamalar"
+                        )
                     },
-                    colors = NavigationBarItemDefaults.colors(
-                        selectedIconColor = ClaudeAccent,
-                        unselectedIconColor = ClaudeTextSecondary,
-                        selectedTextColor = ClaudeAccent,
-                        unselectedTextColor = ClaudeTextSecondary,
-                        indicatorColor = Color.Transparent
-                    )
+                    colors = NavigationBarItemDefaults.colors(indicatorColor = Color.Transparent)
                 )
             }
         }
@@ -5964,14 +5915,33 @@ fun ScooterTable(
                                                         }
                                                     }
                                                 }
-                                                Text(
-                                                    "${cAmount.toLong()} so'm",
-                                                    modifier = Modifier.width(100.dp),
-                                                    style = MaterialTheme.typography.labelMedium,
-                                                    color = cStatusColor,
-                                                    fontWeight = FontWeight.Bold,
-                                                    textAlign = TextAlign.End
-                                                )
+                                                // Сумма контракта — форматируем с разделителем
+                                                // тысяч (пробел): "420 000" вместо "420000".
+                                                // «so'm» кладём строкой ниже мелким шрифтом, чтобы
+                                                // не занимать горизонтальное место и не выдавливать
+                                                // цифру в вертикальный столбец (прежний баг:
+                                                // width(100.dp) + "420000 so'm" → перенос по символам).
+                                                Column(
+                                                    modifier = Modifier.weight(1f),
+                                                    horizontalAlignment = Alignment.End
+                                                ) {
+                                                    Text(
+                                                        formatContractAmount(cAmount.toLong()),
+                                                        style = MaterialTheme.typography.titleMedium,
+                                                        color = cStatusColor,
+                                                        fontWeight = FontWeight.Bold,
+                                                        textAlign = TextAlign.End,
+                                                        maxLines = 1
+                                                    )
+                                                    Text(
+                                                        "so'm",
+                                                        style = MaterialTheme.typography.labelSmall,
+                                                        color = cStatusColor.copy(alpha = 0.7f),
+                                                        fontWeight = FontWeight.Normal,
+                                                        textAlign = TextAlign.End,
+                                                        maxLines = 1
+                                                    )
+                                                }
                                             }
                                         }
                                     }
