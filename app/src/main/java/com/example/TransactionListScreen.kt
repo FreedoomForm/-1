@@ -106,7 +106,12 @@ fun TransactionListScreen(
     searchQuery: String = "",
     onSearchQueryChange: (String) -> Unit = {},
     calendarTrigger: Int = 0,
-    filterTrigger: Int = 0
+    filterTrigger: Int = 0,
+    // ── Trash mode (v36+) ──────────────────────────────────────────────
+    // true = показывать только удалённые транзакции (isDeleted=1) + скрыть
+    //        диалоги создания (поскольку «+» в trash mode = restore).
+    // false = обычный режим (активные транзакции, «+» = create).
+    isTrashMode: Boolean = false
 ) {
     val transactions by transactionViewModel.transactions.collectAsStateWithLifecycle()
     val allRenters by renterViewModel.rentersList.collectAsStateWithLifecycle()
@@ -121,6 +126,14 @@ fun TransactionListScreen(
     val cards by finansiViewModel.cards.collectAsStateWithLifecycle()
     val cardById = remember(cards) { cards.associateBy { it.id } }
     val context = LocalContext.current
+
+    // ── Источник данных: в trash mode показываем только удалённые транзакции.
+    val liveTransactions by transactionViewModel.liveTransactions.collectAsStateWithLifecycle()
+    val trashedTransactions by transactionViewModel.trashedTransactions.collectAsStateWithLifecycle()
+    val liveCardTxs by finansiViewModel.liveTransactions.collectAsStateWithLifecycle()
+    val trashedCardTxs by finansiViewModel.trashedTransactions.collectAsStateWithLifecycle()
+    val txSource = if (isTrashMode) trashedTransactions else liveTransactions
+    val cardTxSource = if (isTrashMode) trashedCardTxs else liveCardTxs
 
     // searchQuery больше не внутренний state — поднят в MainActivity.
     var editingTx by remember { mutableStateOf<Transaction?>(null) }
@@ -216,8 +229,8 @@ fun TransactionListScreen(
     // (переводы между виртуальными картами). Оба типа фильтруются одними и
     // теми же критериями (searchQuery, dateRange, column filters) и потом
     // сливаются в один список, отсортированный по timestamp DESC.
-    val filteredTxs = remember(transactions, searchQuery, filterValues, dateRangePickerState.selectedStartDateMillis, dateRangePickerState.selectedEndDateMillis) {
-        transactions.filter { t ->
+    val filteredTxs = remember(txSource, searchQuery, filterValues, dateRangePickerState.selectedStartDateMillis, dateRangePickerState.selectedEndDateMillis) {
+        txSource.filter { t ->
             val textMatch = searchQuery.isBlank() ||
                 t.renterName.contains(searchQuery, ignoreCase = true) ||
                 t.renterPhone.contains(searchQuery) ||
@@ -254,8 +267,8 @@ fun TransactionListScreen(
     // ── Фильтрация CardTransaction (переводы между картами) ──────────────
     // Применяем ТЕ ЖЕ критерии: searchQuery ищет по именам карт и note,
     // dateRange — по timestamp, column filters — по date/amount/type.
-    val filteredCardTxs = remember(cardTxs, cardById, searchQuery, filterValues, dateRangePickerState.selectedStartDateMillis, dateRangePickerState.selectedEndDateMillis) {
-        cardTxs.filter { ctx ->
+    val filteredCardTxs = remember(cardTxSource, cardById, searchQuery, filterValues, dateRangePickerState.selectedStartDateMillis, dateRangePickerState.selectedEndDateMillis) {
+        cardTxSource.filter { ctx ->
             val fromName = cardById[ctx.fromCardId]?.name ?: "Kontrakt"
             val toName = cardById[ctx.toCardId]?.name ?: "—"
             val typeLabel = when (ctx.type) {
@@ -428,7 +441,7 @@ fun TransactionListScreen(
                                         modifier = Modifier
                                             .horizontalScroll(hScrollState)
                                             .clip(RoundedCornerShape(8.dp))
-                                            .background(if (isSelected) ClaudeAccentBg else ClaudeCard)
+                                            .background(if (isSelected) Color(0xFFF3F4F6) else Color.White)
                                             .combinedClickable(
                                                 onClick = {
                                                     onSelectedTxsChange(

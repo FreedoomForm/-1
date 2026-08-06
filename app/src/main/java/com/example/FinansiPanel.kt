@@ -865,9 +865,18 @@ fun FinansiPanel(
     searchQuery: String = "",
     onSearchQueryChange: (String) -> Unit = {},
     calendarTrigger: Int = 0,
-    filterTrigger: Int = 0
+    filterTrigger: Int = 0,
+    // ── Trash mode (v36+) ──────────────────────────────────────────────
+    // true = показывать только удалённые карты (isDeleted=1). Системные
+    //        карты (id 1-4) всегда активны — они не появятся в trash mode.
+    // false = обычный режим (активные карты).
+    isTrashMode: Boolean = false
 ) {
     val cards by viewModel.cards.collectAsStateWithLifecycle()
+    // ── Источник данных: в trash mode показываем только удалённые карты.
+    val liveCards by viewModel.liveCards.collectAsStateWithLifecycle()
+    val trashedCards by viewModel.trashedCards.collectAsStateWithLifecycle()
+    val cardsSource = if (isTrashMode) trashedCards else liveCards
     val context = LocalContext.current
 
     // ── Порядок карт (как в Otcheti) — сохраняется в SharedPreferences ────
@@ -885,9 +894,10 @@ fun FinansiPanel(
 
     // Сортируем карты по сохранённому порядку: сначала те, что есть в cardOrder
     // (в этом порядке), потом остальные (по возрастанию id).
-    val orderedCards = remember(cards, cardOrder) {
-        val inOrder = cardOrder.mapNotNull { id -> cards.find { it.id == id } }
-        val rest = cards.filter { it.id !in cardOrder }.sortedBy { it.id }
+    // Источник: cardsSource (liveCards в обычном режиме, trashedCards в trash mode).
+    val orderedCards = remember(cardsSource, cardOrder) {
+        val inOrder = cardOrder.mapNotNull { id -> cardsSource.find { it.id == id } }
+        val rest = cardsSource.filter { it.id !in cardOrder }.sortedBy { it.id }
         inOrder + rest
     }
 

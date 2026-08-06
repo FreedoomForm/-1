@@ -46,7 +46,11 @@ data class Transaction(
     val renterPhone: String = "",
     val scooterName: String = "",
     /** Человекочитаемая подпись контракта, напр. "#123  01.07 → 08.07". */
-    val contractLabel: String = ""
+    val contractLabel: String = "",
+
+    // ── Soft-delete (trash mode) ──────────────────────────────────────────
+    val isDeleted: Boolean = false,
+    val deletedAt: Long? = null
 ) {
     companion object {
         const val TYPE_PAYMENT    = "PAYMENT"

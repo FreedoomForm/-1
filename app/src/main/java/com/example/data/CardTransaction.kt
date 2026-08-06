@@ -40,7 +40,11 @@ data class CardTransaction(
     val note: String? = null,
     val type: String = TYPE_CARD_TRANSFER,
     /** ID контракта, для TYPE_CONTRACT_INCOME. null в остальных случаях. */
-    val contractId: Int? = null
+    val contractId: Int? = null,
+
+    // ── Soft-delete (trash mode) ──────────────────────────────────────────
+    val isDeleted: Boolean = false,
+    val deletedAt: Long? = null
 ) {
     companion object {
         const val TYPE_CARD_TRANSFER = "CARD_TRANSFER"

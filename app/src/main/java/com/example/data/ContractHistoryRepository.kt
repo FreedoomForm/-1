@@ -4,6 +4,8 @@ import kotlinx.coroutines.flow.Flow
 
 class ContractHistoryRepository(private val dao: ContractHistoryDao) {
     val allHistory: Flow<List<ContractHistoryEntry>> = dao.getAll()
+    val liveContracts: Flow<List<ContractHistoryEntry>> = dao.getLiveContracts()
+    val trashedContracts: Flow<List<ContractHistoryEntry>> = dao.getTrashedContracts()
 
     fun forRenter(renterId: Int): Flow<List<ContractHistoryEntry>> = dao.getForRenterFlow(renterId)
     fun forScooter(scooterName: String): Flow<List<ContractHistoryEntry>> = dao.getForScooterFlow(scooterName)
@@ -27,4 +29,12 @@ class ContractHistoryRepository(private val dao: ContractHistoryDao) {
     suspend fun deleteByIds(ids: List<Int>) = dao.deleteByIds(ids)
     suspend fun deleteForRenter(renterId: Int) = dao.deleteForRenter(renterId)
     suspend fun clear() = dao.clear()
+
+    // ── Trash-mode operations ────────────────────────────────────────────
+    suspend fun moveToTrash(id: Int) = dao.moveToTrash(id)
+    suspend fun moveToTrashBatch(ids: List<Int>) = dao.moveToTrashBatch(ids)
+    suspend fun moveToTrashForRenter(renterId: Int) = dao.moveToTrashForRenter(renterId)
+    suspend fun restoreFromTrash(id: Int) = dao.restoreFromTrash(id)
+    suspend fun restoreFromTrashBatch(ids: List<Int>) = dao.restoreFromTrashBatch(ids)
+    suspend fun restoreFromTrashForRenter(renterId: Int) = dao.restoreFromTrashForRenter(renterId)
 }

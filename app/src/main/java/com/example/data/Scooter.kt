@@ -22,5 +22,9 @@ data class Scooter(
     /** ID второго аккумулятора. */
     val batteryId2: String = "",
     /** Дополнительная информация (свободный текст). */
-    val additionalInfo: String = ""
+    val additionalInfo: String = "",
+
+    // ── Soft-delete (trash mode) ──────────────────────────────────────────
+    val isDeleted: Boolean = false,
+    val deletedAt: Long? = null
 )

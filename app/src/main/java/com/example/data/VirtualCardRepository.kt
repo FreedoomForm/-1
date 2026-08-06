@@ -19,6 +19,12 @@ class VirtualCardRepository(
     val allCards: Flow<List<VirtualCard>> = cardDao.getAllCards()
     val allTransactions: Flow<List<CardTransaction>> = txDao.getAllTransactions()
 
+    // ── Trash-mode flows ─────────────────────────────────────────────────
+    val liveCards: Flow<List<VirtualCard>> = cardDao.getLiveCards()
+    val trashedCards: Flow<List<VirtualCard>> = cardDao.getTrashedCards()
+    val liveTransactions: Flow<List<CardTransaction>> = txDao.getLiveTransactions()
+    val trashedTransactions: Flow<List<CardTransaction>> = txDao.getTrashedTransactions()
+
     /** Все транзакции, в которых участвует карта [cardId] (входящие + исходящие). */
     fun transactionsForCard(cardId: Int): Flow<List<CardTransaction>> =
         txDao.getTransactionsForCard(cardId)
@@ -106,6 +112,14 @@ class VirtualCardRepository(
     suspend fun deleteTransaction(id: Int) = txDao.deleteTransaction(id)
     suspend fun updateTransaction(tx: CardTransaction) = txDao.updateTransaction(tx)
     suspend fun countCards(): Int = cardDao.count()
+
+    // ── Trash-mode operations ────────────────────────────────────────────
+    suspend fun moveCardToTrash(id: Int) = cardDao.moveToTrash(id)
+    suspend fun restoreCardFromTrash(id: Int) = cardDao.restoreFromTrash(id)
+    suspend fun moveTxToTrash(id: Int) = txDao.moveToTrash(id)
+    suspend fun moveTxToTrashForContract(contractId: Int) = txDao.moveToTrashForContract(contractId)
+    suspend fun restoreTxFromTrash(id: Int) = txDao.restoreFromTrash(id)
+    suspend fun restoreTxFromTrashForContract(contractId: Int) = txDao.restoreFromTrashForContract(contractId)
 
     /**
      * Возвращает все CardTransaction, привязанные к контракту [contractId].

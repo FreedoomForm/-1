@@ -15,6 +15,25 @@ interface TransactionDao {
     @Query("SELECT * FROM transactions ORDER BY timestamp DESC")
     suspend fun getAllOnce(): List<Transaction>
 
+    // ── Trash-mode queries (v36+) ────────────────────────────────────────
+    @Query("SELECT * FROM transactions WHERE isDeleted = 0 ORDER BY timestamp DESC")
+    fun getLiveTransactions(): Flow<List<Transaction>>
+
+    @Query("SELECT * FROM transactions WHERE isDeleted = 1 ORDER BY deletedAt DESC")
+    fun getTrashedTransactions(): Flow<List<Transaction>>
+
+    @Query("UPDATE transactions SET isDeleted = 1, deletedAt = :now WHERE id = :id")
+    suspend fun moveToTrash(id: Int, now: Long = System.currentTimeMillis())
+
+    @Query("UPDATE transactions SET isDeleted = 1, deletedAt = :now WHERE id IN (:ids)")
+    suspend fun moveToTrashBatch(ids: List<Int>, now: Long = System.currentTimeMillis())
+
+    @Query("UPDATE transactions SET isDeleted = 0, deletedAt = NULL WHERE id = :id")
+    suspend fun restoreFromTrash(id: Int)
+
+    @Query("UPDATE transactions SET isDeleted = 0, deletedAt = NULL WHERE id IN (:ids)")
+    suspend fun restoreFromTrashBatch(ids: List<Int>)
+
     @Query("SELECT * FROM transactions WHERE id = :id LIMIT 1")
     suspend fun getById(id: Int): Transaction?
 

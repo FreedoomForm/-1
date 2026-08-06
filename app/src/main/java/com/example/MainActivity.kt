@@ -41,6 +41,7 @@ import androidx.compose.material.icons.filled.List
 import androidx.compose.material.icons.filled.DirectionsBike
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.Restore
 import androidx.compose.material.icons.filled.FileDownload
 import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.Check
@@ -527,6 +528,18 @@ fun MainScreen(
     var cardDeleteTrigger by remember { mutableStateOf(0) }
     var selectedCardIds by remember { mutableStateOf(setOf<Int>()) }
 
+    // ── Trash mode (v36+) ────────────────────────────────────────────────
+    // false = обычный режим (показываются активные объекты, кнопка «Удалить»
+    //            зелёная, кнопка «+» создаёт, «✎» редактирует, «🗑» soft-delete).
+    // true  = режим корзины (показываются только удалённые объекты, кнопка
+    //            «Удалить» красная, кнопка «+» восстанавливает выбранные,
+    //            «✎» редактирует данные удалённых, «🗑» окончательно удаляет).
+    //
+    // Переключается долгим нажатием на универсальную кнопку «Удалить» в
+    // TopAppBar. При входе в trash mode выделение сбрасывается (чтобы старые
+    // selectedRenters/Scooters/etc. из обычного режима не «протекали» в trash).
+    var isTrashMode by remember { mutableStateOf(false) }
+
     // ── Навигация ────────────────────────────────────────────────────
     var navState by remember { mutableStateOf<NavigationState>(NavigationState.MainView) }
 
@@ -630,6 +643,12 @@ fun MainScreen(
     // Загружается по требованию — когда пользователь открывает список версий.
     var allReleases by remember { mutableStateOf<List<UpdateInfo>>(emptyList()) }
     var isLoadingReleases by remember { mutableStateOf(false) }
+    // ── Текст ошибки загрузки списка релизов (null = ошибки нет) ──────────
+    // Когда fetchAllReleasesDetailed() возвращает не-Success, сюда кладётся
+    // человекочитаемое сообщение на узбекском. UI показывает его с кнопкой
+    // «Qayta urinish» (Retry). Пустая строка = «ошибки нет, просто список
+    // пустой» — отдельный случай (не должно случаться для этого репо).
+    var releasesError by remember { mutableStateOf<String?>(null) }
     val localContext = LocalContext.current
     val updateManager = remember { InAppUpdateManager(localContext) }
     val updateState by updateManager.state.collectAsStateWithLifecycle()
@@ -668,6 +687,12 @@ fun MainScreen(
     }
 
     val renters by viewModel.rentersList.collectAsStateWithLifecycle()
+    val liveRenters by viewModel.liveRenters.collectAsStateWithLifecycle()
+    val trashedRenters by viewModel.trashedRenters.collectAsStateWithLifecycle()
+    val liveScooters by scooterViewModel.liveScooters.collectAsStateWithLifecycle()
+    val trashedScooters by scooterViewModel.trashedScooters.collectAsStateWithLifecycle()
+    val liveCards by finansiViewModel.liveCards.collectAsStateWithLifecycle()
+    val trashedCards by finansiViewModel.trashedCards.collectAsStateWithLifecycle()
     val history by historyViewModel.history.collectAsStateWithLifecycle()
 
     // ── Авто-восстановление из публичной папки Downloads ──────────────────
@@ -1081,12 +1106,47 @@ fun MainScreen(
                 },
                 allReleases = allReleases,
                 isLoadingReleases = isLoadingReleases,
+                releasesError = releasesError,
                 onLoadReleases = {
                     if (!isLoadingReleases) {
                         isLoadingReleases = true
+                        releasesError = null
                         coroutineScope.launch {
                             val checker = UpdateChecker(localContext)
-                            allReleases = checker.fetchAllReleases()
+                            val result = checker.fetchAllReleasesDetailed()
+                            when (result) {
+                                is com.example.data.remote.FetchReleasesResult.Success -> {
+                                    allReleases = result.releases
+                                    releasesError = null
+                                }
+                                else -> {
+                                    allReleases = emptyList()
+                                    releasesError = checker.userFacingMessage(result)
+                                }
+                            }
+                            isLoadingReleases = false
+                        }
+                    }
+                },
+                onRetryReleases = {
+                    if (!isLoadingReleases) {
+                        isLoadingReleases = true
+                        releasesError = null
+                        coroutineScope.launch {
+                            val checker = UpdateChecker(localContext)
+                            // Чистим кэш чтобы гарантированно сделать свежий запрос
+                            checker.clearCache()
+                            val result = checker.fetchAllReleasesDetailed()
+                            when (result) {
+                                is com.example.data.remote.FetchReleasesResult.Success -> {
+                                    allReleases = result.releases
+                                    releasesError = null
+                                }
+                                else -> {
+                                    allReleases = emptyList()
+                                    releasesError = checker.userFacingMessage(result)
+                                }
+                            }
                             isLoadingReleases = false
                         }
                     }
@@ -1116,7 +1176,8 @@ fun MainScreen(
             // Кнопка сканера (иконка Camera) — в верхнем баре рядом с
             // переключателем SMS-режима, доступна с любой вкладки.
             ScannerScreen(
-                onBack = { navState = NavigationState.MainView }
+                onBack = { navState = NavigationState.MainView },
+                isTrashMode = isTrashMode
             )
             return
         }
@@ -1321,25 +1382,74 @@ fun MainScreen(
                         // сущностей для создания (только виджеты). Edit/delete там тоже
                         // не показываются — нет строк для выбора.
                         // ── Кнопка «+» — скрыта на «Отчётах» (4) и «Sozlamalar» (6) ─
+                        // В обычном режиме: создаёт новую сущность (открывает диалог).
+                        // В trash mode: ВОССТАНАВЛИВАЕТ выбранные удалённые объекты
+                        //               (как просил пользователь: «+» теперь restore).
+                        //               Иконка меняется с «+» на «↩» (Restore).
                         if (currentTab != 4 && currentTab != 6) {
+                            val addEnabled = if (isTrashMode) {
+                                when (currentTab) {
+                                    0 -> selectedRenters.isNotEmpty()
+                                    1 -> selectedScooters.isNotEmpty()
+                                    2 -> selectedContracts.isNotEmpty()
+                                    3 -> selectedTxs.isNotEmpty()
+                                    5 -> selectedCardIds.isNotEmpty()
+                                    else -> false
+                                }
+                            } else true
                             IconButton(
                                 onClick = {
-                                    when (currentTab) {
-                                        0 -> showAddDialog = true
-                                        1 -> showAddScooterDialog = true
-                                        2 -> contractCreateTrigger++
-                                        3 -> transactionCreateTrigger++
-                                        5 -> cardCreateTrigger++
+                                    if (isTrashMode) {
+                                        // ── RESTORE (trash mode) ──
+                                        when (currentTab) {
+                                            0 -> {
+                                                selectedRenters.forEach { id -> viewModel.restoreRenterFromTrash(id) }
+                                                selectedRenters = emptySet()
+                                            }
+                                            1 -> {
+                                                selectedScooters.forEach { id -> scooterViewModel.restoreScooterFromTrash(id) }
+                                                selectedScooters = emptySet()
+                                            }
+                                            2 -> contractHistoryViewModel.restoreContractsFromTrash(selectedContracts.toList()).also { selectedContracts = emptySet() }
+                                            3 -> {
+                                                val liveTxIds = transactionViewModel.liveTransactions.value.map { it.id }.toSet()
+                                                selectedTxs.forEach { id ->
+                                                    val isCardTx = id !in liveTxIds
+                                                    if (isCardTx) finansiViewModel.restoreTransactionFromTrash(id)
+                                                    else transactionViewModel.restoreFromTrash(id)
+                                                }
+                                                selectedTxs = emptySet()
+                                            }
+                                            5 -> {
+                                                selectedCardIds.forEach { id -> finansiViewModel.restoreCardFromTrash(id) }
+                                                selectedCardIds = emptySet()
+                                            }
+                                        }
+                                    } else {
+                                        // ── CREATE (normal mode) ──
+                                        when (currentTab) {
+                                            0 -> showAddDialog = true
+                                            1 -> showAddScooterDialog = true
+                                            2 -> contractCreateTrigger++
+                                            3 -> transactionCreateTrigger++
+                                            5 -> cardCreateTrigger++
+                                        }
                                     }
                                 },
+                                enabled = addEnabled,
                                 modifier = Modifier
                                     .padding(end = 6.dp, start = 4.dp)
                                     .size(56.dp)
-                                    .background(ClaudeAccent, RoundedCornerShape(8.dp))
+                                    .background(
+                                        if (isTrashMode) {
+                                            if (addEnabled) StatusOk else StatusOk.copy(alpha = 0.4f)
+                                        } else ClaudeAccent,
+                                        RoundedCornerShape(8.dp)
+                                    )
                             ) {
                                 Icon(
-                                    Icons.Default.Add,
-                                    contentDescription = "Qo'shish",
+                                    if (isTrashMode) Icons.Default.Restore else Icons.Default.Add,
+                                    contentDescription = if (isTrashMode) "Qayta tiklash" else "Qo'shish",
                                     tint = Color.White,
                                     modifier = Modifier.size(30.dp)
                                 )
@@ -1392,7 +1502,24 @@ fun MainScreen(
                                 )
                             }
 
-                            // ── Кнопка «🗑 O'chir» — универсальная ──────────────────
+                            // ── Кнопка «🗑 O'chir» — универсальная + переключатель trash mode ─
+                            // Поведение:
+                            //   • КРАТКОЕ нажатие в обычном режиме (кнопка ЗЕЛЁНАЯ):
+                            //     soft-delete выбранных объектов (перемещение в корзину).
+                            //     Кнопка активна только если есть выделение.
+                            //   • КРАТКОЕ нажатие в trash mode (кнопка КРАСНАЯ):
+                            //     окончательное удаление выбранных объектов из БД.
+                            //     Кнопка активна только если есть выделение.
+                            //   • ДОЛГОЕ нажатие (в любом режиме, даже без выделения):
+                            //     переключает isTrashMode. При входе в trash mode
+                            //     кнопка меняет фон green → red, при выходе red → green.
+                            //     Выделение при этом сбрасывается (чтобы старые selected*
+                            //     из обычного режима не «протекали» в trash и наоборот).
+                            //
+                            // Цвета:
+                            //   • Обычный режим: фон StatusOk (зелёный), иконка белая.
+                            //   • Trash mode:    фон StatusOverdue (красный), иконка белая.
+                            //   • Disabled (нет выделения): фон серый с прозрачностью.
                             val deleteEnabled = when (currentTab) {
                                 0 -> selectedRenters.isNotEmpty()
                                 1 -> selectedScooters.isNotEmpty()
@@ -1401,38 +1528,104 @@ fun MainScreen(
                                 5 -> selectedCardIds.isNotEmpty()
                                 else -> false
                             }
-                            IconButton(
-                                onClick = {
-                                    when (currentTab) {
-                                        0 -> {
-                                            selectedRenters.forEach { id -> viewModel.deleteRenter(id) }
-                                            selectedRenters = emptySet()
-                                        }
-                                        1 -> {
-                                            scooters.filter { it.id in selectedScooters }.forEach {
-                                                scooterViewModel.deleteScooter(it)
-                                            }
-                                            selectedScooters = emptySet()
-                                        }
-                                        2 -> contractDeleteTrigger++
-                                        3 -> transactionDeleteTrigger++
-                                        5 -> cardDeleteTrigger++
-                                    }
-                                },
-                                enabled = deleteEnabled,
+                            val deleteBgColor = when {
+                                isTrashMode -> if (deleteEnabled) StatusOverdue else StatusOverdue.copy(alpha = 0.4f)
+                                else        -> if (deleteEnabled) StatusOk else StatusOk.copy(alpha = 0.4f)
+                            }
+                            val deleteBorderColor = when {
+                                isTrashMode -> StatusOverdue
+                                else        -> StatusOk
+                            }
+                            Box(
                                 modifier = Modifier
                                     .padding(end = 6.dp)
                                     .size(56.dp)
-                                    .background(
-                                        if (deleteEnabled) Color.White else Color.White.copy(alpha = 0.5f),
-                                        RoundedCornerShape(8.dp)
-                                    )
-                                    .border(1.dp, if (deleteEnabled) StatusOverdue else ClaudeDivider, RoundedCornerShape(8.dp))
+                                    .background(deleteBgColor, RoundedCornerShape(8.dp))
+                                    .border(1.dp, deleteBorderColor, RoundedCornerShape(8.dp))
+                                    .combinedClickable(
+                                        onClick = {
+                                            if (!deleteEnabled) return@combinedClickable
+                                            if (isTrashMode) {
+                                                // ── PERMANENT DELETE (trash mode) ──
+                                                when (currentTab) {
+                                                    0 -> {
+                                                        selectedRenters.forEach { id -> viewModel.permanentlyDeleteRenter(id) }
+                                                        selectedRenters = emptySet()
+                                                    }
+                                                    1 -> {
+                                                        selectedScooters.forEach { id -> scooterViewModel.permanentlyDeleteScooter(id) }
+                                                        selectedScooters = emptySet()
+                                                    }
+                                                    2 -> contractHistoryViewModel.permanentlyDeleteContracts(selectedContracts.toList()).also { selectedContracts = emptySet() }
+                                                    3 -> {
+                                                        val liveTxIds = transactionViewModel.liveTransactions.value.map { it.id }.toSet()
+                                                        selectedTxs.forEach { id ->
+                                                            val isCardTx = id !in liveTxIds
+                                                            if (isCardTx) finansiViewModel.permanentlyDeleteTransaction(id)
+                                                            else transactionViewModel.permanentlyDelete(id)
+                                                        }
+                                                        selectedTxs = emptySet()
+                                                    }
+                                                    5 -> {
+                                                        trashedCards.filter { it.id in selectedCardIds }.forEach { card ->
+                                                            finansiViewModel.permanentlyDeleteCard(card)
+                                                        }
+                                                        selectedCardIds = emptySet()
+                                                    }
+                                                }
+                                            } else {
+                                                // ── SOFT DELETE (normal mode → move to trash) ──
+                                                when (currentTab) {
+                                                    0 -> {
+                                                        selectedRenters.forEach { id -> viewModel.moveRenterToTrash(id) }
+                                                        selectedRenters = emptySet()
+                                                    }
+                                                    1 -> {
+                                                        selectedScooters.forEach { id -> scooterViewModel.moveScooterToTrash(id) }
+                                                        selectedScooters = emptySet()
+                                                    }
+                                                    2 -> contractHistoryViewModel.moveContractsToTrash(selectedContracts.toList()).also { selectedContracts = emptySet() }
+                                                    3 -> {
+                                                        val liveTxIds = transactionViewModel.liveTransactions.value.map { it.id }.toSet()
+                                                        selectedTxs.forEach { id ->
+                                                            val isCardTx = id !in liveTxIds
+                                                            if (isCardTx) finansiViewModel.moveTransactionToTrash(id)
+                                                            else transactionViewModel.moveToTrash(id)
+                                                        }
+                                                        selectedTxs = emptySet()
+                                                    }
+                                                    5 -> {
+                                                        selectedCardIds.forEach { id -> finansiViewModel.moveCardToTrash(id) }
+                                                        selectedCardIds = emptySet()
+                                                    }
+                                                }
+                                            }
+                                        },
+                                        onLongClick = {
+                                            // ── TOGGLE TRASH MODE ──
+                                            isTrashMode = !isTrashMode
+                                            // Сбрасываем выделение при переключении режима,
+                                            // чтобы selected* из обычного режима не «протекали»
+                                            // в trash mode (где они указывают на не те объекты).
+                                            selectedRenters = emptySet()
+                                            selectedScooters = emptySet()
+                                            selectedContracts = emptySet()
+                                            selectedTxs = emptySet()
+                                            selectedCardIds = emptySet()
+                                            Toast.makeText(
+                                                localContext,
+                                                if (isTrashMode) "Chiqindixon rejimi yoqildi"
+                                                else "Chiqindixon rejimi o'chirildi",
+                                                Toast.LENGTH_SHORT
+                                            ).show()
+                                        }
+                                    ),
+                                contentAlignment = Alignment.Center
                             ) {
                                 Icon(
                                     Icons.Default.Delete,
-                                    contentDescription = "O'chirish",
-                                    tint = if (deleteEnabled) StatusOverdue else ClaudeTextSecondary,
+                                    contentDescription = if (isTrashMode) "Butunlay o'chirish" else "O'chirish",
+                                    tint = Color.White,
                                     modifier = Modifier.size(28.dp)
                                 )
                             }
@@ -1535,13 +1728,19 @@ fun MainScreen(
             )
         },
         bottomBar = {
-            // ── Нижняя навигация с КВАДРАТНЫМ индикатором ──────────────────
-            // В Material 3 форма индикатора (pill) зашита в NavigationBarDefaults
-            // и не переопределяется через API NavigationBarItem. Чтобы получить
-            // квадратный индикатор, скрываем дефолтный pill (indicatorColor =
-            // Transparent) и оборачиваем иконку в Box с квадратным фоном
-            // (RoundedCornerShape(8.dp)) — тот же стиль, что у универсальных
-            // кнопок в TopAppBar. Фон появляется только у выбранной вкладки.
+            // ── Нижняя навигация — иконки стилистически похожи на ──────────
+            // универсальные кнопки TopAppBar (Camera/Search/Add/Edit/Delete):
+            //   • Размер Box-а 48dp (немного меньше 56dp верхних, чтобы влезть
+            //     в высоту NavigationBar).
+            //   • Форма — RoundedCornerShape(8.dp) (квадратная, как сверху).
+            //   • Выбранная вкладка: ClaudeAccentBg fill + 1dp ClaudeAccent
+            //     border, иконка 26dp ClaudeAccent — точно как кнопки Camera /
+            //     Search в TopAppBar.
+            //   • Невыбранная: Color.White fill + 1dp ClaudeDivider border,
+            //     иконка 26dp ClaudeTextSecondary — как outlined-кнопка Edit
+            //     в disabled-состоянии сверху.
+            //   • Дефолтный Material 3 pill-индикатор скрыт (indicatorColor =
+            //     Color.Transparent), чтобы не было двух фонов подряд.
             NavigationBar(containerColor = ClaudeCard, contentColor = ClaudeText) {
                 NavigationBarItem(
                     selected = currentTab == 0,
@@ -1549,19 +1748,24 @@ fun MainScreen(
                     icon = {
                         Box(
                             modifier = Modifier
-                                .size(40.dp)
+                                .size(48.dp)
                                 .background(
-                                    if (currentTab == 0) ClaudeAccentBg else Color.Transparent,
+                                    if (currentTab == 0) ClaudeAccentBg else Color.White,
                                     RoundedCornerShape(8.dp)
                                 )
                                 .border(
                                     width = 1.dp,
-                                    color = if (currentTab == 0) ClaudeAccent else Color.Transparent,
+                                    color = if (currentTab == 0) ClaudeAccent else ClaudeDivider,
                                     shape = RoundedCornerShape(8.dp)
                                 ),
                             contentAlignment = Alignment.Center
                         ) {
-                            Icon(Icons.Default.List, contentDescription = "Ijarachilar")
+                            Icon(
+                                Icons.Default.List,
+                                contentDescription = "Ijarachilar",
+                                tint = if (currentTab == 0) ClaudeAccent else ClaudeTextSecondary,
+                                modifier = Modifier.size(26.dp)
+                            )
                         }
                     },
                     label = { Text("Ijarachilar") },
@@ -1579,19 +1783,24 @@ fun MainScreen(
                     icon = {
                         Box(
                             modifier = Modifier
-                                .size(40.dp)
+                                .size(48.dp)
                                 .background(
-                                    if (currentTab == 1) ClaudeAccentBg else Color.Transparent,
+                                    if (currentTab == 1) ClaudeAccentBg else Color.White,
                                     RoundedCornerShape(8.dp)
                                 )
                                 .border(
                                     width = 1.dp,
-                                    color = if (currentTab == 1) ClaudeAccent else Color.Transparent,
+                                    color = if (currentTab == 1) ClaudeAccent else ClaudeDivider,
                                     shape = RoundedCornerShape(8.dp)
                                 ),
                             contentAlignment = Alignment.Center
                         ) {
-                            Icon(Icons.Default.DirectionsBike, contentDescription = "Skuterlar")
+                            Icon(
+                                Icons.Default.DirectionsBike,
+                                contentDescription = "Skuterlar",
+                                tint = if (currentTab == 1) ClaudeAccent else ClaudeTextSecondary,
+                                modifier = Modifier.size(26.dp)
+                            )
                         }
                     },
                     label = { Text("Skuterlar") },
@@ -1609,19 +1818,24 @@ fun MainScreen(
                     icon = {
                         Box(
                             modifier = Modifier
-                                .size(40.dp)
+                                .size(48.dp)
                                 .background(
-                                    if (currentTab == 2) ClaudeAccentBg else Color.Transparent,
+                                    if (currentTab == 2) ClaudeAccentBg else Color.White,
                                     RoundedCornerShape(8.dp)
                                 )
                                 .border(
                                     width = 1.dp,
-                                    color = if (currentTab == 2) ClaudeAccent else Color.Transparent,
+                                    color = if (currentTab == 2) ClaudeAccent else ClaudeDivider,
                                     shape = RoundedCornerShape(8.dp)
                                 ),
                             contentAlignment = Alignment.Center
                         ) {
-                            Icon(Icons.Default.Description, contentDescription = "Kontraktlar")
+                            Icon(
+                                Icons.Default.Description,
+                                contentDescription = "Kontraktlar",
+                                tint = if (currentTab == 2) ClaudeAccent else ClaudeTextSecondary,
+                                modifier = Modifier.size(26.dp)
+                            )
                         }
                     },
                     label = { Text("Kontraktlar") },
@@ -1639,19 +1853,24 @@ fun MainScreen(
                     icon = {
                         Box(
                             modifier = Modifier
-                                .size(40.dp)
+                                .size(48.dp)
                                 .background(
-                                    if (currentTab == 3) ClaudeAccentBg else Color.Transparent,
+                                    if (currentTab == 3) ClaudeAccentBg else Color.White,
                                     RoundedCornerShape(8.dp)
                                 )
                                 .border(
                                     width = 1.dp,
-                                    color = if (currentTab == 3) ClaudeAccent else Color.Transparent,
+                                    color = if (currentTab == 3) ClaudeAccent else ClaudeDivider,
                                     shape = RoundedCornerShape(8.dp)
                                 ),
                             contentAlignment = Alignment.Center
                         ) {
-                            Icon(Icons.Default.RequestQuote, contentDescription = "Tranzaksiyalar")
+                            Icon(
+                                Icons.Default.RequestQuote,
+                                contentDescription = "Tranzaksiyalar",
+                                tint = if (currentTab == 3) ClaudeAccent else ClaudeTextSecondary,
+                                modifier = Modifier.size(26.dp)
+                            )
                         }
                     },
                     label = { Text("Tranzaksiya") },
@@ -1669,19 +1888,24 @@ fun MainScreen(
                     icon = {
                         Box(
                             modifier = Modifier
-                                .size(40.dp)
+                                .size(48.dp)
                                 .background(
-                                    if (currentTab == 4) ClaudeAccentBg else Color.Transparent,
+                                    if (currentTab == 4) ClaudeAccentBg else Color.White,
                                     RoundedCornerShape(8.dp)
                                 )
                                 .border(
                                     width = 1.dp,
-                                    color = if (currentTab == 4) ClaudeAccent else Color.Transparent,
+                                    color = if (currentTab == 4) ClaudeAccent else ClaudeDivider,
                                     shape = RoundedCornerShape(8.dp)
                                 ),
                             contentAlignment = Alignment.Center
                         ) {
-                            Icon(Icons.Default.RequestQuote, contentDescription = "Otchetlar")
+                            Icon(
+                                Icons.Default.RequestQuote,
+                                contentDescription = "Otchetlar",
+                                tint = if (currentTab == 4) ClaudeAccent else ClaudeTextSecondary,
+                                modifier = Modifier.size(26.dp)
+                            )
                         }
                     },
                     label = { Text("Otchetlar") },
@@ -1699,19 +1923,24 @@ fun MainScreen(
                     icon = {
                         Box(
                             modifier = Modifier
-                                .size(40.dp)
+                                .size(48.dp)
                                 .background(
-                                    if (currentTab == 5) ClaudeAccentBg else Color.Transparent,
+                                    if (currentTab == 5) ClaudeAccentBg else Color.White,
                                     RoundedCornerShape(8.dp)
                                 )
                                 .border(
                                     width = 1.dp,
-                                    color = if (currentTab == 5) ClaudeAccent else Color.Transparent,
+                                    color = if (currentTab == 5) ClaudeAccent else ClaudeDivider,
                                     shape = RoundedCornerShape(8.dp)
                                 ),
                             contentAlignment = Alignment.Center
                         ) {
-                            Icon(Icons.Default.AccountBalanceWallet, contentDescription = "Finansi")
+                            Icon(
+                                Icons.Default.AccountBalanceWallet,
+                                contentDescription = "Finansi",
+                                tint = if (currentTab == 5) ClaudeAccent else ClaudeTextSecondary,
+                                modifier = Modifier.size(26.dp)
+                            )
                         }
                     },
                     label = { Text("Finansi") },
@@ -1732,19 +1961,24 @@ fun MainScreen(
                     icon = {
                         Box(
                             modifier = Modifier
-                                .size(40.dp)
+                                .size(48.dp)
                                 .background(
-                                    if (currentTab == 6) ClaudeAccentBg else Color.Transparent,
+                                    if (currentTab == 6) ClaudeAccentBg else Color.White,
                                     RoundedCornerShape(8.dp)
                                 )
                                 .border(
                                     width = 1.dp,
-                                    color = if (currentTab == 6) ClaudeAccent else Color.Transparent,
+                                    color = if (currentTab == 6) ClaudeAccent else ClaudeDivider,
                                     shape = RoundedCornerShape(8.dp)
                                 ),
                             contentAlignment = Alignment.Center
                         ) {
-                            Icon(Icons.Outlined.Settings, contentDescription = "Sozlamalar")
+                            Icon(
+                                Icons.Outlined.Settings,
+                                contentDescription = "Sozlamalar",
+                                tint = if (currentTab == 6) ClaudeAccent else ClaudeTextSecondary,
+                                modifier = Modifier.size(26.dp)
+                            )
                         }
                     },
                     label = { Text("Sozlamalar") },
@@ -1980,7 +2214,11 @@ fun MainScreen(
                     latestContractByRenter[r.id]?.weekEnd
                         ?: (r.rentStartDateTimestamp + (r.rentDurationDays * 24L * 60 * 60 * 1000))
 
-                val filteredRenters = renters.filter { renter ->
+                // ── Источник данных зависит от isTrashMode ────────────────────
+                // В обычном режиме показываем активных арендаторов (isDeleted=0),
+                // в trash mode — только удалённых (isDeleted=1).
+                val rentersSource = if (isTrashMode) trashedRenters else liveRenters
+                val filteredRenters = rentersSource.filter { renter ->
                     val textMatch = renter.name.contains(searchQuery, ignoreCase = true) ||
                         renter.phoneNumber.contains(searchQuery) ||
                         (renter.scooterName != null && renter.scooterName.contains(searchQuery, ignoreCase = true))
@@ -2108,7 +2346,9 @@ fun MainScreen(
                 // Вкладка «Скутеры» — поиск теперь в TopAppBar (CompactSearchPanel),
                 // фильтры и календарь открываются оттуда же. FilterSidePanel
                 // рендерится как overlay поверх ScooterTable (внутри Box).
-                val filteredScooters = scooters.filter { scooter ->
+                // ── Источник данных: в trash mode показываем только удалённые скутеры.
+                val scootersSource = if (isTrashMode) trashedScooters else liveScooters
+                val filteredScooters = scootersSource.filter { scooter ->
                     val textMatch = scooter.name.contains(searchQuery, ignoreCase = true)
                     // Calendar filter — by active renter's contract start date.
                     // A scooter with no active renter never matches a date filter
@@ -2227,7 +2467,8 @@ fun MainScreen(
                     searchQuery = contractSearchQuery,
                     onSearchQueryChange = { contractSearchQuery = it },
                     calendarTrigger = contractCalendarTrigger,
-                    filterTrigger = contractFilterTrigger
+                    filterTrigger = contractFilterTrigger,
+                    isTrashMode = isTrashMode
                 )
             } else if (currentTab == 3) {
                 // ── Вкладка «Tranzaksiya» — все транзакции ──────────────
@@ -2247,7 +2488,8 @@ fun MainScreen(
                     searchQuery = transactionSearchQuery,
                     onSearchQueryChange = { transactionSearchQuery = it },
                     calendarTrigger = transactionCalendarTrigger,
-                    filterTrigger = transactionFilterTrigger
+                    filterTrigger = transactionFilterTrigger,
+                    isTrashMode = isTrashMode
                 )
             } else if (currentTab == 4) {
                 // ── Вкладка «Otchetlar» — дашборд с инфографикой ────────
@@ -2277,7 +2519,8 @@ fun MainScreen(
                     searchQuery = finansiSearchQuery,
                     onSearchQueryChange = { finansiSearchQuery = it },
                     calendarTrigger = finansiCalendarTrigger,
-                    filterTrigger = finansiFilterTrigger
+                    filterTrigger = finansiFilterTrigger,
+                    isTrashMode = isTrashMode
                 )
             } else if (currentTab == 6) {
                 // ── Вкладка «Sozlamalar» ─────────────────────────────────
@@ -2351,12 +2594,46 @@ fun MainScreen(
                     },
                     allReleases = allReleases,
                     isLoadingReleases = isLoadingReleases,
+                    releasesError = releasesError,
                     onLoadReleases = {
                         if (!isLoadingReleases) {
                             isLoadingReleases = true
+                            releasesError = null
                             coroutineScope.launch {
                                 val checker = UpdateChecker(localContext)
-                                allReleases = checker.fetchAllReleases()
+                                val result = checker.fetchAllReleasesDetailed()
+                                when (result) {
+                                    is com.example.data.remote.FetchReleasesResult.Success -> {
+                                        allReleases = result.releases
+                                        releasesError = null
+                                    }
+                                    else -> {
+                                        allReleases = emptyList()
+                                        releasesError = checker.userFacingMessage(result)
+                                    }
+                                }
+                                isLoadingReleases = false
+                            }
+                        }
+                    },
+                    onRetryReleases = {
+                        if (!isLoadingReleases) {
+                            isLoadingReleases = true
+                            releasesError = null
+                            coroutineScope.launch {
+                                val checker = UpdateChecker(localContext)
+                                checker.clearCache()
+                                val result = checker.fetchAllReleasesDetailed()
+                                when (result) {
+                                    is com.example.data.remote.FetchReleasesResult.Success -> {
+                                        allReleases = result.releases
+                                        releasesError = null
+                                    }
+                                    else -> {
+                                        allReleases = emptyList()
+                                        releasesError = checker.userFacingMessage(result)
+                                    }
+                                }
                                 isLoadingReleases = false
                             }
                         }
@@ -3061,41 +3338,25 @@ fun RenterTable(
                             }
                             .sortedBy { it.weekStart ?: it.timestamp }
 
-                        // Собственный scroll-state для блока контрактов.
-                        // rememberScrollState() в scope элемента LazyColumn →
-                        // у каждого раскрытого арендатора свой независимый state.
-                        val contractsScrollState = rememberScrollState()
-
-                        // ── Ширины колонок совпадают со страницей «Kontraktlar»
-                        // (ContractListScreen), чтобы раскрывающаяся таблица
-                        // выглядела точь-в-точь как там. Mijoz/Telefon пропущены:
-                        // имя и телефон арендатора уже показаны в основной строке
-                        // выше, дублировать их в каждой строке контракта избыточно.
-                        val wCNum      = 40.dp    // № — порядковый номер
-                        val wCId       = 55.dp    // #ID
-                        val wCScooter  = 95.dp    // Skuter
-                        val wCStart    = 90.dp    // Boshlanish
-                        val wCEnd      = 90.dp    // Tugash
-                        val wCAmount   = 85.dp    // Summa
-                        val wCStatus   = 100.dp   // Holat (To'langan / To'lanmagan)
-                        val wCPassport = 115.dp   // Pasport
-                        val wCAddress  = 145.dp   // Manzil
-                        val wCPinfl    = 105.dp   // JSHSHIR
-                        // Ширина карточки = сумма колонок + отступы:
-                        // 16dp (Column padding 8×2) + 16dp (Row padding 8×2).
-                        val wContractsCard = wCNum + wCId + wCScooter + wCStart + wCEnd +
-                            wCAmount + wCStatus + wCPassport + wCAddress + wCPinfl + 32.dp
+                        // ── Контракты в раскрытой строке арендатора оформлены
+                        // ТОЧНО так же, как на странице «Об арендаторе»
+                        // (RenterContractHistoryScreen): 4-колоночная карточка
+                        // (№ | # | Muddat (hafta) с датой-стрелкой-датой + статус
+                        // точкой-текстом + примечание | Summa). Раньше здесь была
+                        // 10-колоночная таблица в стиле ContractListScreen —
+                        // пользователь явно попросил сделать визуально такой же,
+                        // как в деталях арендатора. ─────────────────────────────
 
                         Row(
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .horizontalScroll(contractsScrollState)
                                 .padding(top = 2.dp, bottom = 4.dp)
                         ) {
-                            // Отступ: стрелка (wExpand) + № (wNum) + 8dp — таблица
-                            // визуально начинается со 2-го столбца после № арендатора.
+                            // Отступ: стрелка (wExpand) + № (wNum) + 8dp — блок
+                            // контрактов визуально начинается со 2-го столбца
+                            // после № арендатора.
                             Spacer(modifier = Modifier.width(wExpand + wNum + 8.dp))
-                            // ── Карточка с таблицей контрактов ──────────────
+                            // ── Карточка с контрактами ──────────────────────
                             Surface(
                                 shape = RoundedCornerShape(8.dp),
                                 color = Color(0xFFFAFAF7),
@@ -3103,7 +3364,7 @@ fun RenterTable(
                                     1.dp,
                                     ClaudeDivider
                                 ),
-                                modifier = Modifier.width(wContractsCard)
+                                modifier = Modifier.fillMaxWidth()
                             ) {
                                 Column(
                                     modifier = Modifier.padding(8.dp),
@@ -3122,30 +3383,27 @@ fun RenterTable(
                                             color = ClaudeTextSecondary
                                         )
                                     } else {
-                                        // ── Заголовок таблицы (как в ContractListScreen) ──
+                                        // ── Заголовок таблицы (как на странице
+                                        // «Об арендаторе»: № | # | Muddat (hafta)
+                                        // | Summa) ──
                                         Surface(color = ClaudeCard, modifier = Modifier.fillMaxWidth()) {
                                             Row(
-                                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+                                                modifier = Modifier
+                                                    .fillMaxWidth()
+                                                    .padding(horizontal = 12.dp, vertical = 4.dp),
                                                 verticalAlignment = Alignment.CenterVertically
                                             ) {
-                                                NonSortableHeaderCellFixed(Icons.Default.Numbers,              wCNum,      "№")
-                                                NonSortableHeaderCellFixed(Icons.Default.Numbers,              wCId,       "#")
-                                                NonSortableHeaderCellFixed(Icons.Default.DirectionsBike,       wCScooter,  "Skuter")
-                                                NonSortableHeaderCellFixed(Icons.Default.CalendarToday,        wCStart,    "Boshlanish")
-                                                NonSortableHeaderCellFixed(Icons.Default.Event,                wCEnd,      "Tugash")
-                                                NonSortableHeaderCellFixed(Icons.Default.AccountBalanceWallet, wCAmount,   "Summa")
-                                                NonSortableHeaderCellFixed(Icons.Default.Check,                wCStatus,   "Holat")
-                                                NonSortableHeaderCellFixed(Icons.Default.CreditCard,           wCPassport, "Pasport")
-                                                NonSortableHeaderCellFixed(Icons.Default.Home,                 wCAddress,  "Manzil")
-                                                NonSortableHeaderCellFixed(Icons.Default.Fingerprint,          wCPinfl,    "JSHSHIR")
+                                                NonSortableHeaderCell(Icons.Default.Numbers,   0.3f, "№")
+                                                NonSortableHeaderCell(Icons.Default.Numbers,   0.4f, "#")
+                                                NonSortableHeaderCell(Icons.Default.DateRange, 1.8f, "Muddat (hafta)")
+                                                NonSortableHeaderCell(Icons.Default.Payments,  1.0f, "Summa")
                                             }
                                         }
                                         HorizontalDivider(color = ClaudeDivider)
 
-                                        // ── Строки контрактов (как в ContractListScreen) ──
-                                        // Каждая строка — карточка с rounded-углами, цветным
-                                        // статусом (точка + текст) и цветной суммой. Стилистика
-                                        // 1-в-1 со страницей «Kontraktlar».
+                                        // ── Строки контрактов (как на странице
+                                        // «Об арендаторе»: 4 колонки с весами,
+                                        // дата-стрелка-дата + статус-точка + сумма) ──
                                         contracts.forEachIndexed { idx, c ->
                                             val statusColor = if (c.isPaid) StatusOk else StatusOverdue
                                             val statusLabel = if (c.isPaid) "To'langan" else "To'lanmagan"
@@ -3153,81 +3411,45 @@ fun RenterTable(
                                             Row(
                                                 modifier = Modifier
                                                     .fillMaxWidth()
-                                                    .padding(vertical = 3.dp)
+                                                    .padding(horizontal = 8.dp, vertical = 3.dp)
+                                                    .clip(RoundedCornerShape(10.dp))
+                                                    .background(ClaudeCard)
+                                                    .padding(horizontal = 12.dp, vertical = 10.dp),
+                                                verticalAlignment = Alignment.CenterVertically
                                             ) {
-                                                Row(
-                                                    modifier = Modifier
-                                                        .clip(RoundedCornerShape(8.dp))
-                                                        .background(ClaudeCard)
-                                                        .padding(horizontal = 8.dp, vertical = 10.dp),
-                                                    verticalAlignment = Alignment.CenterVertically
-                                                ) {
-                                                    // № — порядковый номер
+                                                // № — порядковый номер строки
+                                                Text(
+                                                    "${idx + 1}",
+                                                    modifier = Modifier.weight(0.3f),
+                                                    style = MaterialTheme.typography.labelSmall,
+                                                    color = ClaudeTextSecondary,
+                                                    fontWeight = FontWeight.Medium,
+                                                    maxLines = 1
+                                                )
+                                                // #ID
+                                                Text(
+                                                    "#${c.id}",
+                                                    modifier = Modifier.weight(0.4f),
+                                                    style = MaterialTheme.typography.labelSmall,
+                                                    color = ClaudeTextSecondary,
+                                                    maxLines = 1
+                                                )
+                                                // Muddat (hafta) — дата → дата
+                                                // + статус-точка + примечание
+                                                Column(modifier = Modifier.weight(1.8f)) {
                                                     Text(
-                                                        "${idx + 1}",
-                                                        modifier = Modifier.width(wCNum).padding(horizontal = 4.dp),
-                                                        style = MaterialTheme.typography.bodySmall,
-                                                        color = ClaudeTextSecondary,
-                                                        fontWeight = FontWeight.Medium,
+                                                        text = buildString {
+                                                            c.weekStart?.let { append(dateFmt.format(Date(it))) }
+                                                            if (c.weekEnd != null) append(" → ")
+                                                            c.weekEnd?.let { append(dateFmt.format(Date(it))) }
+                                                        }.ifEmpty { "—" },
+                                                        style = MaterialTheme.typography.labelMedium,
+                                                        color = ClaudeText,
+                                                        fontWeight = FontWeight.SemiBold,
                                                         maxLines = 1
                                                     )
-                                                    // #ID
-                                                    Text(
-                                                        "#${c.id}",
-                                                        modifier = Modifier.width(wCId).padding(horizontal = 4.dp),
-                                                        style = MaterialTheme.typography.labelSmall,
-                                                        color = ClaudeTextSecondary,
-                                                        maxLines = 2,
-                                                        softWrap = true,
-                                                        overflow = TextOverflow.Visible
-                                                    )
-                                                    // Skuter
-                                                    Text(
-                                                        c.scooterName ?: "—",
-                                                        modifier = Modifier.width(wCScooter).padding(horizontal = 4.dp),
-                                                        style = MaterialTheme.typography.bodySmall,
-                                                        color = ClaudeText,
-                                                        maxLines = 2,
-                                                        softWrap = true,
-                                                        overflow = TextOverflow.Visible
-                                                    )
-                                                    // Boshlanish
-                                                    Text(
-                                                        c.weekStart?.let { dateFmt.format(Date(it)) } ?: "—",
-                                                        modifier = Modifier.width(wCStart).padding(horizontal = 4.dp),
-                                                        style = MaterialTheme.typography.bodySmall,
-                                                        color = ClaudeText,
-                                                        maxLines = 2,
-                                                        softWrap = true,
-                                                        overflow = TextOverflow.Visible
-                                                    )
-                                                    // Tugash
-                                                    Text(
-                                                        c.weekEnd?.let { dateFmt.format(Date(it)) } ?: "—",
-                                                        modifier = Modifier.width(wCEnd).padding(horizontal = 4.dp),
-                                                        style = MaterialTheme.typography.bodySmall,
-                                                        color = ClaudeText,
-                                                        maxLines = 2,
-                                                        softWrap = true,
-                                                        overflow = TextOverflow.Visible
-                                                    )
-                                                    // Summa (цветная жирная)
-                                                    Text(
-                                                        "${c.amount.toLong()}",
-                                                        modifier = Modifier.width(wCAmount).padding(horizontal = 4.dp),
-                                                        style = MaterialTheme.typography.bodyMedium,
-                                                        color = statusColor,
-                                                        fontWeight = FontWeight.Bold,
-                                                        textAlign = TextAlign.End,
-                                                        maxLines = 2,
-                                                        softWrap = true,
-                                                        overflow = TextOverflow.Visible
-                                                    )
-                                                    // Holat — точка + текст (как в ContractListScreen)
-                                                    Row(
-                                                        modifier = Modifier.width(wCStatus).padding(horizontal = 4.dp),
-                                                        verticalAlignment = Alignment.CenterVertically
-                                                    ) {
+                                                    Spacer(Modifier.height(2.dp))
+                                                    Row(verticalAlignment = Alignment.CenterVertically) {
                                                         Box(
                                                             modifier = Modifier
                                                                 .size(8.dp)
@@ -3239,42 +3461,29 @@ fun RenterTable(
                                                             style = MaterialTheme.typography.labelSmall,
                                                             color = statusColor,
                                                             fontWeight = FontWeight.SemiBold,
-                                                            maxLines = 2,
-                                                            softWrap = true,
-                                                            overflow = TextOverflow.Visible
+                                                            maxLines = 1
                                                         )
+                                                        if (!c.notes.isNullOrBlank()) {
+                                                            Spacer(Modifier.width(6.dp))
+                                                            Text(
+                                                                "• ${c.notes}",
+                                                                style = MaterialTheme.typography.labelSmall,
+                                                                color = ClaudeTextSecondary,
+                                                                maxLines = 1
+                                                            )
+                                                        }
                                                     }
-                                                    // Pasport
-                                                    Text(
-                                                        c.passportData.ifBlank { "—" },
-                                                        modifier = Modifier.width(wCPassport).padding(horizontal = 4.dp),
-                                                        style = MaterialTheme.typography.bodySmall,
-                                                        color = ClaudeText,
-                                                        maxLines = 2,
-                                                        softWrap = true,
-                                                        overflow = TextOverflow.Visible
-                                                    )
-                                                    // Manzil
-                                                    Text(
-                                                        c.address.ifBlank { "—" },
-                                                        modifier = Modifier.width(wCAddress).padding(horizontal = 4.dp),
-                                                        style = MaterialTheme.typography.bodySmall,
-                                                        color = ClaudeText,
-                                                        maxLines = 2,
-                                                        softWrap = true,
-                                                        overflow = TextOverflow.Visible
-                                                    )
-                                                    // JSHSHIR
-                                                    Text(
-                                                        c.pinfl.ifBlank { "—" },
-                                                        modifier = Modifier.width(wCPinfl).padding(horizontal = 4.dp),
-                                                        style = MaterialTheme.typography.bodySmall,
-                                                        color = ClaudeText,
-                                                        maxLines = 2,
-                                                        softWrap = true,
-                                                        overflow = TextOverflow.Visible
-                                                    )
                                                 }
+                                                // Summa — цветная жирная
+                                                Text(
+                                                    "${c.amount.toLong()}",
+                                                    modifier = Modifier.weight(1.0f),
+                                                    style = MaterialTheme.typography.labelMedium,
+                                                    color = statusColor,
+                                                    fontWeight = FontWeight.Bold,
+                                                    textAlign = TextAlign.End,
+                                                    maxLines = 1
+                                                )
                                             }
                                         }
                                     }
@@ -4407,7 +4616,17 @@ fun SettingsScreen(
     // GitHub. Список загружается по требованию через onLoadReleases().
     allReleases: List<UpdateInfo> = emptyList(),
     isLoadingReleases: Boolean = false,
+    /**
+     * Текст ошибки загрузки списка релизов на узбекском (null = ошибки нет).
+     * Когда не null — UI показывает сообщение и кнопку «Qayta urinish».
+     */
+    releasesError: String? = null,
     onLoadReleases: () -> Unit = {},
+    /**
+     * Принудительный retry — чистит дисковый кэш и заново вызывает
+     * fetchAllReleasesDetailed(). Используется кнопкой «Qayta urinish».
+     */
+    onRetryReleases: () -> Unit = {},
     onExportBackup: (android.net.Uri) -> Unit = {},
     onImportBackup: (android.net.Uri) -> Unit = {},
     // ── showTopBar ───────────────────────────────────────────────────────
@@ -4958,12 +5177,42 @@ fun SettingsScreen(
                                                 }
                                             }
                                             allReleases.isEmpty() -> {
-                                                Text(
-                                                    "Versiyalar topilmadi. Internet aloqasini tekshiring.",
-                                                    modifier = Modifier.padding(12.dp),
-                                                    style = MaterialTheme.typography.bodySmall,
-                                                    color = Color(0xFF666666)
-                                                )
+                                                Column(
+                                                    modifier = Modifier
+                                                        .fillMaxWidth()
+                                                        .padding(12.dp)
+                                                ) {
+                                                    Text(
+                                                        releasesError
+                                                            ?: "Versiyalar topilmadi. Internet aloqasini tekshiring.",
+                                                        style = MaterialTheme.typography.bodySmall,
+                                                        color = Color(0xFFB00020)
+                                                    )
+                                                    Spacer(modifier = Modifier.height(8.dp))
+                                                    OutlinedButton(
+                                                        onClick = onRetryReleases,
+                                                        shape = RoundedCornerShape(8.dp),
+                                                        contentPadding = androidx.compose.foundation.layout.PaddingValues(
+                                                            horizontal = 16.dp,
+                                                            vertical = 6.dp
+                                                        ),
+                                                        colors = androidx.compose.material3.ButtonDefaults.outlinedButtonColors(
+                                                            contentColor = Color(0xFF000000)
+                                                        ),
+                                                        border = androidx.compose.foundation.BorderStroke(
+                                                            1.dp,
+                                                            Color(0xFF000000)
+                                                        )
+                                                    ) {
+                                                        Icon(
+                                                            imageVector = Icons.Default.Refresh,
+                                                            contentDescription = null,
+                                                            modifier = Modifier.size(16.dp)
+                                                        )
+                                                        Spacer(modifier = Modifier.width(6.dp))
+                                                        Text("Qayta urinish")
+                                                    }
+                                                }
                                             }
                                             else -> {
                                                 allReleases.forEach { release ->

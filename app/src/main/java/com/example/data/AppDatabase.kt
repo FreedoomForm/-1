@@ -17,7 +17,7 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         VirtualCard::class,
         CardTransaction::class
     ],
-    version = 35,
+    version = 36,
     exportSchema = false
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -320,6 +320,42 @@ abstract class AppDatabase : RoomDatabase() {
             }
         }
 
+        /**
+         * Migration 35 → 36: добавляем колонки `isDeleted` (INTEGER NOT NULL DEFAULT 0)
+         * и `deletedAt` (INTEGER, nullable) во все 6 основных таблиц — renters,
+         * scooters, transactions, card_transactions, contract_history, virtual_cards.
+         *
+         * Это включает поддержку trash mode (soft-delete): когда пользователь
+         * долго нажимает на универсальную кнопку «Удалить» в TopAppBar, кнопка
+         * краснеет и приложение переходит в режим просмотра корзины. В этом
+         * режиме таблицы показывают только строки с isDeleted=1, а универсальные
+         * кнопки меняют поведение:
+         *   • «+» → восстанавливает выбранные удалённые объекты.
+         *   • «✎» → редактирует данные удалённого объекта.
+         *   • «🗑» → окончательно удаляет выбранные удалённые объекты из БД.
+         *   • «Сканер» → создаёт новые объекты сразу с isDeleted=1.
+         *   • «SMS» → отправляет SMS только удалённым арендаторам.
+         *   • «Поиск/Фильтр/Календарь» → работают с удалёнными данными.
+         *
+         * Существующие строки получают isDeleted=0 (активны), deletedAt=NULL.
+         */
+        private val MIGRATION_35_36 = object : Migration(35, 36) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE `renters`            ADD COLUMN `isDeleted` INTEGER NOT NULL DEFAULT 0")
+                db.execSQL("ALTER TABLE `renters`            ADD COLUMN `deletedAt` INTEGER")
+                db.execSQL("ALTER TABLE `scooters`           ADD COLUMN `isDeleted` INTEGER NOT NULL DEFAULT 0")
+                db.execSQL("ALTER TABLE `scooters`           ADD COLUMN `deletedAt` INTEGER")
+                db.execSQL("ALTER TABLE `transactions`       ADD COLUMN `isDeleted` INTEGER NOT NULL DEFAULT 0")
+                db.execSQL("ALTER TABLE `transactions`       ADD COLUMN `deletedAt` INTEGER")
+                db.execSQL("ALTER TABLE `card_transactions`  ADD COLUMN `isDeleted` INTEGER NOT NULL DEFAULT 0")
+                db.execSQL("ALTER TABLE `card_transactions`  ADD COLUMN `deletedAt` INTEGER")
+                db.execSQL("ALTER TABLE `contract_history`   ADD COLUMN `isDeleted` INTEGER NOT NULL DEFAULT 0")
+                db.execSQL("ALTER TABLE `contract_history`   ADD COLUMN `deletedAt` INTEGER")
+                db.execSQL("ALTER TABLE `virtual_cards`      ADD COLUMN `isDeleted` INTEGER NOT NULL DEFAULT 0")
+                db.execSQL("ALTER TABLE `virtual_cards`      ADD COLUMN `deletedAt` INTEGER")
+            }
+        }
+
         fun getDatabase(context: Context): AppDatabase {
             return INSTANCE ?: synchronized(this) {
                 val instance = Room.databaseBuilder(
@@ -329,7 +365,7 @@ abstract class AppDatabase : RoomDatabase() {
                 )
                     .addMigrations(
                         MIGRATION_11_12, MIGRATION_12_13, MIGRATION_13_14, MIGRATION_14_15,
-                        MIGRATION_15_34, MIGRATION_33_34, MIGRATION_34_35
+                        MIGRATION_15_34, MIGRATION_33_34, MIGRATION_34_35, MIGRATION_35_36
                     )
                     // На случай если кто-то перескакивает через несколько версий
                     // (например, был на v16-v32, для которых нет явной миграции

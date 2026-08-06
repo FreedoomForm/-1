@@ -42,6 +42,8 @@ class TransactionViewModel(application: Application) : AndroidViewModel(applicat
     private val repo: TransactionRepository
     private val renterRepo: RenterRepository
     val transactions: StateFlow<List<Transaction>>
+    val liveTransactions: StateFlow<List<Transaction>>
+    val trashedTransactions: StateFlow<List<Transaction>>
 
     // Кэши StateFlow по renterId / scooterId / contractId — чтобы не создавать
     // новый flow на каждую рекомпозицию (аналогично ContractHistoryViewModel).
@@ -55,6 +57,12 @@ class TransactionViewModel(application: Application) : AndroidViewModel(applicat
         repo = TransactionRepository(db.transactionDao())
         renterRepo = RenterRepository(db.renterDao())
         transactions = repo.all.stateIn(
+            viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList()
+        )
+        liveTransactions = repo.liveTransactions.stateIn(
+            viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList()
+        )
+        trashedTransactions = repo.trashedTransactions.stateIn(
             viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList()
         )
     }
@@ -172,6 +180,26 @@ class TransactionViewModel(application: Application) : AndroidViewModel(applicat
 
     fun clear() {
         viewModelScope.launch(Dispatchers.IO) { repo.clear() }
+    }
+
+    // ── Trash-mode operations (v36+) ─────────────────────────────────────
+    fun moveToTrash(id: Int) {
+        viewModelScope.launch(Dispatchers.IO) { repo.moveToTrash(id) }
+    }
+    fun moveToTrashBatch(ids: List<Int>) {
+        viewModelScope.launch(Dispatchers.IO) { repo.moveToTrashBatch(ids) }
+    }
+    fun restoreFromTrash(id: Int) {
+        viewModelScope.launch(Dispatchers.IO) { repo.restoreFromTrash(id) }
+    }
+    fun restoreFromTrashBatch(ids: List<Int>) {
+        viewModelScope.launch(Dispatchers.IO) { repo.restoreFromTrashBatch(ids) }
+    }
+    fun permanentlyDelete(id: Int) {
+        viewModelScope.launch(Dispatchers.IO) { repo.deleteById(id) }
+    }
+    fun permanentlyDeleteBatch(ids: List<Int>) {
+        viewModelScope.launch(Dispatchers.IO) { repo.deleteByIds(ids) }
     }
 
     suspend fun getById(id: Int): Transaction? = withContext(Dispatchers.IO) {

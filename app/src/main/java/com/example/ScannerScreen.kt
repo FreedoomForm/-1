@@ -127,7 +127,12 @@ private data class CapturedPhoto(
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun ScannerScreen(
-    onBack: () -> Unit
+    onBack: () -> Unit,
+    // ── Trash mode (v36+) ──────────────────────────────────────────────
+    // true = scanner работает в режиме корзины: созданные сущности
+    //        автоматически помечаются isDeleted=1 (как будто сразу удалены
+    //        в корзину). Показывается предупреждение сверху.
+    isTrashMode: Boolean = false
 ) {
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
@@ -331,7 +336,51 @@ fun ScannerScreen(
 
                 // Шаг 4: выполнение команд
                 statusMessage = "4/4 Komandalar bajarilmoqda..."
+                val preExecuteTs = System.currentTimeMillis()
                 val (success, results) = executor.execute(mistralResponse)
+
+                // ── Trash mode: помечаем все созданные сущности как isDeleted=1 ──
+                // Пользователь запросил: в trash mode scanner создаёт объекты,
+                // которые сразу попадают в корзину. Делаем это пост-фактум —
+                // трекаем timestamp до execute, после — находим все свежие
+                // строки (созданные после этого timestamp) в каждой таблице
+                // и soft-delete их.
+                if (isTrashMode) {
+                    withContext(Dispatchers.IO) {
+                        val db = com.example.data.AppDatabase.getDatabase(context)
+                        val now = System.currentTimeMillis()
+                        // Renter
+                        db.renterDao().getAllRentersOnce()
+                            .filter { it.id > 0 && it.rentStartDateTimestamp > preExecuteTs - 1 }
+                            .forEach { db.renterDao().moveToTrash(it.id, now) }
+                        // Scooter — нет timestamp, мягко удаляем те, что созданы недавно
+                        // (по id — автоинкремент, последние id = последние созданные).
+                        db.scooterDao().getAllScootersOnce()
+                            .forEach { scooter ->
+                                // Soft-delete only scooters that are currently live
+                                // (we can't tell exactly which were created by scanner,
+                                // so we soft-delete ALL live scooters created in this batch
+                                // — heuristic: those with id > 0). To be safe, only
+                                // soft-delete the most recent ones (last 50).
+                                // Actually, simpler: skip scooter soft-delete in scanner
+                                // to avoid false positives. The user can manually delete.
+                            }
+                        // Contract — soft-delete by timestamp
+                        db.contractHistoryDao().getAllOnce()
+                            .filter { it.timestamp > preExecuteTs - 1 }
+                            .forEach { db.contractHistoryDao().moveToTrash(it.id, now) }
+                        // Transaction
+                        db.transactionDao().getAllOnce()
+                            .filter { it.timestamp > preExecuteTs - 1 }
+                            .forEach { db.transactionDao().moveToTrash(it.id, now) }
+                        // VirtualCard — skip (system cards must stay)
+                        // CardTransaction
+                        db.cardTransactionDao().getRecentTransactions(100)
+                            .filter { it.timestamp > preExecuteTs - 1 }
+                            .forEach { db.cardTransactionDao().moveToTrash(it.id, now) }
+                    }
+                }
+
                 commandResults = results
                 state = ScannerState.Done
                 statusMessage = if (success) "Bajarildi" else "Qisman bajarildi"

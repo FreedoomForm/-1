@@ -18,6 +18,23 @@ interface RenterDao {
     @Query("SELECT * FROM renters WHERE isReturned = 0")
     suspend fun getActiveRenters(): List<Renter>
 
+    // ── Trash-mode queries (v36+) ────────────────────────────────────────
+    /** Только активные арендаторы (isDeleted = 0) — для обычного режима. */
+    @Query("SELECT * FROM renters WHERE isDeleted = 0 ORDER BY isReturned ASC, rentStartDateTimestamp DESC")
+    fun getLiveRenters(): Flow<List<Renter>>
+
+    /** Только удалённые в корзину (isDeleted = 1) — для trash mode. */
+    @Query("SELECT * FROM renters WHERE isDeleted = 1 ORDER BY deletedAt DESC")
+    fun getTrashedRenters(): Flow<List<Renter>>
+
+    /** Soft-delete: помечает арендатора как удалённого (isDeleted=1, deletedAt=now). */
+    @Query("UPDATE renters SET isDeleted = 1, deletedAt = :now WHERE id = :id")
+    suspend fun moveToTrash(id: Int, now: Long = System.currentTimeMillis())
+
+    /** Восстановление из корзины: isDeleted=0, deletedAt=NULL. */
+    @Query("UPDATE renters SET isDeleted = 0, deletedAt = NULL WHERE id = :id")
+    suspend fun restoreFromTrash(id: Int)
+
     @Query("SELECT * FROM renters WHERE id = :id LIMIT 1")
     suspend fun getRenterById(id: Int): Renter?
 

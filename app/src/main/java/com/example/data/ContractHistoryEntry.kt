@@ -58,7 +58,11 @@ data class ContractHistoryEntry(
     // false = долг (красная линия статуса)
     // Применяется только к записям-контрактам (CREATED, AUTO_RENEW).
     // PAYMENT/TERMINATED/RETURNED — транзакции, для них isPaid не используется.
-    val isPaid: Boolean = false
+    val isPaid: Boolean = false,
+
+    // ── Soft-delete (trash mode) ──────────────────────────────────────────
+    val isDeleted: Boolean = false,
+    val deletedAt: Long? = null
 ) {
     companion object {
         const val TYPE_CREATED = "CREATED"

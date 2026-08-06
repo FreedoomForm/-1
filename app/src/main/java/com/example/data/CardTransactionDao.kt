@@ -15,6 +15,25 @@ interface CardTransactionDao {
     @Query("SELECT * FROM card_transactions ORDER BY timestamp DESC LIMIT :limit")
     suspend fun getRecentTransactions(limit: Int): List<CardTransaction>
 
+    // ── Trash-mode queries (v36+) ────────────────────────────────────────
+    @Query("SELECT * FROM card_transactions WHERE isDeleted = 0 ORDER BY timestamp DESC")
+    fun getLiveTransactions(): Flow<List<CardTransaction>>
+
+    @Query("SELECT * FROM card_transactions WHERE isDeleted = 1 ORDER BY deletedAt DESC")
+    fun getTrashedTransactions(): Flow<List<CardTransaction>>
+
+    @Query("UPDATE card_transactions SET isDeleted = 1, deletedAt = :now WHERE id = :id")
+    suspend fun moveToTrash(id: Int, now: Long = System.currentTimeMillis())
+
+    @Query("UPDATE card_transactions SET isDeleted = 1, deletedAt = :now WHERE contractId = :contractId")
+    suspend fun moveToTrashForContract(contractId: Int, now: Long = System.currentTimeMillis())
+
+    @Query("UPDATE card_transactions SET isDeleted = 0, deletedAt = NULL WHERE id = :id")
+    suspend fun restoreFromTrash(id: Int)
+
+    @Query("UPDATE card_transactions SET isDeleted = 0, deletedAt = NULL WHERE contractId = :contractId")
+    suspend fun restoreFromTrashForContract(contractId: Int)
+
     @Query("SELECT * FROM card_transactions WHERE fromCardId = :cardId OR toCardId = :cardId ORDER BY timestamp DESC")
     fun getTransactionsForCard(cardId: Int): Flow<List<CardTransaction>>
 

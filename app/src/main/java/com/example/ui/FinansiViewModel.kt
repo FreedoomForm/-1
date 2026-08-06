@@ -31,6 +31,10 @@ class FinansiViewModel(application: Application) : AndroidViewModel(application)
 
     val cards: StateFlow<List<VirtualCard>>
     val transactions: StateFlow<List<CardTransaction>>
+    val liveCards: StateFlow<List<VirtualCard>>
+    val trashedCards: StateFlow<List<VirtualCard>>
+    val liveTransactions: StateFlow<List<CardTransaction>>
+    val trashedTransactions: StateFlow<List<CardTransaction>>
 
     /** Поток транзакций для конкретной карты (используется экраном истории карты). */
     fun transactionsForCard(cardId: Int): Flow<List<CardTransaction>> =
@@ -48,6 +52,26 @@ class FinansiViewModel(application: Application) : AndroidViewModel(application)
             initialValue = emptyList()
         )
         transactions = repository.allTransactions.stateIn(
+            scope = viewModelScope,
+            started = SharingStarted.WhileSubscribed(5000),
+            initialValue = emptyList()
+        )
+        liveCards = repository.liveCards.stateIn(
+            scope = viewModelScope,
+            started = SharingStarted.WhileSubscribed(5000),
+            initialValue = emptyList()
+        )
+        trashedCards = repository.trashedCards.stateIn(
+            scope = viewModelScope,
+            started = SharingStarted.WhileSubscribed(5000),
+            initialValue = emptyList()
+        )
+        liveTransactions = repository.liveTransactions.stateIn(
+            scope = viewModelScope,
+            started = SharingStarted.WhileSubscribed(5000),
+            initialValue = emptyList()
+        )
+        trashedTransactions = repository.trashedTransactions.stateIn(
             scope = viewModelScope,
             started = SharingStarted.WhileSubscribed(5000),
             initialValue = emptyList()
@@ -183,6 +207,79 @@ class FinansiViewModel(application: Application) : AndroidViewModel(application)
                 WidgetUpdater.updateAll(getApplication())
             } catch (e: Exception) {
                 Log.e(TAG, "Failed to update transaction", e)
+            }
+        }
+    }
+
+    // ── Trash-mode operations (v36+) ─────────────────────────────────────
+    /**
+     * Помещает карту в корзину (soft-delete). Системные карты (isDefault=true)
+     * не могут быть удалены — DAO игнорирует их (UPDATE WHERE isDefault=0).
+     */
+    fun moveCardToTrash(cardId: Int) {
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                repository.moveCardToTrash(cardId)
+                WidgetUpdater.updateAll(getApplication())
+            } catch (e: Exception) {
+                Log.e(TAG, "moveCardToTrash failed for #$cardId", e)
+            }
+        }
+    }
+
+    fun restoreCardFromTrash(cardId: Int) {
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                repository.restoreCardFromTrash(cardId)
+                WidgetUpdater.updateAll(getApplication())
+            } catch (e: Exception) {
+                Log.e(TAG, "restoreCardFromTrash failed for #$cardId", e)
+            }
+        }
+    }
+
+    fun permanentlyDeleteCard(card: VirtualCard) {
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                if (!card.isDefault) {
+                    repository.deleteCard(card)
+                    WidgetUpdater.updateAll(getApplication())
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "permanentlyDeleteCard failed for #${card.id}", e)
+            }
+        }
+    }
+
+    fun moveTransactionToTrash(id: Int) {
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                repository.moveTxToTrash(id)
+                WidgetUpdater.updateAll(getApplication())
+            } catch (e: Exception) {
+                Log.e(TAG, "moveTxToTrash failed for #$id", e)
+            }
+        }
+    }
+
+    fun restoreTransactionFromTrash(id: Int) {
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                repository.restoreTxFromTrash(id)
+                WidgetUpdater.updateAll(getApplication())
+            } catch (e: Exception) {
+                Log.e(TAG, "restoreTxFromTrash failed for #$id", e)
+            }
+        }
+    }
+
+    fun permanentlyDeleteTransaction(id: Int) {
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                repository.deleteTransaction(id)
+                WidgetUpdater.updateAll(getApplication())
+            } catch (e: Exception) {
+                Log.e(TAG, "permanentlyDeleteTransaction failed for #$id", e)
             }
         }
     }

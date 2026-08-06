@@ -35,6 +35,10 @@ class ContractHistoryViewModel(application: Application) : AndroidViewModel(appl
     private val transactionRepo: TransactionRepository
     private val virtualCardRepo: VirtualCardRepository
     val history: StateFlow<List<ContractHistoryEntry>>
+    val liveContracts: StateFlow<List<ContractHistoryEntry>>
+    val trashedContracts: StateFlow<List<ContractHistoryEntry>>
+    /** TrashService — для каскадного soft-delete контрактов. */
+    val trashService: com.example.data.TrashService
 
     // Кэш StateFlow по renterId — чтобы не создавать новый flow на каждую рекомпозицию
     // (старая версия создавала новый flow каждый вызов forRenter() → утечка + мерцание UI)
@@ -51,6 +55,19 @@ class ContractHistoryViewModel(application: Application) : AndroidViewModel(appl
         virtualCardRepo = VirtualCardRepository(db.virtualCardDao(), db.cardTransactionDao())
         history = repo.allHistory.stateIn(
             viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList()
+        )
+        liveContracts = repo.liveContracts.stateIn(
+            viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList()
+        )
+        trashedContracts = repo.trashedContracts.stateIn(
+            viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList()
+        )
+        trashService = com.example.data.TrashService(
+            renterRepository = renterRepo,
+            scooterRepository = com.example.data.ScooterRepository(db.scooterDao()),
+            contractRepository = repo,
+            transactionRepository = transactionRepo,
+            virtualCardRepository = virtualCardRepo
         )
     }
 
@@ -850,6 +867,67 @@ class ContractHistoryViewModel(application: Application) : AndroidViewModel(appl
         } catch (e: Exception) {
             Log.e(TAG, "Unlimited PDF generation failed", e)
             null
+        }
+    }
+
+    // ── Trash-mode operations (v36+) ─────────────────────────────────────
+    /**
+     * Каскадно помещает контракт в корзину: сам контракт + связанные
+     * Transaction + CardTransaction (с реверсом баланса главной карты).
+     */
+    fun moveContractToTrash(id: Int) {
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                trashService.moveContractToTrash(id)
+                com.example.widget.WidgetUpdater.updateAll(getApplication())
+            } catch (e: Exception) {
+                Log.e(TAG, "moveContractToTrash failed for #$id", e)
+            }
+        }
+    }
+
+    fun moveContractsToTrash(ids: List<Int>) {
+        viewModelScope.launch(Dispatchers.IO) {
+            ids.forEach { trashService.moveContractToTrash(it) }
+            com.example.widget.WidgetUpdater.updateAll(getApplication())
+        }
+    }
+
+    /** Восстанавливает контракт из корзины (+ дочерние сущности, + реверс-баланс). */
+    fun restoreContractFromTrash(id: Int) {
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                trashService.restoreContractFromTrash(id)
+                com.example.widget.WidgetUpdater.updateAll(getApplication())
+            } catch (e: Exception) {
+                Log.e(TAG, "restoreContractFromTrash failed for #$id", e)
+            }
+        }
+    }
+
+    fun restoreContractsFromTrash(ids: List<Int>) {
+        viewModelScope.launch(Dispatchers.IO) {
+            ids.forEach { trashService.restoreContractFromTrash(it) }
+            com.example.widget.WidgetUpdater.updateAll(getApplication())
+        }
+    }
+
+    /** Окончательно удаляет контракт из БД (+ каскад). Необратимо. */
+    fun permanentlyDeleteContract(id: Int) {
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                trashService.permanentlyDeleteContract(id)
+                com.example.widget.WidgetUpdater.updateAll(getApplication())
+            } catch (e: Exception) {
+                Log.e(TAG, "permanentlyDeleteContract failed for #$id", e)
+            }
+        }
+    }
+
+    fun permanentlyDeleteContracts(ids: List<Int>) {
+        viewModelScope.launch(Dispatchers.IO) {
+            ids.forEach { trashService.permanentlyDeleteContract(it) }
+            com.example.widget.WidgetUpdater.updateAll(getApplication())
         }
     }
 

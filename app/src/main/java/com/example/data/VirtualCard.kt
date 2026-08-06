@@ -56,7 +56,13 @@ data class VirtualCard(
      * Добавлено в миграции 13→14; у всех существующих карт значение 'REGULAR'.
      */
     val kind: String = KIND_REGULAR,
-    val createdAt: Long = System.currentTimeMillis()
+    val createdAt: Long = System.currentTimeMillis(),
+
+    // ── Soft-delete (trash mode) ──────────────────────────────────────────
+    // Системные карты (isDefault=true, id 1-4) не могут быть удалены в корзину —
+    // VirtualCardRepository.deleteCard блокирует их.
+    val isDeleted: Boolean = false,
+    val deletedAt: Long? = null
 ) {
     companion object {
         /** id «главной» карты — нельзя удалить. На неё падают все оплаты контрактов. */

@@ -198,7 +198,8 @@ object BackupManager {
             "id", "name", "phoneNumber", "debtAmount", "rentDurationDays",
             "rentStartDateTimestamp", "isReturned", "isOverdueSmsSent",
             "scooterId", "scooterName", "lastPaymentTimestamp", "balance",
-            "passportData", "address", "pinfl", "autoRenewMode"
+            "passportData", "address", "pinfl", "autoRenewMode",
+            "isDeleted", "deletedAt"
         )
         headers.forEachIndexed { i, h -> ws.value(0, i, h) }
         items.forEachIndexed { rowIdx, r ->
@@ -222,6 +223,10 @@ object BackupManager {
             // (созданные до добавления этой колонки) её не содержат — при
             // импорте таких файлов значение по умолчанию = AUTO (см. readRenters).
             ws.value(r2, 15, r.autoRenewMode)
+            // Колонки 16-17 — isDeleted/deletedAt (v36+). Старые .xlsx не содержат —
+            // при импорте isDeleted=false, deletedAt=null.
+            ws.value(r2, 16, r.isDeleted)
+            r.deletedAt?.let { ws.value(r2, 17, it) }
         }
     }
 
@@ -229,7 +234,8 @@ object BackupManager {
         val ws = wb.newWorksheet(SHEET_SCOOTERS)
         val headers = listOf(
             "id", "name", "documentedNumber", "vinNumber", "engineNumber",
-            "scooterSerialNumber", "batteryId1", "batteryId2", "additionalInfo"
+            "scooterSerialNumber", "batteryId1", "batteryId2", "additionalInfo",
+            "isDeleted", "deletedAt"
         )
         headers.forEachIndexed { i, h -> ws.value(0, i, h) }
         items.forEachIndexed { rowIdx, s ->
@@ -243,6 +249,8 @@ object BackupManager {
             ws.value(r, 6, s.batteryId1)
             ws.value(r, 7, s.batteryId2)
             ws.value(r, 8, s.additionalInfo)
+            ws.value(r, 9, s.isDeleted)
+            s.deletedAt?.let { ws.value(r, 10, it) }
         }
     }
 
@@ -253,7 +261,8 @@ object BackupManager {
             "renterName", "renterPhone", "scooterName", "weekStart", "weekEnd",
             "weeklyPrice", "passportData", "address", "pinfl",
             "vinNumber", "engineNumber", "scooterSerialNumber",
-            "batteryId1", "batteryId2", "additionalInfo", "isPaid"
+            "batteryId1", "batteryId2", "additionalInfo", "isPaid",
+            "isDeleted", "deletedAt"
         )
         headers.forEachIndexed { i, h -> ws.value(0, i, h) }
         items.forEachIndexed { rowIdx, c ->
@@ -280,6 +289,8 @@ object BackupManager {
             ws.value(r, 19, c.batteryId2)
             ws.value(r, 20, c.additionalInfo)
             ws.value(r, 21, c.isPaid)
+            ws.value(r, 22, c.isDeleted)
+            c.deletedAt?.let { ws.value(r, 23, it) }
         }
     }
 
@@ -288,7 +299,7 @@ object BackupManager {
         val headers = listOf(
             "id", "contractId", "renterId", "scooterId", "timestamp",
             "type", "amount", "notes", "renterName", "renterPhone",
-            "scooterName", "contractLabel"
+            "scooterName", "contractLabel", "isDeleted", "deletedAt"
         )
         headers.forEachIndexed { i, h -> ws.value(0, i, h) }
         items.forEachIndexed { rowIdx, t ->
@@ -305,6 +316,8 @@ object BackupManager {
             ws.value(r, 9, t.renterPhone)
             ws.value(r, 10, t.scooterName)
             ws.value(r, 11, t.contractLabel)
+            ws.value(r, 12, t.isDeleted)
+            t.deletedAt?.let { ws.value(r, 13, it) }
         }
     }
 
@@ -312,7 +325,7 @@ object BackupManager {
         val ws = wb.newWorksheet(SHEET_VIRTUAL_CARDS)
         val headers = listOf(
             "id", "name", "balance", "colorHex", "info", "isDefault",
-            "kind", "createdAt"
+            "kind", "createdAt", "isDeleted", "deletedAt"
         )
         headers.forEachIndexed { i, h -> ws.value(0, i, h) }
         items.forEachIndexed { rowIdx, c ->
@@ -325,6 +338,8 @@ object BackupManager {
             ws.value(r, 5, c.isDefault)
             ws.value(r, 6, c.kind)
             ws.value(r, 7, c.createdAt)
+            ws.value(r, 8, c.isDeleted)
+            c.deletedAt?.let { ws.value(r, 9, it) }
         }
     }
 
@@ -332,7 +347,7 @@ object BackupManager {
         val ws = wb.newWorksheet(SHEET_CARD_TX)
         val headers = listOf(
             "id", "timestamp", "fromCardId", "toCardId", "amount", "note", "type",
-            "contractId"
+            "contractId", "isDeleted", "deletedAt"
         )
         headers.forEachIndexed { i, h -> ws.value(0, i, h) }
         items.forEachIndexed { rowIdx, t ->
@@ -345,6 +360,8 @@ object BackupManager {
             t.note?.let { ws.value(r, 5, it) }
             ws.value(r, 6, t.type)
             t.contractId?.let { ws.value(r, 7, it) }
+            ws.value(r, 8, t.isDeleted)
+            t.deletedAt?.let { ws.value(r, 9, it) }
         }
     }
 
@@ -511,6 +528,9 @@ object BackupManager {
                     null, "" -> RenterAutoRenewMode.AUTO
                     else -> autoRenewFromCell
                 }
+                // Колонки 16-17 — isDeleted/deletedAt (v36+). Старые .xlsx не содержат.
+                val isDeleted = row.getCell(16)?.asBoolean() ?: false
+                val deletedAt = row.getCell(17)?.asNumber()?.toLong()
                 Renter(
                     id = row.getCell(0)?.asNumber()?.toInt() ?: 0,
                     name = row.getCell(1)?.asString() ?: "",
@@ -527,7 +547,9 @@ object BackupManager {
                     passportData = row.getCell(12)?.asString() ?: "",
                     address = row.getCell(13)?.asString() ?: "",
                     pinfl = row.getCell(14)?.asString() ?: "",
-                    autoRenewMode = autoRenew
+                    autoRenewMode = autoRenew,
+                    isDeleted = isDeleted,
+                    deletedAt = deletedAt
                 )
             } catch (e: Exception) {
                 Log.w(TAG, "Skip renter row: ${e.message}")
@@ -550,7 +572,9 @@ object BackupManager {
                     scooterSerialNumber = row.getCell(5)?.asString() ?: "",
                     batteryId1 = row.getCell(6)?.asString() ?: "",
                     batteryId2 = row.getCell(7)?.asString() ?: "",
-                    additionalInfo = row.getCell(8)?.asString() ?: ""
+                    additionalInfo = row.getCell(8)?.asString() ?: "",
+                    isDeleted = row.getCell(9)?.asBoolean() ?: false,
+                    deletedAt = row.getCell(10)?.asNumber()?.toLong()
                 )
             } catch (e: Exception) {
                 Log.w(TAG, "Skip scooter row: ${e.message}")
@@ -586,7 +610,9 @@ object BackupManager {
                     batteryId1 = row.getCell(18)?.asString() ?: "",
                     batteryId2 = row.getCell(19)?.asString() ?: "",
                     additionalInfo = row.getCell(20)?.asString() ?: "",
-                    isPaid = row.getCell(21)?.asBoolean() ?: false
+                    isPaid = row.getCell(21)?.asBoolean() ?: false,
+                    isDeleted = row.getCell(22)?.asBoolean() ?: false,
+                    deletedAt = row.getCell(23)?.asNumber()?.toLong()
                 )
             } catch (e: Exception) {
                 Log.w(TAG, "Skip contract row: ${e.message}")
@@ -612,7 +638,9 @@ object BackupManager {
                     renterName = row.getCell(8)?.asString() ?: "",
                     renterPhone = row.getCell(9)?.asString() ?: "",
                     scooterName = row.getCell(10)?.asString() ?: "",
-                    contractLabel = row.getCell(11)?.asString() ?: ""
+                    contractLabel = row.getCell(11)?.asString() ?: "",
+                    isDeleted = row.getCell(12)?.asBoolean() ?: false,
+                    deletedAt = row.getCell(13)?.asNumber()?.toLong()
                 )
             } catch (e: Exception) {
                 Log.w(TAG, "Skip transaction row: ${e.message}")
@@ -634,7 +662,9 @@ object BackupManager {
                     info = row.getCell(4)?.asString(),
                     isDefault = row.getCell(5)?.asBoolean() ?: false,
                     kind = row.getCell(6)?.asString() ?: VirtualCard.KIND_REGULAR,
-                    createdAt = row.getCell(7)?.asNumber()?.toLong() ?: System.currentTimeMillis()
+                    createdAt = row.getCell(7)?.asNumber()?.toLong() ?: System.currentTimeMillis(),
+                    isDeleted = row.getCell(8)?.asBoolean() ?: false,
+                    deletedAt = row.getCell(9)?.asNumber()?.toLong()
                 )
             } catch (e: Exception) {
                 Log.w(TAG, "Skip virtual card row: ${e.message}")
@@ -658,7 +688,9 @@ object BackupManager {
                     type = row.getCell(6)?.asString() ?: CardTransaction.TYPE_CARD_TRANSFER,
                     // contractId — опциональное поле (добавлено в миграции 14→15).
                     // Старые .xlsx без этой колонки дадут null — это корректно.
-                    contractId = row.getCell(7)?.asNumber()?.toInt()
+                    contractId = row.getCell(7)?.asNumber()?.toInt(),
+                    isDeleted = row.getCell(8)?.asBoolean() ?: false,
+                    deletedAt = row.getCell(9)?.asNumber()?.toLong()
                 )
             } catch (e: Exception) {
                 Log.w(TAG, "Skip card tx row: ${e.message}")

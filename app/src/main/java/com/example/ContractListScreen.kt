@@ -108,13 +108,23 @@ fun ContractListScreen(
     searchQuery: String = "",
     onSearchQueryChange: (String) -> Unit = {},
     calendarTrigger: Int = 0,
-    filterTrigger: Int = 0
+    filterTrigger: Int = 0,
+    // ── Trash mode (v36+) ──────────────────────────────────────────────
+    // true = показывать только удалённые контракты (isDeleted=1) + скрыть
+    //        диалоги создания (поскольку «+» в trash mode = restore).
+    // false = обычный режим (активные контракты, «+» = create).
+    isTrashMode: Boolean = false
 ) {
     val allHistory by contractHistoryViewModel.history.collectAsStateWithLifecycle()
     val allRenters by renterViewModel.rentersList.collectAsStateWithLifecycle()
     val allScooters by scooterViewModel.scootersList.collectAsStateWithLifecycle()
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
+
+    // ── Источник данных: в trash mode показываем только удалённые контракты.
+    val liveContracts by contractHistoryViewModel.liveContracts.collectAsStateWithLifecycle()
+    val trashedContracts by contractHistoryViewModel.trashedContracts.collectAsStateWithLifecycle()
+    val contractsSource = if (isTrashMode) trashedContracts else liveContracts
 
     // searchQuery больше не внутренний state — поднят в MainActivity и
     // передаётся параметром. См. searchQuery / onSearchQueryChange выше.
@@ -139,9 +149,11 @@ fun ContractListScreen(
         lastCreateTrigger = createTrigger
     }
 
-    // Только контракты (CREATED + AUTO_RENEW), отсортированы по weekStart DESC
-    val allContracts = remember(allHistory) {
-        allHistory
+    // Только контракты (CREATED + AUTO_RENEW), отсортированы по weekStart DESC.
+    // Источник: contractsSource (liveContracts в обычном режиме, trashedContracts
+    // в trash mode) — см. параметр isTrashMode.
+    val allContracts = remember(contractsSource) {
+        contractsSource
             .filter { it.type == ContractHistoryEntry.TYPE_CREATED || it.type == ContractHistoryEntry.TYPE_AUTO_RENEW }
             .sortedByDescending { it.weekStart ?: it.timestamp }
     }
@@ -388,7 +400,7 @@ fun ContractListScreen(
                                 modifier = Modifier
                                     .horizontalScroll(hScrollState)
                                     .clip(RoundedCornerShape(8.dp))
-                                    .background(if (isSelected) ClaudeAccentBg else ClaudeCard)
+                                    .background(if (isSelected) Color(0xFFF3F4F6) else Color.White)
                                     .combinedClickable(
                                         onClick = {
                                             // Один клик = открыть экран истории транзакций

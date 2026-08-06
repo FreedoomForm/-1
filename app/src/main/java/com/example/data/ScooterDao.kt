@@ -15,6 +15,22 @@ interface ScooterDao {
     @Query("SELECT * FROM scooters ORDER BY id ASC")
     suspend fun getAllScootersOnce(): List<Scooter>
 
+    // ── Trash-mode queries (v36+) ────────────────────────────────────────
+    @Query("SELECT * FROM scooters WHERE isDeleted = 0 ORDER BY id ASC")
+    fun getLiveScooters(): Flow<List<Scooter>>
+
+    @Query("SELECT * FROM scooters WHERE isDeleted = 1 ORDER BY deletedAt DESC")
+    fun getTrashedScooters(): Flow<List<Scooter>>
+
+    @Query("UPDATE scooters SET isDeleted = 1, deletedAt = :now WHERE id = :id")
+    suspend fun moveToTrash(id: Int, now: Long = System.currentTimeMillis())
+
+    @Query("UPDATE scooters SET isDeleted = 0, deletedAt = NULL WHERE id = :id")
+    suspend fun restoreFromTrash(id: Int)
+
+    @Query("DELETE FROM scooters WHERE id = :id")
+    suspend fun deleteById(id: Int)
+
     @Query("SELECT * FROM scooters WHERE id = :id LIMIT 1")
     suspend fun getScooterById(id: Int): Scooter?
 

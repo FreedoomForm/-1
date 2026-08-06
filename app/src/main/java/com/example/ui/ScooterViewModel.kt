@@ -14,11 +14,23 @@ import kotlinx.coroutines.launch
 class ScooterViewModel(application: Application) : AndroidViewModel(application) {
     private val repository: ScooterRepository
     val scootersList: StateFlow<List<Scooter>>
+    val liveScooters: StateFlow<List<Scooter>>
+    val trashedScooters: StateFlow<List<Scooter>>
 
     init {
         val database = AppDatabase.getDatabase(application)
         repository = ScooterRepository(database.scooterDao())
         scootersList = repository.allScooters.stateIn(
+            scope = viewModelScope,
+            started = SharingStarted.WhileSubscribed(5000),
+            initialValue = emptyList()
+        )
+        liveScooters = repository.liveScooters.stateIn(
+            scope = viewModelScope,
+            started = SharingStarted.WhileSubscribed(5000),
+            initialValue = emptyList()
+        )
+        trashedScooters = repository.trashedScooters.stateIn(
             scope = viewModelScope,
             started = SharingStarted.WhileSubscribed(5000),
             initialValue = emptyList()
@@ -74,5 +86,18 @@ class ScooterViewModel(application: Application) : AndroidViewModel(application)
         viewModelScope.launch {
             repository.delete(scooter)
         }
+    }
+
+    // ── Trash-mode operations (v36+) ─────────────────────────────────────
+    fun moveScooterToTrash(id: Int) {
+        viewModelScope.launch { repository.moveToTrash(id) }
+    }
+
+    fun restoreScooterFromTrash(id: Int) {
+        viewModelScope.launch { repository.restoreFromTrash(id) }
+    }
+
+    fun permanentlyDeleteScooter(id: Int) {
+        viewModelScope.launch { repository.deleteById(id) }
     }
 }

@@ -57,6 +57,12 @@ class RenterViewModel(application: Application) : AndroidViewModel(application) 
     private val virtualCardRepository: com.example.data.VirtualCardRepository
     private val actionUseCase: com.example.data.RenterActionUseCase
     val rentersList: StateFlow<List<Renter>>
+    /** Только активные арендаторы (isDeleted=0) — для обычного режима. */
+    val liveRenters: StateFlow<List<Renter>>
+    /** Только удалённые в корзину (isDeleted=1) — для trash mode. */
+    val trashedRenters: StateFlow<List<Renter>>
+    /** TrashService для каскадного soft-delete/restore/permanent-delete. */
+    val trashService: com.example.data.TrashService
 
     private var smsSendCounter = 0
 
@@ -79,6 +85,23 @@ class RenterViewModel(application: Application) : AndroidViewModel(application) 
             scope = viewModelScope,
             started = SharingStarted.WhileSubscribed(5000),
             initialValue = emptyList()
+        )
+        liveRenters = repository.liveRenters.stateIn(
+            scope = viewModelScope,
+            started = SharingStarted.WhileSubscribed(5000),
+            initialValue = emptyList()
+        )
+        trashedRenters = repository.trashedRenters.stateIn(
+            scope = viewModelScope,
+            started = SharingStarted.WhileSubscribed(5000),
+            initialValue = emptyList()
+        )
+        trashService = com.example.data.TrashService(
+            renterRepository = repository,
+            scooterRepository = com.example.data.ScooterRepository(database.scooterDao()),
+            contractRepository = historyRepository,
+            transactionRepository = transactionRepository,
+            virtualCardRepository = virtualCardRepository
         )
     }
 
@@ -1249,6 +1272,52 @@ class RenterViewModel(application: Application) : AndroidViewModel(application) 
      */
     private suspend fun applyTermination(renter: Renter, weeklyPrice: Double) {
         actionUseCase.terminate(renter, weeklyPrice)
+    }
+
+    // ── Trash-mode operations (v36+) ─────────────────────────────────────
+    /**
+     * Каскадно помещает арендатора в корзину: сам арендатор + все его контракты
+     * + все его транзакции + реверс card_transactions. Не удаляет данные
+     * физически — только помечает isDeleted=1.
+     */
+    fun moveRenterToTrash(id: Int) {
+        viewModelScope.launch {
+            try {
+                trashService.moveRenterToTrash(id)
+                com.example.widget.WidgetUpdater.updateAll(getApplication())
+            } catch (e: Exception) {
+                Log.e(TAG, "moveRenterToTrash failed for #$id", e)
+            }
+        }
+    }
+
+    /**
+     * Восстанавливает арендатора из корзины (вместе с дочерними сущностями).
+     */
+    fun restoreRenterFromTrash(id: Int) {
+        viewModelScope.launch {
+            try {
+                trashService.restoreRenterFromTrash(id)
+                com.example.widget.WidgetUpdater.updateAll(getApplication())
+            } catch (e: Exception) {
+                Log.e(TAG, "restoreRenterFromTrash failed for #$id", e)
+            }
+        }
+    }
+
+    /**
+     * Окончательно удаляет арендатора из БД (вместе с контрактами, транзакциями
+     * и card_transactions). Необратимо.
+     */
+    fun permanentlyDeleteRenter(id: Int) {
+        viewModelScope.launch {
+            try {
+                trashService.permanentlyDeleteRenter(id)
+                com.example.widget.WidgetUpdater.updateAll(getApplication())
+            } catch (e: Exception) {
+                Log.e(TAG, "permanentlyDeleteRenter failed for #$id", e)
+            }
+        }
     }
 
     companion object {

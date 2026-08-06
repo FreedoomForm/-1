@@ -15,6 +15,31 @@ interface ContractHistoryDao {
     @Query("SELECT * FROM contract_history ORDER BY timestamp DESC")
     suspend fun getAllOnce(): List<ContractHistoryEntry>
 
+    // ── Trash-mode queries (v36+) ────────────────────────────────────────
+    @Query("SELECT * FROM contract_history WHERE isDeleted = 0 ORDER BY timestamp DESC")
+    fun getLiveContracts(): Flow<List<ContractHistoryEntry>>
+
+    @Query("SELECT * FROM contract_history WHERE isDeleted = 1 ORDER BY deletedAt DESC")
+    fun getTrashedContracts(): Flow<List<ContractHistoryEntry>>
+
+    @Query("UPDATE contract_history SET isDeleted = 1, deletedAt = :now WHERE id = :id")
+    suspend fun moveToTrash(id: Int, now: Long = System.currentTimeMillis())
+
+    @Query("UPDATE contract_history SET isDeleted = 1, deletedAt = :now WHERE id IN (:ids)")
+    suspend fun moveToTrashBatch(ids: List<Int>, now: Long = System.currentTimeMillis())
+
+    @Query("UPDATE contract_history SET isDeleted = 1, deletedAt = :now WHERE renterId = :renterId")
+    suspend fun moveToTrashForRenter(renterId: Int, now: Long = System.currentTimeMillis())
+
+    @Query("UPDATE contract_history SET isDeleted = 0, deletedAt = NULL WHERE id = :id")
+    suspend fun restoreFromTrash(id: Int)
+
+    @Query("UPDATE contract_history SET isDeleted = 0, deletedAt = NULL WHERE id IN (:ids)")
+    suspend fun restoreFromTrashBatch(ids: List<Int>)
+
+    @Query("UPDATE contract_history SET isDeleted = 0, deletedAt = NULL WHERE renterId = :renterId")
+    suspend fun restoreFromTrashForRenter(renterId: Int)
+
     @Query("SELECT * FROM contract_history WHERE renterId = :renterId ORDER BY timestamp DESC")
     suspend fun getForRenter(renterId: Int): List<ContractHistoryEntry>
 
