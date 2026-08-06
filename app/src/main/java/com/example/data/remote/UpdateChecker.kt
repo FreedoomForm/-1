@@ -114,16 +114,42 @@ class UpdateChecker(
      *   result = UPDATE_AVAILABLE → updateInfo != null
      *   result = UP_TO_DATE → updateInfo = null
      *   result = ERROR → updateInfo = null
+     *
+     * При получении HTTP 401 от первого запроса (если у нас есть зашитый токен)
+     * автоматически повторяет запрос **без** Authorization header — репозиторий
+     * публичный, поэтому чтение работает и без токена. Это спасает ситуацию,
+     * когда PAT в APK был отозван/протухнул после публикации сборки.
      */
     suspend fun checkForUpdate(): Pair<UpdateCheckResult, UpdateInfo?> = withContext(Dispatchers.IO) {
-        try {
+        val first = checkForUpdateOnce(skipAuth = false)
+
+        // 401 + есть токен → повторяем без Authorization. Репо публичный,
+        // без токена работает (с лимитом 60/час), это лучше чем молча показать
+        // пользователю «нет обновлений» из-за протухшего токена.
+        if (first.first == UpdateCheckResult.ERROR && githubToken().isNotEmpty()) {
+            Log.w(TAG, "checkForUpdate: first attempt failed, retrying without Authorization header (public repo fallback)")
+            val noAuth = checkForUpdateOnce(skipAuth = true)
+            if (noAuth.first != UpdateCheckResult.ERROR) return@withContext noAuth
+        }
+
+        first
+    }
+
+    /**
+     * Одна попытка проверить обновление. Не ретраит сам — вызывающий код
+     * ([checkForUpdate]) решает, нужно ли перепосылать без токена.
+     *
+     * Параметр [skipAuth] пробрасывается в [applyDefaultHeaders].
+     */
+    private fun checkForUpdateOnce(skipAuth: Boolean): Pair<UpdateCheckResult, UpdateInfo?> {
+        return try {
             val currentVersionCode = getCurrentVersionCode()
             val currentVersionName = getCurrentVersionName()
-            Log.d(TAG, "Current: versionCode=$currentVersionCode, versionName=$currentVersionName")
+            Log.d(TAG, "Current: versionCode=$currentVersionCode, versionName=$currentVersionName (skipAuth=$skipAuth)")
 
             val apiUrl = "https://api.github.com/repos/$REPO_OWNER/$REPO_NAME/releases/latest"
             val connection = URL(apiUrl).openConnection() as java.net.HttpURLConnection
-            applyDefaultHeaders(connection)
+            applyDefaultHeaders(connection, skipAuth = skipAuth)
             connection.connectTimeout = 10_000
             connection.readTimeout = 15_000
             connection.instanceFollowRedirects = true
@@ -132,7 +158,7 @@ class UpdateChecker(
             if (responseCode != 200) {
                 val errorBody = connection.errorStream?.bufferedReader()?.use { it.readText() } ?: ""
                 Log.e(TAG, "GitHub API returned HTTP $responseCode: $errorBody")
-                return@withContext Pair(UpdateCheckResult.ERROR, null)
+                return Pair(UpdateCheckResult.ERROR, null)
             }
 
             val json = connection.inputStream.bufferedReader().use { it.readText() }
@@ -147,7 +173,7 @@ class UpdateChecker(
 
             Log.d(TAG, "Latest GitHub release: tag=$tagName, remoteVersionCode=$remoteVersionCode")
 
-            val assets = release.optJSONArray("assets") ?: return@withContext Pair(UpdateCheckResult.ERROR, null)
+            val assets = release.optJSONArray("assets") ?: return Pair(UpdateCheckResult.ERROR, null)
             var downloadUrl: String? = null
             var fileSize: Long = 0
 
@@ -163,18 +189,18 @@ class UpdateChecker(
 
             if (downloadUrl == null) {
                 Log.w(TAG, "No APK asset found in release $tagName")
-                return@withContext Pair(UpdateCheckResult.ERROR, null)
+                return Pair(UpdateCheckResult.ERROR, null)
             }
 
             if (remoteVersionCode != null) {
                 if (currentVersionCode >= remoteVersionCode) {
                     Log.d(TAG, "App is up to date (versionCode: $currentVersionCode >= $remoteVersionCode)")
-                    return@withContext Pair(UpdateCheckResult.UP_TO_DATE, null)
+                    return Pair(UpdateCheckResult.UP_TO_DATE, null)
                 }
             } else {
                 if (!isNewerVersion(currentVersionName, tagName)) {
                     Log.d(TAG, "App is up to date (versionName: $currentVersionName >= $tagName)")
-                    return@withContext Pair(UpdateCheckResult.UP_TO_DATE, null)
+                    return Pair(UpdateCheckResult.UP_TO_DATE, null)
                 }
             }
 
@@ -439,24 +465,49 @@ class UpdateChecker(
      * Делает один сетевой запрос; при транзиентной сетевой ошибке (timeout,
      * UnknownHostException, SocketException) — одна повторная попытка с
      * короткой паузой. При 4xx не ретраит (бесполезно — код ошибки тот же).
+     *
+     * Дополнительно: при получении HTTP 401 (invalid/revoked embedded token)
+     * делает одну повторную попытку **без** Authorization header. Репозиторий
+     * публичный, поэтому чтение релизов работает и без токена (с лимитом 60/час),
+     * что лучше, чем показывать пользователю «HTTP 401». Это спасает ситуацию,
+     * когда зашитый в APK PAT был отозван/протухнул после публикации сборки.
      */
     private suspend fun fetchAllReleasesFromNetworkWithRetry(): FetchReleasesResult {
-        val first = tryFetchAllReleasesOnce()
+        val first = tryFetchAllReleasesOnce(skipAuth = false)
+
+        // 401 + у нас есть токен → перепосылаем без Authorization. Это покрывает
+        // случай «токен отозвали после релиза APK» — репо публичный, без токена
+        // тоже работает, просто с жёстким rate limit (60/час).
+        if (first is FetchReleasesResult.HttpError &&
+            first.code == 401 &&
+            githubToken().isNotEmpty()
+        ) {
+            Log.w(TAG, "fetchAllReleases: got HTTP 401 with embedded token — retrying without Authorization (public repo fallback)")
+            val noAuth = tryFetchAllReleasesOnce(skipAuth = true)
+            // Если retry без токена тоже дал НЕ сетевую ошибку — возвращаем его
+            // (это может быть 200 success, 403 rate limit, 404 — всё равно
+            // информативнее, чем исходный 401).
+            if (noAuth !is FetchReleasesResult.NetworkError) return noAuth
+        }
+
         if (first !is FetchReleasesResult.NetworkError) return first
 
         Log.w(TAG, "fetchAllReleases: first attempt failed with NetworkError (${first.cause.javaClass.simpleName}), retrying in 1500ms")
         delay(1500)
-        return tryFetchAllReleasesOnce()
+        return tryFetchAllReleasesOnce(skipAuth = false)
     }
 
     /**
      * Один сетевой запрос к GitHub Releases API. Не ретраит сам.
+     *
+     * Параметр [skipAuth] пробрасывается в [applyDefaultHeaders] и заставляет
+     * пропустить Authorization header. Используется fallback’ом при 401.
      */
-    private fun tryFetchAllReleasesOnce(): FetchReleasesResult {
+    private fun tryFetchAllReleasesOnce(skipAuth: Boolean = false): FetchReleasesResult {
         return try {
             val apiUrl = "https://api.github.com/repos/$REPO_OWNER/$REPO_NAME/releases?per_page=50"
             val connection = URL(apiUrl).openConnection() as java.net.HttpURLConnection
-            applyDefaultHeaders(connection)
+            applyDefaultHeaders(connection, skipAuth = skipAuth)
             connection.connectTimeout = 10_000
             connection.readTimeout = 15_000
             connection.instanceFollowRedirects = true
@@ -568,10 +619,22 @@ class UpdateChecker(
      *  - User-Agent: обязателен для GitHub API (иначе 403)
      *  - Authorization: Bearer <token> если задан BuildConfig.GITHUB_API_TOKEN
      *    и он не пустой. Поднимает лимит с 60 → 5000 запросов/час.
+     *
+     * Параметр [skipAuth] принудительно отключает Authorization header даже если
+     * токен задан. Используется как fallback при получении HTTP 401: репозиторий
+     * публичный, поэтому чтение релизов работает и без токена (с лимитом 60/час),
+     * что лучше, чем показывать пользователю ошибку «HTTP 401».
      */
-    private fun applyDefaultHeaders(connection: java.net.HttpURLConnection) {
+    private fun applyDefaultHeaders(
+        connection: java.net.HttpURLConnection,
+        skipAuth: Boolean = false
+    ) {
         connection.setRequestProperty("Accept", "application/vnd.github.v3+json")
         connection.setRequestProperty("User-Agent", "ScooterRent-App-Update-Checker")
+        if (skipAuth) {
+            Log.d(TAG, "Skipping Authorization header (skipAuth=true, unauthenticated request)")
+            return
+        }
         val token = githubToken()
         if (token.isNotEmpty()) {
             connection.setRequestProperty("Authorization", "Bearer $token")
@@ -584,6 +647,14 @@ class UpdateChecker(
     /**
      * Читает токен из BuildConfig.GITHUB_API_TOKEN (внедряется secrets-gradle-plugin
      * из .env). Возвращает пустую строку если токен не задан.
+     *
+     * Фильтрует не только placeholder’ы из `.env.example`, но и любые другие
+     * мусорные значения: `[REDACTED:...]` (так AI Studio иногда маскирует секреты
+     * в локальном .env), строки с `PLACEHOLDER`/`REDACTED`, строки со скобками
+     * `[` `]` или двоеточием `:` (настоящие GitHub PAT никогда не содержат этих
+     * символов), и слишком короткие строки (классический PAT — 40 символов,
+     * fine-grained — 93+). Без этой фильтрации приложение отправило бы мусор
+     * как Bearer-токен и получило бы HTTP 401 Unauthorized.
      */
     private fun githubToken(): String {
         return try {
@@ -597,15 +668,17 @@ class UpdateChecker(
             // и запрос должен идти без Authorization header (unauthenticated, 60 req/hour).
             // Без этой проверки приложение отправило бы placeholder как Bearer-токен,
             // и GitHub API вернул бы 401 Unauthorized.
-            if (raw.isEmpty() ||
+            val isJunk = raw.isEmpty() ||
                 raw.equals("PLACEHOLDER_REPLACE_VIA_CI_SECRET", ignoreCase = true) ||
                 raw.startsWith("MY_GITHUB") ||
-                raw.startsWith("YOUR_GITHUB")
-            ) {
-                ""
-            } else {
-                raw
-            }
+                raw.startsWith("YOUR_GITHUB") ||
+                raw.contains("PLACEHOLDER", ignoreCase = true) ||
+                raw.contains("REDACTED", ignoreCase = true) ||
+                raw.contains("[") ||
+                raw.contains("]") ||
+                raw.contains("{{") ||          // незаменённый шаблон ${{ secrets.X }}
+                raw.length < 20                // настоящий PAT — минимум 40 символов
+            if (isJunk) "" else raw
         } catch (e: Exception) {
             Log.w(TAG, "BuildConfig.GITHUB_API_TOKEN not available", e)
             ""
@@ -716,7 +789,14 @@ class UpdateChecker(
             FetchReleasesResult.NotFound ->
                 "GitHub repozitoriyasi topilmadi. Iltimos dasturchi bilan bog'laning."
             is FetchReleasesResult.HttpError ->
-                "GitHub serveri xato qaytardi (HTTP ${result.code}). Iltimos keyinroq urinib ko'ring."
+                if (result.code == 401) {
+                    // 401 означает, что и зашитый токен отклонён, и fallback без
+                    // токена тоже не прошёл (например, 60/час лимит уже исчерпан
+                    // и GitHub почему-то вернул 401 вместо 403). Просим подождать.
+                    "GitHub token yaroqsiz yoki so'rovlar chegarasi tugagan. Iltimos keyinroq urinib ko'ring."
+                } else {
+                    "GitHub serveri xato qaytardi (HTTP ${result.code}). Iltimos keyinroq urinib ko'ring."
+                }
             FetchReleasesResult.NoApkInReleases ->
                 "Relizlarda APK fayl topilmadi. Iltimos dasturchi bilan bog'laning."
         }
