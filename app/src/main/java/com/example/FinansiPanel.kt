@@ -51,6 +51,7 @@ import com.example.ui.theme.ClaudeCard
 import com.example.ui.theme.ClaudeDivider
 import com.example.ui.theme.ClaudeText
 import com.example.ui.theme.ClaudeTextSecondary
+import com.example.ui.theme.StatusOverdue
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -596,6 +597,7 @@ fun CardsGrid(
 @Composable
 fun VirtualCardFormDialog(
     initial: VirtualCard? = null,
+    existingCards: List<VirtualCard> = emptyList(),
     onDismiss: () -> Unit,
     onSave: (name: String, balance: Double, colorHex: String, info: String?) -> Unit
 ) {
@@ -609,6 +611,20 @@ fun VirtualCardFormDialog(
     }
     val isEdit = initial != null
     val isDefaultCard = initial?.isDefault == true
+
+    // ── Проверка дубликатов (красная рамка при совпадении имени) ──────
+    // Имя карты должно быть уникальным. Если в БД уже есть карта с таким
+    // же именем (исключая текущую редактируемую) — поле подсвечивается
+    // красным. Сравнение регистронезависимая, по trim.
+    val editCardId = initial?.id
+    val isNameDuplicate = name.trim().isNotEmpty() &&
+        existingCards.any {
+            it.id != editCardId &&
+            it.name.trim().equals(name.trim(), ignoreCase = true)
+        }
+    val errorBorder = StatusOverdue
+    val dupFocused = StatusOverdue
+    val dupUnfocused = StatusOverdue
 
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -643,9 +659,19 @@ fun VirtualCardFormDialog(
                     modifier = Modifier.fillMaxWidth(),
                     shape = RoundedCornerShape(12.dp),
                     singleLine = true,
+                    isError = isNameDuplicate,
+                    supportingText = {
+                        if (isNameDuplicate) {
+                            Text(
+                                "Bunday nomdagi karta allaqachon mavjud!",
+                                color = StatusOverdue,
+                                style = MaterialTheme.typography.labelSmall
+                            )
+                        }
+                    },
                     colors = OutlinedTextFieldDefaults.colors(
-                        unfocusedBorderColor = ClaudeDivider,
-                        focusedBorderColor = ClaudeAccent
+                        unfocusedBorderColor = if (isNameDuplicate) errorBorder else ClaudeDivider,
+                        focusedBorderColor = if (isNameDuplicate) dupFocused else ClaudeAccent
                     )
                 )
 
@@ -1105,6 +1131,7 @@ fun FinansiPanel(
     if (showCreateDialog || editingCard != null) {
         VirtualCardFormDialog(
             initial = editingCard,
+            existingCards = cards,
             onDismiss = {
                 showCreateDialog = false
                 editingCard = null

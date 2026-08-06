@@ -133,7 +133,7 @@ fun UnifiedButton(
                 scaleY = buttonScale
                 alpha = disabledAlpha
             },
-        shape = RoundedCornerShape(50),  // Pill — Driftwood CTA shape
+        shape = RoundedCornerShape(8.dp),  // Square — unified with TopAppBar action buttons
         color = containerColor,
         contentColor = contentColor,
         border = border,

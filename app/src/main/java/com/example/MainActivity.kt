@@ -1160,7 +1160,7 @@ fun MainScreen(
                             onClick = { navState = NavigationState.Scanner },
                             modifier = Modifier
                                 .padding(end = 6.dp)
-                                .size(80.dp)
+                                .size(56.dp)
                                 .background(ClaudeAccentBg, RoundedCornerShape(8.dp))
                                 .border(1.dp, ClaudeAccent, RoundedCornerShape(8.dp))
                         ) {
@@ -1168,7 +1168,7 @@ fun MainScreen(
                                 Icons.Default.CameraAlt,
                                 contentDescription = "Skaner",
                                 tint = ClaudeAccent,
-                                modifier = Modifier.size(40.dp)
+                                modifier = Modifier.size(28.dp)
                             )
                         }
 
@@ -1194,7 +1194,7 @@ fun MainScreen(
                         Box(
                             modifier = Modifier
                                 .padding(end = 6.dp)
-                                .size(80.dp)
+                                .size(56.dp)
                                 .background(
                                     if (smsAutoSend) StatusOk else StatusOverdue,
                                     RoundedCornerShape(8.dp)
@@ -1307,7 +1307,7 @@ fun MainScreen(
                                 Icons.Default.Sms,
                                 contentDescription = if (smsAutoSend) "SMS avto" else "SMS qo'llanma",
                                 tint = Color.White,
-                                modifier = Modifier.size(40.dp)
+                                modifier = Modifier.size(28.dp)
                             )
                         }
 
@@ -1334,14 +1334,14 @@ fun MainScreen(
                                 },
                                 modifier = Modifier
                                     .padding(end = 6.dp, start = 4.dp)
-                                    .size(80.dp)
+                                    .size(56.dp)
                                     .background(ClaudeAccent, RoundedCornerShape(8.dp))
                             ) {
                                 Icon(
                                     Icons.Default.Add,
                                     contentDescription = "Qo'shish",
                                     tint = Color.White,
-                                    modifier = Modifier.size(44.dp)
+                                    modifier = Modifier.size(30.dp)
                                 )
                             }
                         }
@@ -1377,7 +1377,7 @@ fun MainScreen(
                                 enabled = editEnabled,
                                 modifier = Modifier
                                     .padding(end = 6.dp)
-                                    .size(80.dp)
+                                    .size(56.dp)
                                     .background(
                                         if (editEnabled) Color.White else Color.White.copy(alpha = 0.5f),
                                         RoundedCornerShape(8.dp)
@@ -1388,7 +1388,7 @@ fun MainScreen(
                                     Icons.Default.Edit,
                                     contentDescription = "Tahrirlash",
                                     tint = if (editEnabled) ClaudeAccent else ClaudeTextSecondary,
-                                    modifier = Modifier.size(40.dp)
+                                    modifier = Modifier.size(28.dp)
                                 )
                             }
 
@@ -1422,7 +1422,7 @@ fun MainScreen(
                                 enabled = deleteEnabled,
                                 modifier = Modifier
                                     .padding(end = 6.dp)
-                                    .size(80.dp)
+                                    .size(56.dp)
                                     .background(
                                         if (deleteEnabled) Color.White else Color.White.copy(alpha = 0.5f),
                                         RoundedCornerShape(8.dp)
@@ -1433,7 +1433,7 @@ fun MainScreen(
                                     Icons.Default.Delete,
                                     contentDescription = "O'chirish",
                                     tint = if (deleteEnabled) StatusOverdue else ClaudeTextSecondary,
-                                    modifier = Modifier.size(40.dp)
+                                    modifier = Modifier.size(28.dp)
                                 )
                             }
                         }
@@ -1447,7 +1447,7 @@ fun MainScreen(
                                 onClick = { isSearchMode = true },
                                 modifier = Modifier
                                     .padding(end = 8.dp)
-                                    .size(80.dp)
+                                    .size(56.dp)
                                     .background(ClaudeAccentBg, RoundedCornerShape(8.dp))
                                     .border(1.dp, ClaudeAccent, RoundedCornerShape(8.dp))
                             ) {
@@ -1455,7 +1455,7 @@ fun MainScreen(
                                     Icons.Default.Search,
                                     contentDescription = "Qidiruv",
                                     tint = ClaudeAccent,
-                                    modifier = Modifier.size(40.dp)
+                                    modifier = Modifier.size(28.dp)
                                 )
                             }
                         }
@@ -1535,83 +1535,192 @@ fun MainScreen(
             )
         },
         bottomBar = {
+            // ── Нижняя навигация с КВАДРАТНЫМ индикатором ──────────────────
+            // В Material 3 форма индикатора (pill) зашита в NavigationBarDefaults
+            // и не переопределяется через API NavigationBarItem. Чтобы получить
+            // квадратный индикатор, скрываем дефолтный pill (indicatorColor =
+            // Transparent) и оборачиваем иконку в Box с квадратным фоном
+            // (RoundedCornerShape(8.dp)) — тот же стиль, что у универсальных
+            // кнопок в TopAppBar. Фон появляется только у выбранной вкладки.
             NavigationBar(containerColor = ClaudeCard, contentColor = ClaudeText) {
                 NavigationBarItem(
                     selected = currentTab == 0,
                     onClick = { currentTab = 0 },
-                    icon = { Icon(Icons.Default.List, contentDescription = "Ijarachilar") },
+                    icon = {
+                        Box(
+                            modifier = Modifier
+                                .size(40.dp)
+                                .background(
+                                    if (currentTab == 0) ClaudeAccentBg else Color.Transparent,
+                                    RoundedCornerShape(8.dp)
+                                )
+                                .border(
+                                    width = 1.dp,
+                                    color = if (currentTab == 0) ClaudeAccent else Color.Transparent,
+                                    shape = RoundedCornerShape(8.dp)
+                                ),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Icon(Icons.Default.List, contentDescription = "Ijarachilar")
+                        }
+                    },
                     label = { Text("Ijarachilar") },
                     colors = NavigationBarItemDefaults.colors(
                         selectedIconColor = ClaudeAccent,
                         unselectedIconColor = ClaudeTextSecondary,
                         selectedTextColor = ClaudeAccent,
                         unselectedTextColor = ClaudeTextSecondary,
-                        indicatorColor = ClaudeAccentBg
+                        indicatorColor = Color.Transparent
                     )
                 )
                 NavigationBarItem(
                     selected = currentTab == 1,
                     onClick = { currentTab = 1 },
-                    icon = { Icon(Icons.Default.DirectionsBike, contentDescription = "Skuterlar") },
+                    icon = {
+                        Box(
+                            modifier = Modifier
+                                .size(40.dp)
+                                .background(
+                                    if (currentTab == 1) ClaudeAccentBg else Color.Transparent,
+                                    RoundedCornerShape(8.dp)
+                                )
+                                .border(
+                                    width = 1.dp,
+                                    color = if (currentTab == 1) ClaudeAccent else Color.Transparent,
+                                    shape = RoundedCornerShape(8.dp)
+                                ),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Icon(Icons.Default.DirectionsBike, contentDescription = "Skuterlar")
+                        }
+                    },
                     label = { Text("Skuterlar") },
                     colors = NavigationBarItemDefaults.colors(
                         selectedIconColor = ClaudeAccent,
                         unselectedIconColor = ClaudeTextSecondary,
                         selectedTextColor = ClaudeAccent,
                         unselectedTextColor = ClaudeTextSecondary,
-                        indicatorColor = ClaudeAccentBg
+                        indicatorColor = Color.Transparent
                     )
                 )
                 NavigationBarItem(
                     selected = currentTab == 2,
                     onClick = { currentTab = 2 },
-                    icon = { Icon(Icons.Default.Description, contentDescription = "Kontraktlar") },
+                    icon = {
+                        Box(
+                            modifier = Modifier
+                                .size(40.dp)
+                                .background(
+                                    if (currentTab == 2) ClaudeAccentBg else Color.Transparent,
+                                    RoundedCornerShape(8.dp)
+                                )
+                                .border(
+                                    width = 1.dp,
+                                    color = if (currentTab == 2) ClaudeAccent else Color.Transparent,
+                                    shape = RoundedCornerShape(8.dp)
+                                ),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Icon(Icons.Default.Description, contentDescription = "Kontraktlar")
+                        }
+                    },
                     label = { Text("Kontraktlar") },
                     colors = NavigationBarItemDefaults.colors(
                         selectedIconColor = ClaudeAccent,
                         unselectedIconColor = ClaudeTextSecondary,
                         selectedTextColor = ClaudeAccent,
                         unselectedTextColor = ClaudeTextSecondary,
-                        indicatorColor = ClaudeAccentBg
+                        indicatorColor = Color.Transparent
                     )
                 )
                 NavigationBarItem(
                     selected = currentTab == 3,
                     onClick = { currentTab = 3 },
-                    icon = { Icon(Icons.Default.RequestQuote, contentDescription = "Tranzaksiyalar") },
+                    icon = {
+                        Box(
+                            modifier = Modifier
+                                .size(40.dp)
+                                .background(
+                                    if (currentTab == 3) ClaudeAccentBg else Color.Transparent,
+                                    RoundedCornerShape(8.dp)
+                                )
+                                .border(
+                                    width = 1.dp,
+                                    color = if (currentTab == 3) ClaudeAccent else Color.Transparent,
+                                    shape = RoundedCornerShape(8.dp)
+                                ),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Icon(Icons.Default.RequestQuote, contentDescription = "Tranzaksiyalar")
+                        }
+                    },
                     label = { Text("Tranzaksiya") },
                     colors = NavigationBarItemDefaults.colors(
                         selectedIconColor = ClaudeAccent,
                         unselectedIconColor = ClaudeTextSecondary,
                         selectedTextColor = ClaudeAccent,
                         unselectedTextColor = ClaudeTextSecondary,
-                        indicatorColor = ClaudeAccentBg
+                        indicatorColor = Color.Transparent
                     )
                 )
                 NavigationBarItem(
                     selected = currentTab == 4,
                     onClick = { currentTab = 4 },
-                    icon = { Icon(Icons.Default.RequestQuote, contentDescription = "Otchetlar") },
+                    icon = {
+                        Box(
+                            modifier = Modifier
+                                .size(40.dp)
+                                .background(
+                                    if (currentTab == 4) ClaudeAccentBg else Color.Transparent,
+                                    RoundedCornerShape(8.dp)
+                                )
+                                .border(
+                                    width = 1.dp,
+                                    color = if (currentTab == 4) ClaudeAccent else Color.Transparent,
+                                    shape = RoundedCornerShape(8.dp)
+                                ),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Icon(Icons.Default.RequestQuote, contentDescription = "Otchetlar")
+                        }
+                    },
                     label = { Text("Otchetlar") },
                     colors = NavigationBarItemDefaults.colors(
                         selectedIconColor = ClaudeAccent,
                         unselectedIconColor = ClaudeTextSecondary,
                         selectedTextColor = ClaudeAccent,
                         unselectedTextColor = ClaudeTextSecondary,
-                        indicatorColor = ClaudeAccentBg
+                        indicatorColor = Color.Transparent
                     )
                 )
                 NavigationBarItem(
                     selected = currentTab == 5,
                     onClick = { currentTab = 5 },
-                    icon = { Icon(Icons.Default.AccountBalanceWallet, contentDescription = "Finansi") },
+                    icon = {
+                        Box(
+                            modifier = Modifier
+                                .size(40.dp)
+                                .background(
+                                    if (currentTab == 5) ClaudeAccentBg else Color.Transparent,
+                                    RoundedCornerShape(8.dp)
+                                )
+                                .border(
+                                    width = 1.dp,
+                                    color = if (currentTab == 5) ClaudeAccent else Color.Transparent,
+                                    shape = RoundedCornerShape(8.dp)
+                                ),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Icon(Icons.Default.AccountBalanceWallet, contentDescription = "Finansi")
+                        }
+                    },
                     label = { Text("Finansi") },
                     colors = NavigationBarItemDefaults.colors(
                         selectedIconColor = ClaudeAccent,
                         unselectedIconColor = ClaudeTextSecondary,
                         selectedTextColor = ClaudeAccent,
                         unselectedTextColor = ClaudeTextSecondary,
-                        indicatorColor = ClaudeAccentBg
+                        indicatorColor = Color.Transparent
                     )
                 )
                 // ── 7-я вкладка: Sozlamalar ──────────────────────────────────
@@ -1620,14 +1729,31 @@ fun MainScreen(
                 NavigationBarItem(
                     selected = currentTab == 6,
                     onClick = { currentTab = 6 },
-                    icon = { Icon(Icons.Outlined.Settings, contentDescription = "Sozlamalar") },
+                    icon = {
+                        Box(
+                            modifier = Modifier
+                                .size(40.dp)
+                                .background(
+                                    if (currentTab == 6) ClaudeAccentBg else Color.Transparent,
+                                    RoundedCornerShape(8.dp)
+                                )
+                                .border(
+                                    width = 1.dp,
+                                    color = if (currentTab == 6) ClaudeAccent else Color.Transparent,
+                                    shape = RoundedCornerShape(8.dp)
+                                ),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Icon(Icons.Outlined.Settings, contentDescription = "Sozlamalar")
+                        }
+                    },
                     label = { Text("Sozlamalar") },
                     colors = NavigationBarItemDefaults.colors(
                         selectedIconColor = ClaudeAccent,
                         unselectedIconColor = ClaudeTextSecondary,
                         selectedTextColor = ClaudeAccent,
                         unselectedTextColor = ClaudeTextSecondary,
-                        indicatorColor = ClaudeAccentBg
+                        indicatorColor = Color.Transparent
                     )
                 )
             }
@@ -3396,6 +3522,33 @@ fun RenterFormDialog(
     var address by remember { mutableStateOf(initialRenter?.address ?: "") }
     var pinfl by remember { mutableStateOf(initialRenter?.pinfl ?: "") }
 
+    // ── Проверка дубликатов (красная рамка при совпадении с БД) ────────
+    // Каждое поле проверяет свой собственный столбец в existing renters.
+    // В режиме редактирования текущий renter (по id) исключается из проверки —
+    // иначе поле всегда «горело» бы красным при открытии формы.
+    // Сравнение регистронезависимое и по trim — чтобы «Akmal» и « akmal »
+    // считались одинаковыми.
+    val editRenterId = initialRenter?.id
+    val isNameDuplicate = name.trim().isNotEmpty() &&
+        activeRenters.any { it.id != editRenterId && it.name.trim().equals(name.trim(), ignoreCase = true) }
+    val normalizedPhone = phone.trim().filter { it.isDigit() }
+    val isPhoneDuplicate = normalizedPhone.isNotEmpty() &&
+        activeRenters.any {
+            it.id != editRenterId &&
+            it.phoneNumber.trim().filter { d -> d.isDigit() }.takeLast(9) == normalizedPhone
+        }
+    val isPassportDuplicate = passportData.trim().isNotEmpty() &&
+        activeRenters.any {
+            it.id != editRenterId &&
+            it.passportData.trim().equals(passportData.trim(), ignoreCase = true)
+        }
+    val isPinflDuplicate = pinfl.trim().isNotEmpty() &&
+        activeRenters.any { it.id != editRenterId && it.pinfl.trim() == pinfl.trim() }
+    // Цвет рамки для полей с дубликатом — ярко-красный, иначе стандартный.
+    val errorBorder = StatusOverdue
+    val dupFocused = StatusOverdue
+    val dupUnfocused = StatusOverdue
+
     // Примечание: реквизиты скутера (VIN, двигатель, ID, аккумы, доп. инфо)
     // заполняются в ScooterFormDialog — это атрибуты скутера, а не арендатора.
     // При создании контракта они автоматически подтягиваются из БД по scooterId.
@@ -3511,9 +3664,19 @@ fun RenterFormDialog(
                     label = { Text("To'liq ism (ФИШ)") },
                     modifier = Modifier.fillMaxWidth(),
                     shape = RoundedCornerShape(8.dp),
+                    isError = isNameDuplicate,
+                    supportingText = {
+                        if (isNameDuplicate) {
+                            Text(
+                                "Bunday ism allaqachon mavjud!",
+                                color = StatusOverdue,
+                                style = MaterialTheme.typography.labelSmall
+                            )
+                        }
+                    },
                     colors = OutlinedTextFieldDefaults.colors(
-                        unfocusedBorderColor = ClaudeDivider,
-                        focusedBorderColor = ClaudeTextSecondary
+                        unfocusedBorderColor = if (isNameDuplicate) errorBorder else ClaudeDivider,
+                        focusedBorderColor = if (isNameDuplicate) dupFocused else ClaudeTextSecondary
                     )
                 )
                 OutlinedTextField(
@@ -3525,7 +3688,21 @@ fun RenterFormDialog(
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Phone),
                     visualTransformation = UzPhoneVisualTransformation(),
                     modifier = Modifier.fillMaxWidth(),
-                    shape = RoundedCornerShape(8.dp)
+                    shape = RoundedCornerShape(8.dp),
+                    isError = isPhoneDuplicate,
+                    supportingText = {
+                        if (isPhoneDuplicate) {
+                            Text(
+                                "Bu raqam allaqachon ro'yxatdan o'tgan!",
+                                color = StatusOverdue,
+                                style = MaterialTheme.typography.labelSmall
+                            )
+                        }
+                    },
+                    colors = OutlinedTextFieldDefaults.colors(
+                        unfocusedBorderColor = if (isPhoneDuplicate) errorBorder else ClaudeDivider,
+                        focusedBorderColor = if (isPhoneDuplicate) dupFocused else ClaudeTextSecondary
+                    )
                 )
 
                 HorizontalDivider(color = ClaudeDivider, thickness = 1.dp)
@@ -3641,14 +3818,15 @@ fun RenterFormDialog(
                                 //   2. Избежать возможных проблем с перехватом кликов
                                 //      соседними Surface/Row. Box с явным clickable
                                 //      и ripple — более надёжный вариант.
-                                //   3. Явный фон (ClaudeAccentBg) и форма (CircleShape)
-                                //      делают кнопку визуально заметнее.
+                                //   3. Явный фон (ClaudeAccentBg) и квадратная форма
+                                //      (RoundedCornerShape(8.dp)) делают кнопку
+                                //      визуально заметнее и единообразной с остальными.
                                 Box(
                                     modifier = Modifier
                                         .size(36.dp)
-                                        .clip(CircleShape)
+                                        .clip(RoundedCornerShape(8.dp))
                                         .background(ClaudeAccentBg)
-                                        .border(1.dp, ClaudeDivider, CircleShape)
+                                        .border(1.dp, ClaudeDivider, RoundedCornerShape(8.dp))
                                         .clickable {
                                             contractGroups = contractGroups.filterNot { it.id == group.id }
                                             if (activeGroupId == group.id) activeGroupId = null
@@ -3872,7 +4050,21 @@ fun RenterFormDialog(
                     label = { Text("Паспорт: серия, рақам, олинган сана") },
                     placeholder = { Text("Masalan: AA 1234567, 15.01.2023") },
                     modifier = Modifier.fillMaxWidth(),
-                    shape = RoundedCornerShape(8.dp)
+                    shape = RoundedCornerShape(8.dp),
+                    isError = isPassportDuplicate,
+                    supportingText = {
+                        if (isPassportDuplicate) {
+                            Text(
+                                "Bu passport allaqachon ro'yxatdan o'tgan!",
+                                color = StatusOverdue,
+                                style = MaterialTheme.typography.labelSmall
+                            )
+                        }
+                    },
+                    colors = OutlinedTextFieldDefaults.colors(
+                        unfocusedBorderColor = if (isPassportDuplicate) errorBorder else ClaudeDivider,
+                        focusedBorderColor = if (isPassportDuplicate) dupFocused else ClaudeTextSecondary
+                    )
                 )
                 OutlinedTextField(
                     value = address,
@@ -3888,7 +4080,21 @@ fun RenterFormDialog(
                     label = { Text("ЖШШИР (ПИНФЛ)") },
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
                     modifier = Modifier.fillMaxWidth(),
-                    shape = RoundedCornerShape(8.dp)
+                    shape = RoundedCornerShape(8.dp),
+                    isError = isPinflDuplicate,
+                    supportingText = {
+                        if (isPinflDuplicate) {
+                            Text(
+                                "Bu JSHSHR allaqachon ro'yxatdan o'tgan!",
+                                color = StatusOverdue,
+                                style = MaterialTheme.typography.labelSmall
+                            )
+                        }
+                    },
+                    colors = OutlinedTextFieldDefaults.colors(
+                        unfocusedBorderColor = if (isPinflDuplicate) errorBorder else ClaudeDivider,
+                        focusedBorderColor = if (isPinflDuplicate) dupFocused else ClaudeTextSecondary
+                    )
                 )
 
                 // ── Inline-секция создания нового скутера ────────────────────
@@ -5325,6 +5531,27 @@ fun ScooterFormDialog(
     // попросил убрать кнопку «More»/«Yashirish» из диалогов создания и
     // редактирования скутеров.
 
+    // ── Проверка дубликатов (красная рамка при совпадении с БД) ────────
+    // Скутер уникален по: name, vin, engine, serial, batt1, batt2.
+    // Если хотя бы одно поле совпадает с существующей записью (исключая
+    // текущий редактируемый скутер) — поле подсвечивается красным.
+    val editScooterId = initialScooter?.id
+    val isScooterNameDuplicate = name.trim().isNotEmpty() &&
+        existingScooters.any { it.id != editScooterId && it.name.trim().equals(name.trim(), ignoreCase = true) }
+    val isVinDuplicate = vinNumber.trim().isNotEmpty() &&
+        existingScooters.any { it.id != editScooterId && it.vinNumber.trim().equals(vinNumber.trim(), ignoreCase = true) }
+    val isEngineDuplicate = engineNumber.trim().isNotEmpty() &&
+        existingScooters.any { it.id != editScooterId && it.engineNumber.trim().equals(engineNumber.trim(), ignoreCase = true) }
+    val isSerialDuplicate = scooterSerialNumber.trim().isNotEmpty() &&
+        existingScooters.any { it.id != editScooterId && it.scooterSerialNumber.trim().equals(scooterSerialNumber.trim(), ignoreCase = true) }
+    val isBatt1Duplicate = batteryId1.trim().isNotEmpty() &&
+        existingScooters.any { it.id != editScooterId && it.batteryId1.trim().equals(batteryId1.trim(), ignoreCase = true) }
+    val isBatt2Duplicate = batteryId2.trim().isNotEmpty() &&
+        existingScooters.any { it.id != editScooterId && it.batteryId2.trim().equals(batteryId2.trim(), ignoreCase = true) }
+    val errorBorder = StatusOverdue
+    val dupFocused = StatusOverdue
+    val dupUnfocused = StatusOverdue
+
     val scrollState = rememberScrollState()
 
     AlertDialog(
@@ -5351,15 +5578,26 @@ fun ScooterFormDialog(
                     label = { Text("Skuter nomi (Skillmax- formatida)") },
                     modifier = Modifier.fillMaxWidth(),
                     shape = RoundedCornerShape(8.dp),
+                    isError = isScooterNameDuplicate,
                     supportingText = {
-                        if (initialScooter == null) {
+                        if (isScooterNameDuplicate) {
+                            Text(
+                                "Bunday nomdagi skuter allaqachon mavjud!",
+                                color = StatusOverdue,
+                                style = MaterialTheme.typography.labelSmall
+                            )
+                        } else if (initialScooter == null) {
                             Text(
                                 "Avtomatik raqamlandi. Istalgan nom bilan almashtirishingiz mumkin.",
                                 style = MaterialTheme.typography.labelSmall,
                                 color = ClaudeTextSecondary
                             )
                         }
-                    }
+                    },
+                    colors = OutlinedTextFieldDefaults.colors(
+                        unfocusedBorderColor = if (isScooterNameDuplicate) errorBorder else ClaudeDivider,
+                        focusedBorderColor = if (isScooterNameDuplicate) dupFocused else ClaudeTextSecondary
+                    )
                 )
 
                 // ── Реквизиты скутера и аккумуляторов (всегда видны) ─────────
@@ -5378,21 +5616,63 @@ fun ScooterFormDialog(
                     onValueChange = { vinNumber = it },
                     label = { Text("VIN номери") },
                     modifier = Modifier.fillMaxWidth(),
-                    shape = RoundedCornerShape(8.dp)
+                    shape = RoundedCornerShape(8.dp),
+                    isError = isVinDuplicate,
+                    supportingText = {
+                        if (isVinDuplicate) {
+                            Text(
+                                "Bu VIN allaqachon mavjud!",
+                                color = StatusOverdue,
+                                style = MaterialTheme.typography.labelSmall
+                            )
+                        }
+                    },
+                    colors = OutlinedTextFieldDefaults.colors(
+                        unfocusedBorderColor = if (isVinDuplicate) errorBorder else ClaudeDivider,
+                        focusedBorderColor = if (isVinDuplicate) dupFocused else ClaudeTextSecondary
+                    )
                 )
                 OutlinedTextField(
                     value = engineNumber,
                     onValueChange = { engineNumber = it },
                     label = { Text("Двигатель номери") },
                     modifier = Modifier.fillMaxWidth(),
-                    shape = RoundedCornerShape(8.dp)
+                    shape = RoundedCornerShape(8.dp),
+                    isError = isEngineDuplicate,
+                    supportingText = {
+                        if (isEngineDuplicate) {
+                            Text(
+                                "Bu dvigatel raqami allaqachon mavjud!",
+                                color = StatusOverdue,
+                                style = MaterialTheme.typography.labelSmall
+                            )
+                        }
+                    },
+                    colors = OutlinedTextFieldDefaults.colors(
+                        unfocusedBorderColor = if (isEngineDuplicate) errorBorder else ClaudeDivider,
+                        focusedBorderColor = if (isEngineDuplicate) dupFocused else ClaudeTextSecondary
+                    )
                 )
                 OutlinedTextField(
                     value = scooterSerialNumber,
                     onValueChange = { scooterSerialNumber = it },
                     label = { Text("ID номери") },
                     modifier = Modifier.fillMaxWidth(),
-                    shape = RoundedCornerShape(8.dp)
+                    shape = RoundedCornerShape(8.dp),
+                    isError = isSerialDuplicate,
+                    supportingText = {
+                        if (isSerialDuplicate) {
+                            Text(
+                                "Bu ID raqami allaqachon mavjud!",
+                                color = StatusOverdue,
+                                style = MaterialTheme.typography.labelSmall
+                            )
+                        }
+                    },
+                    colors = OutlinedTextFieldDefaults.colors(
+                        unfocusedBorderColor = if (isSerialDuplicate) errorBorder else ClaudeDivider,
+                        focusedBorderColor = if (isSerialDuplicate) dupFocused else ClaudeTextSecondary
+                    )
                 )
                 Row(
                     modifier = Modifier.fillMaxWidth(),
@@ -5403,14 +5683,42 @@ fun ScooterFormDialog(
                         onValueChange = { batteryId1 = it },
                         label = { Text("Аккумулятор ID 1") },
                         modifier = Modifier.weight(1f),
-                        shape = RoundedCornerShape(8.dp)
+                        shape = RoundedCornerShape(8.dp),
+                        isError = isBatt1Duplicate,
+                        supportingText = {
+                            if (isBatt1Duplicate) {
+                                Text(
+                                    "Mavjud!",
+                                    color = StatusOverdue,
+                                    style = MaterialTheme.typography.labelSmall
+                                )
+                            }
+                        },
+                        colors = OutlinedTextFieldDefaults.colors(
+                            unfocusedBorderColor = if (isBatt1Duplicate) errorBorder else ClaudeDivider,
+                            focusedBorderColor = if (isBatt1Duplicate) dupFocused else ClaudeTextSecondary
+                        )
                     )
                     OutlinedTextField(
                         value = batteryId2,
                         onValueChange = { batteryId2 = it },
                         label = { Text("Аккумулятор ID 2") },
                         modifier = Modifier.weight(1f),
-                        shape = RoundedCornerShape(8.dp)
+                        shape = RoundedCornerShape(8.dp),
+                        isError = isBatt2Duplicate,
+                        supportingText = {
+                            if (isBatt2Duplicate) {
+                                Text(
+                                    "Mavjud!",
+                                    color = StatusOverdue,
+                                    style = MaterialTheme.typography.labelSmall
+                                )
+                            }
+                        },
+                        colors = OutlinedTextFieldDefaults.colors(
+                            unfocusedBorderColor = if (isBatt2Duplicate) errorBorder else ClaudeDivider,
+                            focusedBorderColor = if (isBatt2Duplicate) dupFocused else ClaudeTextSecondary
+                        )
                     )
                 }
                 OutlinedTextField(
