@@ -1728,17 +1728,19 @@ fun MainScreen(
             )
         },
         bottomBar = {
-            // ── Нижняя навигация — иконки стилистически похожи на ──────────
-            // универсальные кнопки TopAppBar (Camera/Search/Add/Edit/Delete):
-            //   • Размер Box-а 48dp (немного меньше 56dp верхних, чтобы влезть
-            //     в высоту NavigationBar).
+            // ── Нижняя навигация — иконки визуально идентичны ───────────────
+            // универсальным кнопкам TopAppBar (Camera/Search/Add/Edit/Delete):
+            //   • Размер Box-а 56dp — ТОЧНО как сверху (раньше было 48dp).
             //   • Форма — RoundedCornerShape(8.dp) (квадратная, как сверху).
             //   • Выбранная вкладка: ClaudeAccentBg fill + 1dp ClaudeAccent
-            //     border, иконка 26dp ClaudeAccent — точно как кнопки Camera /
+            //     border, иконка 28dp ClaudeAccent — ТОЧНО как кнопки Camera /
             //     Search в TopAppBar.
             //   • Невыбранная: Color.White fill + 1dp ClaudeDivider border,
-            //     иконка 26dp ClaudeTextSecondary — как outlined-кнопка Edit
+            //     иконка 28dp ClaudeTextSecondary — как outlined-кнопка Edit
             //     в disabled-состоянии сверху.
+            //   • БЕЗ текстовых подписей (как и универсальные кнопки TopAppBar).
+            //     Имя вкладки сохранено только в contentDescription иконки
+            //     для screen-reader'а.
             //   • Дефолтный Material 3 pill-индикатор скрыт (indicatorColor =
             //     Color.Transparent), чтобы не было двух фонов подряд.
             NavigationBar(containerColor = ClaudeCard, contentColor = ClaudeText) {
@@ -1748,7 +1750,7 @@ fun MainScreen(
                     icon = {
                         Box(
                             modifier = Modifier
-                                .size(48.dp)
+                                .size(56.dp)
                                 .background(
                                     if (currentTab == 0) ClaudeAccentBg else Color.White,
                                     RoundedCornerShape(8.dp)
@@ -1764,11 +1766,10 @@ fun MainScreen(
                                 Icons.Default.List,
                                 contentDescription = "Ijarachilar",
                                 tint = if (currentTab == 0) ClaudeAccent else ClaudeTextSecondary,
-                                modifier = Modifier.size(26.dp)
+                                modifier = Modifier.size(28.dp)
                             )
                         }
                     },
-                    label = { Text("Ijarachilar") },
                     colors = NavigationBarItemDefaults.colors(
                         selectedIconColor = ClaudeAccent,
                         unselectedIconColor = ClaudeTextSecondary,
@@ -1783,7 +1784,7 @@ fun MainScreen(
                     icon = {
                         Box(
                             modifier = Modifier
-                                .size(48.dp)
+                                .size(56.dp)
                                 .background(
                                     if (currentTab == 1) ClaudeAccentBg else Color.White,
                                     RoundedCornerShape(8.dp)
@@ -1799,11 +1800,10 @@ fun MainScreen(
                                 Icons.Default.DirectionsBike,
                                 contentDescription = "Skuterlar",
                                 tint = if (currentTab == 1) ClaudeAccent else ClaudeTextSecondary,
-                                modifier = Modifier.size(26.dp)
+                                modifier = Modifier.size(28.dp)
                             )
                         }
                     },
-                    label = { Text("Skuterlar") },
                     colors = NavigationBarItemDefaults.colors(
                         selectedIconColor = ClaudeAccent,
                         unselectedIconColor = ClaudeTextSecondary,
@@ -1818,7 +1818,7 @@ fun MainScreen(
                     icon = {
                         Box(
                             modifier = Modifier
-                                .size(48.dp)
+                                .size(56.dp)
                                 .background(
                                     if (currentTab == 2) ClaudeAccentBg else Color.White,
                                     RoundedCornerShape(8.dp)
@@ -1834,11 +1834,10 @@ fun MainScreen(
                                 Icons.Default.Description,
                                 contentDescription = "Kontraktlar",
                                 tint = if (currentTab == 2) ClaudeAccent else ClaudeTextSecondary,
-                                modifier = Modifier.size(26.dp)
+                                modifier = Modifier.size(28.dp)
                             )
                         }
                     },
-                    label = { Text("Kontraktlar") },
                     colors = NavigationBarItemDefaults.colors(
                         selectedIconColor = ClaudeAccent,
                         unselectedIconColor = ClaudeTextSecondary,
@@ -1853,7 +1852,7 @@ fun MainScreen(
                     icon = {
                         Box(
                             modifier = Modifier
-                                .size(48.dp)
+                                .size(56.dp)
                                 .background(
                                     if (currentTab == 3) ClaudeAccentBg else Color.White,
                                     RoundedCornerShape(8.dp)
@@ -1869,11 +1868,10 @@ fun MainScreen(
                                 Icons.Default.RequestQuote,
                                 contentDescription = "Tranzaksiyalar",
                                 tint = if (currentTab == 3) ClaudeAccent else ClaudeTextSecondary,
-                                modifier = Modifier.size(26.dp)
+                                modifier = Modifier.size(28.dp)
                             )
                         }
                     },
-                    label = { Text("Tranzaksiya") },
                     colors = NavigationBarItemDefaults.colors(
                         selectedIconColor = ClaudeAccent,
                         unselectedIconColor = ClaudeTextSecondary,
@@ -1888,7 +1886,7 @@ fun MainScreen(
                     icon = {
                         Box(
                             modifier = Modifier
-                                .size(48.dp)
+                                .size(56.dp)
                                 .background(
                                     if (currentTab == 4) ClaudeAccentBg else Color.White,
                                     RoundedCornerShape(8.dp)
@@ -1904,11 +1902,10 @@ fun MainScreen(
                                 Icons.Default.RequestQuote,
                                 contentDescription = "Otchetlar",
                                 tint = if (currentTab == 4) ClaudeAccent else ClaudeTextSecondary,
-                                modifier = Modifier.size(26.dp)
+                                modifier = Modifier.size(28.dp)
                             )
                         }
                     },
-                    label = { Text("Otchetlar") },
                     colors = NavigationBarItemDefaults.colors(
                         selectedIconColor = ClaudeAccent,
                         unselectedIconColor = ClaudeTextSecondary,
@@ -1923,7 +1920,7 @@ fun MainScreen(
                     icon = {
                         Box(
                             modifier = Modifier
-                                .size(48.dp)
+                                .size(56.dp)
                                 .background(
                                     if (currentTab == 5) ClaudeAccentBg else Color.White,
                                     RoundedCornerShape(8.dp)
@@ -1939,11 +1936,10 @@ fun MainScreen(
                                 Icons.Default.AccountBalanceWallet,
                                 contentDescription = "Finansi",
                                 tint = if (currentTab == 5) ClaudeAccent else ClaudeTextSecondary,
-                                modifier = Modifier.size(26.dp)
+                                modifier = Modifier.size(28.dp)
                             )
                         }
                     },
-                    label = { Text("Finansi") },
                     colors = NavigationBarItemDefaults.colors(
                         selectedIconColor = ClaudeAccent,
                         unselectedIconColor = ClaudeTextSecondary,
@@ -1961,7 +1957,7 @@ fun MainScreen(
                     icon = {
                         Box(
                             modifier = Modifier
-                                .size(48.dp)
+                                .size(56.dp)
                                 .background(
                                     if (currentTab == 6) ClaudeAccentBg else Color.White,
                                     RoundedCornerShape(8.dp)
@@ -1977,11 +1973,10 @@ fun MainScreen(
                                 Icons.Outlined.Settings,
                                 contentDescription = "Sozlamalar",
                                 tint = if (currentTab == 6) ClaudeAccent else ClaudeTextSecondary,
-                                modifier = Modifier.size(26.dp)
+                                modifier = Modifier.size(28.dp)
                             )
                         }
                     },
-                    label = { Text("Sozlamalar") },
                     colors = NavigationBarItemDefaults.colors(
                         selectedIconColor = ClaudeAccent,
                         unselectedIconColor = ClaudeTextSecondary,
