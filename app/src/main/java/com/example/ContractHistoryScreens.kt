@@ -254,9 +254,15 @@ fun RenterContractHistoryScreen(
         // пользователя. Создание/редактирование/удаление контрактов
         // выполняется через кнопки «Yaratish» / «Tahrirlash» / «O'chir»
         // и диалоги CreateContractDialog / EditContractDialog.
+        //
+        // ── ВАЖНО: контент + FilterSidePanel оборачиваются в Box, чтобы
+        // FilterSidePanel рендерился как overlay. Раньше, в Column,
+        // FilterSidePanel получал 0dp высоты после fillMaxSize-LazyColumn,
+        // и кнопка фильтра не работала. ─────────────────────────────────
         val contractsList = contracts
 
-        if (selectedTab == 0) {
+        Box(modifier = Modifier.fillMaxSize()) {
+            if (selectedTab == 0) {
             // ── ВКЛАДКА «КОНТРАКТЫ» — единый LazyColumn ─────────────────
             LazyColumn(
                 modifier = Modifier
@@ -630,18 +636,20 @@ fun RenterContractHistoryScreen(
             }
         }
 
-        // ── Боковая панель фильтров ──────────────────────────────────
-        FilterSidePanel(
-            columns = renterHistoryFilterColumns,
-            filterValues = filterValues,
-            onFilterChange = { colId, value ->
-                filterValues = filterValues.toMutableMap().apply { put(colId, value) }
-            },
-            onSearch = { /* фильтры применяются реактивно */ },
-            onReset = { filterValues = emptyMap() },
-            onDismiss = { showFilterPanel = false },
-            visible = showFilterPanel
-        )
+            // ── Боковая панель фильтров ──────────────────────────────
+            // Рендерится как overlay поверх таблицы (внутри Box).
+            FilterSidePanel(
+                columns = renterHistoryFilterColumns,
+                filterValues = filterValues,
+                onFilterChange = { colId, value ->
+                    filterValues = filterValues.toMutableMap().apply { put(colId, value) }
+                },
+                onSearch = { /* фильтры применяются реактивно */ },
+                onReset = { filterValues = emptyMap() },
+                onDismiss = { showFilterPanel = false },
+                visible = showFilterPanel
+            )
+        }  // закрытие Box
     }
 
     // ── Диалог редактирования контракта ─────────────────────────────────
@@ -1749,6 +1757,10 @@ fun ScooterContractHistoryScreen(
             )
         }
     ) { innerPadding ->
+        // ── ВАЖНО: контент + FilterSidePanel оборачиваются в Box, чтобы
+        // FilterSidePanel рендерился как overlay. Раньше, в Column,
+        // FilterSidePanel получал 0dp высоты после fillMaxSize-контента. ─
+        Box(modifier = Modifier.fillMaxSize()) {
         Column(
             modifier = Modifier
                 .padding(innerPadding)
@@ -1841,19 +1853,6 @@ fun ScooterContractHistoryScreen(
                 calendarActive = dateRangePickerState.selectedStartDateMillis != null,
                 onFilterClick = { showFilterPanel = true },
                 filterActive = filterValues.any { it.value.isNotBlank() }
-            )
-
-            // ── Боковая панель фильтров ──────────────────────────────────
-            FilterSidePanel(
-                columns = scooterHistoryFilterColumns,
-                filterValues = filterValues,
-                onFilterChange = { colId, value ->
-                    filterValues = filterValues.toMutableMap().apply { put(colId, value) }
-                },
-                onSearch = { /* фильтры применяются реактивно */ },
-                onReset = { filterValues = emptyMap() },
-                onDismiss = { showFilterPanel = false },
-                visible = showFilterPanel
             )
 
             if (selectedTab == 0) {
@@ -1975,6 +1974,20 @@ fun ScooterContractHistoryScreen(
                 )
             }
         }
+
+        // ── Боковая панель фильтров ── overlay поверх таблицы (внутри Box) ──
+        FilterSidePanel(
+            columns = scooterHistoryFilterColumns,
+            filterValues = filterValues,
+            onFilterChange = { colId, value ->
+                filterValues = filterValues.toMutableMap().apply { put(colId, value) }
+            },
+            onSearch = { /* фильтры применяются реактивно */ },
+            onReset = { filterValues = emptyMap() },
+            onDismiss = { showFilterPanel = false },
+            visible = showFilterPanel
+        )
+        }  // закрытие Box
     }
 
     // ── Диалог выбора диапазона дат (фильтр по weekStart/timestamp) ──────

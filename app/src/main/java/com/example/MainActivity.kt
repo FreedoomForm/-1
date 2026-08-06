@@ -1161,8 +1161,8 @@ fun MainScreen(
                             modifier = Modifier
                                 .padding(end = 6.dp)
                                 .size(80.dp)
-                                .background(ClaudeAccentBg, CircleShape)
-                                .border(1.dp, ClaudeAccent, CircleShape)
+                                .background(ClaudeAccentBg, RoundedCornerShape(8.dp))
+                                .border(1.dp, ClaudeAccent, RoundedCornerShape(8.dp))
                         ) {
                             Icon(
                                 Icons.Default.CameraAlt,
@@ -1197,7 +1197,7 @@ fun MainScreen(
                                 .size(80.dp)
                                 .background(
                                     if (smsAutoSend) StatusOk else StatusOverdue,
-                                    CircleShape
+                                    RoundedCornerShape(8.dp)
                                 )
                                 .combinedClickable(
                                     onClick = {
@@ -1335,7 +1335,7 @@ fun MainScreen(
                                 modifier = Modifier
                                     .padding(end = 6.dp, start = 4.dp)
                                     .size(80.dp)
-                                    .background(ClaudeAccent, CircleShape)
+                                    .background(ClaudeAccent, RoundedCornerShape(8.dp))
                             ) {
                                 Icon(
                                     Icons.Default.Add,
@@ -1380,9 +1380,9 @@ fun MainScreen(
                                     .size(80.dp)
                                     .background(
                                         if (editEnabled) Color.White else Color.White.copy(alpha = 0.5f),
-                                        CircleShape
+                                        RoundedCornerShape(8.dp)
                                     )
-                                    .border(1.dp, ClaudeDivider, CircleShape)
+                                    .border(1.dp, ClaudeDivider, RoundedCornerShape(8.dp))
                             ) {
                                 Icon(
                                     Icons.Default.Edit,
@@ -1425,9 +1425,9 @@ fun MainScreen(
                                     .size(80.dp)
                                     .background(
                                         if (deleteEnabled) Color.White else Color.White.copy(alpha = 0.5f),
-                                        CircleShape
+                                        RoundedCornerShape(8.dp)
                                     )
-                                    .border(1.dp, if (deleteEnabled) StatusOverdue else ClaudeDivider, CircleShape)
+                                    .border(1.dp, if (deleteEnabled) StatusOverdue else ClaudeDivider, RoundedCornerShape(8.dp))
                             ) {
                                 Icon(
                                     Icons.Default.Delete,
@@ -1448,8 +1448,8 @@ fun MainScreen(
                                 modifier = Modifier
                                     .padding(end = 8.dp)
                                     .size(80.dp)
-                                    .background(ClaudeAccentBg, CircleShape)
-                                    .border(1.dp, ClaudeAccent, CircleShape)
+                                    .background(ClaudeAccentBg, RoundedCornerShape(8.dp))
+                                    .border(1.dp, ClaudeAccent, RoundedCornerShape(8.dp))
                             ) {
                                 Icon(
                                     Icons.Default.Search,
@@ -1905,6 +1905,9 @@ fun MainScreen(
                         // Default: sort by status (latest contract end) ASC
                         list.sortedWith(compareBy { latestEndTs(it) })
                     } else {
+                        // ── Sort comparators для ВСЕХ столбцов таблицы арендаторов ──
+                        // По запросу пользователя: все столбцы (включая Status)
+                        // теперь сортируемые — от меньшего к большему и наоборот.
                         val comparator = when (col) {
                             "col_name" -> compareBy<Renter> { it.name.lowercase() }
                             "col_phone" -> compareBy<Renter> { it.phoneNumber }
@@ -1915,6 +1918,7 @@ fun MainScreen(
                             "col_passport" -> compareBy<Renter> { it.passportData }
                             "col_address" -> compareBy<Renter> { it.address }
                             "col_pinfl" -> compareBy<Renter> { it.pinfl }
+                            "col_renewal" -> compareBy<Renter> { it.autoRenewMode }
                             else -> compareBy<Renter> { latestEndTs(it) }
                         }
                         if (state == SortState.ASCENDING) list.sortedWith(comparator)
@@ -1922,72 +1926,62 @@ fun MainScreen(
                     }
                 }
 
-                RenterTable(
-                    renters = filteredRenters,
-                    selected = selectedRenters,
-                    sortState = renterSortState,
-                    columnVisibility = renterColumnVisibility,
-                    latestContractByRenter = latestContractByRenter,
-                    contractsByRenter = contractsByRenter,
-                    // ── Поисковая панель и панель действий (To'lov/Uzish/SMS)
-                    // полностью удалены из контента таблицы арендаторов.
-                    // Поиск живёт в TopAppBar (CompactSearchPanel), который
-                    // переключается кнопкой «Поиск» в группе универсальных
-                    // кнопок. Панель действий (To'lov / Uzish / SMS) тоже
-                    // удалена — все эти действия выполняются через
-                    // универсальные кнопки TopAppBar или экран истории
-                    // контрактов арендатора.
-                    onSortClick = { colId ->
-                        renterSortState = renterSortState.click(colId)
-                    },
-                    onSelect = { id, checked ->
-                        val newSet = selectedRenters.toMutableSet()
-                        if (checked) newSet.add(id) else newSet.remove(id)
-                        selectedRenters = newSet
-                    },
-                    onClick = { renter ->
-                        // Клик по строке → экран истории контрактов
-                        navState = NavigationState.RenterHistory(renter)
-                    }
-                )
+                // ── ВАЖНО: RenterTable + FilterSidePanel оборачиваем в Box ──
+                // Раньше FilterSidePanel была sibling-ом RenterTable в Column.
+                // RenterTable (LazyColumn) потреблял всю высоту (fillMaxSize),
+                // и FilterSidePanel получал 0dp → кнопка фильтра не работала.
+                // В Box FilterSidePanel рендерится поверх RenterTable как overlay.
+                Box(modifier = Modifier.fillMaxSize()) {
+                    RenterTable(
+                        renters = filteredRenters,
+                        selected = selectedRenters,
+                        sortState = renterSortState,
+                        columnVisibility = renterColumnVisibility,
+                        latestContractByRenter = latestContractByRenter,
+                        contractsByRenter = contractsByRenter,
+                        // ── Поисковая панель и панель действий (To'lov/Uzish/SMS)
+                        // полностью удалены из контента таблицы арендаторов.
+                        // Поиск живёт в TopAppBar (CompactSearchPanel), который
+                        // переключается кнопкой «Поиск» в группе универсальных
+                        // кнопок. Панель действий (To'lov / Uzish / SMS) тоже
+                        // удалена — все эти действия выполняются через
+                        // универсальные кнопки TopAppBar или экран истории
+                        // контрактов арендатора.
+                        onSortClick = { colId ->
+                            renterSortState = renterSortState.click(colId)
+                        },
+                        onSelect = { id, checked ->
+                            val newSet = selectedRenters.toMutableSet()
+                            if (checked) newSet.add(id) else newSet.remove(id)
+                            selectedRenters = newSet
+                        },
+                        onClick = { renter ->
+                            // Клик по строке → экран истории контрактов
+                            navState = NavigationState.RenterHistory(renter)
+                        }
+                    )
 
-                // Filter side panel — overlay, не часть скроллящегося контента.
-                FilterSidePanel(
-                    columns = renterFilterColumns,
-                    filterValues = renterFilterValues,
-                    onFilterChange = { colId, value ->
-                        renterFilterValues = renterFilterValues.toMutableMap().apply { put(colId, value) }
-                    },
-                    onSearch = { /* filters already applied reactively */ },
-                    onReset = { renterFilterValues = emptyMap() },
-                    onDismiss = { showRenterFilterPanel = false },
-                    visible = showRenterFilterPanel,
-                    columnVisibility = renterColumnVisibility,
-                    onColumnVisibilityChange = { colId, isVisible ->
-                        renterColumnVisibility = renterColumnVisibility.toMutableMap().apply { put(colId, isVisible) }
-                    }
-                )
+                    // Filter side panel — overlay поверх RenterTable.
+                    FilterSidePanel(
+                        columns = renterFilterColumns,
+                        filterValues = renterFilterValues,
+                        onFilterChange = { colId, value ->
+                            renterFilterValues = renterFilterValues.toMutableMap().apply { put(colId, value) }
+                        },
+                        onSearch = { /* filters already applied reactively */ },
+                        onReset = { renterFilterValues = emptyMap() },
+                        onDismiss = { showRenterFilterPanel = false },
+                        visible = showRenterFilterPanel,
+                        columnVisibility = renterColumnVisibility,
+                        onColumnVisibilityChange = { colId, isVisible ->
+                            renterColumnVisibility = renterColumnVisibility.toMutableMap().apply { put(colId, isVisible) }
+                        }
+                    )
+                }
             } else if (currentTab == 1) {
                 // Вкладка «Скутеры» — поиск теперь в TopAppBar (CompactSearchPanel),
                 // фильтры и календарь открываются оттуда же. FilterSidePanel
-                // остаётся здесь (overlay, не часть скроллящегося контента).
-                // Filter side panel
-                FilterSidePanel(
-                    columns = scooterFilterColumns,
-                    filterValues = scooterFilterValues,
-                    onFilterChange = { colId, value ->
-                        scooterFilterValues = scooterFilterValues.toMutableMap().apply { put(colId, value) }
-                    },
-                    onSearch = { /* filters applied reactively */ },
-                    onReset = { scooterFilterValues = emptyMap() },
-                    onDismiss = { showScooterFilterPanel = false },
-                    visible = showScooterFilterPanel,
-                    columnVisibility = scooterColumnVisibility,
-                    onColumnVisibilityChange = { colId, isVisible ->
-                        scooterColumnVisibility = scooterColumnVisibility.toMutableMap().apply { put(colId, isVisible) }
-                    }
-                )
-
+                // рендерится как overlay поверх ScooterTable (внутри Box).
                 val filteredScooters = scooters.filter { scooter ->
                     val textMatch = scooter.name.contains(searchQuery, ignoreCase = true)
                     // Calendar filter — by active renter's contract start date.
@@ -2027,8 +2021,23 @@ fun MainScreen(
                     if (state == SortState.NONE) {
                         list.sortedBy { it.name.lowercase() }
                     } else {
+                        // ── Sort comparators для ВСЕХ столбцов таблицы скутеров ──
+                        // Раньше сортировался только col_name, остальные столбцы
+                        // были NonSortable. По запросу пользователя все столбцы
+                        // теперь сортируемые (от меньшего к большему и наоборот).
                         val comparator = when (col) {
-                            "col_name" -> compareBy<Scooter> { it.name.lowercase() }
+                            "col_name"   -> compareBy<Scooter> { it.name.lowercase() }
+                            "col_doc"    -> compareBy<Scooter> { (it.documentedNumber ?: "").lowercase() }
+                            "col_vin"    -> compareBy<Scooter> { it.vinNumber.lowercase() }
+                            "col_engine" -> compareBy<Scooter> { it.engineNumber.lowercase() }
+                            "col_serial" -> compareBy<Scooter> { it.scooterSerialNumber.lowercase() }
+                            "col_batt1"  -> compareBy<Scooter> { it.batteryId1.lowercase() }
+                            "col_batt2"  -> compareBy<Scooter> { it.batteryId2.lowercase() }
+                            "col_extra"  -> compareBy<Scooter> { it.additionalInfo.lowercase() }
+                            "col_status" -> compareBy<Scooter> {
+                                // Ijarada (rented) > Bazada (in_base) — сортируем по статусу
+                                if (scooterStatusOf(it.id, renters) == ScooterStatus.RENTED) 1 else 0
+                            }
                             else -> compareBy<Scooter> { it.name.lowercase() }
                         }
                         if (state == SortState.ASCENDING) list.sortedWith(comparator)
@@ -2036,25 +2045,45 @@ fun MainScreen(
                     }
                 }
 
-                ScooterTable(
-                    scooters = filteredScooters,
-                    renters = renters,
-                    selected = selectedScooters,
-                    sortState = scooterSortState,
-                    columnVisibility = scooterColumnVisibility,
-                    onSortClick = { colId ->
-                        scooterSortState = scooterSortState.click(colId)
-                    },
-                    onSelect = { id, checked ->
-                        val newSet = selectedScooters.toMutableSet()
-                        if (checked) newSet.add(id) else newSet.remove(id)
-                        selectedScooters = newSet
-                    },
-                    onClick = { scooter ->
-                        // Клик по скутеру → экран истории контрактов скутера
-                        navState = NavigationState.ScooterHistory(scooter)
-                    }
-                )
+                // ── Box: ScooterTable + FilterSidePanel как overlay ──
+                Box(modifier = Modifier.fillMaxSize()) {
+                    ScooterTable(
+                        scooters = filteredScooters,
+                        renters = renters,
+                        selected = selectedScooters,
+                        sortState = scooterSortState,
+                        columnVisibility = scooterColumnVisibility,
+                        onSortClick = { colId ->
+                            scooterSortState = scooterSortState.click(colId)
+                        },
+                        onSelect = { id, checked ->
+                            val newSet = selectedScooters.toMutableSet()
+                            if (checked) newSet.add(id) else newSet.remove(id)
+                            selectedScooters = newSet
+                        },
+                        onClick = { scooter ->
+                            // Клик по скутеру → экран истории контрактов скутера
+                            navState = NavigationState.ScooterHistory(scooter)
+                        }
+                    )
+
+                    // Filter side panel — overlay поверх ScooterTable.
+                    FilterSidePanel(
+                        columns = scooterFilterColumns,
+                        filterValues = scooterFilterValues,
+                        onFilterChange = { colId, value ->
+                            scooterFilterValues = scooterFilterValues.toMutableMap().apply { put(colId, value) }
+                        },
+                        onSearch = { /* filters applied reactively */ },
+                        onReset = { scooterFilterValues = emptyMap() },
+                        onDismiss = { showScooterFilterPanel = false },
+                        visible = showScooterFilterPanel,
+                        columnVisibility = scooterColumnVisibility,
+                        onColumnVisibilityChange = { colId, isVisible ->
+                            scooterColumnVisibility = scooterColumnVisibility.toMutableMap().apply { put(colId, isVisible) }
+                        }
+                    )
+                }
             } else if (currentTab == 2) {
                 // ── Вкладка «Kontraktlar» — все контракты всех арендаторов ──
                 ContractListScreen(
@@ -2568,7 +2597,7 @@ fun RenterTable(
                 if (showStart)    SortableHeaderCellFixed(Icons.Default.CalendarToday,        wStart,    "col_start",    sortState) { onSortClick("col_start") }
                 if (showEnd)      SortableHeaderCellFixed(Icons.Default.Event,                wEnd,      "col_end",      sortState) { onSortClick("col_end") }
                 if (showBalance)  SortableHeaderCellFixed(Icons.Default.AccountBalanceWallet, wDebt,     "col_balance",  sortState) { onSortClick("col_balance") }
-                if (showRenewal)  NonSortableHeaderCellFixed(Icons.Default.Refresh,            wRenewal,  "Status")
+                if (showRenewal)  SortableHeaderCellFixed(Icons.Default.Refresh,            wRenewal,  "col_renewal", sortState) { onSortClick("col_renewal") }
                 if (showPassport) SortableHeaderCellFixed(Icons.Default.CreditCard,           wPassport, "col_passport", sortState) { onSortClick("col_passport") }
                 if (showAddress)  SortableHeaderCellFixed(Icons.Default.Home,                 wAddress,  "col_address",  sortState) { onSortClick("col_address") }
                 if (showPinfl)    SortableHeaderCellFixed(Icons.Default.Fingerprint,          wPinfl,    "col_pinfl",    sortState) { onSortClick("col_pinfl") }
@@ -2910,10 +2939,26 @@ fun RenterTable(
                         // rememberScrollState() в scope элемента LazyColumn →
                         // у каждого раскрытого арендатора свой независимый state.
                         val contractsScrollState = rememberScrollState()
-                        // Фиксированная ширина карточки: ID(40) + Holat(80) +
-                        // Boshlanish(90) + Tugash(90) + Summa(80) + spacing(6×4=24)
-                        // + inner padding(8×2=16) = 420dp. Берём 440dp с запасом.
-                        val wContractsCard = 440.dp
+
+                        // ── Ширины колонок совпадают со страницей «Kontraktlar»
+                        // (ContractListScreen), чтобы раскрывающаяся таблица
+                        // выглядела точь-в-точь как там. Mijoz/Telefon пропущены:
+                        // имя и телефон арендатора уже показаны в основной строке
+                        // выше, дублировать их в каждой строке контракта избыточно.
+                        val wCNum      = 40.dp    // № — порядковый номер
+                        val wCId       = 55.dp    // #ID
+                        val wCScooter  = 95.dp    // Skuter
+                        val wCStart    = 90.dp    // Boshlanish
+                        val wCEnd      = 90.dp    // Tugash
+                        val wCAmount   = 85.dp    // Summa
+                        val wCStatus   = 100.dp   // Holat (To'langan / To'lanmagan)
+                        val wCPassport = 115.dp   // Pasport
+                        val wCAddress  = 145.dp   // Manzil
+                        val wCPinfl    = 105.dp   // JSHSHIR
+                        // Ширина карточки = сумма колонок + отступы:
+                        // 16dp (Column padding 8×2) + 16dp (Row padding 8×2).
+                        val wContractsCard = wCNum + wCId + wCScooter + wCStart + wCEnd +
+                            wCAmount + wCStatus + wCPassport + wCAddress + wCPinfl + 32.dp
 
                         Row(
                             modifier = Modifier
@@ -2921,7 +2966,8 @@ fun RenterTable(
                                 .horizontalScroll(contractsScrollState)
                                 .padding(top = 2.dp, bottom = 4.dp)
                         ) {
-                            // Отступ: стрелка (wExpand) + № (wNum) + 8dp
+                            // Отступ: стрелка (wExpand) + № (wNum) + 8dp — таблица
+                            // визуально начинается со 2-го столбца после № арендатора.
                             Spacer(modifier = Modifier.width(wExpand + wNum + 8.dp))
                             // ── Карточка с таблицей контрактов ──────────────
                             Surface(
@@ -2950,102 +2996,159 @@ fun RenterTable(
                                             color = ClaudeTextSecondary
                                         )
                                     } else {
-                                        // ── Заголовок мини-таблицы ─────────────
-                                        Row(
-                                            modifier = Modifier.fillMaxWidth(),
-                                            horizontalArrangement = Arrangement.spacedBy(6.dp)
-                                        ) {
-                                            Text(
-                                                "ID",
-                                                modifier = Modifier.width(40.dp),
-                                                style = MaterialTheme.typography.labelSmall,
-                                                color = ClaudeTextSecondary,
-                                                fontWeight = FontWeight.SemiBold
-                                            )
-                                            Text(
-                                                "Holat",
-                                                modifier = Modifier.width(80.dp),
-                                                style = MaterialTheme.typography.labelSmall,
-                                                color = ClaudeTextSecondary,
-                                                fontWeight = FontWeight.SemiBold
-                                            )
-                                            Text(
-                                                "Boshlanish",
-                                                modifier = Modifier.width(90.dp),
-                                                style = MaterialTheme.typography.labelSmall,
-                                                color = ClaudeTextSecondary,
-                                                fontWeight = FontWeight.SemiBold
-                                            )
-                                            Text(
-                                                "Tugash",
-                                                modifier = Modifier.width(90.dp),
-                                                style = MaterialTheme.typography.labelSmall,
-                                                color = ClaudeTextSecondary,
-                                                fontWeight = FontWeight.SemiBold
-                                            )
-                                            Text(
-                                                "Summa",
-                                                modifier = Modifier.width(80.dp),
-                                                style = MaterialTheme.typography.labelSmall,
-                                                color = ClaudeTextSecondary,
-                                                fontWeight = FontWeight.SemiBold,
-                                                textAlign = TextAlign.End
-                                            )
+                                        // ── Заголовок таблицы (как в ContractListScreen) ──
+                                        Surface(color = ClaudeCard, modifier = Modifier.fillMaxWidth()) {
+                                            Row(
+                                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+                                                verticalAlignment = Alignment.CenterVertically
+                                            ) {
+                                                NonSortableHeaderCellFixed(Icons.Default.Numbers,              wCNum,      "№")
+                                                NonSortableHeaderCellFixed(Icons.Default.Numbers,              wCId,       "#")
+                                                NonSortableHeaderCellFixed(Icons.Default.DirectionsBike,       wCScooter,  "Skuter")
+                                                NonSortableHeaderCellFixed(Icons.Default.CalendarToday,        wCStart,    "Boshlanish")
+                                                NonSortableHeaderCellFixed(Icons.Default.Event,                wCEnd,      "Tugash")
+                                                NonSortableHeaderCellFixed(Icons.Default.AccountBalanceWallet, wCAmount,   "Summa")
+                                                NonSortableHeaderCellFixed(Icons.Default.Check,                wCStatus,   "Holat")
+                                                NonSortableHeaderCellFixed(Icons.Default.CreditCard,           wCPassport, "Pasport")
+                                                NonSortableHeaderCellFixed(Icons.Default.Home,                 wCAddress,  "Manzil")
+                                                NonSortableHeaderCellFixed(Icons.Default.Fingerprint,          wCPinfl,    "JSHSHIR")
+                                            }
                                         }
-                                        HorizontalDivider(color = ClaudeDivider, thickness = 1.dp)
-                                        // ── Строки контрактов ──────────────────
-                                        contracts.forEach { c ->
-                                            val cColor = if (c.isPaid) StatusOk else StatusOverdue
-                                            val cStatus = if (c.isPaid) "To'langan" else "To'lanmagan"
-                                            val startStr = c.weekStart?.let { dateFmt.format(Date(it)) } ?: "—"
-                                            val endStr = c.weekEnd?.let { dateFmt.format(Date(it)) } ?: "—"
+                                        HorizontalDivider(color = ClaudeDivider)
+
+                                        // ── Строки контрактов (как в ContractListScreen) ──
+                                        // Каждая строка — карточка с rounded-углами, цветным
+                                        // статусом (точка + текст) и цветной суммой. Стилистика
+                                        // 1-в-1 со страницей «Kontraktlar».
+                                        contracts.forEachIndexed { idx, c ->
+                                            val statusColor = if (c.isPaid) StatusOk else StatusOverdue
+                                            val statusLabel = if (c.isPaid) "To'langan" else "To'lanmagan"
+
                                             Row(
                                                 modifier = Modifier
                                                     .fillMaxWidth()
-                                                    .padding(vertical = 2.dp),
-                                                horizontalArrangement = Arrangement.spacedBy(6.dp),
-                                                verticalAlignment = Alignment.CenterVertically
+                                                    .padding(vertical = 3.dp)
                                             ) {
-                                                Text(
-                                                    "#${c.id}",
-                                                    modifier = Modifier.width(40.dp),
-                                                    style = MaterialTheme.typography.bodySmall,
-                                                    color = ClaudeTextSecondary
-                                                )
-                                                Surface(
-                                                    shape = RoundedCornerShape(4.dp),
-                                                    color = if (c.isPaid) StatusOkBg else StatusOverdueBg
+                                                Row(
+                                                    modifier = Modifier
+                                                        .clip(RoundedCornerShape(8.dp))
+                                                        .background(ClaudeCard)
+                                                        .padding(horizontal = 8.dp, vertical = 10.dp),
+                                                    verticalAlignment = Alignment.CenterVertically
                                                 ) {
+                                                    // № — порядковый номер
                                                     Text(
-                                                        cStatus,
-                                                        modifier = Modifier
-                                                            .width(80.dp)
-                                                            .padding(horizontal = 4.dp, vertical = 2.dp),
+                                                        "${idx + 1}",
+                                                        modifier = Modifier.width(wCNum).padding(horizontal = 4.dp),
+                                                        style = MaterialTheme.typography.bodySmall,
+                                                        color = ClaudeTextSecondary,
+                                                        fontWeight = FontWeight.Medium,
+                                                        maxLines = 1
+                                                    )
+                                                    // #ID
+                                                    Text(
+                                                        "#${c.id}",
+                                                        modifier = Modifier.width(wCId).padding(horizontal = 4.dp),
                                                         style = MaterialTheme.typography.labelSmall,
-                                                        color = cColor,
-                                                        fontWeight = FontWeight.SemiBold
+                                                        color = ClaudeTextSecondary,
+                                                        maxLines = 2,
+                                                        softWrap = true,
+                                                        overflow = TextOverflow.Visible
+                                                    )
+                                                    // Skuter
+                                                    Text(
+                                                        c.scooterName ?: "—",
+                                                        modifier = Modifier.width(wCScooter).padding(horizontal = 4.dp),
+                                                        style = MaterialTheme.typography.bodySmall,
+                                                        color = ClaudeText,
+                                                        maxLines = 2,
+                                                        softWrap = true,
+                                                        overflow = TextOverflow.Visible
+                                                    )
+                                                    // Boshlanish
+                                                    Text(
+                                                        c.weekStart?.let { dateFmt.format(Date(it)) } ?: "—",
+                                                        modifier = Modifier.width(wCStart).padding(horizontal = 4.dp),
+                                                        style = MaterialTheme.typography.bodySmall,
+                                                        color = ClaudeText,
+                                                        maxLines = 2,
+                                                        softWrap = true,
+                                                        overflow = TextOverflow.Visible
+                                                    )
+                                                    // Tugash
+                                                    Text(
+                                                        c.weekEnd?.let { dateFmt.format(Date(it)) } ?: "—",
+                                                        modifier = Modifier.width(wCEnd).padding(horizontal = 4.dp),
+                                                        style = MaterialTheme.typography.bodySmall,
+                                                        color = ClaudeText,
+                                                        maxLines = 2,
+                                                        softWrap = true,
+                                                        overflow = TextOverflow.Visible
+                                                    )
+                                                    // Summa (цветная жирная)
+                                                    Text(
+                                                        "${c.amount.toLong()}",
+                                                        modifier = Modifier.width(wCAmount).padding(horizontal = 4.dp),
+                                                        style = MaterialTheme.typography.bodyMedium,
+                                                        color = statusColor,
+                                                        fontWeight = FontWeight.Bold,
+                                                        textAlign = TextAlign.End,
+                                                        maxLines = 2,
+                                                        softWrap = true,
+                                                        overflow = TextOverflow.Visible
+                                                    )
+                                                    // Holat — точка + текст (как в ContractListScreen)
+                                                    Row(
+                                                        modifier = Modifier.width(wCStatus).padding(horizontal = 4.dp),
+                                                        verticalAlignment = Alignment.CenterVertically
+                                                    ) {
+                                                        Box(
+                                                            modifier = Modifier
+                                                                .size(8.dp)
+                                                                .background(statusColor, CircleShape)
+                                                        )
+                                                        Spacer(Modifier.width(4.dp))
+                                                        Text(
+                                                            statusLabel,
+                                                            style = MaterialTheme.typography.labelSmall,
+                                                            color = statusColor,
+                                                            fontWeight = FontWeight.SemiBold,
+                                                            maxLines = 2,
+                                                            softWrap = true,
+                                                            overflow = TextOverflow.Visible
+                                                        )
+                                                    }
+                                                    // Pasport
+                                                    Text(
+                                                        c.passportData.ifBlank { "—" },
+                                                        modifier = Modifier.width(wCPassport).padding(horizontal = 4.dp),
+                                                        style = MaterialTheme.typography.bodySmall,
+                                                        color = ClaudeText,
+                                                        maxLines = 2,
+                                                        softWrap = true,
+                                                        overflow = TextOverflow.Visible
+                                                    )
+                                                    // Manzil
+                                                    Text(
+                                                        c.address.ifBlank { "—" },
+                                                        modifier = Modifier.width(wCAddress).padding(horizontal = 4.dp),
+                                                        style = MaterialTheme.typography.bodySmall,
+                                                        color = ClaudeText,
+                                                        maxLines = 2,
+                                                        softWrap = true,
+                                                        overflow = TextOverflow.Visible
+                                                    )
+                                                    // JSHSHIR
+                                                    Text(
+                                                        c.pinfl.ifBlank { "—" },
+                                                        modifier = Modifier.width(wCPinfl).padding(horizontal = 4.dp),
+                                                        style = MaterialTheme.typography.bodySmall,
+                                                        color = ClaudeText,
+                                                        maxLines = 2,
+                                                        softWrap = true,
+                                                        overflow = TextOverflow.Visible
                                                     )
                                                 }
-                                                Text(
-                                                    startStr,
-                                                    modifier = Modifier.width(90.dp),
-                                                    style = MaterialTheme.typography.bodySmall,
-                                                    color = ClaudeText
-                                                )
-                                                Text(
-                                                    endStr,
-                                                    modifier = Modifier.width(90.dp),
-                                                    style = MaterialTheme.typography.bodySmall,
-                                                    color = ClaudeText
-                                                )
-                                                Text(
-                                                    c.amount.toLong().toString(),
-                                                    modifier = Modifier.width(80.dp),
-                                                    style = MaterialTheme.typography.bodySmall,
-                                                    color = cColor,
-                                                    fontWeight = FontWeight.Bold,
-                                                    textAlign = TextAlign.End
-                                                )
                                             }
                                         }
                                     }
@@ -3230,12 +3333,12 @@ fun RenterFormDialog(
     }
 
     // ── Режим авто-продления контракта (Manual / Auto) ─────────────────
-    // По умолчанию MANUAL (безопасное поведение: система не создаёт
-    // контракты автоматически). В режиме редактирования подставляется
-    // текущее значение из БД. Пользователь может переключаться между
-    // MANUAL и AUTO через две кнопки-«таблетки» ниже.
+    // По умолчанию AUTO (автоматическое создание контрактов при окончании
+    // последнего). В режиме редактирования подставляется текущее значение
+    // из БД. Пользователь может переключаться между MANUAL и AUTO через
+    // две кнопки-«таблетки» ниже.
     var autoRenewMode by remember {
-        mutableStateOf(initialRenter?.autoRenewMode ?: com.example.data.RenterAutoRenewMode.MANUAL)
+        mutableStateOf(initialRenter?.autoRenewMode ?: com.example.data.RenterAutoRenewMode.AUTO)
     }
 
     // ── Группы контрактов (новый календарь) ───────────────────────────
@@ -3578,7 +3681,7 @@ fun RenterFormDialog(
                 //   • «Qo'llanma» (Manual) — система НЕ создаёт автоматически.
                 //   • «Avtomatik» (Auto) — система создаёт AUTO_RENEW при
                 //     окончании последнего контракта по дате.
-                // По умолчанию Manual (безопасное поведение). Пользователь
+                // По умолчанию Avtomatik (автоматическое создание). Пользователь
                 // может переключаться в любой момент — изменение сохраняется
                 // в Renter.autoRenewMode при сохранении формы.
                 SectionLabel("Status (kontrakt avtomatik yaratilishi)")
@@ -4033,9 +4136,9 @@ data class RenterFormResult(
      *     создаёт новый контракт (AUTO_RENEW) при наступлении дня окончания
      *     последнего контракта.
      *
-     * По умолчанию MANUAL — безопасное поведение для новых арендаторов.
+     * По умолчанию AUTO — автоматическое создание контрактов для новых арендаторов.
      */
-    val autoRenewMode: String = com.example.data.RenterAutoRenewMode.MANUAL,
+    val autoRenewMode: String = com.example.data.RenterAutoRenewMode.AUTO,
     // Группы контрактов, выбранные в календаре (если пусто — используется
     // автоматическая логика по выбранной дате). Каждая группа =
     // Triple<startMs, endMs, isPaid>.
@@ -4987,14 +5090,14 @@ fun ScooterTable(
             ) {
                 NonSortableHeaderCellFixed(Icons.Default.Numbers, wNum, "№")
                 if (showName)   SortableHeaderCellFixed(Icons.Default.Label,         wName,   "col_name",  sortState) { onSortClick("col_name") }
-                if (showDoc)    NonSortableHeaderCellFixed(Icons.Default.CreditCard,   wDoc,    "Hujjat raqami")
-                if (showVin)    NonSortableHeaderCellFixed(Icons.Default.Numbers,      wVin,    "VIN")
-                if (showEngine) NonSortableHeaderCellFixed(Icons.Default.Build,         wEngine, "Dvigatel")
-                if (showSerial) NonSortableHeaderCellFixed(Icons.Default.Tag,           wSerial, "ID raqami")
-                if (showBatt1)  NonSortableHeaderCellFixed(Icons.Default.Bolt,          wBatt1,  "Akkumulyator 1")
-                if (showBatt2)  NonSortableHeaderCellFixed(Icons.Default.Bolt,          wBatt2,  "Akkumulyator 2")
-                if (showExtra)  NonSortableHeaderCellFixed(Icons.Default.Info,          wExtra,  "Qo'shimcha")
-                if (showStatus) NonSortableHeaderCellFixed(Icons.Default.Info,          wStat,   "Holat")
+                if (showDoc)    SortableHeaderCellFixed(Icons.Default.CreditCard,   wDoc,    "col_doc",    sortState) { onSortClick("col_doc") }
+                if (showVin)    SortableHeaderCellFixed(Icons.Default.Numbers,      wVin,    "col_vin",    sortState) { onSortClick("col_vin") }
+                if (showEngine) SortableHeaderCellFixed(Icons.Default.Build,         wEngine, "col_engine", sortState) { onSortClick("col_engine") }
+                if (showSerial) SortableHeaderCellFixed(Icons.Default.Tag,           wSerial, "col_serial", sortState) { onSortClick("col_serial") }
+                if (showBatt1)  SortableHeaderCellFixed(Icons.Default.Bolt,          wBatt1,  "col_batt1",  sortState) { onSortClick("col_batt1") }
+                if (showBatt2)  SortableHeaderCellFixed(Icons.Default.Bolt,          wBatt2,  "col_batt2",  sortState) { onSortClick("col_batt2") }
+                if (showExtra)  SortableHeaderCellFixed(Icons.Default.Info,          wExtra,  "col_extra",  sortState) { onSortClick("col_extra") }
+                if (showStatus) SortableHeaderCellFixed(Icons.Default.Info,          wStat,   "col_status", sortState) { onSortClick("col_status") }
             }
         }
         HorizontalDivider(color = ClaudeDivider)

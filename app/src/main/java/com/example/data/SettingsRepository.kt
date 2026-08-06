@@ -90,15 +90,18 @@ class SettingsRepository(context: Context) {
 
     /**
      * SMS yuborish rejimi:
-     *  • true  — AVTO yuborish (standart). Kechikkan mijozga SmsWorker
+     *  • true  — AVTO yuborish. Kechikkan mijozga SmsWorker
      *            (4 soatda bir) va kechikgan holda yaratilgan renter uchun
      *            RenterViewModel tomonidan SMS darhol yuboriladi.
-     *  • false — FAQAT QO'LLANMA. SMS faqat foydalanuvchi "SMS" tugmasini
-     *            bosganda yuboriladi. SmsWorker va addRenter() avto-yuborish
-     *            o'chiriladi (notif/yozuvlar saqlanadi).
+     *  • false — FAQAT QO'LLANMA (STANDART). SMS faqat foydalanuvchi "SMS"
+     *            tugmasini bosganda yuboriladi. SmsWorker va addRenter()
+     *            avto-yuborish o'chiriladi (notif/yozuvlar saqlanadi).
+     *
+     * Standart qiymat — false (qo'llanma rejimi). Foydalanuvchi avto-yuborishni
+     * Sozlamalar sahifasida qo'lda yoqishi mumkin.
      */
     var smsAutoSendEnabled: Boolean
-        get() = prefs.getBoolean("sms_auto_send_enabled", true)
+        get() = prefs.getBoolean("sms_auto_send_enabled", false)
         set(value) = prefs.edit().putBoolean("sms_auto_send_enabled", value).apply()
 
     /**

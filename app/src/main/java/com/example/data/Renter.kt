@@ -36,8 +36,8 @@ data class Renter(
     // Добавлено по запросу пользователя: в форме создания/редактирования
     // арендатора добавлен переключатель «Статус» (Manual/Auto). При Manual
     // PaymentCheckWorker пропускает арендатора, при Auto — продлевает как
-    // раньше. Значение по умолчанию — "MANUAL" (безопасное поведение).
-    val autoRenewMode: String = RenterAutoRenewMode.MANUAL,
+    // раньше. Значение по умолчанию — "AUTO" (автоматическое создание).
+    val autoRenewMode: String = RenterAutoRenewMode.AUTO,
 
     // Примечание: реквизиты скутера (VIN, двигатель, ID, аккумы, доп. инфо)
     // хранятся на самой сущности Scooter и подтягиваются в ContractHistoryEntry

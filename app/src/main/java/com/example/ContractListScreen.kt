@@ -266,6 +266,9 @@ fun ContractListScreen(
                     "col_end"      -> compareBy<ContractHistoryEntry> { it.weekEnd ?: 0L }
                     "col_amount"   -> compareBy<ContractHistoryEntry> { it.amount }
                     "col_status"   -> compareBy<ContractHistoryEntry> { it.isPaid }
+                    "col_passport" -> compareBy<ContractHistoryEntry> { it.passportData }
+                    "col_address"  -> compareBy<ContractHistoryEntry> { it.address }
+                    "col_pinfl"    -> compareBy<ContractHistoryEntry> { it.pinfl }
                     else -> compareBy<ContractHistoryEntry> { it.weekStart ?: 0L }
                 }
                 if (state == SortState.ASCENDING) list.sortedWith(comparator)
@@ -310,30 +313,20 @@ fun ContractListScreen(
     // ── Содержимое страницы (без собственного Scaffold — вкладка живёт
     // внутри единого Scaffold в MainActivity, чтобы поисковая строка всех
     // 4 вкладок находилась на одной вертикали) ─────────────────────────
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-    ) {
+    // ── ВАЖНО: вся таблица + FilterSidePanel оборачиваются в Box, чтобы
+    // FilterSidePanel рендерился как overlay поверх таблицы. Раньше, в
+    // Column, FilterSidePanel получал 0dp высоты после fillMaxSize-таблицы,
+    // и кнопка фильтра не работала. ─────────────────────────────────────
+    Box(modifier = Modifier
+        .fillMaxSize()) {
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+        ) {
             // ── Поисковая панель удалена из контента ─────────────────────
             // Теперь поиск живёт в TopAppBar MainActivity (CompactSearchPanel).
             // Календарь и фильтры открываются кнопками оттуда же через
             // calendarTrigger / filterTrigger, см. LaunchedEffect выше.
-
-            FilterSidePanel(
-                columns = filterColumns,
-                filterValues = filterValues,
-                onFilterChange = { colId, value ->
-                    filterValues = filterValues.toMutableMap().apply { put(colId, value) }
-                },
-                onSearch = { /* applied reactively */ },
-                onReset = { filterValues = emptyMap() },
-                onDismiss = { showFilterPanel = false },
-                visible = showFilterPanel,
-                columnVisibility = columnVisibility,
-                onColumnVisibilityChange = { colId, isVisible ->
-                    columnVisibility = columnVisibility.toMutableMap().apply { put(colId, isVisible) }
-                }
-            )
 
             // ── Заголовок таблицы ───────────────────────────────────────
             // В этой таблице всегда много колонок (9+), поэтому всегда
@@ -349,15 +342,15 @@ fun ContractListScreen(
                     NonSortableHeaderCellFixed(Icons.Default.Numbers, wNum, "№")
                     if (showId)       SortableHeaderCellFixed(Icons.Default.Numbers,              wId,       "col_id",      sortState) { sortState = sortState.click("col_id") }
                     if (showRenter)   SortableHeaderCellFixed(Icons.Default.Person,               wRenter,   "col_renter",  sortState) { sortState = sortState.click("col_renter") }
-                    if (showPhone)    NonSortableHeaderCellFixed(Icons.Default.Phone,              wPhone,    "Telefon")
+                    if (showPhone)    SortableHeaderCellFixed(Icons.Default.Phone,                wPhone,    "col_phone",   sortState) { sortState = sortState.click("col_phone") }
                     if (showScooter)  SortableHeaderCellFixed(Icons.Default.DirectionsBike,       wScooter,  "col_scooter", sortState) { sortState = sortState.click("col_scooter") }
                     if (showStart)    SortableHeaderCellFixed(Icons.Default.CalendarToday,        wStart,    "col_start",   sortState) { sortState = sortState.click("col_start") }
                     if (showEnd)      SortableHeaderCellFixed(Icons.Default.Event,                wEnd,      "col_end",     sortState) { sortState = sortState.click("col_end") }
                     if (showAmount)   SortableHeaderCellFixed(Icons.Default.AccountBalanceWallet, wAmount,   "col_amount",  sortState) { sortState = sortState.click("col_amount") }
-                    if (showStatus)   NonSortableHeaderCellFixed(Icons.Default.Check,              wStatus,   "Holat")
-                    if (showPassport) NonSortableHeaderCellFixed(Icons.Default.CreditCard,         wPassport, "Pasport")
-                    if (showAddress)  NonSortableHeaderCellFixed(Icons.Default.Home,               wAddress,  "Manzil")
-                    if (showPinfl)    NonSortableHeaderCellFixed(Icons.Default.Fingerprint,        wPinfl,    "JSHSHIR")
+                    if (showStatus)   SortableHeaderCellFixed(Icons.Default.Check,                wStatus,   "col_status",  sortState) { sortState = sortState.click("col_status") }
+                    if (showPassport) SortableHeaderCellFixed(Icons.Default.CreditCard,           wPassport, "col_passport",sortState) { sortState = sortState.click("col_passport") }
+                    if (showAddress)  SortableHeaderCellFixed(Icons.Default.Home,                 wAddress,  "col_address", sortState) { sortState = sortState.click("col_address") }
+                    if (showPinfl)    SortableHeaderCellFixed(Icons.Default.Fingerprint,          wPinfl,    "col_pinfl",   sortState) { sortState = sortState.click("col_pinfl") }
                     // Колонка «PDF» удалена — PDF-договор теперь формируется
                     // только кнопкой в TopAppBar на странице истории контрактов
                     // арендатора (cheksiz muddatli — на неограниченный срок).
@@ -571,6 +564,24 @@ fun ContractListScreen(
                 }
             }
         }
+
+        // ── FilterSidePanel как overlay поверх таблицы (внутри Box) ──
+        FilterSidePanel(
+            columns = filterColumns,
+            filterValues = filterValues,
+            onFilterChange = { colId, value ->
+                filterValues = filterValues.toMutableMap().apply { put(colId, value) }
+            },
+            onSearch = { /* applied reactively */ },
+            onReset = { filterValues = emptyMap() },
+            onDismiss = { showFilterPanel = false },
+            visible = showFilterPanel,
+            columnVisibility = columnVisibility,
+            onColumnVisibilityChange = { colId, isVisible ->
+                columnVisibility = columnVisibility.toMutableMap().apply { put(colId, isVisible) }
+            }
+        )
+    }
 
     // ── Диалог редактирования ────────────────────────────────────────────
     editingContract?.let { entry ->

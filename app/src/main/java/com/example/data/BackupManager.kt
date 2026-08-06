@@ -198,7 +198,7 @@ object BackupManager {
             "id", "name", "phoneNumber", "debtAmount", "rentDurationDays",
             "rentStartDateTimestamp", "isReturned", "isOverdueSmsSent",
             "scooterId", "scooterName", "lastPaymentTimestamp", "balance",
-            "passportData", "address", "pinfl"
+            "passportData", "address", "pinfl", "autoRenewMode"
         )
         headers.forEachIndexed { i, h -> ws.value(0, i, h) }
         items.forEachIndexed { rowIdx, r ->
@@ -218,6 +218,10 @@ object BackupManager {
             ws.value(r2, 12, r.passportData)
             ws.value(r2, 13, r.address)
             ws.value(r2, 14, r.pinfl)
+            // Колонка 15 — autoRenewMode ("MANUAL" или "AUTO"). Старые .xlsx
+            // (созданные до добавления этой колонки) её не содержат — при
+            // импорте таких файлов значение по умолчанию = AUTO (см. readRenters).
+            ws.value(r2, 15, r.autoRenewMode)
         }
     }
 
@@ -495,6 +499,18 @@ object BackupManager {
         if (rows.size <= 1) return emptyList()
         return rows.drop(1).mapNotNull { row ->
             try {
+                // autoRenewMode — колонка 15. Старые .xlsx (созданные до
+                // добавления этой колонки) её не содержат — getCell(15) вернёт
+                // null. В этом случае по умолчанию используем AUTO, чтобы при
+                // загрузке из старой базы все арендаторы автоматически получали
+                // статус «автоматическое создание контрактов» (по запросу
+                // пользователя). Новые .xlsx содержат колонку и значение
+                // сохраняется как есть.
+                val autoRenewFromCell = row.getCell(15)?.asString()
+                val autoRenew = when (autoRenewFromCell) {
+                    null, "" -> RenterAutoRenewMode.AUTO
+                    else -> autoRenewFromCell
+                }
                 Renter(
                     id = row.getCell(0)?.asNumber()?.toInt() ?: 0,
                     name = row.getCell(1)?.asString() ?: "",
@@ -510,7 +526,8 @@ object BackupManager {
                     balance = row.getCell(11)?.asNumber()?.toDouble() ?: 0.0,
                     passportData = row.getCell(12)?.asString() ?: "",
                     address = row.getCell(13)?.asString() ?: "",
-                    pinfl = row.getCell(14)?.asString() ?: ""
+                    pinfl = row.getCell(14)?.asString() ?: "",
+                    autoRenewMode = autoRenew
                 )
             } catch (e: Exception) {
                 Log.w(TAG, "Skip renter row: ${e.message}")

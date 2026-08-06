@@ -45,6 +45,7 @@ import com.example.ui.components.FilterColumn
 import com.example.ui.components.FilterSidePanel
 import com.example.ui.components.NonSortableHeaderCellFixed
 import com.example.ui.components.SortState
+import com.example.ui.components.SortableHeaderCellFixed
 import com.example.ui.components.TableSortState
 import com.example.ui.components.PrimaryButton
 import com.example.ui.components.SecondaryButton
@@ -168,6 +169,11 @@ fun TransactionListScreen(
     var showFilterPanel by remember { mutableStateOf(false) }
     var filterValues by remember { mutableStateOf(mapOf<String, String>()) }
     var columnVisibility by remember { mutableStateOf(mapOf<String, Boolean>()) }
+    // ── Состояние сортировки ──
+    // По запросу пользователя все столбцы таблицы транзакций теперь сортируемые
+    // (от меньшего к большему и наоборот). Раньше таблица была отсортирована
+    // только по timestamp DESC без возможности переключать.
+    var sortState by remember { mutableStateOf(TableSortState()) }
 
     // Calendar (DateRange) — фильтр по timestamp
     var showDateRangePicker by remember { mutableStateOf(false) }
@@ -316,30 +322,18 @@ fun TransactionListScreen(
     // ── Содержимое страницы (без собственного Scaffold — вкладка живёт
     // внутри единого Scaffold в MainActivity, чтобы поисковая строка всех
     // 4 вкладок находилась на одной вертикали) ─────────────────────────
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-    ) {
+    // ── ВАЖНО: вся таблица + FilterSidePanel оборачиваются в Box, чтобы
+    // FilterSidePanel рендерился как overlay поверх таблицы. ────────────
+    Box(modifier = Modifier
+        .fillMaxSize()) {
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+        ) {
             // ── Поисковая панель удалена из контента ─────────────────────
             // Теперь поиск живёт в TopAppBar MainActivity (CompactSearchPanel).
             // Календарь и фильтры открываются кнопками оттуда же через
             // calendarTrigger / filterTrigger, см. LaunchedEffect выше.
-
-            FilterSidePanel(
-                columns = filterColumns,
-                filterValues = filterValues,
-                onFilterChange = { colId, value ->
-                    filterValues = filterValues.toMutableMap().apply { put(colId, value) }
-                },
-                onSearch = { /* applied reactively */ },
-                onReset = { filterValues = emptyMap() },
-                onDismiss = { showFilterPanel = false },
-                visible = showFilterPanel,
-                columnVisibility = columnVisibility,
-                onColumnVisibilityChange = { colId, isVisible ->
-                    columnVisibility = columnVisibility.toMutableMap().apply { put(colId, isVisible) }
-                }
-            )
 
             // ── Заголовок таблицы ───────────────────────────────────────
             Surface(color = ClaudeCard, modifier = Modifier.fillMaxWidth()) {
@@ -350,14 +344,14 @@ fun TransactionListScreen(
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     NonSortableHeaderCellFixed(Icons.Default.Numbers, wNum, "№")
-                    if (showId)       NonSortableHeaderCellFixed(Icons.Default.Numbers,              wId,       "#")
-                    if (showDate)     NonSortableHeaderCellFixed(Icons.Default.DateRange,            wDate,     "Sana")
-                    if (showRenter)   NonSortableHeaderCellFixed(Icons.Default.Person,               wRenter,   "Mijoz")
-                    if (showPhone)    NonSortableHeaderCellFixed(Icons.Default.Phone,                wPhone,    "Telefon")
-                    if (showScooter)  NonSortableHeaderCellFixed(Icons.Default.DirectionsBike,       wScooter,  "Skuter")
-                    if (showContract) NonSortableHeaderCellFixed(Icons.Default.Description,          wContract, "Kontrakt")
-                    if (showType)     NonSortableHeaderCellFixed(Icons.Default.Category,             wType,     "Tur")
-                    if (showAmount)   NonSortableHeaderCellFixed(Icons.Default.AccountBalanceWallet, wAmount,   "Summa")
+                    if (showId)       SortableHeaderCellFixed(Icons.Default.Numbers,              wId,       "col_id",       sortState) { sortState = sortState.click("col_id") }
+                    if (showDate)     SortableHeaderCellFixed(Icons.Default.DateRange,            wDate,     "col_date",     sortState) { sortState = sortState.click("col_date") }
+                    if (showRenter)   SortableHeaderCellFixed(Icons.Default.Person,               wRenter,   "col_renter",   sortState) { sortState = sortState.click("col_renter") }
+                    if (showPhone)    SortableHeaderCellFixed(Icons.Default.Phone,                wPhone,    "col_phone",    sortState) { sortState = sortState.click("col_phone") }
+                    if (showScooter)  SortableHeaderCellFixed(Icons.Default.DirectionsBike,       wScooter,  "col_scooter",  sortState) { sortState = sortState.click("col_scooter") }
+                    if (showContract) SortableHeaderCellFixed(Icons.Default.Description,          wContract, "col_contract", sortState) { sortState = sortState.click("col_contract") }
+                    if (showType)     SortableHeaderCellFixed(Icons.Default.Category,             wType,     "col_type",     sortState) { sortState = sortState.click("col_type") }
+                    if (showAmount)   SortableHeaderCellFixed(Icons.Default.AccountBalanceWallet, wAmount,   "col_amount",   sortState) { sortState = sortState.click("col_amount") }
                 }
             }
             HorizontalDivider(color = ClaudeDivider)
@@ -377,12 +371,37 @@ fun TransactionListScreen(
                     )
                 }
             } else {
-                // ── Сортируем обе ленты вместе по timestamp DESC ──────────
+                // ── Сортируем обе ленты вместе ──────────────────────────
                 // Используем sealed class для统一 типа элемента списка.
-                val mergedItems: List<UnifiedTxItem> = buildList {
+                // По умолчанию (NONE) — по timestamp DESC (как раньше).
+                // При активной сортировке — по выбранному столбцу ASC/DESC.
+                val rawItems: List<UnifiedTxItem> = buildList {
                     filteredTxs.forEach { add(UnifiedTxItem.ContractTx(it)) }
                     filteredCardTxs.forEach { add(UnifiedTxItem.CardTx(it)) }
-                }.sortedByDescending { it.timestamp }
+                }
+                val mergedItems: List<UnifiedTxItem> = run {
+                    val col = sortState.activeColumn
+                    val state = sortState.stateFor(col ?: "")
+                    if (state == SortState.NONE) {
+                        rawItems.sortedByDescending { it.timestamp }
+                    } else {
+                        // ── Sort comparators для всех столбцов транзакций ──
+                        // Для ContractTx и CardTx значения извлекаются по-разному.
+                        val comparator = when (col) {
+                            "col_id"       -> compareBy<UnifiedTxItem> { it.sortId }
+                            "col_date"     -> compareBy<UnifiedTxItem> { it.timestamp }
+                            "col_renter"   -> compareBy<UnifiedTxItem> { it.sortRenter.lowercase() }
+                            "col_phone"    -> compareBy<UnifiedTxItem> { it.sortPhone }
+                            "col_scooter"  -> compareBy<UnifiedTxItem> { it.sortScooter }
+                            "col_contract" -> compareBy<UnifiedTxItem> { it.sortContract }
+                            "col_type"     -> compareBy<UnifiedTxItem> { it.sortType.lowercase() }
+                            "col_amount"   -> compareBy<UnifiedTxItem> { it.sortAmount }
+                            else -> compareBy<UnifiedTxItem> { it.timestamp }
+                        }
+                        if (state == SortState.ASCENDING) rawItems.sortedWith(comparator)
+                        else rawItems.sortedWith(comparator.reversed())
+                    }
+                }
 
                 LazyColumn(modifier = Modifier.fillMaxSize()) {
                     itemsIndexed(mergedItems, key = { _, it -> it.uniqueKey }) { idx, item ->
@@ -681,6 +700,24 @@ fun TransactionListScreen(
                 }
             }
         }
+
+        // ── FilterSidePanel как overlay поверх таблицы (внутри Box) ──
+        FilterSidePanel(
+            columns = filterColumns,
+            filterValues = filterValues,
+            onFilterChange = { colId, value ->
+                filterValues = filterValues.toMutableMap().apply { put(colId, value) }
+            },
+            onSearch = { /* applied reactively */ },
+            onReset = { filterValues = emptyMap() },
+            onDismiss = { showFilterPanel = false },
+            visible = showFilterPanel,
+            columnVisibility = columnVisibility,
+            onColumnVisibilityChange = { colId, isVisible ->
+                columnVisibility = columnVisibility.toMutableMap().apply { put(colId, isVisible) }
+            }
+        )
+    }
 
     // ── Диалог редактирования ────────────────────────────────────────────
     editingTx?.let { tx ->
@@ -1491,13 +1528,42 @@ sealed class UnifiedTxItem {
     abstract val timestamp: Long
     abstract val uniqueKey: String
 
+    // ── Sort helper properties ─────────────────────────────────────────
+    // Используются comparator'ом при сортировке по столбцам. Каждое свойство
+    // возвращает значение соответствующего столбца для данного элемента.
+    abstract val sortId: String
+    abstract val sortRenter: String
+    abstract val sortPhone: String
+    abstract val sortScooter: String
+    abstract val sortContract: String
+    abstract val sortType: String
+    abstract val sortAmount: Long
+
     data class ContractTx(val tx: Transaction) : UnifiedTxItem() {
         override val timestamp: Long get() = tx.timestamp
         override val uniqueKey: String get() = "t${tx.id}"
+        override val sortId: String get() = tx.id.toString()
+        override val sortRenter: String get() = tx.renterName
+        override val sortPhone: String get() = tx.renterPhone
+        override val sortScooter: String get() = tx.scooterName
+        override val sortContract: String get() = tx.contractLabel
+        override val sortType: String get() = TransactionViewModel.typeLabel(tx.type)
+        override val sortAmount: Long get() = tx.amount.toLong()
     }
 
     data class CardTx(val tx: com.example.data.CardTransaction) : UnifiedTxItem() {
         override val timestamp: Long get() = tx.timestamp
         override val uniqueKey: String get() = "k${tx.id}"
+        override val sortId: String get() = "K${tx.id}"
+        override val sortRenter: String get() = ""  // у CardTransaction нет арендатора
+        override val sortPhone: String get() = ""
+        override val sortScooter: String get() = ""
+        override val sortContract: String get() = tx.contractId?.toString() ?: ""
+        override val sortType: String get() = when (tx.type) {
+            com.example.data.CardTransaction.TYPE_CONTRACT_INCOME -> "Kontrakt to'lovi"
+            com.example.data.CardTransaction.TYPE_EXPENSE -> "Xarajat"
+            else -> "Karta o'tkazmasi"
+        }
+        override val sortAmount: Long get() = tx.amount.toLong()
     }
 }

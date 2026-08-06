@@ -122,9 +122,9 @@ class RenterViewModel(application: Application) : AndroidViewModel(application) 
         address: String = "",
         pinfl: String = "",
         // ── Режим авто-продления контракта ────────────────────────────────
-        // MANUAL (по умолчанию) — система НЕ создаёт контракты автоматически.
-        // AUTO — система создаёт AUTO_RENEW при окончании последнего контракта.
-        autoRenewMode: String = com.example.data.RenterAutoRenewMode.MANUAL,
+        // AUTO (по умолчанию) — система создаёт AUTO_RENEW при окончании
+        // последнего контракта. Пользователь может переключить в MANUAL.
+        autoRenewMode: String = com.example.data.RenterAutoRenewMode.AUTO,
         // ── Группы контрактов (из календаря формы) ────────────────────────
         // Если список не пуст — он имеет приоритет над автогенерацией по
         // выбранной дате. Каждая группа = один контракт с weekStart/weekEnd

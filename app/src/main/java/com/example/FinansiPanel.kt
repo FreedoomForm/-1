@@ -1017,21 +1017,15 @@ fun FinansiPanel(
     // и скроллится вместе с картами естественным образом.
     //
     // Поиск живёт в TopAppBar MainActivity (CompactSearchPanel).
-    // FilterSidePanel остаётся здесь (overlay, не часть скроллящегося
-    // контента). Открывается кнопкой фильтров из CompactSearchPanel через
+    // FilterSidePanel рендерится как overlay поверх CardsGrid (внутри Box).
+    // Открывается кнопкой фильтров из CompactSearchPanel через
     // filterTrigger, см. LaunchedEffect выше.
-    Column(modifier = Modifier.fillMaxSize()) {
-        FilterSidePanel(
-            columns = cardFilterColumns,
-            filterValues = filterValues,
-            onFilterChange = { colId, value ->
-                filterValues = filterValues.toMutableMap().apply { put(colId, value) }
-            },
-            onSearch = { /* applied reactively */ },
-            onReset = { filterValues = emptyMap() },
-            onDismiss = { showFilterPanel = false },
-            visible = showFilterPanel
-        )
+    //
+    // ── ВАЖНО: CardsGrid + FilterSidePanel оборачиваются в Box, чтобы
+    // FilterSidePanel рендерился как overlay. Раньше, в Column,
+    // FilterSidePanel получал 0dp высоты после fillMaxSize-CardsGrid. ──
+    Box(modifier = Modifier.fillMaxSize()) {
+        Column(modifier = Modifier.fillMaxSize()) {
         CardsGrid(
             cards = filteredOrderedCards,
             selectedIds = selectedIds,
@@ -1091,7 +1085,21 @@ fun FinansiPanel(
                 pickingSlot = null
             }
         )
-    }
+        }
+
+        // ── FilterSidePanel как overlay поверх CardsGrid (внутри Box) ──
+        FilterSidePanel(
+            columns = cardFilterColumns,
+            filterValues = filterValues,
+            onFilterChange = { colId, value ->
+                filterValues = filterValues.toMutableMap().apply { put(colId, value) }
+            },
+            onSearch = { /* applied reactively */ },
+            onReset = { filterValues = emptyMap() },
+            onDismiss = { showFilterPanel = false },
+            visible = showFilterPanel
+        )
+    }  // закрытие Box
 
     // Диалог создания/редактирования карты
     if (showCreateDialog || editingCard != null) {
