@@ -418,61 +418,61 @@ private fun CompactSearchPanel(
     Surface(
         modifier = modifier
             .padding(end = 12.dp, start = 4.dp)
-            .height(40.dp)
-            .width(240.dp)
+            .height(80.dp)
+            .width(480.dp)
             .combinedClickable(
                 interactionSource = panelInteractionSource,
                 indication = null,
                 onClick = {},
                 onLongClick = onLongClickDismiss
             ),
-        shape = RoundedCornerShape(8.dp),  // Квадратная форма (углы 8dp)
+        shape = RoundedCornerShape(16.dp),  // Квадратная форма (углы 16dp, увеличено пропорционально)
         color = Color.White,
         border = BorderStroke(1.dp, ClaudeDivider)
     ) {
         Row(
-            modifier = Modifier.padding(horizontal = 6.dp),
+            modifier = Modifier.padding(horizontal = 12.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
             Icon(
                 Icons.Default.Search,
                 contentDescription = null,
                 tint = ClaudeTextSecondary,
-                modifier = Modifier.size(18.dp)
+                modifier = Modifier.size(36.dp)
             )
-            Spacer(Modifier.width(4.dp))
+            Spacer(Modifier.width(8.dp))
             BasicTextField(
                 value = query,
                 onValueChange = onQueryChange,
                 modifier = Modifier.weight(1f),
                 singleLine = true,
-                textStyle = MaterialTheme.typography.bodyMedium.copy(color = ClaudeText),
+                textStyle = MaterialTheme.typography.bodyLarge.copy(color = ClaudeText),
                 cursorBrush = SolidColor(ClaudeAccent),
                 decorationBox = { innerTextField ->
                     if (query.isEmpty()) {
                         Text(
                             "Поиск",
                             color = ClaudeTextSecondary,
-                            style = MaterialTheme.typography.bodyMedium
+                            style = MaterialTheme.typography.bodyLarge
                         )
                     }
                     innerTextField()
                 }
             )
-            IconButton(onClick = onFilterClick, modifier = Modifier.size(32.dp)) {
+            IconButton(onClick = onFilterClick, modifier = Modifier.size(64.dp)) {
                 Icon(
                     Icons.Default.Tune,
                     contentDescription = "Filtrlash",
                     tint = if (filterActive) ClaudeAccent else ClaudeTextSecondary,
-                    modifier = Modifier.size(18.dp)
+                    modifier = Modifier.size(36.dp)
                 )
             }
-            IconButton(onClick = onCalendarClick, modifier = Modifier.size(32.dp)) {
+            IconButton(onClick = onCalendarClick, modifier = Modifier.size(64.dp)) {
                 Icon(
                     Icons.Default.DateRange,
                     contentDescription = "Sana",
                     tint = if (calendarActive) ClaudeAccent else ClaudeTextSecondary,
-                    modifier = Modifier.size(18.dp)
+                    modifier = Modifier.size(36.dp)
                 )
             }
         }
@@ -900,6 +900,7 @@ fun MainScreen(
                     // Inline-создание скутера доступно и из экрана истории
                     // арендатора — там тоже может быть сценарий, когда нужно
                     // перевыбрать скутер, а нужного нет в списке.
+                    // Лямбда suspend, возвращает id свежесозданного скутера.
                     onCreateScooterInline = { name, docNum, vin, engine, serial, batt1, batt2, info ->
                         scooterViewModel.addScooter(
                             name = name,
@@ -1159,7 +1160,7 @@ fun MainScreen(
                             onClick = { navState = NavigationState.Scanner },
                             modifier = Modifier
                                 .padding(end = 6.dp)
-                                .size(40.dp)
+                                .size(80.dp)
                                 .background(ClaudeAccentBg, CircleShape)
                                 .border(1.dp, ClaudeAccent, CircleShape)
                         ) {
@@ -1167,7 +1168,7 @@ fun MainScreen(
                                 Icons.Default.CameraAlt,
                                 contentDescription = "Skaner",
                                 tint = ClaudeAccent,
-                                modifier = Modifier.size(20.dp)
+                                modifier = Modifier.size(40.dp)
                             )
                         }
 
@@ -1193,7 +1194,7 @@ fun MainScreen(
                         Box(
                             modifier = Modifier
                                 .padding(end = 6.dp)
-                                .size(40.dp)
+                                .size(80.dp)
                                 .background(
                                     if (smsAutoSend) StatusOk else StatusOverdue,
                                     CircleShape
@@ -1306,7 +1307,7 @@ fun MainScreen(
                                 Icons.Default.Sms,
                                 contentDescription = if (smsAutoSend) "SMS avto" else "SMS qo'llanma",
                                 tint = Color.White,
-                                modifier = Modifier.size(20.dp)
+                                modifier = Modifier.size(40.dp)
                             )
                         }
 
@@ -1333,14 +1334,14 @@ fun MainScreen(
                                 },
                                 modifier = Modifier
                                     .padding(end = 6.dp, start = 4.dp)
-                                    .size(40.dp)
+                                    .size(80.dp)
                                     .background(ClaudeAccent, CircleShape)
                             ) {
                                 Icon(
                                     Icons.Default.Add,
                                     contentDescription = "Qo'shish",
                                     tint = Color.White,
-                                    modifier = Modifier.size(22.dp)
+                                    modifier = Modifier.size(44.dp)
                                 )
                             }
                         }
@@ -1376,7 +1377,7 @@ fun MainScreen(
                                 enabled = editEnabled,
                                 modifier = Modifier
                                     .padding(end = 6.dp)
-                                    .size(40.dp)
+                                    .size(80.dp)
                                     .background(
                                         if (editEnabled) Color.White else Color.White.copy(alpha = 0.5f),
                                         CircleShape
@@ -1387,7 +1388,7 @@ fun MainScreen(
                                     Icons.Default.Edit,
                                     contentDescription = "Tahrirlash",
                                     tint = if (editEnabled) ClaudeAccent else ClaudeTextSecondary,
-                                    modifier = Modifier.size(20.dp)
+                                    modifier = Modifier.size(40.dp)
                                 )
                             }
 
@@ -1421,7 +1422,7 @@ fun MainScreen(
                                 enabled = deleteEnabled,
                                 modifier = Modifier
                                     .padding(end = 6.dp)
-                                    .size(40.dp)
+                                    .size(80.dp)
                                     .background(
                                         if (deleteEnabled) Color.White else Color.White.copy(alpha = 0.5f),
                                         CircleShape
@@ -1432,7 +1433,7 @@ fun MainScreen(
                                     Icons.Default.Delete,
                                     contentDescription = "O'chirish",
                                     tint = if (deleteEnabled) StatusOverdue else ClaudeTextSecondary,
-                                    modifier = Modifier.size(20.dp)
+                                    modifier = Modifier.size(40.dp)
                                 )
                             }
                         }
@@ -1446,7 +1447,7 @@ fun MainScreen(
                                 onClick = { isSearchMode = true },
                                 modifier = Modifier
                                     .padding(end = 8.dp)
-                                    .size(40.dp)
+                                    .size(80.dp)
                                     .background(ClaudeAccentBg, CircleShape)
                                     .border(1.dp, ClaudeAccent, CircleShape)
                             ) {
@@ -1454,7 +1455,7 @@ fun MainScreen(
                                     Icons.Default.Search,
                                     contentDescription = "Qidiruv",
                                     tint = ClaudeAccent,
-                                    modifier = Modifier.size(20.dp)
+                                    modifier = Modifier.size(40.dp)
                                 )
                             }
                         }
@@ -2316,6 +2317,7 @@ fun MainScreen(
                 // Пользователь может внутри формы арендатора создать новый
                 // скутер, не выходя из диалога. Форма автоматически выберет
                 // свежесозданный скутер в качестве scooterId для арендатора.
+                // Лямбда suspend, возвращает id свежесозданного скутера.
                 onCreateScooterInline = { name, docNum, vin, engine, serial, batt1, batt2, info ->
                     scooterViewModel.addScooter(
                         name = name,
@@ -2357,16 +2359,21 @@ fun MainScreen(
                             )
                         }
                     } else {
-                        scooterViewModel.addScooter(
-                            name = name,
-                            documentedNumber = docNum,
-                            vinNumber = vin,
-                            engineNumber = engine,
-                            scooterSerialNumber = serial,
-                            batteryId1 = batt1,
-                            batteryId2 = batt2,
-                            additionalInfo = extra
-                        )
+                        // addScooter теперь suspend (возвращает id) — запускаем
+                        // в coroutineScope из MainScreen. ID здесь не нужен —
+                        // просто создаём скутер для вкладки «Скутеры».
+                        coroutineScope.launch {
+                            scooterViewModel.addScooter(
+                                name = name,
+                                documentedNumber = docNum,
+                                vinNumber = vin,
+                                engineNumber = engine,
+                                scooterSerialNumber = serial,
+                                batteryId1 = batt1,
+                                batteryId2 = batt2,
+                                additionalInfo = extra
+                            )
+                        }
                     }
                     showAddScooterDialog = false
                     scooterToEdit = null
@@ -2595,6 +2602,12 @@ fun RenterTable(
             itemsIndexed(renters, key = { _, it -> it.id }) { idx, renter ->
                 val isSelected = selected.contains(renter.id)
                 val isExpanded = expandedRenterIds.contains(renter.id)
+                // ── Статус арендатора для цветной полосы слева ─────────────────
+                // Возвращено по просьбе пользователя: тонкая вертикальная
+                // полоса (4dp / 5dp если выбран) красного (просрочен) или
+                // зелёного (всё ок) цвета вдоль левого края строки.
+                val status = statusOf(renter)
+                val sColor = statusColor(status)
 
                 Column(
                     modifier = Modifier
@@ -2654,15 +2667,26 @@ fun RenterTable(
                         }
 
                         // ── Основная строка арендатора (№ + Mijoz + Tel + ...) ──
-                        // Раньше строка имела цветную вертикальную полосу статуса
-                        // слева (drawBehind). По просьбе пользователя — убрана,
-                        // теперь строка без статус-полосы: только фон (выбор).
+                        // Цветная вертикальная полоса статуса слева (drawBehind):
+                        //   • зелёная (StatusOk) — аренда активна, долгов нет
+                        //   • красная (StatusOverdue) — просрочка / долг
+                        //   • серая (ClaudeDivider) — возвращён / неактивен
+                        // Ширина полосы: 4dp (или 5dp если строка выбрана —
+                        // визуально выделяет выбранные строки).
                         Row(
                             modifier = Modifier
                                 .clip(RoundedCornerShape(8.dp))
                                 .background(
                                     if (isSelected) Color(0xFFF3F4F6) else Color.White
                                 )
+                                .drawBehind {
+                                    val stripeW = if (isSelected) 5.dp.toPx() else 4.dp.toPx()
+                                    drawRect(
+                                        color = sColor,
+                                        topLeft = Offset.Zero,
+                                        size = Size(stripeW, size.height)
+                                    )
+                                }
                                 .combinedClickable(
                                     onClick = { if (isSelected) onSelect(renter.id, false) else onClick(renter) },
                                     onLongClick = { onSelect(renter.id, !isSelected) }
@@ -3169,10 +3193,13 @@ fun RenterFormDialog(
     // Когда пользователь нажимает «+ Yangi skuter yaratish» в конце списка
     // скутеров, внизу формы арендатора появляются поля для ввода данных
     // нового скутера. При сохранении вызывается этот callback — родитель
-    // вызывает scooterViewModel.addScooter, после чего список `scooters`
-    // обновляется через Flow, и LaunchedEffect ниже автоматически выбирает
-    // свежесозданный скутер в качестве selectedScooterId.
-    onCreateScooterInline: (
+    // вызывает scooterViewModel.addScooter (теперь suspend, возвращает id
+    // свежесозданной записи), и мы СРАЗУ привязываем renter.scooterId к
+    // этому id. Раньше скутер создавался асинхронно, и renter сохранялся
+    // с scooterId=null — баг, который мы здесь исправляем.
+    //
+    // Возвращает id нового скутера (>0) или -1/null при ошибке.
+    onCreateScooterInline: suspend (
         name: String,
         documentedNumber: String?,
         vinNumber: String,
@@ -3181,7 +3208,7 @@ fun RenterFormDialog(
         batteryId1: String,
         batteryId2: String,
         additionalInfo: String
-    ) -> Unit = { _, _, _, _, _, _, _, _ -> }
+    ) -> Int = { _, _, _, _, _, _, _, _ -> -1 }
 ) {
     var name by remember { mutableStateOf(initialRenter?.name ?: "") }
     var phone by remember {
@@ -3344,6 +3371,10 @@ fun RenterFormDialog(
     }
 
     val scrollState = rememberScrollState()
+    // Корутин-скоуп для асинхронных операций внутри диалога — в частности,
+    // для ожидания завершения inline-создания скутера перед сохранением
+    // арендатора (чтобы привязать renter.scooterId к свежесозданному id).
+    val dialogScope = rememberCoroutineScope()
 
     // Дополнительные поля (паспорт/адрес/ПИНФЛ) теперь ВСЕГДА видны и обязательны
     // — пользователь явно попросил убрать кнопку «More»/«Yashirish» и сделать
@@ -3850,75 +3881,90 @@ fun RenterFormDialog(
                 // по требованию пользователя: ничего не должно блокировать сохранение.
                 enabled = true,
                 onClick = {
-                    // ── Если раскрыта inline-секция создания скутера — сначала ──
-                    // сохраняем скутер. LaunchedEffect(scooters) ниже подхватит
-                    // его и установит selectedScooterId, но это произойдёт
-                    // асинхронно. Чтобы арендатор сразу привязался к новому
-                    // скутеру, мы устанавливаем pendingScooterName, а реальный
-                    // selectedScooterId подставится при следующей композиции.
-                    if (showCreateScooterInline) {
-                        val nameToSave = newScooterName.trim()
-                            .ifBlank {
-                                val nextN = (scooters
-                                    .mapNotNull {
-                                        it.name.removePrefix("Skillmax-")
-                                            .trimStart('0').toIntOrNull()
-                                    }
-                                    .maxOrNull() ?: 0) + 1
-                                "Skillmax-" + nextN.toString().padStart(3, '0')
+                    // ── Inline-создание скутера должно завершиться ДО того, ─────
+                    // как мы сохраняем арендатора — иначе renter сохранится с
+                    // scooterId=null (старый баг). Запускаем корутину и внутри
+                    // неё ждём id свежесозданного скутера, после чего передаём
+                    // его в onSave через RenterFormResult.scooterId.
+                    dialogScope.launch {
+                        var effectiveScooterId = selectedScooterId
+                        var effectiveScooterName: String? =
+                            scooters.find { it.id == selectedScooterId }?.name
+
+                        if (showCreateScooterInline) {
+                            val nameToSave = newScooterName.trim()
+                                .ifBlank {
+                                    val nextN = (scooters
+                                        .mapNotNull {
+                                            it.name.removePrefix("Skillmax-")
+                                                .trimStart('0').toIntOrNull()
+                                        }
+                                        .maxOrNull() ?: 0) + 1
+                                    "Skillmax-" + nextN.toString().padStart(3, '0')
+                                }
+                            // Создаём скутер и ждём возврата id.
+                            val newScooterId = onCreateScooterInline(
+                                nameToSave,
+                                newScooterDocNum.trim().ifBlank { null },
+                                newScooterVin.trim(),
+                                newScooterEngine.trim(),
+                                newScooterSerial.trim(),
+                                newScooterBatt1.trim(),
+                                newScooterBatt2.trim(),
+                                newScooterInfo.trim()
+                            )
+                            if (newScooterId > 0) {
+                                effectiveScooterId = newScooterId
+                                effectiveScooterName = nameToSave
+                                // Обновляем локальный state — чтобы при повторном
+                                // сохранении или перерисовке форма показывала
+                                // выбранный скутер.
+                                selectedScooterId = newScooterId
                             }
-                        onCreateScooterInline(
-                            nameToSave,
-                            newScooterDocNum.trim().ifBlank { null },
-                            newScooterVin.trim(),
-                            newScooterEngine.trim(),
-                            newScooterSerial.trim(),
-                            newScooterBatt1.trim(),
-                            newScooterBatt2.trim(),
-                            newScooterInfo.trim()
+                            pendingScooterName = nameToSave
+                            showCreateScooterInline = false
+                        } else if (effectiveScooterName == null && pendingScooterName != null) {
+                            // Скутер был создан ранее в этой же сессии диалога,
+                            // но selectedScooterId ещё не подхватился из Flow.
+                            // Используем pendingScooterName как fallback.
+                            effectiveScooterName = pendingScooterName
+                        }
+
+                        val debtValue = debt.toDoubleOrNull() ?: 0.0
+                        val durationValue = duration.toIntOrNull() ?: 7
+                        val phoneToSave = if (phone.isBlank()) "" else "+998$phone"
+                        onSave(
+                            RenterFormResult(
+                                name = name,
+                                phone = phoneToSave,
+                                debt = debtValue,
+                                duration = durationValue,
+                                startTimestamp = startTimestamp,
+                                // Теперь scooterId реально указывает на
+                                // свежесозданный скутер (если он был создан).
+                                scooterId = effectiveScooterId,
+                                scooterName = effectiveScooterName,
+                                isActive = isActive,
+                                passportData = passportData.trim(),
+                                address = address.trim(),
+                                pinfl = pinfl.trim(),
+                                autoRenewMode = autoRenewMode,
+                                contractGroups = contractGroups.map { Triple(it.startMs, it.endMs, it.isPaid) },
+                                // Передаём полный список групп с existingContractId —
+                                // updateRenterWithContracts использует его для
+                                // корректного реконсиалирования (удаление существующих,
+                                // добавление новых, обновление статуса оплаты).
+                                contractGroupsWithIds = contractGroups.map {
+                                    RenterFormContractGroup(
+                                        existingId = it.existingContractId,
+                                        startMs = it.startMs,
+                                        endMs = it.endMs,
+                                        isPaid = it.isPaid
+                                    )
+                                }
+                            )
                         )
-                        pendingScooterName = nameToSave
-                        showCreateScooterInline = false
                     }
-                    val debtValue = debt.toDoubleOrNull() ?: 0.0
-                    val durationValue = duration.toIntOrNull() ?: 7
-                    val phoneToSave = if (phone.isBlank()) "" else "+998$phone"
-                    val scooterName = scooters.find { it.id == selectedScooterId }?.name
-                        ?: pendingScooterName
-                    onSave(
-                        RenterFormResult(
-                            name = name,
-                            phone = phoneToSave,
-                            debt = debtValue,
-                            duration = durationValue,
-                            startTimestamp = startTimestamp,
-                            // Если только что создали скутер, selectedScooterId
-                            // ещё null (LaunchedEffect не успел сработать) —
-                            // арендатор сохранится с scooterId=null, но
-                            // scooterName = pendingScooterName позволит
-                            // пользователю привязать скутер позже.
-                            scooterId = selectedScooterId,
-                            scooterName = scooterName,
-                            isActive = isActive,
-                            passportData = passportData.trim(),
-                            address = address.trim(),
-                            pinfl = pinfl.trim(),
-                            autoRenewMode = autoRenewMode,
-                            contractGroups = contractGroups.map { Triple(it.startMs, it.endMs, it.isPaid) },
-                            // Передаём полный список групп с existingContractId —
-                            // updateRenterWithContracts использует его для
-                            // корректного реконсиалирования (удаление существующих,
-                            // добавление новых, обновление статуса оплаты).
-                            contractGroupsWithIds = contractGroups.map {
-                                RenterFormContractGroup(
-                                    existingId = it.existingContractId,
-                                    startMs = it.startMs,
-                                    endMs = it.endMs,
-                                    isPaid = it.isPaid
-                                )
-                            }
-                        )
-                    )
                 }
             )
         },
