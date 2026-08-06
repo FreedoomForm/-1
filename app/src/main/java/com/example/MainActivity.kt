@@ -11,6 +11,7 @@ import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.LocalIndication
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
@@ -426,15 +427,25 @@ private fun formatContractAmount(amount: Long): String {
 }
 
 /**
- * Иконка вкладки нижней навигации — визуально идентичная «универсальным
- * кнопкам» из TopAppBar (Camera / Add / Edit / Delete / Search): квадрат
- * 56dp со скруглением 8dp, цветной фон, цветная иконка 28dp.
+ * Кнопка вкладки нижней навигации — ВИЗУАЛЬНО И ПОВЕДЕНИЕМ идентична
+ * «универсальным кнопкам» из TopAppBar (Camera / SMS / + / ✎ / 🗑 / Search):
+ * квадрат 56dp со скруглением 8dp, цветной фон, цветная иконка 28dp.
+ *
+ * ВАЖНО: это НЕ Material3 NavigationBarItem. Раньше использовался
+ * NavigationBarItem с indicatorColor = Color.Transparent, но у него три
+ * побочных эффекта, из-за которых нижние кнопки отличались от верхних:
+ *   1. НЕОГРАНИЧЕННАЯ ripple — кругом расходилась за пределы кнопки
+ *      («странный круглый эффект» при тапе).
+ *   2. Внутренние padding'и (6dp h / 8dp v) + слот иконки 32dp.
+ *   3. Pill-индикатор занимал layout-место даже при прозрачном цвете.
+ *
+ * Теперь это обычный Box + combinedClickable с bounded ripple
+ * (LocalIndication.current) — точно как верхние кнопки. Ripple остаётся
+ * внутри квадратной кнопки 56dp, никаких круглых артефактов.
  *
  * Каждая вкладка имеет СОБСТВЕННЫЙ акцентный цвет [accent] — как у верхних
  * универсальных кнопок, где Camera = бежевый, Add = оранжевый, Delete =
- * зелёный/красный и т. д. Это устраняет прежний «бледный» вид нижней
- * навигации, когда все невыбранные вкладки выглядели одинаково белыми
- * с серой рамкой.
+ * зелёный/красный и т. д.
  *
  * Состояния:
  *   • Выбрано:     фон accent@22%, рамка accent@100%, иконка accent@100%.
@@ -445,15 +456,18 @@ private fun formatContractAmount(amount: Long): String {
  * с выбранной.
  *
  * @param isSelected     выбрана ли вкладка (currentTab == index)
+ * @param onClick        что делать при тапе (currentTab = index)
  * @param accent         акцентный цвет вкладки (ClaudeAccent, StatusOk,
  *                       ClaudeGold, ClaudeAccentDark, ClaudeTeal,
  *                       StatusOverdue, ClaudeTextSecondary)
  * @param icon           Material-иконка вкладки
  * @param contentDescription описание для screen-reader'а
  */
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
-private fun NavTabIcon(
+private fun NavTabButton(
     isSelected: Boolean,
+    onClick: () -> Unit,
     accent: Color,
     icon: ImageVector,
     contentDescription: String
@@ -461,11 +475,18 @@ private fun NavTabIcon(
     val bgAlpha = if (isSelected) 0.22f else 0.10f
     val borderAlpha = if (isSelected) 1.0f else 0.45f
     val iconAlpha = if (isSelected) 1.0f else 0.75f
+    val interactionSource = remember { MutableInteractionSource() }
     Box(
         modifier = Modifier
             .size(56.dp)
+            .clip(RoundedCornerShape(8.dp))
             .background(accent.copy(alpha = bgAlpha), RoundedCornerShape(8.dp))
-            .border(1.dp, accent.copy(alpha = borderAlpha), RoundedCornerShape(8.dp)),
+            .border(1.dp, accent.copy(alpha = borderAlpha), RoundedCornerShape(8.dp))
+            .combinedClickable(
+                interactionSource = interactionSource,
+                indication = LocalIndication.current,
+                onClick = onClick
+            ),
         contentAlignment = Alignment.Center
     ) {
         Icon(
@@ -1841,101 +1862,84 @@ fun MainScreen(
             //   4 Otchetlar    → ClaudeTeal          (teal — альт-акцент, отчёты)
             //   5 Finansi      → StatusOverdue       (red — деньги/финансы)
             //   6 Sozlamalar   → ClaudeTextSecondary (muted brown — утилитарное)
-            NavigationBar(containerColor = ClaudeCard, contentColor = ClaudeText) {
-                NavigationBarItem(
-                    selected = currentTab == 0,
-                    onClick = { currentTab = 0 },
-                    icon = {
-                        NavTabIcon(
-                            isSelected = currentTab == 0,
-                            accent = ClaudeAccent,
-                            icon = Icons.Default.List,
-                            contentDescription = "Ijarachilar"
-                        )
-                    },
-                    colors = NavigationBarItemDefaults.colors(indicatorColor = Color.Transparent)
-                )
-                NavigationBarItem(
-                    selected = currentTab == 1,
-                    onClick = { currentTab = 1 },
-                    icon = {
-                        NavTabIcon(
-                            isSelected = currentTab == 1,
-                            accent = StatusOk,
-                            icon = Icons.Default.DirectionsBike,
-                            contentDescription = "Skuterlar"
-                        )
-                    },
-                    colors = NavigationBarItemDefaults.colors(indicatorColor = Color.Transparent)
-                )
-                NavigationBarItem(
-                    selected = currentTab == 2,
-                    onClick = { currentTab = 2 },
-                    icon = {
-                        NavTabIcon(
-                            isSelected = currentTab == 2,
-                            accent = ClaudeGold,
-                            icon = Icons.Default.Description,
-                            contentDescription = "Kontraktlar"
-                        )
-                    },
-                    colors = NavigationBarItemDefaults.colors(indicatorColor = Color.Transparent)
-                )
-                NavigationBarItem(
-                    selected = currentTab == 3,
-                    onClick = { currentTab = 3 },
-                    icon = {
-                        NavTabIcon(
-                            isSelected = currentTab == 3,
-                            accent = ClaudeAccentDark,
-                            icon = Icons.Default.RequestQuote,
-                            contentDescription = "Tranzaksiyalar"
-                        )
-                    },
-                    colors = NavigationBarItemDefaults.colors(indicatorColor = Color.Transparent)
-                )
-                NavigationBarItem(
-                    selected = currentTab == 4,
-                    onClick = { currentTab = 4 },
-                    icon = {
-                        NavTabIcon(
-                            isSelected = currentTab == 4,
-                            accent = ClaudeTeal,
-                            icon = Icons.Default.Assessment,
-                            contentDescription = "Otchetlar"
-                        )
-                    },
-                    colors = NavigationBarItemDefaults.colors(indicatorColor = Color.Transparent)
-                )
-                NavigationBarItem(
-                    selected = currentTab == 5,
-                    onClick = { currentTab = 5 },
-                    icon = {
-                        NavTabIcon(
-                            isSelected = currentTab == 5,
-                            accent = StatusOverdue,
-                            icon = Icons.Default.AccountBalanceWallet,
-                            contentDescription = "Finansi"
-                        )
-                    },
-                    colors = NavigationBarItemDefaults.colors(indicatorColor = Color.Transparent)
-                )
-                // ── 7-я вкладка: Sozlamalar ──────────────────────────────────
-                // Раньше была кнопка-иконка в TopAppBar. Теперь — полноценная
-                // вкладка внизу, рядом с остальными главными страницами.
-                NavigationBarItem(
-                    selected = currentTab == 6,
-                    onClick = { currentTab = 6 },
-                    icon = {
-                        NavTabIcon(
-                            isSelected = currentTab == 6,
-                            accent = ClaudeTextSecondary,
-                            icon = Icons.Outlined.Settings,
-                            contentDescription = "Sozlamalar"
-                        )
-                    },
-                    colors = NavigationBarItemDefaults.colors(indicatorColor = Color.Transparent)
-                )
+            // ── Кастомная нижняя навигация ─────────────────────────────────
+            // Раньше здесь был Material3 NavigationBar+NavigationBarItem, но у
+            // него три побочных эффекта, отличающих нижние кнопки от верхних
+            // (Camera/SMS/+//✎/🗑):
+            //   1. НЕОГРАНИЧЕННАЯ ripple — при тапе расходится кругом далеко
+            //      за пределы кнопки («странный круглый эффект», на который
+            //      жаловался пользователь).
+            //   2. Внутренние padding'и (6dp h / 8dp v) + слот иконки 32dp —
+            //      кнопка выглядит меньше и смещена по вертикали.
+            //   3. Pill-индикатор (Shape.Top) — даже с indicatorColor =
+            //      Color.Transparent занимает layout-место.
+            //
+            // Решение: Surface + Row с такими же кнопками-Box'ами 56dp +
+            // RoundedCornerShape(8.dp), как в верхнем баре. Ripple — bounded
+            // (LocalIndication.current), остаётся внутри квадратной кнопки.
+            Surface(
+                color = ClaudeCard,
+                tonalElevation = 0.dp,
+                shadowElevation = 0.dp
+            ) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .navigationBarsPadding()
+                        .padding(horizontal = 8.dp, vertical = 8.dp),
+                    horizontalArrangement = Arrangement.SpaceEvenly,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    NavTabButton(
+                        isSelected = currentTab == 0,
+                        onClick = { currentTab = 0 },
+                        accent = ClaudeAccent,
+                        icon = Icons.Default.List,
+                        contentDescription = "Ijarachilar"
+                    )
+                    NavTabButton(
+                        isSelected = currentTab == 1,
+                        onClick = { currentTab = 1 },
+                        accent = StatusOk,
+                        icon = Icons.Default.DirectionsBike,
+                        contentDescription = "Skuterlar"
+                    )
+                    NavTabButton(
+                        isSelected = currentTab == 2,
+                        onClick = { currentTab = 2 },
+                        accent = ClaudeGold,
+                        icon = Icons.Default.Description,
+                        contentDescription = "Kontraktlar"
+                    )
+                    NavTabButton(
+                        isSelected = currentTab == 3,
+                        onClick = { currentTab = 3 },
+                        accent = ClaudeAccentDark,
+                        icon = Icons.Default.RequestQuote,
+                        contentDescription = "Tranzaksiyalar"
+                    )
+                    NavTabButton(
+                        isSelected = currentTab == 4,
+                        onClick = { currentTab = 4 },
+                        accent = ClaudeTeal,
+                        icon = Icons.Default.Assessment,
+                        contentDescription = "Otchetlar"
+                    )
+                    NavTabButton(
+                        isSelected = currentTab == 5,
+                        onClick = { currentTab = 5 },
+                        accent = StatusOverdue,
+                        icon = Icons.Default.AccountBalanceWallet,
+                        contentDescription = "Finansi"
+                    )
+                    NavTabButton(
+                        isSelected = currentTab == 6,
+                        onClick = { currentTab = 6 },
+                        accent = ClaudeTextSecondary,
+                        icon = Icons.Outlined.Settings,
+                        contentDescription = "Sozlamalar"
+                    )
+                }
             }
         }
     ) { innerPadding ->
@@ -5781,6 +5785,15 @@ fun ScooterTable(
                         val contracts = contractsByScooterName[scooter.name].orEmpty()
                             .sortedBy { it.weekStart ?: it.timestamp }
 
+                        // Общее состояние горизонтального скролла для таблицы
+                        // контрактов внутри раскрытой строки скутера. Без этого
+                        // на узких экранах колонка «Summa» (100dp) + № (30dp) +
+                        // # (40dp) + Muddat (160dp) = 330dp + paddings не помещаются
+                        // в доступную ширину (viewport − indent 88dp − paddings),
+                        // и weight(1f) на Summa получает отрицательную ширину →
+                        // «420 000» рендерится в 0 пикселей и невидим (баг).
+                        val cScrollState = rememberScrollState()
+
                         Row(
                             modifier = Modifier
                                 .fillMaxWidth()
@@ -5822,6 +5835,7 @@ fun ScooterTable(
                                             Row(
                                                 modifier = Modifier
                                                     .fillMaxWidth()
+                                                    .horizontalScroll(cScrollState)
                                                     .padding(horizontal = 12.dp, vertical = 4.dp),
                                                 verticalAlignment = Alignment.CenterVertically
                                             ) {
@@ -5865,7 +5879,8 @@ fun ScooterTable(
                                                     .padding(horizontal = 8.dp, vertical = 3.dp)
                                                     .clip(RoundedCornerShape(10.dp))
                                                     .background(ClaudeCard)
-                                                    .padding(12.dp, 10.dp),
+                                                    .padding(12.dp, 10.dp)
+                                                    .horizontalScroll(cScrollState),
                                                 verticalAlignment = Alignment.CenterVertically
                                             ) {
                                                 Text(
@@ -5921,8 +5936,18 @@ fun ScooterTable(
                                                 // не занимать горизонтальное место и не выдавливать
                                                 // цифру в вертикальный столбец (прежний баг:
                                                 // width(100.dp) + "420000 so'm" → перенос по символам).
+                                                //
+                                                // ВАЖНО: используем ФИКСИРОВАННУЮ ширину 100dp
+                                                // (как в шапке), а не weight(1f). Раньше weight(1f)
+                                                // внутри fillMaxWidth() без horizontalScroll получал
+                                                // ОТРИЦАТЕЛЬНУЮ ширину (viewport − indent 88dp − paddings −
+                                                // 30 − 40 − 160 < 0 на узких экранах) → «420 000»
+                                                // рендерился в 0 пикселей и был невидим. Теперь
+                                                // horizontalScroll(cScrollState) даёт строке
+                                                // естественную ширину контента, а 100dp гарантированно
+                                                // вмещает «420 000» (7 символов) шрифтом titleMedium.
                                                 Column(
-                                                    modifier = Modifier.weight(1f),
+                                                    modifier = Modifier.width(100.dp),
                                                     horizontalAlignment = Alignment.End
                                                 ) {
                                                     Text(
