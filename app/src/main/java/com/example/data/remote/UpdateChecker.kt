@@ -592,7 +592,20 @@ class UpdateChecker(
             // отсутствовать в unit-тестах. В рантайме Android-сборки класс всегда есть.
             val clazz = Class.forName("com.example.BuildConfig")
             val field = clazz.getField("GITHUB_API_TOKEN")
-            (field.get(null) as? String)?.trim().orEmpty()
+            val raw = (field.get(null) as? String)?.trim().orEmpty()
+            // Отбрасываем placeholder и пустую строку — в этих случаях токена реально нет,
+            // и запрос должен идти без Authorization header (unauthenticated, 60 req/hour).
+            // Без этой проверки приложение отправило бы placeholder как Bearer-токен,
+            // и GitHub API вернул бы 401 Unauthorized.
+            if (raw.isEmpty() ||
+                raw.equals("PLACEHOLDER_REPLACE_VIA_CI_SECRET", ignoreCase = true) ||
+                raw.startsWith("MY_GITHUB") ||
+                raw.startsWith("YOUR_GITHUB")
+            ) {
+                ""
+            } else {
+                raw
+            }
         } catch (e: Exception) {
             Log.w(TAG, "BuildConfig.GITHUB_API_TOKEN not available", e)
             ""
