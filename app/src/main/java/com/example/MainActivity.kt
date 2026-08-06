@@ -2294,6 +2294,20 @@ fun MainScreen(
                         columnVisibility = renterColumnVisibility,
                         latestContractByRenter = latestContractByRenter,
                         contractsByRenter = contractsByRenter,
+                        // ── Переключение статуса контракта из раскрытой строки ──
+                        // Делегируем в ContractHistoryViewModel.updateContract —
+                        // она уже правильно обрабатывает смену isPaid:
+                        //   • Удаляет старую Transaction(и) контракта
+                        //   • Реверсит CardTransaction на главной карте
+                        //   • Создаёт новую Transaction с актуальным знаком
+                        //   • Корректирует баланс арендатора
+                        //   • Добавляет аудита-запись TYPE_PAYMENT в историю
+                        //   • Зачисляет на карту если стал оплачен
+                        onToggleContractStatus = { contract ->
+                            contractHistoryViewModel.updateContract(
+                                contract.copy(isPaid = !contract.isPaid)
+                            )
+                        },
                         // ── Поисковая панель и панель действий (To'lov/Uzish/SMS)
                         // полностью удалены из контента таблицы арендаторов.
                         // Поиск живёт в TopAppBar (CompactSearchPanel), который
@@ -2665,10 +2679,16 @@ fun MainScreen(
             // В режиме редактирования календарь в RenterFormDialog должен
             // показывать все текущие контракты (как цветные периоды) и список
             // под календарём. Для этого родитель собирает StateFlow через
-            // contractHistoryViewModel.contractsForRenter(renterId).
+            // contractHistoryViewModel.forRenter(renterId).
             //
-            // Раньше этого не было — календарь показывал «Kontraktlar yo'q»
-            // даже если у арендатора были контракты в БД. Это был баг.
+            // ВАЖНО: используем forRenter (а НЕ contractsForRenter), потому что
+            // forRenter возвращает ВСЕ записи контрактов — включая Stop/Resume
+            // маркеры (TYPE_TERMINATED с notes="STOP_MARKER" и TYPE_RETURNED с
+            // notes="RESUME_MARKER"). Если использовать contractsForRenter, он
+            // фильтрует только CREATED/AUTO_RENEW — и тогда маркеры НЕ
+            // загружаются в форму, что приводит к багу: после сохранения
+            // маркер «исчезает» из календаря при повторном открытии формы.
+            // С forRenter маркеры корректно загружаются и отображаются.
             //
             // ВАЖНО: collectAsStateWithLifecycle должен вызываться безусловно
             // (правила Compose — хуки нельзя вызывать в ветках if). Поэтому
@@ -2677,7 +2697,7 @@ fun MainScreen(
             // создания.
             val editRenterId = renterToEdit?.id ?: -1
             val existingContractsForForm by contractHistoryViewModel
-                .contractsForRenter(editRenterId)
+                .forRenter(editRenterId)
                 .collectAsStateWithLifecycle()
             // В режиме создания (renterToEdit == null) принудительно пустой список,
             // чтобы не показать «фантомные» контракты для id=-1 (на случай если
@@ -2925,6 +2945,14 @@ fun RenterTable(
      * в первом столбце). Сортировка — ASC по weekStart.
      */
     contractsByRenter: Map<Int, List<com.example.data.ContractHistoryEntry>> = emptyMap(),
+    /**
+     * Callback переключения статуса контракта (paid ↔ unpaid).
+     * Вызывается при нажатии на кнопку «−» рядом с контрактом в раскрытой
+     * строке арендатора. Родитель (MainScreen) делегирует вызов в
+     * ContractHistoryViewModel.updateContract — которая уже правильно
+     * создаёт/удаляет Transaction, корректирует баланс и аудит-запись.
+     */
+    onToggleContractStatus: ((com.example.data.ContractHistoryEntry) -> Unit)? = null,
     /**
      * Опциональный header-блок, который рендерится как ПЕРВЫЙ элемент
      * LazyColumn (перед строками арендаторов). Используется чтобы полоса
@@ -3421,6 +3449,11 @@ fun RenterTable(
                                                 NonSortableHeaderCell(Icons.Default.Numbers,   0.4f, "#")
                                                 NonSortableHeaderCell(Icons.Default.DateRange, 1.8f, "Muddat (hafta)")
                                                 NonSortableHeaderCell(Icons.Default.Payments,  1.0f, "Summa")
+                                                // Колонка для кнопки переключения статуса (минус).
+                                                // Ширина совпадает с кнопкой (36dp + padding).
+                                                if (onToggleContractStatus != null) {
+                                                    Spacer(modifier = Modifier.width(44.dp))
+                                                }
                                             }
                                         }
                                         HorizontalDivider(color = ClaudeDivider)
@@ -3508,6 +3541,43 @@ fun RenterTable(
                                                     textAlign = TextAlign.End,
                                                     maxLines = 1
                                                 )
+                                                // ── Кнопка переключения статуса (минус) ──
+                                                // Иконка: всегда Icons.Default.Remove (минус),
+                                                // чтобы визуально отличать от красного X
+                                                // (как в RenterFormDialog). Цвет отражает
+                                                // ТЕКУЩИЙ статус: зелёный = оплачен,
+                                                // красный = долг. Нажатие переключает
+                                                // isPaid и вызывает onToggleContractStatus,
+                                                // который через ContractHistoryViewModel
+                                                // .updateContract корректно создаёт/удаляет
+                                                // Transaction, корректирует баланс и
+                                                // аудит-запись в истории контрактов.
+                                                if (onToggleContractStatus != null) {
+                                                    Spacer(Modifier.width(8.dp))
+                                                    val toggleTint = if (c.isPaid) StatusOk else StatusOverdue
+                                                    val toggleBg = if (c.isPaid) StatusOk.copy(alpha = 0.15f)
+                                                                   else StatusOverdue.copy(alpha = 0.15f)
+                                                    Box(
+                                                        modifier = Modifier
+                                                            .size(36.dp)
+                                                            .clip(RoundedCornerShape(8.dp))
+                                                            .background(toggleBg)
+                                                            .border(1.dp, ClaudeDivider, RoundedCornerShape(8.dp))
+                                                            .clickable {
+                                                                onToggleContractStatus.invoke(
+                                                                    c.copy(isPaid = !c.isPaid)
+                                                                )
+                                                            },
+                                                        contentAlignment = Alignment.Center
+                                                    ) {
+                                                        Icon(
+                                                            imageVector = Icons.Default.Remove,
+                                                            contentDescription = "Statusni almashtirish",
+                                                            tint = toggleTint,
+                                                            modifier = Modifier.size(20.dp)
+                                                        )
+                                                    }
+                                                }
                                             }
                                         }
                                     }
@@ -3736,12 +3806,27 @@ fun RenterFormDialog(
                     cal.set(java.util.Calendar.SECOND, 59)
                     cal.set(java.util.Calendar.MILLISECOND, 999)
                     val normEnd = cal.timeInMillis
+                    // ── Распознавание Stop/Resume маркеров ────────────────
+                    // Записи TYPE_TERMINATED с notes="STOP_MARKER" и
+                    // TYPE_RETURNED с notes="RESUME_MARKER" загружаются в форму
+                    // как маркерные группы (isStopMarker / isResumeMarker = true).
+                    // Это позволяет корректно отобразить их в календаре и в
+                    // списке контрактов ниже при повторном открытии формы.
+                    // Раньше они загружались как обычные контракты, что
+                    // приводило к визуальным багам и потере маркеров при
+                    // следующем сохранении.
+                    val isStopMarker = entry.type == com.example.data.ContractHistoryEntry.TYPE_TERMINATED &&
+                                       entry.notes == "STOP_MARKER"
+                    val isResumeMarker = entry.type == com.example.data.ContractHistoryEntry.TYPE_RETURNED &&
+                                         entry.notes == "RESUME_MARKER"
                     ContractGroup(
                         id = index + 1,
                         startMs = normStart,
                         endMs = normEnd,
                         isPaid = entry.isPaid,
-                        existingContractId = entry.id
+                        existingContractId = entry.id,
+                        isStopMarker = isStopMarker,
+                        isResumeMarker = isResumeMarker
                     )
                 }
         } else emptyList()

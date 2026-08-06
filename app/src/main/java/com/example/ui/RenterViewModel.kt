@@ -262,6 +262,20 @@ class RenterViewModel(application: Application) : AndroidViewModel(application) 
                     val generated = mutableListOf<ContractSpec>()
 
                     for ((resumeStart, _) in resumeMarkers.sortedBy { it.first }) {
+                        // ── Защита от дубликатов ──────────────────────────────
+                        // Календарь в RenterFormDialog АВТОСОЗДАЁТ недельные
+                        // неоплаченные контракты сразу при тапе на Resume-день
+                        // (см. ContractCalendar.onDayClick → dayMarkerMode==2).
+                        // Эти контракты попадают в regularSpecs как обычные
+                        // группы. Если мы здесь снова сгенерируем контракты от
+                        // того же Resume-маркера — получим дубликаты в БД.
+                        // Поэтому: если в regularSpecs уже есть контракт,
+                        // покрывающий resumeStart — пропускаем автогенерацию.
+                        val alreadyCovered = regularSpecs.any { spec ->
+                            resumeStart >= spec.weekStart && resumeStart <= spec.weekEnd
+                        }
+                        if (alreadyCovered) continue
+
                         // Forward: R → next Stop or R+7
                         val nextStop = stopMarkers.map { it.first }
                             .filter { it > resumeStart }
@@ -1103,7 +1117,13 @@ class RenterViewModel(application: Application) : AndroidViewModel(application) 
         val now = System.currentTimeMillis()
 
         // ── 1. Загружаем все текущие контракты арендатора ──────────────
-        val currentContracts = historyRepository.contractsForRenterOnce(existing.id)
+        // ВАЖНО: используем getForRenterOnce (а НЕ contractsForRenterOnce),
+        // потому что getForRenterOnce возвращает ВСЕ записи — включая
+        // Stop/Resume маркеры (TYPE_TERMINATED с notes="STOP_MARKER" и
+        // TYPE_RETURNED с notes="RESUME_MARKER"). contractsForRenterOnce
+        // фильтрует только CREATED/AUTO_RENEW — и тогда currentMarkers (ниже)
+        // всегда пуст, старые маркеры не удаляются и накапливаются в БД.
+        val currentContracts = historyRepository.getForRenterOnce(existing.id)
 
         // ── 1а. Разделяем группы на обычные контракты и маркеры Stop/Resume ──
         // Маркеры обрабатываются ОТДЕЛЬНО от обычных контрактов:
@@ -1298,94 +1318,108 @@ class RenterViewModel(application: Application) : AndroidViewModel(application) 
         val stopDays = stopMarkers.map { it.startMs }.sorted()
         for (rm in resumeMarkers.sortedBy { it.startMs }) {
             val resumeStart = rm.startMs
-            // Forward
-            val nextStop = stopDays.firstOrNull { it > resumeStart }
-            val forwardEnd = when {
-                nextStop != null && nextStop <= resumeStart + weekMs -> nextStop - 1L
-                else -> resumeStart + weekMs - 1L
+            // ── Защита от дубликатов ──────────────────────────────────
+            // Календарь в RenterFormDialog АВТОСОЗДАЁТ недельные неоплаченные
+            // контракты сразу при тапе на Resume-день. Эти контракты
+            // попадают в regularGroups как обычные группы и сохраняются в
+            // БД на шаге 5 выше. Если мы здесь снова сгенерируем контракты
+            // от того же Resume-маркера — получим дубликаты. Пропускаем
+            // автогенерацию, но продолжаем сохранять сам Resume-маркер.
+            val alreadyCovered = regularGroups.any { g ->
+                resumeStart >= g.startMs && resumeStart <= g.endMs
             }
-            if (forwardEnd > resumeStart) {
-                val daysCount = kotlin.math.ceil((forwardEnd - resumeStart).toDouble() / dayMs).toInt()
-                val amount = dailyPrice * daysCount
-                historyRepository.insert(ContractHistoryEntry(
-                    renterId = existing.id,
-                    timestamp = now,
-                    type = ContractHistoryEntry.TYPE_AUTO_RENEW,
-                    amount = amount,
-                    notes = "Kalendar orqali yaratildi — Resume dan avtomatik (oldinga) — $daysCount kun",
-                    renterName = newName,
-                    renterPhone = newPhone,
-                    scooterName = newScooterName ?: scooter?.name ?: "",
-                    weekStart = resumeStart,
-                    weekEnd = forwardEnd,
-                    weeklyPrice = amount,
-                    passportData = passportData,
-                    address = address,
-                    pinfl = pinfl,
-                    vinNumber = scooter?.vinNumber ?: "",
-                    engineNumber = scooter?.engineNumber ?: "",
-                    scooterSerialNumber = scooter?.scooterSerialNumber ?: "",
-                    batteryId1 = scooter?.batteryId1 ?: "",
-                    batteryId2 = scooter?.batteryId2 ?: "",
-                    additionalInfo = scooter?.additionalInfo ?: "",
-                    isPaid = false
-                ))
-                renter = renter.copy(
-                    balance = renter.balance - amount,
-                    debtAmount = maxOf(0.0, -(renter.balance - amount))
-                )
-            }
-            // Backward (только если нет Stop в [today, R-1])
-            val todayStart = run {
-                val cal = java.util.Calendar.getInstance()
-                cal.set(java.util.Calendar.HOUR_OF_DAY, 0)
-                cal.set(java.util.Calendar.MINUTE, 0)
-                cal.set(java.util.Calendar.SECOND, 0)
-                cal.set(java.util.Calendar.MILLISECOND, 0)
-                cal.timeInMillis
-            }
-            if (resumeStart > todayStart + dayMs) {
-                val stopInGap = stopDays.any { it in (todayStart until resumeStart) }
-                if (!stopInGap) {
-                    var cursor = resumeStart - dayMs
-                    var guard = 0
-                    while (cursor >= todayStart && guard < 60) {
-                        val ws = cursor - 6 * dayMs
-                        val realWs = maxOf(ws, todayStart)
-                        val daysCount = kotlin.math.ceil((cursor - realWs).toDouble() / dayMs).toInt()
-                            .coerceAtLeast(1)
-                        val amount = dailyPrice * daysCount
-                        historyRepository.insert(ContractHistoryEntry(
-                            renterId = existing.id,
-                            timestamp = now,
-                            type = ContractHistoryEntry.TYPE_AUTO_RENEW,
-                            amount = amount,
-                            notes = "Kalendar orqali yaratildi — Resume dan avtomatik (orqaga) — $daysCount kun",
-                            renterName = newName,
-                            renterPhone = newPhone,
-                            scooterName = newScooterName ?: scooter?.name ?: "",
-                            weekStart = realWs,
-                            weekEnd = cursor,
-                            weeklyPrice = amount,
-                            passportData = passportData,
-                            address = address,
-                            pinfl = pinfl,
-                            vinNumber = scooter?.vinNumber ?: "",
-                            engineNumber = scooter?.engineNumber ?: "",
-                            scooterSerialNumber = scooter?.scooterSerialNumber ?: "",
-                            batteryId1 = scooter?.batteryId1 ?: "",
-                            batteryId2 = scooter?.batteryId2 ?: "",
-                            additionalInfo = scooter?.additionalInfo ?: "",
-                            isPaid = false
-                        ))
-                        renter = renter.copy(
-                            balance = renter.balance - amount,
-                            debtAmount = maxOf(0.0, -(renter.balance - amount))
-                        )
-                        cursor = realWs - dayMs
-                        guard++
+            if (!alreadyCovered) {
+                // Forward
+                val nextStop = stopDays.firstOrNull { it > resumeStart }
+                val forwardEnd = when {
+                    nextStop != null && nextStop <= resumeStart + weekMs -> nextStop - 1L
+                    else -> resumeStart + weekMs - 1L
+                }
+                if (forwardEnd > resumeStart) {
+                    val daysCount = kotlin.math.ceil((forwardEnd - resumeStart).toDouble() / dayMs).toInt()
+                    val amount = dailyPrice * daysCount
+                    historyRepository.insert(ContractHistoryEntry(
+                        renterId = existing.id,
+                        timestamp = now,
+                        type = ContractHistoryEntry.TYPE_AUTO_RENEW,
+                        amount = amount,
+                        notes = "Kalendar orqali yaratildi — Resume dan avtomatik (oldinga) — $daysCount kun",
+                        renterName = newName,
+                        renterPhone = newPhone,
+                        scooterName = newScooterName ?: scooter?.name ?: "",
+                        weekStart = resumeStart,
+                        weekEnd = forwardEnd,
+                        weeklyPrice = amount,
+                        passportData = passportData,
+                        address = address,
+                        pinfl = pinfl,
+                        vinNumber = scooter?.vinNumber ?: "",
+                        engineNumber = scooter?.engineNumber ?: "",
+                        scooterSerialNumber = scooter?.scooterSerialNumber ?: "",
+                        batteryId1 = scooter?.batteryId1 ?: "",
+                        batteryId2 = scooter?.batteryId2 ?: "",
+                        additionalInfo = scooter?.additionalInfo ?: "",
+                        isPaid = false
+                    ))
+                    renter = renter.copy(
+                        balance = renter.balance - amount,
+                        debtAmount = maxOf(0.0, -(renter.balance - amount))
+                    )
+                }
+                // Backward (только если нет Stop в [today, R-1])
+                val todayStart = run {
+                    val cal = java.util.Calendar.getInstance()
+                    cal.set(java.util.Calendar.HOUR_OF_DAY, 0)
+                    cal.set(java.util.Calendar.MINUTE, 0)
+                    cal.set(java.util.Calendar.SECOND, 0)
+                    cal.set(java.util.Calendar.MILLISECOND, 0)
+                    cal.timeInMillis
+                }
+                if (resumeStart > todayStart + dayMs) {
+                    val stopInGap = stopDays.any { it in (todayStart until resumeStart) }
+                    if (!stopInGap) {
+                        var cursor = resumeStart - dayMs
+                        var guard = 0
+                        while (cursor >= todayStart && guard < 60) {
+                            val ws = cursor - 6 * dayMs
+                            val realWs = maxOf(ws, todayStart)
+                            val daysCount = kotlin.math.ceil((cursor - realWs).toDouble() / dayMs).toInt()
+                                .coerceAtLeast(1)
+                            val amount = dailyPrice * daysCount
+                            historyRepository.insert(ContractHistoryEntry(
+                                renterId = existing.id,
+                                timestamp = now,
+                                type = ContractHistoryEntry.TYPE_AUTO_RENEW,
+                                amount = amount,
+                                notes = "Kalendar orqali yaratildi — Resume dan avtomatik (orqaga) — $daysCount kun",
+                                renterName = newName,
+                                renterPhone = newPhone,
+                                scooterName = newScooterName ?: scooter?.name ?: "",
+                                weekStart = realWs,
+                                weekEnd = cursor,
+                                weeklyPrice = amount,
+                                passportData = passportData,
+                                address = address,
+                                pinfl = pinfl,
+                                vinNumber = scooter?.vinNumber ?: "",
+                                engineNumber = scooter?.engineNumber ?: "",
+                                scooterSerialNumber = scooter?.scooterSerialNumber ?: "",
+                                batteryId1 = scooter?.batteryId1 ?: "",
+                                batteryId2 = scooter?.batteryId2 ?: "",
+                                additionalInfo = scooter?.additionalInfo ?: "",
+                                isPaid = false
+                            ))
+                            renter = renter.copy(
+                                balance = renter.balance - amount,
+                                debtAmount = maxOf(0.0, -(renter.balance - amount))
+                            )
+                            cursor = realWs - dayMs
+                            guard++
+                        }
                     }
                 }
+            } else {
+                Log.d(TAG, "reconcile: Resume marker at $resumeStart already covered by regularGroups — skipping auto-generation")
             }
             // Сохраняем сам Resume-маркер (однодневный)
             try {

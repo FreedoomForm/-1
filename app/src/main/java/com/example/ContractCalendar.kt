@@ -38,6 +38,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -292,23 +293,81 @@ fun ContractCalendar(
                 .fillMaxWidth()
                 .padding(12.dp)
         ) {
-            // ── Шапка: месяц/год (без навигационных стрелок) + статус + стрелка свернуть/развернуть ──
-            // По просьбе пользователя убраны все кнопки рядом с месяцем/годом
-            // (стрелки влево/вправо для навигации по месяцам). Календарь
-            // показывает текущий месяц. Пользователь всё ещё может видеть
-            // соседние дни в сетке 6×7, но не может переключать месяц.
+            // ── Шапка: стрелки навигации по месяцам + месяц/год + статус + стрелка свернуть/развернуть ──
+            // Возвращены стрелки «‹» и «›» для перехода между месяцами — пользователь
+            // случайно лишился их в прошлой правке. Теперь они снова работают:
+            //   • ‹ → viewMonth -= 1 (с авто-переходом через декабрь/январь)
+            //   • › → viewMonth += 1
+            // Кнопки квадратные (28dp), в стиле остальных кнопок календаря.
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.SpaceBetween
             ) {
-                // Левая часть: только месяц/год (без навигации)
-                Text(
-                    text = monthTitle,
-                    style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.SemiBold),
-                    color = ClaudeText,
-                    modifier = Modifier.padding(start = 4.dp)
-                )
+                // Левая часть: стрелка ‹ + месяц/год + стрелка ›
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(4.dp)
+                ) {
+                    // Стрелка влево (предыдущий месяц)
+                    Box(
+                        modifier = Modifier
+                            .size(28.dp)
+                            .clip(CircleShape)
+                            .background(ClaudeAccentBg)
+                            .clickable {
+                                if (viewMonth == 0) {
+                                    viewMonth = 11
+                                    viewYear -= 1
+                                } else {
+                                    viewMonth -= 1
+                                }
+                            },
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.KeyboardArrowDown,
+                            contentDescription = "Oldingi oy",
+                            tint = ClaudeAccent,
+                            modifier = Modifier
+                                .size(20.dp)
+                                .rotate(90f) // ← поворачиваем «вниз» в «влево»
+                        )
+                    }
+
+                    Text(
+                        text = monthTitle,
+                        style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.SemiBold),
+                        color = ClaudeText,
+                        modifier = Modifier.padding(horizontal = 4.dp)
+                    )
+
+                    // Стрелка вправо (следующий месяц)
+                    Box(
+                        modifier = Modifier
+                            .size(28.dp)
+                            .clip(CircleShape)
+                            .background(ClaudeAccentBg)
+                            .clickable {
+                                if (viewMonth == 11) {
+                                    viewMonth = 0
+                                    viewYear += 1
+                                } else {
+                                    viewMonth += 1
+                                }
+                            },
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.KeyboardArrowDown,
+                            contentDescription = "Keyingi oy",
+                            tint = ClaudeAccent,
+                            modifier = Modifier
+                                .size(20.dp)
+                                .rotate(-90f) // ← поворачиваем «вниз» в «вправо»
+                        )
+                    }
+                }
 
                 // Правая часть: статус-пилюли + стрелка свернуть/развернуть
                 Row(
@@ -444,23 +503,93 @@ fun ContractCalendar(
                                     // Если включён режим Stop (1) или Resume (2),
                                     // тап по дате создаёт однодневный «маркерный»
                                     // контракт с особым флагом isStopMarker /
-                                    // isResumeMarker. Логика создания реальных
-                                    // неоплаченных контрактов отрабатывается
-                                    // в RenterViewModel при сохранении формы
-                                    // (см. applyResumeStopMarkers).
+                                    // isResumeMarker.
+                                    //
+                                    // Для Resume-маркера дополнительно АВТОСОЗДАЮТСЯ
+                                    // неоплаченные недельные контракты:
+                                    //   • Forward: от Resume-дня до ближайшего Stop
+                                    //     (если Stop в пределах +7 дней) или до +7 дней.
+                                    //   • Backward: от Resume-1 назад до сегодня
+                                    //     недельными контрактами, ЕСЛИ в [today, R-1]
+                                    //     нет Stop-маркера.
+                                    // Это позволяет пользователю ВИДЕТЬ контракты в
+                                    // календаре и в списке ниже сразу после тапа —
+                                    // не нужно ждать сохранения формы. При сохранении
+                                    // RenterViewModel распознаёт уже существующие
+                                    // группы и НЕ создаёт дубликаты (см. проверку
+                                    // в reconcileContractsFromGroups / addRenter).
                                     if (editable && dayMarkerMode != 0) {
-                                        val newId = (groups.maxOfOrNull { it.id } ?: 0) + 1
-                                        val dayEnd = ms + 24L * 60 * 60 * 1000 - 1
+                                        val dayMs = 24L * 60 * 60 * 1000
+                                        val weekMs = 7L * dayMs
+                                        val newIdBase = (groups.maxOfOrNull { it.id } ?: 0)
+                                        val dayEnd = ms + dayMs - 1
                                         val markerGroup = ContractGroup(
-                                            id = newId,
+                                            id = newIdBase + 1,
                                             startMs = ms,
                                             endMs = dayEnd,
                                             isPaid = false,
                                             isStopMarker = dayMarkerMode == 1,
                                             isResumeMarker = dayMarkerMode == 2
                                         )
-                                        onGroupsChange(groups + markerGroup)
-                                        onActiveGroupChange(newId)
+                                        var newGroups = groups + markerGroup
+
+                                        // ── Если Resume — авто-создаём недельные контракты ──
+                                        if (dayMarkerMode == 2) {
+                                            // Forward: до ближайшего Stop в [ms, ms+7d]
+                                            // или до ms+7d-1 если Stop нет.
+                                            val stopDays = groups
+                                                .filter { it.isStopMarker }
+                                                .map { it.startMs }
+                                                .sorted()
+                                            val nextStop = stopDays.firstOrNull { it > ms }
+                                            val forwardEnd = when {
+                                                nextStop != null && nextStop <= ms + weekMs -> nextStop - 1L
+                                                else -> ms + weekMs - 1L
+                                            }
+                                            if (forwardEnd > ms) {
+                                                var idCounter = newIdBase + 2
+                                                newGroups = newGroups + ContractGroup(
+                                                    id = idCounter,
+                                                    startMs = ms,
+                                                    endMs = forwardEnd,
+                                                    isPaid = false
+                                                )
+                                            }
+
+                                            // Backward: недельные контракты от R-1 до
+                                            // сегодня, если в [today, R-1] нет Stop.
+                                            val todayStart = run {
+                                                val cal = java.util.Calendar.getInstance()
+                                                cal.set(java.util.Calendar.HOUR_OF_DAY, 0)
+                                                cal.set(java.util.Calendar.MINUTE, 0)
+                                                cal.set(java.util.Calendar.SECOND, 0)
+                                                cal.set(java.util.Calendar.MILLISECOND, 0)
+                                                cal.timeInMillis
+                                            }
+                                            if (ms > todayStart + dayMs) {
+                                                val stopInGap = stopDays.any { it in (todayStart until ms) }
+                                                if (!stopInGap) {
+                                                    var cursor = ms - dayMs
+                                                    var guard = 0
+                                                    var idCounter = (newGroups.maxOfOrNull { it.id } ?: 0) + 1
+                                                    while (cursor >= todayStart && guard < 60) {
+                                                        val ws = cursor - 6 * dayMs
+                                                        val realWs = maxOf(ws, todayStart)
+                                                        newGroups = newGroups + ContractGroup(
+                                                            id = idCounter++,
+                                                            startMs = realWs,
+                                                            endMs = cursor,
+                                                            isPaid = false
+                                                        )
+                                                        cursor = realWs - dayMs
+                                                        guard++
+                                                    }
+                                                }
+                                            }
+                                        }
+
+                                        onGroupsChange(newGroups)
+                                        onActiveGroupChange(markerGroup.id)
                                         // Сбрасываем режим маркера после установки
                                         dayMarkerMode = 0
                                         return@DayCell
