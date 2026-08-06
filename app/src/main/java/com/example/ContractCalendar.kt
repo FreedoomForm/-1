@@ -21,8 +21,6 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Check
-import androidx.compose.material.icons.filled.ChevronLeft
-import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.KeyboardArrowUp
@@ -83,6 +81,12 @@ import java.util.Locale
       контрактов через onAddGroup callback.
    ============================================================================ */
 
+/* ── Палитра для кнопок Stop / Resume ─────────────────────────────── */
+private val StopBg   = Color(0xFF1E3A8A) // тёмно-синий (Tailwind blue-900)
+private val StopFg   = Color(0xFFBFDBFE) // светло-голубой текст/иконка
+private val ResumeBg = Color(0xFFFACC15) // жёлтый (Tailwind yellow-400)
+private val ResumeFg = Color(0xFF78350F) // тёмно-коричневый текст/иконка
+
 /** Один диапазон дат = одна группа контрактов. */
 data class ContractGroup(
     val id: Int,
@@ -100,7 +104,22 @@ data class ContractGroup(
      * их удалять/редактировать. При сохранении формы existingContractId позволяет
      * корректно различить «удалить существующий» от «добавить новый».
      */
-    val existingContractId: Int? = null
+    val existingContractId: Int? = null,
+    /**
+     * Маркер «остановки» аренды на этот день. Не является контрактом — это
+     * сигнал для RenterViewModel, что начиная с этого дня аренда приостановлена
+     * и автоматическое создание неоплаченных контрактов должно остановиться
+     * на этом дне. Сохраняется как ContractHistoryEntry с type=TERMINATED.
+     */
+    val isStopMarker: Boolean = false,
+    /**
+     * Маркер «возобновления» аренды с этого дня. Не является контрактом — это
+     * сигнал для RenterViewModel, что начиная с этого дня автоматическое
+     * создание неоплаченных контрактов возобновляется (после предыдущего Stop).
+     * Сохраняется как ContractHistoryEntry с type=RETURNED и isResumeMarker=true
+     * (используется поле notes для хранения флага, чтобы не менять схему БД).
+     */
+    val isResumeMarker: Boolean = false
 ) {
     /** Цветовая метка группы (циклический выбор по id). */
     val colorIndex: Int get() = ((id - 1).coerceAtLeast(0)) % 6
@@ -114,6 +133,8 @@ enum class DayStatus {
     UNPAID,
     /** Приостановленный контракт (TERMINATED) — серый фон. */
     SUSPENDED,
+    /** День «возобновления» — жёлтый фон. */
+    RESUMED,
     /** Обычный день — белый фон. */
     EMPTY
 }
@@ -139,6 +160,15 @@ fun ContractCalendar(
      * Пользователь может переключать состояние стрелкой в шапке.
      */
     initiallyExpanded: Boolean = true,
+    /**
+     * Выбран ли скутер в форме арендатора.
+     * По требованию пользователя: «пользователь после выборки из двух кнопок
+     * статуса оплаченный и неоплаченный должен будет в обязательном порядке
+     * выбрать скутер с помощью нашей кнопки и только потом в календаре выбрать
+     * период». Если скутер не выбран (false) — тапы по дням календаря
+     * игнорируются, и пользователю показывается подсказка «Skuterni tanlang».
+     */
+    scooterSelected: Boolean = true,
     /**
      * Текущие группы.
      * - Для editable=true (форма): локальный список, который пользователь собирает.
@@ -197,10 +227,18 @@ fun ContractCalendar(
     // становится следующая "новая" (activeGroupId = null).
     var pendingStartMs by remember { mutableStateOf<Long?>(null) }
 
-    // ── Текущий статус для новых групп (To'langan / To'lanmagan) ───────
+    // ── Текущий статус для новых групп (To'langan / To'lanmagan / Stop / Resume) ──
     // По умолчанию "To'langan" (оплаченный). Пользователь может переключить
     // большими квадратными кнопками в шапке календаря перед выбором периода.
     var newGroupIsPaid by remember { mutableStateOf(true) }
+
+    // ── Режим маркера дня (Stop / Resume) ────────────────────────────
+    // 0 = обычный режим выбора периода (по кнопкам Paid/Unpaid)
+    // 1 = режим Stop — тап по дате создаёт маркер «остановлен»
+    // 2 = режим Resume — тап по дате создаёт маркер «возобновлён» и
+    //     запускает авто-создание неоплаченных контрактов от этой даты
+    //     до ближайшего Stop или до следующей недели.
+    var dayMarkerMode by remember { mutableStateOf(0) } // 0=none, 1=stop, 2=resume
 
     // ── Пользователь явно нажал кнопку статуса? ────────────────────────
     // Только после этого можно тапать по дням календаря для выбора периода.
@@ -254,30 +292,23 @@ fun ContractCalendar(
                 .fillMaxWidth()
                 .padding(12.dp)
         ) {
-            // ── Шапка: месяц/год + навигация + статус + стрелка свернуть/развернуть ──
+            // ── Шапка: месяц/год (без навигационных стрелок) + статус + стрелка свернуть/развернуть ──
+            // По просьбе пользователя убраны все кнопки рядом с месяцем/годом
+            // (стрелки влево/вправо для навигации по месяцам). Календарь
+            // показывает текущий месяц. Пользователь всё ещё может видеть
+            // соседние дни в сетке 6×7, но не может переключать месяц.
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.SpaceBetween
             ) {
-                // Левая часть: навигация ← месяц/год →
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    IconButton(onClick = {
-                        if (viewMonth == 0) { viewMonth = 11; viewYear-- } else viewMonth--
-                    }) {
-                        Icon(Icons.Default.ChevronLeft, contentDescription = "Oldingi oy")
-                    }
-                    Text(
-                        text = monthTitle,
-                        style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.SemiBold),
-                        color = ClaudeText
-                    )
-                    IconButton(onClick = {
-                        if (viewMonth == 11) { viewMonth = 0; viewYear++ } else viewMonth++
-                    }) {
-                        Icon(Icons.Default.ChevronRight, contentDescription = "Keyingi oy")
-                    }
-                }
+                // Левая часть: только месяц/год (без навигации)
+                Text(
+                    text = monthTitle,
+                    style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.SemiBold),
+                    color = ClaudeText,
+                    modifier = Modifier.padding(start = 4.dp)
+                )
 
                 // Правая часть: статус-пилюли + стрелка свернуть/развернуть
                 Row(
@@ -329,15 +360,27 @@ fun ContractCalendar(
                     groups = groups,
                     activeGroupId = activeGroupId,
                     newGroupIsPaid = newGroupIsPaid,
+                    dayMarkerMode = dayMarkerMode,
                     onNewGroupStatusChange = {
                         newGroupIsPaid = it
                         // Пользователь выбрал статус → теперь можно выбирать
                         // период в календаре.
                         hasSelectedStatus = true
+                        dayMarkerMode = 0 // сброс режима Stop/Resume
                         // Сбрасываем частично выбранный период, если он был,
                         // чтобы начать заново с новым статусом.
                         pendingStartMs = null
                         onActiveGroupChange(null)
+                    },
+                    onDayMarkerModeChange = { mode ->
+                        dayMarkerMode = mode
+                        if (mode != 0) {
+                            // При выборе Stop/Resume сбрасываем выбор статуса
+                            // Paid/Unpaid — эти режимы взаимоисключающие.
+                            hasSelectedStatus = false
+                            pendingStartMs = null
+                            onActiveGroupChange(null)
+                        }
                     },
                     onActiveGroupChange = onActiveGroupChange,
                     onAddGroup = {
@@ -397,6 +440,31 @@ fun ContractCalendar(
                                 pendingStartMs = pendingStartMs,
                                 dayStatusFor = dayStatusFor,
                                 onDayClick = { ms ->
+                                    // ── Режим Stop/Resume маркера дня ──────────────
+                                    // Если включён режим Stop (1) или Resume (2),
+                                    // тап по дате создаёт однодневный «маркерный»
+                                    // контракт с особым флагом isStopMarker /
+                                    // isResumeMarker. Логика создания реальных
+                                    // неоплаченных контрактов отрабатывается
+                                    // в RenterViewModel при сохранении формы
+                                    // (см. applyResumeStopMarkers).
+                                    if (editable && dayMarkerMode != 0) {
+                                        val newId = (groups.maxOfOrNull { it.id } ?: 0) + 1
+                                        val dayEnd = ms + 24L * 60 * 60 * 1000 - 1
+                                        val markerGroup = ContractGroup(
+                                            id = newId,
+                                            startMs = ms,
+                                            endMs = dayEnd,
+                                            isPaid = false,
+                                            isStopMarker = dayMarkerMode == 1,
+                                            isResumeMarker = dayMarkerMode == 2
+                                        )
+                                        onGroupsChange(groups + markerGroup)
+                                        onActiveGroupChange(newId)
+                                        // Сбрасываем режим маркера после установки
+                                        dayMarkerMode = 0
+                                        return@DayCell
+                                    }
                                     // ── Блокировка выбора периода до выбора статуса ──
                                     // Пользователь должен сначала нажать большую
                                     // квадратную кнопку «To'langan» или «To'lanmagan»
@@ -405,6 +473,14 @@ fun ContractCalendar(
                                     // выбора периода.
                                     if (editable && !hasSelectedStatus && activeGroupId == null) {
                                         return@DayCell  // игнорируем тап
+                                    }
+                                    // ── Блокировка выбора периода до выбора скутера ──
+                                    // По требованию пользователя: после выбора статуса
+                                    // (Paid/Unpaid) пользователь ОБЯЗАТЕЛЬНО должен
+                                    // выбрать скутер, и только потом — период в календаре.
+                                    // Если скутер не выбран — тап игнорируется.
+                                    if (editable && !scooterSelected && dayMarkerMode == 0) {
+                                        return@DayCell
                                     }
                                     if (editable) {
                                         handleDayClick(
@@ -471,6 +547,13 @@ fun ContractCalendar(
                     !hasSelectedStatus && editable -> {
                         // Подсказка для пользователя: сначала выбери статус
                         "Yuqoridagi «To'langan» yoki «To'lanmagan» tugmasini bosing"
+                    }
+                    editable && !scooterSelected && dayMarkerMode == 0 -> {
+                        // Подсказка: статус выбран, но скутер — нет.
+                        // По требованию пользователя: «должен будет в обязательном
+                        // порядке выбрать скутер с помощью нашей кнопки и только
+                        // потом в календаре выбрать период».
+                        "Avval skuterni tanlang — keyin davrni belgilang"
                     }
                     pendingStartMs == null -> {
                         if (!editable && onAddGroup != null) {
@@ -628,7 +711,24 @@ private fun RowScope.DayCell(
         }
         val inPending = pendingStartMs != null && isSameDay(dayMs, pendingStartMs!!)
 
+        // ── Приоритет маркеров Stop/Resume над обычными контрактами ──
+        // Stop-маркер рисуется тёмно-синим, Resume-маркер — жёлтым.
+        val stopMarker = groups.firstOrNull { g ->
+            g.isStopMarker && dayMs >= g.startMs && dayMs <= g.endMs
+        }
+        val resumeMarker = groups.firstOrNull { g ->
+            g.isResumeMarker && dayMs >= g.startMs && dayMs <= g.endMs
+        }
+
         when {
+            stopMarker != null -> {
+                bgColor = StopBg.copy(alpha = 0.55f)
+                fgColor = StopFg
+            }
+            resumeMarker != null -> {
+                bgColor = ResumeBg.copy(alpha = 0.55f)
+                fgColor = ResumeFg
+            }
             inActiveGroup != null -> {
                 // Активная группа: цвет по isPaid (зелёный/красный),
                 // альфа 0.45 для явной видимости.
@@ -656,6 +756,7 @@ private fun RowScope.DayCell(
             DayStatus.PAID -> { bgColor = StatusOkBg; fgColor = StatusOk }
             DayStatus.UNPAID -> { bgColor = StatusOverdueBg; fgColor = StatusOverdue }
             DayStatus.SUSPENDED -> { bgColor = StatusReturnedBg; fgColor = StatusReturned }
+            DayStatus.RESUMED -> { bgColor = ResumeBg.copy(alpha = 0.45f); fgColor = ResumeFg }
             DayStatus.EMPTY -> {
                 bgColor = if (isCurrentMonth) ClaudeCard else ClaudeBackground
                 fgColor = if (isCurrentMonth) ClaudeText else ClaudeTextSecondary
@@ -693,21 +794,19 @@ private fun GroupsPanel(
     groups: List<ContractGroup>,
     activeGroupId: Int?,
     newGroupIsPaid: Boolean,
+    /** 0 = обычный режим, 1 = Stop-маркер, 2 = Resume-маркер. */
+    dayMarkerMode: Int = 0,
     onNewGroupStatusChange: (Boolean) -> Unit,
+    onDayMarkerModeChange: (Int) -> Unit = {},
     onActiveGroupChange: (Int?) -> Unit,
     onAddGroup: () -> Unit,
     onRemoveGroup: (Int) -> Unit
 ) {
     Column(modifier = Modifier.fillMaxWidth()) {
-        // ── Ряд 1: БОЛЬШИЕ КВАДРАТНЫЕ кнопки статуса ─────────────────
+        // ── Ряд 1: БОЛЬШИЕ КВАДРАТНЫЕ кнопки Paid / Unpaid ─────────────
         // Пользователь явно попросил сделать кнопки «To'langan» /
         // «To'lanmagan» большими и квадратными. Только после выбора одной
         // из них можно выбирать период в календаре.
-        //
-        // Кнопка «+» удалена — она больше не нужна: пользователь сразу
-        // выбирает статус (оплаченный/неоплаченный), а затем тапает по
-        // двум датам в календаре. Не нужно отдельное действие «начать
-        // новую группу».
         Row(
             modifier = Modifier
                 .fillMaxWidth()
@@ -718,11 +817,12 @@ private fun GroupsPanel(
             // Кнопка статуса «To'langan» (оплаченный) — большая квадратная
             BigStatusTile(
                 label = "To'langan",
-                selected = newGroupIsPaid,
+                selected = newGroupIsPaid && dayMarkerMode == 0,
                 color = StatusOk,
                 modifier = Modifier.weight(1f),
                 onClick = {
                     onNewGroupStatusChange(true)
+                    onDayMarkerModeChange(0)
                     onAddGroup()  // переводит календарь в режим выбора периода
                 }
             )
@@ -730,12 +830,60 @@ private fun GroupsPanel(
             // Кнопка статуса «To'lanmagan» (неоплаченный) — большая квадратная
             BigStatusTile(
                 label = "To'lanmagan",
-                selected = !newGroupIsPaid,
+                selected = !newGroupIsPaid && dayMarkerMode == 0,
                 color = StatusOverdue,
                 modifier = Modifier.weight(1f),
                 onClick = {
                     onNewGroupStatusChange(false)
-                    onAddGroup()  // переводит календарь в режим выбора периода
+                    onDayMarkerModeChange(0)
+                    onAddGroup()
+                }
+            )
+        }
+
+        // ── Ряд 2: БОЛЬШИЕ КВАДРАТНЫЕ кнопки Stop / Resume ─────────────
+        // По просьбе пользователя: «добав сверху календаря снизу кнопок
+        // оплаченный и неоплаченный кнопки остановить и возобновить в точно
+        // таком же стиле квадратном но только фон этих кнопок другой
+        // кнопка остановить имеет темно синий а кнопка возобновить желтий фон».
+        //
+        // Логика:
+        //   • Stop — тап по дате ставит «остановленный» маркер (TERMINATED).
+        //     На этот день аренда приостанавливается, скутер освобождается.
+        //   • Resume — тап по дате ставит «возобновлённый» маркер и запускает
+        //     авто-создание неоплаченных контрактов от этой даты вперёд
+        //     до ближайшего Stop или до следующей недели.
+        Spacer(Modifier.height(8.dp))
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .wrapContentHeight(),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            // Кнопка «To'xtash» (Stop) — тёмно-синий фон
+            BigStatusTile(
+                label = "To'xtash",
+                selected = dayMarkerMode == 1,
+                color = StopBg,
+                solidBg = StopBg,
+                solidFg = StopFg,
+                modifier = Modifier.weight(1f),
+                onClick = {
+                    onDayMarkerModeChange(if (dayMarkerMode == 1) 0 else 1)
+                }
+            )
+
+            // Кнопка «Davom» (Resume) — жёлтый фон
+            BigStatusTile(
+                label = "Davom",
+                selected = dayMarkerMode == 2,
+                color = ResumeBg,
+                solidBg = ResumeBg,
+                solidFg = ResumeFg,
+                modifier = Modifier.weight(1f),
+                onClick = {
+                    onDayMarkerModeChange(if (dayMarkerMode == 2) 0 else 2)
                 }
             )
         }
@@ -758,16 +906,40 @@ private fun BigStatusTile(
     selected: Boolean,
     color: Color,
     modifier: Modifier = Modifier,
+    /** Если задано — фон кнопки заливается этим цветом (для Stop/Resume). */
+    solidBg: Color? = null,
+    /** Если задано — текст/иконка рисуются этим цветом (для Stop/Resume). */
+    solidFg: Color? = null,
     onClick: () -> Unit
 ) {
+    // ── Вычисление цветов с учётом solidBg / solidFg ──
+    // Для Stop/Resume используем сплошной фон независимо от selected.
+    // Для Paid/Unpaid — прежняя логика: при selected фон = color.copy(0.35),
+    // иначе нейтральный ClaudeAccentBg.
+    val bgColor = when {
+        solidBg != null -> if (selected) solidBg else solidBg.copy(alpha = 0.45f)
+        selected -> color.copy(alpha = 0.35f)
+        else -> ClaudeAccentBg
+    }
+    val fgColor = when {
+        solidFg != null -> solidFg
+        selected -> ClaudeText
+        else -> ClaudeTextSecondary
+    }
+    val borderColor = when {
+        solidBg != null -> solidBg
+        else -> color
+    }
+    val indicatorColor = solidFg ?: color
+
     Box(
         modifier = modifier
             .height(64.dp)  // большая высота → квадратная форма при weight(1f)
             .clip(RoundedCornerShape(10.dp))
-            .background(if (selected) color.copy(alpha = 0.35f) else ClaudeAccentBg)
+            .background(bgColor)
             .border(
                 width = if (selected) 2.dp else 1.dp,
-                color = color,
+                color = borderColor,
                 shape = RoundedCornerShape(10.dp)
             )
             .clickable { onClick() }
@@ -783,12 +955,12 @@ private fun BigStatusTile(
                 modifier = Modifier
                     .size(14.dp)
                     .clip(CircleShape)
-                    .background(color)
+                    .background(indicatorColor)
             )
             Text(
                 text = label,
                 fontSize = 13.sp,
-                color = if (selected) ClaudeText else ClaudeTextSecondary,
+                color = fgColor,
                 fontWeight = if (selected) FontWeight.Bold else FontWeight.Normal,
                 textAlign = TextAlign.Center
             )
@@ -796,7 +968,7 @@ private fun BigStatusTile(
                 Icon(
                     Icons.Default.Check,
                     contentDescription = null,
-                    tint = color,
+                    tint = indicatorColor,
                     modifier = Modifier.size(14.dp)
                 )
             }

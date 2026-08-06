@@ -152,7 +152,15 @@ class RenterViewModel(application: Application) : AndroidViewModel(application) 
         // Если список не пуст — он имеет приоритет над автогенерацией по
         // выбранной дате. Каждая группа = один контракт с weekStart/weekEnd
         // и isPaid из группы. Список — это List<Triple<startMs, endMs, isPaid>>.
-        contractGroups: List<Triple<Long, Long, Boolean>> = emptyList()
+        contractGroups: List<Triple<Long, Long, Boolean>> = emptyList(),
+        // ── Полный список групп с маркерами Stop/Resume ──────────────────
+        // Используется для обработки Stop/Resume-маркеров при создании
+        // арендатора. Если список не пуст — он имеет приоритет над обычным
+        // contractGroups: маркеры сохраняются как TERMINATED/RETURNED записи,
+        // а для Resume-маркеров генерируются неоплаченные weekly-контракты
+        // (см. applyResumeAutoContracts). Обычные контракты из этого списка
+        // обрабатываются по той же логике, что и contractGroups.
+        contractGroupsWithMarkers: List<com.example.RenterFormContractGroup> = emptyList()
     ) {
         viewModelScope.launch {
             val now = System.currentTimeMillis()
@@ -188,8 +196,10 @@ class RenterViewModel(application: Application) : AndroidViewModel(application) 
             //   SCENARIO_RECENT    — выбранная дата менее недели назад
             //   SCENARIO_FUTURE    — выбранная дата сегодня или в будущем
             //   SCENARIO_GROUPS    — передан явный список групп из календаря
+            //   SCENARIO_GROUPS_WITH_MARKERS — передан список с Stop/Resume маркерами
             val diffMs = now - startTimestamp
             val scenario = when {
+                contractGroupsWithMarkers.isNotEmpty() -> 5 // SCENARIO_GROUPS_WITH_MARKERS
                 contractGroups.isNotEmpty() -> 4 // SCENARIO_GROUPS
                 diffMs > weekMs -> 1             // SCENARIO_OVERDUE
                 diffMs > 0L -> 2                 // SCENARIO_RECENT
@@ -204,7 +214,102 @@ class RenterViewModel(application: Application) : AndroidViewModel(application) 
             //                Transaction НЕ создаётся, на карту ничего не падает.
             data class ContractSpec(val weekStart: Long, val weekEnd: Long, val isPaid: Boolean)
 
+            // ── Маркеры Stop/Resume (сохраняются отдельно как TERMINATED/RETURNED) ──
+            // Эти записи не являются контрактами — это однодневные сигналы для:
+            //   • Stop — аренда приостановлена, скутер свободен (TYPE_TERMINATED).
+            //   • Resume — аренда возобновлена, запускает авто-создание неоплаченных
+            //     weekly-контрактов от этого дня вперёд (TYPE_RETURNED + notes=RESUME_MARKER).
+            val stopMarkers = mutableListOf<Pair<Long, Long>>()
+            val resumeMarkers = mutableListOf<Pair<Long, Long>>()
+
             val specs: List<ContractSpec> = when (scenario) {
+                5 -> {
+                    // ── Сценарий с маркерами: обрабатываем contractGroupsWithMarkers ──
+                    // Разделяем группы на:
+                    //   • Обычные контракты (isStopMarker=false && isResumeMarker=false)
+                    //     — добавляются в specs как есть.
+                    //   • Stop-маркеры — добавляются в stopMarkers, будут сохранены
+                    //     как TYPE_TERMINATED.
+                    //   • Resume-маркеры — добавляются в resumeMarkers, будут сохранены
+                    //     как TYPE_RETURNED + notes=RESUME_MARKER. Для каждого Resume
+                    //     маркера также генерируются неоплаченные weekly-контракты
+                    //     (см. ниже).
+                    val regularSpecs = mutableListOf<ContractSpec>()
+                    for (g in contractGroupsWithMarkers) {
+                        when {
+                            g.isStopMarker -> stopMarkers.add(g.startMs to g.endMs)
+                            g.isResumeMarker -> resumeMarkers.add(g.startMs to g.endMs)
+                            else -> regularSpecs.add(ContractSpec(g.startMs, g.endMs, g.isPaid))
+                        }
+                    }
+
+                    // ── Авто-создание неоплаченных weekly-контрактов от Resume-маркеров ──
+                    // Алгоритм (по описанию пользователя):
+                    //   Для каждого Resume-маркера на дате R:
+                    //     1. Найти ближайший Stop-маркер на дате S > R (если есть).
+                    //     2. Если S существует и S ∈ [R, R+7 дней]:
+                    //        - Создать 1 неоплаченный контракт R → S-1 (или R → S,
+                    //          если S-R < 1 дня — однодневный контракт).
+                    //     3. Иначе: создать 1 неоплаченный контракт R → R+7 дней.
+                    //     4. Если есть следующий Resume-маркер R' > S: повторить
+                    //        шаги 1-3 от R'.
+                    //   Дополнительно (заполнение назад):
+                    //     - Если в [today, R-1] нет существующих контрактов и
+                    //       нет Stop-маркеров — создать неоплаченные weekly-контракты
+                    //       назад от R-1 до today (покрывая «пустоту»).
+                    val allMarkerDays = (stopMarkers.map { it.first } + resumeMarkers.map { it.first })
+                        .sorted()
+                    val generated = mutableListOf<ContractSpec>()
+
+                    for ((resumeStart, _) in resumeMarkers.sortedBy { it.first }) {
+                        // Forward: R → next Stop or R+7
+                        val nextStop = stopMarkers.map { it.first }
+                            .filter { it > resumeStart }
+                            .minOrNull()
+                        val forwardEnd = when {
+                            nextStop != null && nextStop <= resumeStart + weekMs -> {
+                                // Stop в пределах недели → контракт до Stop-дня
+                                // (включительно, что Stop-маркер рисуется на этот день).
+                                nextStop - 1L // конец дня перед Stop
+                            }
+                            else -> resumeStart + weekMs - 1L // неделя вперёд
+                        }
+                        if (forwardEnd > resumeStart) {
+                            generated.add(ContractSpec(resumeStart, forwardEnd, isPaid = false))
+                        }
+
+                        // Backward: если нет контрактов в [today, R-1], заполнить
+                        val todayStart = run {
+                            val cal = java.util.Calendar.getInstance()
+                            cal.set(java.util.Calendar.HOUR_OF_DAY, 0)
+                            cal.set(java.util.Calendar.MINUTE, 0)
+                            cal.set(java.util.Calendar.SECOND, 0)
+                            cal.set(java.util.Calendar.MILLISECOND, 0)
+                            cal.timeInMillis
+                        }
+                        if (resumeStart > todayStart + dayMs) {
+                            // Есть «пустота» между today и Resume-днём.
+                            // Создаём weekly-контракты назад, НЕ заходя за Stop-маркер.
+                            // Если в [today, R-1] есть Stop-маркер, то назад не заполняем
+                            // (стоп означает «аренда была приостановлена» — пустота нормальна).
+                            val stopInGap = stopMarkers.map { it.first }
+                                .any { it in (todayStart until resumeStart) }
+                            if (!stopInGap) {
+                                var cursor = resumeStart - dayMs // день перед Resume
+                                var guard = 0
+                                while (cursor >= todayStart && guard < 60) {
+                                    val ws = cursor - 6 * dayMs // неделя назад
+                                    val realWs = maxOf(ws, todayStart)
+                                    generated.add(ContractSpec(realWs, cursor, isPaid = false))
+                                    cursor = realWs - dayMs
+                                    guard++
+                                }
+                            }
+                        }
+                    }
+
+                    regularSpecs + generated
+                }
                 4 -> {
                     // Сценарий групп: для каждой группы используем isPaid,
                     // который выбрал пользователь в календаре (кнопки статуса).
@@ -297,7 +402,7 @@ class RenterViewModel(application: Application) : AndroidViewModel(application) 
                         // (applyWeeklyPayment) и применять к ним симметричную
                         // логику удаления (реверс баланса на ±amount).
                         val calendarMarker =
-                            if (scenario == 4) "Kalendar orqali yaratildi — " else ""
+                            if (scenario == 4 || scenario == 5) "Kalendar orqali yaratildi — " else ""
                         val notes = when {
                             spec.isPaid && specs.size > 1 ->
                                 "${calendarMarker}${idx + 1}-hafta oldindan to'lov"
@@ -308,12 +413,12 @@ class RenterViewModel(application: Application) : AndroidViewModel(application) 
                         }
 
                         // ── Сумма контракта зависит от сценария ──────────────
-                        // Для scenario 4 (календарь) — по дням.
+                        // Для scenario 4 и 5 (календарь) — по дням.
                         // Для остальных — effectiveWeeklyPrice (7 дней).
                         val contractAmount = contractAmountFor(
                             startMs = spec.weekStart,
                             endMs = spec.weekEnd,
-                            isCalendarGroup = (scenario == 4)
+                            isCalendarGroup = (scenario == 4 || scenario == 5)
                         )
                         val contractId = historyRepository.insert(ContractHistoryEntry(
                             renterId = savedRenter.id,
@@ -375,6 +480,78 @@ class RenterViewModel(application: Application) : AndroidViewModel(application) 
                                 )
                             } catch (e: Exception) {
                                 Log.w(TAG, "depositContractIncome failed for new contract #$contractId: ${e.message}")
+                            }
+                        }
+                    }
+
+                    // ── Сохранение Stop/Resume маркеров как отдельных записей ──
+                    // (только для scenario == 5 — SCENARIO_GROUPS_WITH_MARKERS)
+                    // Stop-маркер → ContractHistoryEntry(type=TERMINATED, isPaid=false,
+                    //   notes="STOP_MARKER", weekStart=weekEnd=day)
+                    // Resume-маркер → ContractHistoryEntry(type=RETURNED, isPaid=false,
+                    //   notes="RESUME_MARKER", weekStart=weekEnd=day)
+                    // Эти записи НЕ создают Transaction и НЕ меняют баланс —
+                    // они служат только сигналом для scooterStatusOf (свободен
+                    // ли скутер) и для отображения в календаре просмотра.
+                    if (scenario == 5) {
+                        for ((stopStart, stopEnd) in stopMarkers) {
+                            try {
+                                historyRepository.insert(ContractHistoryEntry(
+                                    renterId = savedRenter.id,
+                                    timestamp = now,
+                                    type = ContractHistoryEntry.TYPE_TERMINATED,
+                                    amount = 0.0,
+                                    notes = "STOP_MARKER",
+                                    renterName = savedRenter.name,
+                                    renterPhone = savedRenter.phoneNumber,
+                                    scooterName = savedRenter.scooterName,
+                                    weekStart = stopStart,
+                                    weekEnd = stopEnd,
+                                    weeklyPrice = 0.0,
+                                    passportData = savedRenter.passportData,
+                                    address = savedRenter.address,
+                                    pinfl = savedRenter.pinfl,
+                                    vinNumber = scooter?.vinNumber ?: "",
+                                    engineNumber = scooter?.engineNumber ?: "",
+                                    scooterSerialNumber = scooter?.scooterSerialNumber ?: "",
+                                    batteryId1 = scooter?.batteryId1 ?: "",
+                                    batteryId2 = scooter?.batteryId2 ?: "",
+                                    additionalInfo = scooter?.additionalInfo ?: "",
+                                    isPaid = false
+                                ))
+                                Log.d(TAG, "addRenter: saved STOP_MARKER for renter #${savedRenter.id} at $stopStart")
+                            } catch (e: Exception) {
+                                Log.w(TAG, "addRenter: failed to save STOP_MARKER: ${e.message}")
+                            }
+                        }
+                        for ((resStart, resEnd) in resumeMarkers) {
+                            try {
+                                historyRepository.insert(ContractHistoryEntry(
+                                    renterId = savedRenter.id,
+                                    timestamp = now,
+                                    type = ContractHistoryEntry.TYPE_RETURNED,
+                                    amount = 0.0,
+                                    notes = "RESUME_MARKER",
+                                    renterName = savedRenter.name,
+                                    renterPhone = savedRenter.phoneNumber,
+                                    scooterName = savedRenter.scooterName,
+                                    weekStart = resStart,
+                                    weekEnd = resEnd,
+                                    weeklyPrice = 0.0,
+                                    passportData = savedRenter.passportData,
+                                    address = savedRenter.address,
+                                    pinfl = savedRenter.pinfl,
+                                    vinNumber = scooter?.vinNumber ?: "",
+                                    engineNumber = scooter?.engineNumber ?: "",
+                                    scooterSerialNumber = scooter?.scooterSerialNumber ?: "",
+                                    batteryId1 = scooter?.batteryId1 ?: "",
+                                    batteryId2 = scooter?.batteryId2 ?: "",
+                                    additionalInfo = scooter?.additionalInfo ?: "",
+                                    isPaid = false
+                                ))
+                                Log.d(TAG, "addRenter: saved RESUME_MARKER for renter #${savedRenter.id} at $resStart")
+                            } catch (e: Exception) {
+                                Log.w(TAG, "addRenter: failed to save RESUME_MARKER: ${e.message}")
                             }
                         }
                     }
@@ -928,18 +1105,44 @@ class RenterViewModel(application: Application) : AndroidViewModel(application) 
         // ── 1. Загружаем все текущие контракты арендатора ──────────────
         val currentContracts = historyRepository.contractsForRenterOnce(existing.id)
 
-        // ── 2. Разделяем на удаление / обновление / добавление ─────────
-        val keepIds = groups.mapNotNull { it.existingId }.toSet()
-        val toDelete = currentContracts.filter { it.id !in keepIds }
+        // ── 1а. Разделяем группы на обычные контракты и маркеры Stop/Resume ──
+        // Маркеры обрабатываются ОТДЕЛЬНО от обычных контрактов:
+        //   • Stop-маркер → TYPE_TERMINATED, isPaid=false, notes="STOP_MARKER"
+        //   • Resume-маркер → TYPE_RETURNED, isPaid=false, notes="RESUME_MARKER"
+        //   • Для Resume-маркеров также генерируются неоплаченные weekly-контракты
+        //     (вперёд до ближайшего Stop и назад до сегодня при отсутствии Stop).
+        val stopMarkers = groups.filter { it.isStopMarker }
+        val resumeMarkers = groups.filter { it.isResumeMarker }
+        val regularGroups = groups.filter { !it.isStopMarker && !it.isResumeMarker }
 
-        // Для обновления: existingId есть в groups, но isPaid или даты изменились.
+        // ── 1б. Загружаем текущие Stop/Resume маркеры из БД ────────────
+        // Это нужно, чтобы корректно удалить старые маркеры, которых больше
+        // нет в новом списке групп (пользователь их стёр в календаре).
+        val currentMarkers = currentContracts.filter {
+            it.type == ContractHistoryEntry.TYPE_TERMINATED ||
+            it.type == ContractHistoryEntry.TYPE_RETURNED
+        }
+
+        // ── 2. Разделяем на удаление / обновление / добавление ─────────
+        val keepIds = regularGroups.mapNotNull { it.existingId }.toSet()
+        val toDelete = currentContracts.filter { it.id !in keepIds && it.id !in currentMarkers.map { m -> m.id } }
+
+        // Также удаляем старые маркеры (они всегда пересоздаются, т.к.
+        // пользователь мог изменить их дату или тип).
+        val markersToDelete = currentMarkers
+        for (marker in markersToDelete) {
+            deleteContractWithCascadeInternal(marker)
+            Log.d(TAG, "reconcile: deleted old marker #${marker.id} (type=${marker.type})")
+        }
+
+        // Для обновления: existingId есть в regularGroups, но isPaid или даты изменились.
         // Логика: удалить старый + создать новый (баланс и Transaction пересоздаются).
         data class UpdatePair(
             val oldContract: ContractHistoryEntry,
             val newGroup: com.example.RenterFormContractGroup
         )
         val toUpdate = mutableListOf<UpdatePair>()
-        for (g in groups) {
+        for (g in regularGroups) {
             val exId = g.existingId ?: continue
             val existingContract = currentContracts.find { it.id == exId } ?: continue
             val statusChanged = existingContract.isPaid != g.isPaid
@@ -950,7 +1153,7 @@ class RenterViewModel(application: Application) : AndroidViewModel(application) 
         }
 
         // Добавляем: existingId == null (новые группы, созданные в календаре)
-        val toAdd = groups.filter { it.existingId == null }
+        val toAdd = regularGroups.filter { it.existingId == null }
 
         // ── 3. Удаляем контракты с каскадом ────────────────────────────
         // Сначала удаляем, потом добавляем — чтобы не было временного дублирования
@@ -1049,6 +1252,170 @@ class RenterViewModel(application: Application) : AndroidViewModel(application) 
                 lastPaymentTimestamp = if (g.isPaid) now else renter.lastPaymentTimestamp
             )
             Log.d(TAG, "reconcile: added/updated contract #$newContractId (isPaid=${g.isPaid})")
+        }
+
+        // ── 5а. Сохраняем Stop/Resume маркеры + авто-контракты от Resume ──
+        // Аналогично addRenter scenario 5:
+        //   • Stop → TYPE_TERMINATED, notes="STOP_MARKER", однодневный.
+        //   • Resume → TYPE_RETURNED, notes="RESUME_MARKER", однодневный.
+        //   • Для каждого Resume генерируем неоплаченные weekly-контракты
+        //     вперёд до ближайшего Stop (или +7 дней) и назад до сегодня,
+        //     если в [today, R-1] нет Stop-маркера.
+        val weekMs = 7L * dayMs
+        for (sm in stopMarkers) {
+            try {
+                historyRepository.insert(ContractHistoryEntry(
+                    renterId = existing.id,
+                    timestamp = now,
+                    type = ContractHistoryEntry.TYPE_TERMINATED,
+                    amount = 0.0,
+                    notes = "STOP_MARKER",
+                    renterName = newName,
+                    renterPhone = newPhone,
+                    scooterName = newScooterName ?: scooter?.name ?: "",
+                    weekStart = sm.startMs,
+                    weekEnd = sm.endMs,
+                    weeklyPrice = 0.0,
+                    passportData = passportData,
+                    address = address,
+                    pinfl = pinfl,
+                    vinNumber = scooter?.vinNumber ?: "",
+                    engineNumber = scooter?.engineNumber ?: "",
+                    scooterSerialNumber = scooter?.scooterSerialNumber ?: "",
+                    batteryId1 = scooter?.batteryId1 ?: "",
+                    batteryId2 = scooter?.batteryId2 ?: "",
+                    additionalInfo = scooter?.additionalInfo ?: "",
+                    isPaid = false
+                ))
+                Log.d(TAG, "reconcile: saved STOP_MARKER for renter #${existing.id} at ${sm.startMs}")
+            } catch (e: Exception) {
+                Log.w(TAG, "reconcile: failed to save STOP_MARKER: ${e.message}")
+            }
+        }
+
+        // Авто-контракты от Resume-маркеров (вперёд до Stop и назад до сегодня).
+        // Используем тот же алгоритм, что и в addRenter (scenario 5).
+        val stopDays = stopMarkers.map { it.startMs }.sorted()
+        for (rm in resumeMarkers.sortedBy { it.startMs }) {
+            val resumeStart = rm.startMs
+            // Forward
+            val nextStop = stopDays.firstOrNull { it > resumeStart }
+            val forwardEnd = when {
+                nextStop != null && nextStop <= resumeStart + weekMs -> nextStop - 1L
+                else -> resumeStart + weekMs - 1L
+            }
+            if (forwardEnd > resumeStart) {
+                val daysCount = kotlin.math.ceil((forwardEnd - resumeStart).toDouble() / dayMs).toInt()
+                val amount = dailyPrice * daysCount
+                historyRepository.insert(ContractHistoryEntry(
+                    renterId = existing.id,
+                    timestamp = now,
+                    type = ContractHistoryEntry.TYPE_AUTO_RENEW,
+                    amount = amount,
+                    notes = "Kalendar orqali yaratildi — Resume dan avtomatik (oldinga) — $daysCount kun",
+                    renterName = newName,
+                    renterPhone = newPhone,
+                    scooterName = newScooterName ?: scooter?.name ?: "",
+                    weekStart = resumeStart,
+                    weekEnd = forwardEnd,
+                    weeklyPrice = amount,
+                    passportData = passportData,
+                    address = address,
+                    pinfl = pinfl,
+                    vinNumber = scooter?.vinNumber ?: "",
+                    engineNumber = scooter?.engineNumber ?: "",
+                    scooterSerialNumber = scooter?.scooterSerialNumber ?: "",
+                    batteryId1 = scooter?.batteryId1 ?: "",
+                    batteryId2 = scooter?.batteryId2 ?: "",
+                    additionalInfo = scooter?.additionalInfo ?: "",
+                    isPaid = false
+                ))
+                renter = renter.copy(
+                    balance = renter.balance - amount,
+                    debtAmount = maxOf(0.0, -(renter.balance - amount))
+                )
+            }
+            // Backward (только если нет Stop в [today, R-1])
+            val todayStart = run {
+                val cal = java.util.Calendar.getInstance()
+                cal.set(java.util.Calendar.HOUR_OF_DAY, 0)
+                cal.set(java.util.Calendar.MINUTE, 0)
+                cal.set(java.util.Calendar.SECOND, 0)
+                cal.set(java.util.Calendar.MILLISECOND, 0)
+                cal.timeInMillis
+            }
+            if (resumeStart > todayStart + dayMs) {
+                val stopInGap = stopDays.any { it in (todayStart until resumeStart) }
+                if (!stopInGap) {
+                    var cursor = resumeStart - dayMs
+                    var guard = 0
+                    while (cursor >= todayStart && guard < 60) {
+                        val ws = cursor - 6 * dayMs
+                        val realWs = maxOf(ws, todayStart)
+                        val daysCount = kotlin.math.ceil((cursor - realWs).toDouble() / dayMs).toInt()
+                            .coerceAtLeast(1)
+                        val amount = dailyPrice * daysCount
+                        historyRepository.insert(ContractHistoryEntry(
+                            renterId = existing.id,
+                            timestamp = now,
+                            type = ContractHistoryEntry.TYPE_AUTO_RENEW,
+                            amount = amount,
+                            notes = "Kalendar orqali yaratildi — Resume dan avtomatik (orqaga) — $daysCount kun",
+                            renterName = newName,
+                            renterPhone = newPhone,
+                            scooterName = newScooterName ?: scooter?.name ?: "",
+                            weekStart = realWs,
+                            weekEnd = cursor,
+                            weeklyPrice = amount,
+                            passportData = passportData,
+                            address = address,
+                            pinfl = pinfl,
+                            vinNumber = scooter?.vinNumber ?: "",
+                            engineNumber = scooter?.engineNumber ?: "",
+                            scooterSerialNumber = scooter?.scooterSerialNumber ?: "",
+                            batteryId1 = scooter?.batteryId1 ?: "",
+                            batteryId2 = scooter?.batteryId2 ?: "",
+                            additionalInfo = scooter?.additionalInfo ?: "",
+                            isPaid = false
+                        ))
+                        renter = renter.copy(
+                            balance = renter.balance - amount,
+                            debtAmount = maxOf(0.0, -(renter.balance - amount))
+                        )
+                        cursor = realWs - dayMs
+                        guard++
+                    }
+                }
+            }
+            // Сохраняем сам Resume-маркер (однодневный)
+            try {
+                historyRepository.insert(ContractHistoryEntry(
+                    renterId = existing.id,
+                    timestamp = now,
+                    type = ContractHistoryEntry.TYPE_RETURNED,
+                    amount = 0.0,
+                    notes = "RESUME_MARKER",
+                    renterName = newName,
+                    renterPhone = newPhone,
+                    scooterName = newScooterName ?: scooter?.name ?: "",
+                    weekStart = rm.startMs,
+                    weekEnd = rm.endMs,
+                    weeklyPrice = 0.0,
+                    passportData = passportData,
+                    address = address,
+                    pinfl = pinfl,
+                    vinNumber = scooter?.vinNumber ?: "",
+                    engineNumber = scooter?.engineNumber ?: "",
+                    scooterSerialNumber = scooter?.scooterSerialNumber ?: "",
+                    batteryId1 = scooter?.batteryId1 ?: "",
+                    batteryId2 = scooter?.batteryId2 ?: "",
+                    additionalInfo = scooter?.additionalInfo ?: "",
+                    isPaid = false
+                ))
+                Log.d(TAG, "reconcile: saved RESUME_MARKER for renter #${existing.id} at ${rm.startMs}")
+            } catch (e: Exception) {
+                Log.w(TAG, "reconcile: failed to save RESUME_MARKER: ${e.message}")
+            }
         }
 
         // ── 6. Сохраняем актуальный баланс арендатора в БД ─────────────

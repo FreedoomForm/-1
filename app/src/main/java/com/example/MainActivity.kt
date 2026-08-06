@@ -38,6 +38,10 @@ import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.PictureAsPdf
 import androidx.compose.material.icons.filled.KeyboardArrowRight
+import androidx.compose.material.icons.filled.KeyboardArrowUp
+import androidx.compose.material.icons.filled.KeyboardArrowDown
+import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.List
 import androidx.compose.material.icons.filled.DirectionsBike
 import androidx.compose.material.icons.filled.Search
@@ -58,6 +62,7 @@ import androidx.compose.material.icons.filled.AccountBalanceWallet
 import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Clear
+import androidx.compose.material.icons.filled.Remove
 import androidx.compose.material.icons.filled.Tag
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Schedule
@@ -2119,6 +2124,30 @@ fun MainScreen(
                         }
                 }
 
+            // ── Latest contract per renter (ВНЕ блоков if (currentTab == ...)) ──
+            // Нужен как для вкладки арендаторов (даты старта/конца последнего
+            // контракта, статус оплаты, цветная полоса), так и для вкладки
+            // скутеров — чтобы определять, свободен ли скутер, если у
+            // арендатора последний контракт TERMINATED (Stop-маркер).
+            val contractHistoryAll by contractHistoryViewModel.history
+                .collectAsStateWithLifecycle()
+            val latestContractByRenter: Map<Int, com.example.data.ContractHistoryEntry> =
+                remember(contractHistoryAll) {
+                    contractHistoryAll
+                        .asSequence()
+                        .filter {
+                            it.type == com.example.data.ContractHistoryEntry.TYPE_CREATED ||
+                            it.type == com.example.data.ContractHistoryEntry.TYPE_AUTO_RENEW ||
+                            it.type == com.example.data.ContractHistoryEntry.TYPE_TERMINATED ||
+                            it.type == com.example.data.ContractHistoryEntry.TYPE_RETURNED
+                        }
+                        .filter { it.renterId > 0 }
+                        .groupBy { it.renterId }
+                        .mapValues { (_, entries) ->
+                            entries.maxByOrNull { it.weekEnd ?: it.timestamp }!!
+                        }
+                }
+
             if (currentTab == 0) {
                 // ===== ТАБЛИЦА АРЕНДАТОРОВ =====
                 // Полоса поиска (UnifiedSearchBar) и панель доп.кнопок (To'lov/
@@ -2141,22 +2170,13 @@ fun MainScreen(
                 // Теперь берём из истории контрактов самую свежую запись
                 // (CREATED или AUTO_RENEW) с наибольшим weekEnd и используем её
                 // weekStart / weekEnd. Если истории нет — fallback на поля Renter.
+                //
+                // ВАЖНО: latestContractByRenter объявлен ВНЕ if (currentTab == 0)
+                // — теперь он используется и в RenterTable, и в ScooterTable
+                // (для определения, свободен ли скутер, если последний контракт
+                // TERMINATED). Здесь просто используем его.
                 val contractHistory by contractHistoryViewModel.history
                     .collectAsStateWithLifecycle()
-                val latestContractByRenter: Map<Int, com.example.data.ContractHistoryEntry> =
-                    remember(contractHistory) {
-                        contractHistory
-                            .asSequence()
-                            .filter {
-                                it.type == com.example.data.ContractHistoryEntry.TYPE_CREATED ||
-                                it.type == com.example.data.ContractHistoryEntry.TYPE_AUTO_RENEW
-                            }
-                            .filter { it.renterId > 0 }
-                            .groupBy { it.renterId }
-                            .mapValues { (_, entries) ->
-                                entries.maxByOrNull { it.weekEnd ?: it.timestamp }!!
-                            }
-                    }
 
                 // ── Все контракты по арендаторам (для раскрывающейся таблицы) ──
                 // Группировка по renterId, только CREATED + AUTO_RENEW (без PAYMENT/
@@ -2345,7 +2365,7 @@ fun MainScreen(
                             "col_batt2"  -> scooter.batteryId2.contains(filterText, ignoreCase = true)
                             "col_extra"  -> scooter.additionalInfo.contains(filterText, ignoreCase = true)
                             "col_status" -> {
-                                val status = scooterStatusLabel(scooterStatusOf(scooter.id, renters))
+                                val status = scooterStatusLabel(scooterStatusOf(scooter.id, renters, latestContractByRenter))
                                 status.contains(filterText, ignoreCase = true)
                             }
                             else -> true
@@ -2373,7 +2393,7 @@ fun MainScreen(
                             "col_extra"  -> compareBy<Scooter> { it.additionalInfo.lowercase() }
                             "col_status" -> compareBy<Scooter> {
                                 // Ijarada (rented) > Bazada (in_base) — сортируем по статусу
-                                if (scooterStatusOf(it.id, renters) == ScooterStatus.RENTED) 1 else 0
+                                if (scooterStatusOf(it.id, renters, latestContractByRenter) == ScooterStatus.RENTED) 1 else 0
                             }
                             else -> compareBy<Scooter> { it.name.lowercase() }
                         }
@@ -2391,6 +2411,10 @@ fun MainScreen(
                         sortState = scooterSortState,
                         columnVisibility = scooterColumnVisibility,
                         contractsByScooterName = contractsByScooterName,
+                        // Передаём карту последних контрактов по арендаторам,
+                        // чтобы ScooterTable мог освободить скутер, если у
+                        // арендатора последний контракт TERMINATED (Stop-маркер).
+                        latestContractByRenter = latestContractByRenter,
                         onSortClick = { colId ->
                             scooterSortState = scooterSortState.click(colId)
                         },
@@ -2711,7 +2735,15 @@ fun MainScreen(
                             address = result.address,
                             pinfl = result.pinfl,
                             autoRenewMode = result.autoRenewMode,
-                            contractGroups = result.contractGroups
+                            contractGroups = result.contractGroups,
+                            // Передаём полный список групп с маркерами Stop/Resume —
+                            // addRenter использует его (scenario 5) для:
+                            //   • сохранения Stop-маркеров как TYPE_TERMINATED
+                            //   • сохранения Resume-маркеров как TYPE_RETURNED
+                            //   • авто-генерации неоплаченных weekly-контрактов от
+                            //     каждого Resume-маркера вперёд до ближайшего Stop
+                            //     (или +7 дней) и назад до сегодня (если нет Stop).
+                            contractGroupsWithMarkers = result.contractGroupsWithIds
                         )
                     }
                     showAddDialog = false
@@ -2917,7 +2949,10 @@ fun RenterTable(
     val showStart    = isColVisible("col_start")
     val showEnd      = isColVisible("col_end")
     val showBalance  = isColVisible("col_balance")
-    val showRenewal  = isColVisible("col_renewal")
+    val showRenewal  = false // столбец «Status (Manual/Auto)» удалён из UI
+                                // по просьбе пользователя. Логика авто-продления
+                                // теперь управляется через маркеры Stop/Resume
+                                // в календаре формы арендатора.
     val showPassport = isColVisible("col_passport")
     val showAddress  = isColVisible("col_address")
     val showPinfl    = isColVisible("col_pinfl")
@@ -3143,15 +3178,32 @@ fun RenterTable(
                                 overflow = TextOverflow.Visible
                             )
                         }
-                        // Skuter
+                        // Skuter — имя скутера из ПОСЛЕДНЕГО КОНТРАКТА
+                        // По просьбе пользователя: «в таблице арендаторов столбце
+                        // скутеров будет показывать текст скутера который
+                        // подключен к этому арендатору с помощью контракта на
+                        // сегодняшний день».
+                        // Берём scooterName из последнего контракта арендатора
+                        // (вместо устаревшего поля Renter.scooterName, которое
+                        // может указывать на старый скутер, не отражая смену
+                        // статуса Stop/Resume). Если последний контракт
+                        // TERMINATED (Stop-маркер) → показываем «Tanlanmagan»,
+                        // signalling что скутер свободен.
                         if (showScooter) {
+                            val latest = latestContractByRenter[renter.id]
+                            val scooterDisplay = when {
+                                latest == null -> renter.scooterName ?: "—"
+                                latest.type == com.example.data.ContractHistoryEntry.TYPE_TERMINATED -> "Tanlanmagan"
+                                else -> latest.scooterName ?: renter.scooterName ?: "—"
+                            }
                             Text(
-                                renter.scooterName ?: "—",
+                                scooterDisplay,
                                 modifier = Modifier
                                     .width(wScoot)
                                     .padding(horizontal = 4.dp),
                                 style = MaterialTheme.typography.bodySmall,
-                                color = ClaudeText,
+                                color = if (latest?.type == com.example.data.ContractHistoryEntry.TYPE_TERMINATED)
+                                    ClaudeTextSecondary else ClaudeText,
                                 maxLines = 2,
                                 softWrap = true,
                                 overflow = TextOverflow.Visible
@@ -3639,14 +3691,13 @@ fun RenterFormDialog(
         mutableStateOf(initialRenter?.rentStartDateTimestamp ?: System.currentTimeMillis())
     }
 
-    // ── Режим авто-продления контракта (Manual / Auto) ─────────────────
-    // По умолчанию AUTO (автоматическое создание контрактов при окончании
-    // последнего). В режиме редактирования подставляется текущее значение
-    // из БД. Пользователь может переключаться между MANUAL и AUTO через
-    // две кнопки-«таблетки» ниже.
-    var autoRenewMode by remember {
-        mutableStateOf(initialRenter?.autoRenewMode ?: com.example.data.RenterAutoRenewMode.AUTO)
-    }
+    // ── Поле autoRenewMode удалено из UI ────────────────────────────────
+    // Переключатель Manual/Auto и его столбец в таблице арендаторов удалены
+    // по просьбе пользователя. Логика авто-продления теперь управляется
+    // через маркеры Stop/Resume в календаре (см. ContractCalendar).
+    // Поле Renter.autoRenewMode в БД сохраняется для совместимости — всегда
+    // defaults to AUTO (старое поведение), но больше не редактируется из UI.
+    val autoRenewMode: String = com.example.data.RenterAutoRenewMode.AUTO
 
     // ── Группы контрактов (новый календарь) ───────────────────────────
     // Список групп, выбранных пользователем в календаре. Если список не пуст,
@@ -3902,263 +3953,111 @@ fun RenterFormDialog(
                 // и используются в addRenter. Если группы пусты — startTimestamp
                 // остаётся как сегодня (default) и работает автоматическая
                 // логика по дате.
+                // ── Вычисляем выбран ли скутер ДО календаря ─────────────────
+                // Нужно для передачи scooterSelected в ContractCalendar —
+                // календарь блокирует тапы по дням пока скутер не выбран
+                // (по требованию пользователя: «должен будет в обязательном
+                // порядке выбрать скутер с помощью нашей кнопки и только
+                // потом в календаре выбрать период»).
+                val scooterSelectedForCalendar = selectedScooterId != null
+
                 ContractCalendar(
                     editable = true,
+                    scooterSelected = scooterSelectedForCalendar,
                     groups = contractGroups,
                     activeGroupId = activeGroupId,
                     onGroupsChange = { contractGroups = it },
                     onActiveGroupChange = { activeGroupId = it }
                 )
 
-                // ── Список контрактов под календарём ──────────────────────────
-                // Показывает все группы (как существующие из БД, так и новые,
-                // только что созданные пользователем в календаре). Каждая строка:
-                //   [статус-пилюля] [дата начала → дата окончания] [✕ удалить]
+                // ── Кнопка выбора скутера (перенесена снизу формы) ────────
+                // По просьбе пользователя: «снизу календаря сверху списка
+                // контрактов сделал кнопку выбора скутера то есть ты должен
+                // перенести кнопку выбора скутера из самого низа окна создания
+                // и изменения арендатора в место снизу календаря и сверху
+                // списка контрактов и стилизировал его квадратным и красивым
+                // похожим на кнопки оплаченный и неоплаченный сверху календаря».
                 //
-                // Существующие контракты помечаются «№<id>», новые — «Yangi».
-                // Это нужно, чтобы пользователь видел, какие контракты уже есть
-                // в БД (и будут сохранены как есть или удалены), а какие только
-                // что добавлены (и будут созданы при сохранении формы).
-                //
-                // Раньше календарь в режиме редактирования показывал «Kontraktlar
-                // yo'q» даже если у арендатора были контракты в БД — это был баг:
-                // contractGroups инициализировался пустым списком и никогда не
-                // загружался из existingContracts. Теперь список загружается
-                // родителем через contractHistoryViewModel.contractsForRenter.
-                if (contractGroups.isNotEmpty()) {
-                    val dateFmtList = remember { SimpleDateFormat("dd.MM.yyyy", Locale.getDefault()) }
-                    Text(
-                        text = "Kontraktlar ro'yxati (${contractGroups.size})",
-                        style = MaterialTheme.typography.titleSmall,
-                        color = ClaudeAccent,
-                        fontWeight = FontWeight.SemiBold,
-                        modifier = Modifier.padding(top = 4.dp)
-                    )
-                    contractGroups.forEachIndexed { idx, group ->
-                        val startDate = dateFmtList.format(java.util.Date(group.startMs))
-                        val endDate = dateFmtList.format(java.util.Date(group.endMs))
-                        val statusLabel = if (group.isPaid) "To'langan" else "To'lanmagan"
-                        val statusColor = if (group.isPaid) StatusOk else StatusOverdue
-                        val statusBg = if (group.isPaid) StatusOkBg else StatusOverdueBg
-                        val idLabel = group.existingContractId?.let { "№$it" } ?: "Yangi"
-
-                        Surface(
-                            shape = RoundedCornerShape(8.dp),
-                            color = ClaudeCard,
-                            border = androidx.compose.foundation.BorderStroke(
-                                1.dp,
-                                if (group.isPaid) StatusOk.copy(alpha = 0.4f)
-                                else StatusOverdue.copy(alpha = 0.4f)
-                            ),
-                            modifier = Modifier.fillMaxWidth()
-                        ) {
-                            Row(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .padding(horizontal = 10.dp, vertical = 8.dp),
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.spacedBy(8.dp)
-                            ) {
-                                // Статус-пилюля
-                                Surface(
-                                    shape = RoundedCornerShape(6.dp),
-                                    color = statusBg
-                                ) {
-                                    Text(
-                                        text = statusLabel,
-                                        color = statusColor,
-                                        style = MaterialTheme.typography.labelSmall,
-                                        fontWeight = FontWeight.SemiBold,
-                                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp)
-                                    )
-                                }
-                                // ID-пилюля (существующий контракт №id или «Yangi»)
-                                Surface(
-                                    shape = RoundedCornerShape(6.dp),
-                                    color = ClaudeDivider.copy(alpha = 0.4f)
-                                ) {
-                                    Text(
-                                        text = idLabel,
-                                        color = ClaudeTextSecondary,
-                                        style = MaterialTheme.typography.labelSmall,
-                                        modifier = Modifier.padding(horizontal = 6.dp, vertical = 3.dp)
-                                    )
-                                }
-                                // Даты
-                                Text(
-                                    text = "$startDate → $endDate",
-                                    color = ClaudeText,
-                                    style = MaterialTheme.typography.bodySmall,
-                                    modifier = Modifier.weight(1f)
-                                )
-                                // ── Кнопка удаления контракта ──────────────────────
-                                // Используем Box + clickable вместо IconButton, чтобы:
-                                //   1. Увеличить тап-таргет (36dp вместо 28dp) — по
-                                //      гайдлайнам Material минимальный тап-таргет 48dp,
-                                //      но в плотном списке 36dp приемлемо.
-                                //   2. Избежать возможных проблем с перехватом кликов
-                                //      соседними Surface/Row. Box с явным clickable
-                                //      и ripple — более надёжный вариант.
-                                //   3. Явный фон (ClaudeAccentBg) и квадратная форма
-                                //      (RoundedCornerShape(8.dp)) делают кнопку
-                                //      визуально заметнее и единообразной с остальными.
-                                Box(
-                                    modifier = Modifier
-                                        .size(36.dp)
-                                        .clip(RoundedCornerShape(8.dp))
-                                        .background(ClaudeAccentBg)
-                                        .border(1.dp, ClaudeDivider, RoundedCornerShape(8.dp))
-                                        .clickable {
-                                            contractGroups = contractGroups.filterNot { it.id == group.id }
-                                            if (activeGroupId == group.id) activeGroupId = null
-                                        },
-                                    contentAlignment = Alignment.Center
-                                ) {
-                                    Icon(
-                                        imageVector = Icons.Default.Close,
-                                        contentDescription = "Kontraktni o'chirish",
-                                        tint = StatusOverdue,
-                                        modifier = Modifier.size(20.dp)
-                                    )
-                                }
-                            }
-                        }
-                    }
-                }
-
-                if (isEdit) {
-                    Text(
-                        "Holat: ${if (initialRenter?.isReturned == true) "Qaytarilgan" else "Faol"}",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = ClaudeTextSecondary
-                    )
-                }
-
-                // ── Переключатель «Статус» (Manual / Auto) ──────────────────
-                // Определяет, будет ли система автоматически создавать новый
-                // контракт при наступлении дня окончания последнего контракта.
-                //   • «Qo'llanma» (Manual) — система НЕ создаёт автоматически.
-                //   • «Avtomatik» (Auto) — система создаёт AUTO_RENEW при
-                //     окончании последнего контракта по дате.
-                // По умолчанию Avtomatik (автоматическое создание). Пользователь
-                // может переключаться в любой момент — изменение сохраняется
-                // в Renter.autoRenewMode при сохранении формы.
-                SectionLabel("Status (kontrakt avtomatik yaratilishi)")
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    // ── Кнопка «Qo'llanma» (MANUAL) ──
-                    Surface(
-                        onClick = { autoRenewMode = com.example.data.RenterAutoRenewMode.MANUAL },
-                        shape = RoundedCornerShape(50),
-                        color = if (autoRenewMode == com.example.data.RenterAutoRenewMode.MANUAL)
-                            ClaudeAccentBg else ClaudeCard,
-                        border = BorderStroke(
-                            1.dp,
-                            if (autoRenewMode == com.example.data.RenterAutoRenewMode.MANUAL)
-                                ClaudeAccent else ClaudeDivider
-                        ),
-                        modifier = Modifier.weight(1f)
-                    ) {
-                        Row(
-                            modifier = Modifier.padding(vertical = 10.dp, horizontal = 12.dp),
-                            horizontalArrangement = Arrangement.Center,
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Icon(
-                                Icons.Default.Person,
-                                contentDescription = null,
-                                tint = if (autoRenewMode == com.example.data.RenterAutoRenewMode.MANUAL)
-                                    ClaudeAccent else ClaudeTextSecondary,
-                                modifier = Modifier.size(18.dp)
-                            )
-                            Spacer(Modifier.width(6.dp))
-                            Text(
-                                "Qo'llanma",
-                                color = if (autoRenewMode == com.example.data.RenterAutoRenewMode.MANUAL)
-                                    ClaudeAccent else ClaudeTextSecondary,
-                                fontWeight = FontWeight.SemiBold,
-                                style = MaterialTheme.typography.labelLarge
-                            )
-                        }
-                    }
-                    // ── Кнопка «Avtomatik» (AUTO) ──
-                    Surface(
-                        onClick = { autoRenewMode = com.example.data.RenterAutoRenewMode.AUTO },
-                        shape = RoundedCornerShape(50),
-                        color = if (autoRenewMode == com.example.data.RenterAutoRenewMode.AUTO)
-                            StatusOkBg else ClaudeCard,
-                        border = BorderStroke(
-                            1.dp,
-                            if (autoRenewMode == com.example.data.RenterAutoRenewMode.AUTO)
-                                StatusOk else ClaudeDivider
-                        ),
-                        modifier = Modifier.weight(1f)
-                    ) {
-                        Row(
-                            modifier = Modifier.padding(vertical = 10.dp, horizontal = 12.dp),
-                            horizontalArrangement = Arrangement.Center,
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Icon(
-                                Icons.Default.Refresh,
-                                contentDescription = null,
-                                tint = if (autoRenewMode == com.example.data.RenterAutoRenewMode.AUTO)
-                                    StatusOk else ClaudeTextSecondary,
-                                modifier = Modifier.size(18.dp)
-                            )
-                            Spacer(Modifier.width(6.dp))
-                            Text(
-                                "Avtomatik",
-                                color = if (autoRenewMode == com.example.data.RenterAutoRenewMode.AUTO)
-                                    StatusOk else ClaudeTextSecondary,
-                                fontWeight = FontWeight.SemiBold,
-                                style = MaterialTheme.typography.labelLarge
-                            )
-                        }
-                    }
-                }
-                // ── Подсказка-описание текущего режима ──────────────────────
-                Text(
-                    text = when (autoRenewMode) {
-                        com.example.data.RenterAutoRenewMode.AUTO ->
-                            "Avtomatik: oxirgi kontrakt tugaganda tizim yangi kontrakt yaratadi."
-                        else ->
-                            "Qo'llanma: kontrakt tugaganda tizim yangi kontrakt yaratmaydi."
-                    },
-                    style = MaterialTheme.typography.labelSmall,
-                    color = ClaudeTextSecondary,
-                    modifier = Modifier.padding(top = 2.dp)
-                )
-
-                // ── ПОЛЕ «КОЛИЧЕСТВО НЕДЕЛЬ» УДАЛЕНО ──────────────────────────
-                // Раньше здесь был ExposedDropdownMenuBox с выбором «1 Hafta»
-                // (7 дней), «2 Hafta», «1 Oy» и т.д. Пользователь явно попросил
-                // убрать это поле — теперь срок аренды определяется только
-                // периодами, выбранными в календаре контрактов ниже.
-                // Если пользователь не выбрал ни одного периода в календаре,
-                // используется startDate по умолчанию + 7 дней (legacy behavior).
-
+                // Логика работы:
+                //   • Пользователь сначала выбирает статус (Paid/Unpaid или
+                //     Stop/Resume) кнопками в календаре.
+                //   • Затем ОБЯЗАТЕЛЬНО выбирает скутер этой квадратной кнопкой.
+                //   • Только потом выбирает период в календаре.
+                //   • Носозданный контракт привязывается и к скутеру, и к арендатору.
+                //   • При Stop-маркере в последний день последнего контракта —
+                //     скутер освобождается (см. scooterStatusOf).
                 val selectedScooter = availableScooters.find { it.id == selectedScooterId }
                     ?: scooters.find { it.id == selectedScooterId }
                 val scooterText = selectedScooter?.name ?: "Tanlanmagan"
+                val scooterSelected = selectedScooter != null
 
                 ExposedDropdownMenuBox(
                     expanded = expandedScooter,
                     onExpandedChange = { expandedScooter = !expandedScooter }
                 ) {
-                    OutlinedTextField(
-                        value = scooterText,
-                        onValueChange = {},
-                        readOnly = true,
-                        label = { Text("Skuter (ixtiyoriy)") },
-                        trailingIcon = {
-                            ExposedDropdownMenuDefaults.TrailingIcon(expanded = expandedScooter)
-                        },
-                        modifier = Modifier.menuAnchor().fillMaxWidth(),
-                        shape = RoundedCornerShape(8.dp)
-                    )
+                    // ── Квадратная кнопка-плитка в стиле Paid/Unpaid ──
+                    // Используем BigScooterTile: высота 64dp, fillMaxWidth,
+                    // фон — ClaudeAccentBg если не выбран, StatusOk если выбран.
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(64.dp)
+                            .menuAnchor()
+                            .clip(RoundedCornerShape(10.dp))
+                            .background(if (scooterSelected) StatusOk.copy(alpha = 0.35f) else ClaudeAccentBg)
+                            .border(
+                                width = if (scooterSelected) 2.dp else 1.dp,
+                                color = if (scooterSelected) StatusOk else ClaudeDivider,
+                                shape = RoundedCornerShape(10.dp)
+                            )
+                            .clickable { expandedScooter = !expandedScooter }
+                            .padding(horizontal = 12.dp),
+                        contentAlignment = Alignment.CenterStart
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(10.dp)
+                        ) {
+                            // Иконка скутера
+                            Box(
+                                modifier = Modifier
+                                    .size(36.dp)
+                                    .clip(CircleShape)
+                                    .background(if (scooterSelected) StatusOk else ClaudeAccent)
+                                    .border(1.dp, ClaudeDivider, CircleShape),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Icon(
+                                    Icons.Default.DirectionsBike,
+                                    contentDescription = null,
+                                    tint = if (scooterSelected) ClaudeText else Color.White,
+                                    modifier = Modifier.size(22.dp)
+                                )
+                            }
+                            // Текст: имя скутера или «Tanlanmagan»
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    text = "Skuter",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = ClaudeTextSecondary
+                                )
+                                Text(
+                                    text = scooterText,
+                                    style = MaterialTheme.typography.titleMedium,
+                                    color = if (scooterSelected) ClaudeText else ClaudeTextSecondary,
+                                    fontWeight = FontWeight.Bold
+                                )
+                            }
+                            // Стрелка выпадающего списка
+                            Icon(
+                                imageVector = if (expandedScooter) Icons.Default.KeyboardArrowUp
+                                              else Icons.Default.KeyboardArrowDown,
+                                contentDescription = if (expandedScooter) "Yopish" else "Tanlash",
+                                tint = ClaudeTextSecondary,
+                                modifier = Modifier.size(28.dp)
+                            )
+                        }
+                    }
                     ExposedDropdownMenu(
                         expanded = expandedScooter,
                         onDismissRequest = { expandedScooter = false }
@@ -4212,6 +4111,237 @@ fun RenterFormDialog(
                         )
                     }
                 }
+
+                // ── Список контрактов под календарём ──────────────────────────
+                // Показывает все группы (как существующие из БД, так и новые,
+                // только что созданные пользователем в календаре). Каждая строка:
+                //   [статус-пилюля] [дата начала → дата окончания] [✕ удалить]
+                //
+                // Существующие контракты помечаются «№<id>», новые — «Yangi».
+                // Это нужно, чтобы пользователь видел, какие контракты уже есть
+                // в БД (и будут сохранены как есть или удалены), а какие только
+                // что добавлены (и будут созданы при сохранении формы).
+                //
+                // Раньше календарь в режиме редактирования показывал «Kontraktlar
+                // yo'q» даже если у арендатора были контракты в БД — это был баг:
+                // contractGroups инициализировался пустым списком и никогда не
+                // загружался из existingContracts. Теперь список загружается
+                // родителем через contractHistoryViewModel.contractsForRenter.
+                if (contractGroups.isNotEmpty()) {
+                    val dateFmtList = remember { SimpleDateFormat("dd.MM.yyyy", Locale.getDefault()) }
+                    Text(
+                        text = "Kontraktlar ro'yxati (${contractGroups.size})",
+                        style = MaterialTheme.typography.titleSmall,
+                        color = ClaudeAccent,
+                        fontWeight = FontWeight.SemiBold,
+                        modifier = Modifier.padding(top = 4.dp)
+                    )
+                    contractGroups.forEachIndexed { idx, group ->
+                        val startDate = dateFmtList.format(java.util.Date(group.startMs))
+                        val endDate = dateFmtList.format(java.util.Date(group.endMs))
+                        val statusLabel = when {
+                            group.isStopMarker -> "To'xtash"
+                            group.isResumeMarker -> "Davom"
+                            group.isPaid -> "To'langan"
+                            else -> "To'lanmagan"
+                        }
+                        val statusColor = when {
+                            group.isStopMarker -> Color(0xFF1E3A8A)
+                            group.isResumeMarker -> Color(0xFFFACC15)
+                            group.isPaid -> StatusOk
+                            else -> StatusOverdue
+                        }
+                        val statusBg = when {
+                            group.isStopMarker -> Color(0xFF1E3A8A).copy(alpha = 0.15f)
+                            group.isResumeMarker -> Color(0xFFFACC15).copy(alpha = 0.15f)
+                            group.isPaid -> StatusOkBg
+                            else -> StatusOverdueBg
+                        }
+                        val idLabel = group.existingContractId?.let { "№$it" } ?: "Yangi"
+                        // Для маркеров Stop/Resume показываем соответствующую
+                        // подпись вместо ID.
+                        val displayIdLabel = when {
+                            group.isStopMarker -> "STOP"
+                            group.isResumeMarker -> "RESUME"
+                            else -> idLabel
+                        }
+
+                        Surface(
+                            shape = RoundedCornerShape(8.dp),
+                            color = ClaudeCard,
+                            border = androidx.compose.foundation.BorderStroke(
+                                1.dp,
+                                when {
+                                    group.isStopMarker -> Color(0xFF1E3A8A).copy(alpha = 0.4f)
+                                    group.isResumeMarker -> Color(0xFFFACC15).copy(alpha = 0.4f)
+                                    group.isPaid -> StatusOk.copy(alpha = 0.4f)
+                                    else -> StatusOverdue.copy(alpha = 0.4f)
+                                }
+                            ),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(horizontal = 10.dp, vertical = 8.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                // Статус-пилюля
+                                Surface(
+                                    shape = RoundedCornerShape(6.dp),
+                                    color = statusBg
+                                ) {
+                                    Text(
+                                        text = statusLabel,
+                                        color = statusColor,
+                                        style = MaterialTheme.typography.labelSmall,
+                                        fontWeight = FontWeight.SemiBold,
+                                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp)
+                                    )
+                                }
+                                // ID-пилюля (существующий контракт №id или «Yangi» / STOP / RESUME)
+                                Surface(
+                                    shape = RoundedCornerShape(6.dp),
+                                    color = ClaudeDivider.copy(alpha = 0.4f)
+                                ) {
+                                    Text(
+                                        text = displayIdLabel,
+                                        color = ClaudeTextSecondary,
+                                        style = MaterialTheme.typography.labelSmall,
+                                        modifier = Modifier.padding(horizontal = 6.dp, vertical = 3.dp)
+                                    )
+                                }
+                                // Даты
+                                Text(
+                                    text = "$startDate → $endDate",
+                                    color = ClaudeText,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    modifier = Modifier.weight(1f)
+                                )
+                                // ── Кнопка быстрого переключения статуса ────────
+                                // По просьбе пользователя: «каждый арендатор рядом
+                                // с кнопкой икс имел кнопку выбора статуса для
+                                // быстрого переключения между оплаченный и неоплаченный».
+                                //
+                                // Иконка — ВСЕГДА минус (Remove), чтобы визуально
+                                // отличать от красной кнопки удаления (Close = X).
+                                // Раньше для оплаченного контракта здесь стоял
+                                // Icons.Default.Close (красный X) — это совпадало
+                                // с кнопкой удаления, и пользователь видел два
+                                // одинаковых красных крестика рядом. Минус решает
+                                // проблему: цвет фона/иконки по-прежнему несёт
+                                // смысл (зелёный = оплачен, красный = долг),
+                                // а форма иконки отличает её от удаления.
+                                //
+                                // Логика переключения:
+                                //   • Для обычных контрактов (не Stop/Resume маркеры) —
+                                //     переключает isPaid true ↔ false.
+                                //   • Для Stop-маркера — переключает в Resume-маркер
+                                //     (PlayArrow — «продолжить»).
+                                //   • Для Resume-маркера — переключает в Stop-маркер
+                                //     (Pause — «остановить»).
+                                val toggleIcon = when {
+                                    group.isStopMarker -> Icons.Default.PlayArrow
+                                    group.isResumeMarker -> Icons.Default.Pause
+                                    else -> Icons.Default.Remove
+                                }
+                                val toggleTint = when {
+                                    group.isStopMarker -> Color(0xFFFACC15)
+                                    group.isResumeMarker -> Color(0xFF1E3A8A)
+                                    group.isPaid -> StatusOk
+                                    else -> StatusOverdue
+                                }
+                                val toggleBg = when {
+                                    group.isStopMarker -> Color(0xFFFACC15).copy(alpha = 0.25f)
+                                    group.isResumeMarker -> Color(0xFF1E3A8A).copy(alpha = 0.25f)
+                                    group.isPaid -> StatusOk.copy(alpha = 0.15f)
+                                    else -> StatusOverdue.copy(alpha = 0.15f)
+                                }
+                                Box(
+                                    modifier = Modifier
+                                        .size(36.dp)
+                                        .clip(RoundedCornerShape(8.dp))
+                                        .background(toggleBg)
+                                        .border(1.dp, ClaudeDivider, RoundedCornerShape(8.dp))
+                                        .clickable {
+                                            val updated = contractGroups.map { g ->
+                                                if (g.id == group.id) {
+                                                    when {
+                                                        g.isStopMarker -> g.copy(isStopMarker = false, isResumeMarker = true)
+                                                        g.isResumeMarker -> g.copy(isStopMarker = true, isResumeMarker = false)
+                                                        else -> g.copy(isPaid = !g.isPaid)
+                                                    }
+                                                } else g
+                                            }
+                                            contractGroups = updated
+                                        },
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    Icon(
+                                        imageVector = toggleIcon,
+                                        contentDescription = "Statusni almashtirish",
+                                        tint = toggleTint,
+                                        modifier = Modifier.size(20.dp)
+                                    )
+                                }
+                                // ── Кнопка удаления контракта ──────────────────
+                                // Используем Box + clickable вместо IconButton, чтобы:
+                                //   1. Увеличить тап-таргет (36dp вместо 28dp) — по
+                                //      гайдлайнам Material минимальный тап-таргет 48dp,
+                                //      но в плотном списке 36dp приемлемо.
+                                //   2. Избежать возможных проблем с перехватом кликов
+                                //      соседними Surface/Row. Box с явным clickable
+                                //      и ripple — более надёжный вариант.
+                                //   3. Явный фон (ClaudeAccentBg) и квадратная форма
+                                //      (RoundedCornerShape(8.dp)) делают кнопку
+                                //      визуально заметнее и единообразной с остальными.
+                                Box(
+                                    modifier = Modifier
+                                        .size(36.dp)
+                                        .clip(RoundedCornerShape(8.dp))
+                                        .background(ClaudeAccentBg)
+                                        .border(1.dp, ClaudeDivider, RoundedCornerShape(8.dp))
+                                        .clickable {
+                                            contractGroups = contractGroups.filterNot { it.id == group.id }
+                                            if (activeGroupId == group.id) activeGroupId = null
+                                        },
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.Close,
+                                        contentDescription = "Kontraktni o'chirish",
+                                        tint = StatusOverdue,
+                                        modifier = Modifier.size(20.dp)
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+
+                if (isEdit) {
+                    Text(
+                        "Holat: ${if (initialRenter?.isReturned == true) "Qaytarilgan" else "Faol"}",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = ClaudeTextSecondary
+                    )
+                }
+
+                // ── ПОЛЕ «КОЛИЧЕСТВО НЕДЕЛЬ» УДАЛЕНО ──────────────────────────
+                // Раньше здесь был ExposedDropdownMenuBox с выбором «1 Hafta»
+                // (7 дней), «2 Hafta», «1 Oy» и т.д. Пользователь явно попросил
+                // убрать это поле — теперь срок аренды определяется только
+                // периодами, выбранными в календаре контрактов ниже.
+                // Если пользователь не выбрал ни одного периода в календаре,
+                // используется startDate по умолчанию + 7 дней (legacy behavior).
+
+                // ── Старый блок выбора скутера удалён ────────────────────────
+                // Раньше здесь был ExposedDropdownMenuBox с выбором скутера.
+                // По просьбе пользователя кнопка выбора скутера перенесена
+                // выше — под календарь, над списком контрактов, в виде
+                // большой квадратной плитки (см. код выше после ContractCalendar).
+                // Здесь остаётся только поле долга.
 
                 OutlinedTextField(
                     value = debt,
@@ -4449,7 +4579,9 @@ fun RenterFormDialog(
                                         existingId = it.existingContractId,
                                         startMs = it.startMs,
                                         endMs = it.endMs,
-                                        isPaid = it.isPaid
+                                        isPaid = it.isPaid,
+                                        isStopMarker = it.isStopMarker,
+                                        isResumeMarker = it.isResumeMarker
                                     )
                                 }
                             )
@@ -4561,7 +4693,21 @@ data class RenterFormContractGroup(
     val existingId: Int?,
     val startMs: Long,
     val endMs: Long,
-    val isPaid: Boolean
+    val isPaid: Boolean,
+    /**
+     * Маркер «остановки» аренды на этот день (однодневный).
+     * Сохраняется в БД как ContractHistoryEntry с type=TERMINATED,
+     * notes="STOP_MARKER". Скутер при этом освобождается.
+     */
+    val isStopMarker: Boolean = false,
+    /**
+     * Маркер «возобновления» аренды с этого дня (однодневный).
+     * Сохраняется в БД как ContractHistoryEntry с type=RETURNED,
+     * notes="RESUME_MARKER". Запускает авто-создание неоплаченных
+     * weekly-контрактов от этого дня вперёд до ближайшего Stop или
+     * до +7 дней (см. applyResumeAutoContracts в RenterViewModel).
+     */
+    val isResumeMarker: Boolean = false
 )
 
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
@@ -5447,8 +5593,34 @@ class UzPhoneVisualTransformation : VisualTransformation {
 
 private enum class ScooterStatus { RENTED, IN_BASE }
 
-private fun scooterStatusOf(scooterId: Int, renters: List<Renter>): ScooterStatus {
-    val active = renters.any { it.scooterId == scooterId && !it.isReturned }
+/**
+ * Определяет статус скутера: арендован или свободен.
+ *
+ * Новое правило (по просьбе пользователя): скутер считается СВОБОДНЫМ, если
+ * у арендатора последний контракт имеет type=TERMINATED (статус «остановлен»).
+ * Это соответствует логике Stop-маркера в календаре: если в последний день
+ * последнего контракта выбран Stop — скутер освобождается и доступен для
+ * аренды другим арендаторам.
+ *
+ * @param scooterId        ID скутера для проверки.
+ * @param renters          Все арендаторы (для поиска активной аренды).
+ * @param latestContractByRenter Карта ID арендатора → его последний контракт
+ *   (по weekEnd). Используется для проверки, не остановлен ли арендатор.
+ */
+private fun scooterStatusOf(
+    scooterId: Int,
+    renters: List<Renter>,
+    latestContractByRenter: Map<Int, com.example.data.ContractHistoryEntry> = emptyMap()
+): ScooterStatus {
+    // Арендатор считается активным, если:
+    //   • не возвращён (!isReturned)
+    //   • у него есть этот скутер (scooterId match)
+    //   • последний контракт НЕ TERMINATED (не остановлен)
+    val active = renters.any { renter ->
+        renter.scooterId == scooterId &&
+        !renter.isReturned &&
+        latestContractByRenter[renter.id]?.type != com.example.data.ContractHistoryEntry.TYPE_TERMINATED
+    }
     return if (active) ScooterStatus.RENTED else ScooterStatus.IN_BASE
 }
 
@@ -5482,6 +5654,13 @@ fun ScooterTable(
      * используется и в ScooterContractHistoryScreen.
      */
     contractsByScooterName: Map<String, List<com.example.data.ContractHistoryEntry>> = emptyMap(),
+    /**
+     * Карта ID арендатора → его последний контракт (по weekEnd).
+     * Используется в scooterStatusOf для определения, свободен ли скутер:
+     * если у арендатора последний контракт TERMINATED (Stop-маркер в
+     * календаре формы арендатора), скутер считается свободным.
+     */
+    latestContractByRenter: Map<Int, com.example.data.ContractHistoryEntry> = emptyMap(),
     onSortClick: (String) -> Unit,
     onSelect: (Int, Boolean) -> Unit,
     onClick: (Scooter) -> Unit
@@ -5572,7 +5751,7 @@ fun ScooterTable(
             itemsIndexed(scooters, key = { _, it -> it.id }) { idx, scooter ->
                 val isSelected = selected.contains(scooter.id)
                 val isExpanded = expandedScooterIds.contains(scooter.id)
-                val status = scooterStatusOf(scooter.id, renters)
+                val status = scooterStatusOf(scooter.id, renters, latestContractByRenter)
                 val sColor = scooterStatusColor(status)
 
                 Column(
