@@ -565,12 +565,17 @@ fun TransactionListScreen(
                             }
                             is UnifiedTxItem.CardTx -> {
                                 // ── Строка CardTransaction (перевод между картами) ──
-                                // Та же структура столбцов, но поля — из CardTransaction.
-                                // Имя «арендатора» заменяем на «Карта-источник → Карта-назначения».
+                                // ВАЖНО: визуально ИДЕНТИЧНА строке ContractTx —
+                                // тот же белый фон, та же структура, тот же формат
+                                // суммы со знаком +/−. Раньше фон был ClaudeCard
+                                // (кремовый) и сумма всегда с "+" — это создавало
+                                // визуальное несоответствие, на которое жаловался
+                                // пользователь.
                                 val ctx = item.tx
                                 val from = cardById[ctx.fromCardId]
                                 val to = cardById[ctx.toCardId]
                                 val isIncome = ctx.type == com.example.data.CardTransaction.TYPE_CONTRACT_INCOME
+                                val isExpense = ctx.type == com.example.data.CardTransaction.TYPE_EXPENSE
                                 val fromLabel = when {
                                     isIncome || ctx.fromCardId == 0 -> "Kontrakt"
                                     ctx.fromCardId == com.example.data.VirtualCard.EXTERNAL_IN_CARD_ID -> "Tashqidan"
@@ -594,6 +599,13 @@ fun TransactionListScreen(
                                     com.example.data.CardTransaction.TYPE_EXPENSE -> StatusOverdue
                                     else -> Color(0xFF1565C0)
                                 }
+                                // Эффективное направление движения денег:
+                                // • TYPE_EXPENSE → расход (−)
+                                // • TYPE_CONTRACT_INCOME → доход (+)
+                                // • прочие переводы между картами → нейтрально (+),
+                                //   так как деньги не покинули бизнес.
+                                val effectivePositive = !isExpense
+                                val amountSign = if (effectivePositive) "+" else "−"
 
                                 Row(
                                     modifier = Modifier
@@ -604,7 +616,7 @@ fun TransactionListScreen(
                                         modifier = Modifier
                                             .horizontalScroll(hScrollState)
                                             .clip(RoundedCornerShape(8.dp))
-                                            .background(ClaudeCard)
+                                            .background(Color.White)
                                             .padding(horizontal = 8.dp, vertical = 10.dp),
                                         verticalAlignment = Alignment.CenterVertically
                                     ) {
@@ -619,7 +631,7 @@ fun TransactionListScreen(
                                         )
                                         if (showId) {
                                             Text(
-                                                "K${ctx.id}",
+                                                "#${ctx.id}",
                                                 modifier = Modifier.width(wId).padding(horizontal = 4.dp),
                                                 style = MaterialTheme.typography.labelSmall,
                                                 color = ClaudeTextSecondary,
@@ -637,9 +649,15 @@ fun TransactionListScreen(
                                             )
                                         }
                                         if (showRenter) {
-                                            // Для CardTransaction показываем «откуда → куда»
+                                            // Для CardTransaction в колонке «Mijoz» показываем
+                                            // только источник (fromLabel) — так же, как в
+                                            // ContractTx показывается только имя арендатора.
+                                            // Раньше здесь было «$fromLabel → $toLabel» со
+                                            // стрелкой, что визуально отличало строку от
+                                            // ContractTx. Назначение (toLabel) при необходимости
+                                            // видно в колонке «Kontrakt» или «Izoh».
                                             Text(
-                                                "$fromLabel → $toLabel",
+                                                fromLabel,
                                                 modifier = Modifier.width(wRenter).padding(horizontal = 4.dp),
                                                 style = MaterialTheme.typography.bodyMedium,
                                                 color = ClaudeText,
@@ -666,8 +684,12 @@ fun TransactionListScreen(
                                             )
                                         }
                                         if (showContract) {
+                                            // Если явного contractId нет, показываем
+                                            // назначение перевода (toLabel) — это даёт
+                                            // пользователю понять, куда ушли деньги.
+                                            val contractDisplay = contractLabel.ifBlank { toLabel }
                                             Text(
-                                                contractLabel.ifBlank { "—" },
+                                                contractDisplay,
                                                 modifier = Modifier.width(wContract).padding(horizontal = 4.dp),
                                                 style = MaterialTheme.typography.labelSmall,
                                                 color = ClaudeTextSecondary,
@@ -695,8 +717,9 @@ fun TransactionListScreen(
                                             }
                                         }
                                         if (showAmount) {
+                                            val displayAmount = kotlin.math.abs(ctx.amount.toLong())
                                             Text(
-                                                "+${ctx.amount.toLong()}",
+                                                "$amountSign $displayAmount",
                                                 modifier = Modifier.width(wAmount).padding(horizontal = 4.dp),
                                                 style = MaterialTheme.typography.bodyMedium,
                                                 color = statusColor,
