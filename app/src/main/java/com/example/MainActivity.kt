@@ -4333,18 +4333,32 @@ fun RenterFormDialog(
                 val scooterText = selectedScooter?.name ?: "Tanlanmagan"
                 val scooterSelected = selectedScooter != null
 
-                ExposedDropdownMenuBox(
-                    expanded = expandedScooter,
-                    onExpandedChange = { expandedScooter = !expandedScooter }
-                ) {
+                // ── ВАЖНО: исправлен баг с невозможностью открыть dropdown скутера ──
+                    // Раньше здесь был ExposedDropdownMenuBox с onExpandedChange
+                    // { !expandedScooter } И внутренний Box с .clickable
+                    // { !expandedScooter } — это вызывало двойной toggle:
+                    //   1. .clickable срабатывал → expandedScooter = !expandedScooter
+                    //   2. menuAnchor() + onExpandedChange срабатывал тоже →
+                    //      expandedScooter = !expandedScooter (ещё раз)
+                    // Итог: состояние возвращалось в исходное → dropdown НЕ открывался.
+                    //
+                    // Решение: вместо ExposedDropdownMenuBox используем простой
+                    // Box + DropdownMenu (базовый компонент Material3). Это
+                    // надёжнее: нет двойных toggle, нет проблем с menuAnchor()
+                    // на Box (вместо OutlinedTextField). Тактильная отдача
+                    // добавлена чтобы пользователь физически чувствовал что тап
+                    // зарегистрирован (по жалобе «ничего не происходит»).
+                val hapticScooter = androidx.compose.ui.platform.LocalHapticFeedback.current
+
+                Box(modifier = Modifier.fillMaxWidth()) {
                     // ── Квадратная кнопка-плитка в стиле Paid/Unpaid ──
-                    // Используем BigScooterTile: высота 64dp, fillMaxWidth,
-                    // фон — ClaudeAccentBg если не выбран, StatusOk если выбран.
+                    // Высота 64dp, fillMaxWidth, фон — ClaudeAccentBg если не
+                    // выбран, StatusOk если выбран. .clickable открывает/закрывает
+                    // dropdown.
                     Box(
                         modifier = Modifier
                             .fillMaxWidth()
                             .height(64.dp)
-                            .menuAnchor()
                             .clip(RoundedCornerShape(10.dp))
                             .background(if (scooterSelected) StatusOk.copy(alpha = 0.35f) else ClaudeAccentBg)
                             .border(
@@ -4352,7 +4366,12 @@ fun RenterFormDialog(
                                 color = if (scooterSelected) StatusOk else ClaudeDivider,
                                 shape = RoundedCornerShape(10.dp)
                             )
-                            .clickable { expandedScooter = !expandedScooter }
+                            .clickable {
+                                hapticScooter.performHapticFeedback(
+                                    androidx.compose.ui.hapticfeedback.HapticFeedbackType.LongPress
+                                )
+                                expandedScooter = !expandedScooter
+                            }
                             .padding(horizontal = 12.dp),
                         contentAlignment = Alignment.CenterStart
                     ) {
@@ -4400,9 +4419,14 @@ fun RenterFormDialog(
                             )
                         }
                     }
-                    ExposedDropdownMenu(
+                    // ── Dropdown со списком скутеров ──
+                    // DropdownMenu позиционируется относительно родительского Box.
+                    // Ширина — по умолчанию wrap-content, но мы задаём
+                    // fillMaxWidth через modifier, чтобы dropdown был не уже кнопки.
+                    DropdownMenu(
                         expanded = expandedScooter,
-                        onDismissRequest = { expandedScooter = false }
+                        onDismissRequest = { expandedScooter = false },
+                        modifier = Modifier.fillMaxWidth()
                     ) {
                         DropdownMenuItem(
                             text = { Text("Tanlanmagan") },
@@ -4505,7 +4529,7 @@ fun RenterFormDialog(
                             }
                         )
                     }
-                }
+                } // end outer Box
 
                 // ── Плашка с именем выбранного скутера над календарём ──────
                 // По просьбе пользователя: «в календаре должен показываться

@@ -420,6 +420,7 @@ fun ContractCalendar(
                     activeGroupId = activeGroupId,
                     newGroupIsPaid = newGroupIsPaid,
                     dayMarkerMode = dayMarkerMode,
+                    hasSelectedStatus = hasSelectedStatus,
                     onNewGroupStatusChange = {
                         newGroupIsPaid = it
                         // Пользователь выбрал статус → теперь можно выбирать
@@ -671,18 +672,36 @@ fun ContractCalendar(
                 }
             } else {
                 Spacer(Modifier.height(8.dp))
+                // ── Подсказка с явным отображением текущего шага ──
+                // Пользователь жаловался что «при нажатии статуса ничего не
+                // происходит». Чтобы было видно что статус выбран, подсказка
+                // динамически меняется и показывает ВЫБРАННЫЙ статус зелёным
+                // или красным цветом. Также явный счётчик шагов: ① статус →
+                // ② скутер → ③ период.
                 val hint = when {
                     activeGroupId != null -> "Kontrakt ${groups.indexOfFirst { it.id == activeGroupId } + 1} tanlandi"
-                    !hasSelectedStatus && editable -> {
-                        // Подсказка для пользователя: сначала выбери статус
-                        "Yuqoridagi «To'langan» yoki «To'lanmagan» tugmasini bosing"
+                    !hasSelectedStatus && editable && dayMarkerMode == 0 -> {
+                        // Шаг 1: статус не выбран → попросить выбрать
+                        "① Yuqoridagi «To'langan» yoki «To'lanmagan» tugmasini bosing"
                     }
-                    editable && !scooterSelected && dayMarkerMode == 0 -> {
-                        // Подсказка: статус выбран, но скутер — нет.
-                        // По требованию пользователя: «должен будет в обязательном
-                        // порядке выбрать скутер с помощью нашей кнопки и только
-                        // потом в календаре выбрать период».
-                        "Avval skuterni tanlang — keyin davrni belgilang"
+                    hasSelectedStatus && editable && !scooterSelected && dayMarkerMode == 0 -> {
+                        // Шаг 2: статус выбран, но скутер — нет.
+                        // Показываем ВЫБРАННЫЙ статус для подтверждения.
+                        val st = if (newGroupIsPaid) "To'langan ✓" else "To'lanmagan ✓"
+                        "② Status: $st. Endi skuterni tanlang — keyin davrni belgilang"
+                    }
+                    hasSelectedStatus && editable && scooterSelected && dayMarkerMode == 0 && pendingStartMs == null -> {
+                        // Шаг 3: статус + скутер выбраны, ждём первую дату
+                        "③ Status va skuter tanlandi. Endi birinchi sanani tanlang"
+                    }
+                    hasSelectedStatus && editable && scooterSelected && dayMarkerMode == 0 && pendingStartMs != null -> {
+                        // Шаг 4: первая дата выбрана, ждём вторую
+                        "④ Ikkinchi sanani tanlang — davr yopiladi"
+                    }
+                    dayMarkerMode != 0 && editable -> {
+                        // Режим Stop/Resume: тап по дню ставит маркер
+                        val marker = if (dayMarkerMode == 1) "To'xtash (STOP)" else "Davom (RESUME)"
+                        "Sanani tanlang — $marker markeri qo'yiladi"
                     }
                     pendingStartMs == null -> {
                         if (!editable && onAddGroup != null) {
@@ -693,10 +712,17 @@ fun ContractCalendar(
                     }
                     else -> "Ikkinchi sanani tanling — davr yopiladi"
                 }
+                // Цвет подсказки: серый по умолчанию, зелёный когда статус выбран
+                val hintColor = when {
+                    hasSelectedStatus && dayMarkerMode == 0 -> StatusOk
+                    dayMarkerMode != 0 -> if (dayMarkerMode == 1) Color(0xFF1E3A8A) else Color(0xFFFACC15)
+                    else -> ClaudeTextSecondary
+                }
                 Text(
                     text = hint,
                     style = MaterialTheme.typography.labelSmall,
-                    color = ClaudeTextSecondary,
+                    color = hintColor,
+                    fontWeight = if (hasSelectedStatus || dayMarkerMode != 0) FontWeight.SemiBold else FontWeight.Normal,
                     modifier = Modifier.fillMaxWidth(),
                     textAlign = TextAlign.Center
                 )
@@ -925,6 +951,13 @@ private fun GroupsPanel(
     newGroupIsPaid: Boolean,
     /** 0 = обычный режим, 1 = Stop-маркер, 2 = Resume-маркер. */
     dayMarkerMode: Int = 0,
+    /** true = пользователь уже нажал одну из кнопок статуса (Paid/Unpaid/Stop/Resume).
+     *  Используется для визуального отклика: пока false — НИ одна из кнопок
+     *  Paid/Unpaid не выглядит «выбранной» (даже если newGroupIsPaid=true по
+     *  умолчанию). Раньше To'langan отображалась выбранной сразу при открытии
+     *  формы, и пользователь при нажатии не видел никаких изменений — ему
+     *  казалось что «кнопка не работает». */
+    hasSelectedStatus: Boolean = false,
     onNewGroupStatusChange: (Boolean) -> Unit,
     onDayMarkerModeChange: (Int) -> Unit = {},
     onActiveGroupChange: (Int?) -> Unit,
@@ -936,6 +969,15 @@ private fun GroupsPanel(
         // Пользователь явно попросил сделать кнопки «To'langan» /
         // «To'lanmagan» большими и квадратными. Только после выбора одной
         // из них можно выбирать период в календаре.
+        //
+        // ВАЖНО про hasSelectedStatus: пока пользователь НЕ нажал ни одну
+        // из кнопок (hasSelectedStatus=false), ОБЕ кнопки отображаются как
+        // «невыбранные» — даже если newGroupIsPaid=true по умолчанию. Это
+        // даёт явный визуальный отклик при нажатии: кнопка «загорается».
+        // Раньше To'langan была «загорена» с самого начала, и при тапе
+        // пользователь не видел изменений — думал что кнопка сломана.
+        val paidSelected = hasSelectedStatus && newGroupIsPaid && dayMarkerMode == 0
+        val unpaidSelected = hasSelectedStatus && !newGroupIsPaid && dayMarkerMode == 0
         Row(
             modifier = Modifier
                 .fillMaxWidth()
@@ -946,7 +988,7 @@ private fun GroupsPanel(
             // Кнопка статуса «To'langan» (оплаченный) — большая квадратная
             BigStatusTile(
                 label = "To'langan",
-                selected = newGroupIsPaid && dayMarkerMode == 0,
+                selected = paidSelected,
                 color = StatusOk,
                 modifier = Modifier.weight(1f),
                 onClick = {
@@ -959,7 +1001,7 @@ private fun GroupsPanel(
             // Кнопка статуса «To'lanmagan» (неоплаченный) — большая квадратная
             BigStatusTile(
                 label = "To'lanmagan",
-                selected = !newGroupIsPaid && dayMarkerMode == 0,
+                selected = unpaidSelected,
                 color = StatusOverdue,
                 modifier = Modifier.weight(1f),
                 onClick = {
@@ -1041,6 +1083,14 @@ private fun BigStatusTile(
     solidFg: Color? = null,
     onClick: () -> Unit
 ) {
+    // ── Тактильная отдача при тапе ──
+    // Пользователь жаловался что «при нажатии статуса ничего не происходит».
+    // Помимо визуального отклика (changing selected) добавляем лёгкую
+    // вибрацию — это даёт явное физическое подтверждение что тап зарегистрирован,
+    // даже если визуально состояние почти не изменилось (например, когда
+    // кнопка уже была selected и пользователь тапает повторно).
+    val haptic = androidx.compose.ui.platform.LocalHapticFeedback.current
+
     // ── Вычисление цветов с учётом solidBg / solidFg ──
     // Для Stop/Resume используем сплошной фон независимо от selected.
     // Для Paid/Unpaid — прежняя логика: при selected фон = color.copy(0.35),
@@ -1057,7 +1107,8 @@ private fun BigStatusTile(
     }
     val borderColor = when {
         solidBg != null -> solidBg
-        else -> color
+        selected -> color
+        else -> ClaudeDivider  // невыбранная кнопка — серая рамка (была color)
     }
     val indicatorColor = solidFg ?: color
 
@@ -1071,7 +1122,12 @@ private fun BigStatusTile(
                 color = borderColor,
                 shape = RoundedCornerShape(10.dp)
             )
-            .clickable { onClick() }
+            .clickable {
+                haptic.performHapticFeedback(
+                    androidx.compose.ui.hapticfeedback.HapticFeedbackType.LongPress
+                )
+                onClick()
+            }
             .padding(8.dp),
         contentAlignment = Alignment.Center
     ) {
