@@ -854,8 +854,16 @@ private fun handleDayClick(
             onPeriodCreated()  // сбрасываем hasSelectedStatus — нужно снова выбрать
         } else {
             // ── Два разных дня → диапазон с пользовательским статусом ──
+            // ВАЖНО: realEnd = начало последнего выбранного дня (БЕЗ +dayMs-1).
+            // Это реализует модель «отель/ночь»: период 1..7 = 6 дней аренды
+            // (день возврата не оплачивается). Ранее было `+ dayMs - 1`,
+            // что давало endMs = конец дня 7 → ceil((endMs-startMs)/dayMs) = 7
+            // → сумма 7×60000 = 420000 вместо ожидаемых 6×60000 = 360000.
+            // UI-подсветка дней остаётся корректной: проверка
+            // `dayMs <= g.endMs` всё ещё включает день 7 (его ms = start_of_day7
+            // = new endMs), но не день 8.
             val start = minOf(pendingStartMs, ms)
-            val realEnd = maxOf(pendingStartMs, ms) + dayMs - 1
+            val realEnd = maxOf(pendingStartMs, ms)
             val newId = (groups.maxOfOrNull { it.id } ?: 0) + 1
             val newGroup = ContractGroup(
                 id = newId, startMs = start, endMs = realEnd, isPaid = newGroupIsPaid,
@@ -903,9 +911,12 @@ private fun handleDayClickWithAddCallback(
             onAddGroup(newGroup)
             setPendingStart(null)
         } else {
-            // Два разных дня → диапазон с пользовательским статусом
+            // Два разных дня → диапазон с пользовательским статусом.
+            // realEnd = начало последнего выбранного дня (без +dayMs-1) —
+            // модель «ночь/отель»: 1..7 = 6 дней аренды (см. комментарий
+            // в handleDayClick выше).
             val start = minOf(pendingStartMs, ms)
-            val realEnd = maxOf(pendingStartMs, ms) + dayMs - 1
+            val realEnd = maxOf(pendingStartMs, ms)
             val newGroup = ContractGroup(
                 id = -1, startMs = start, endMs = realEnd, isPaid = newGroupIsPaid
             )
