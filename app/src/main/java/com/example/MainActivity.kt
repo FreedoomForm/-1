@@ -1051,6 +1051,11 @@ fun MainScreen(
                             batteryId2 = batt2,
                             additionalInfo = info
                         )
+                    },
+                    // Каскадное удаление существующего контракта из формы
+                    // (кнопка ✕ в списке контрактов под календарём).
+                    onDeleteExistingContract = { contractId ->
+                        contractHistoryViewModel.deleteContract(contractId)
                     }
                 )
             }
@@ -2308,6 +2313,15 @@ fun MainScreen(
                                 contract.copy(isPaid = !contract.isPaid)
                             )
                         },
+                        // ── Каскадное удаление контракта из раскрытой строки ──
+                        // Делегируется в contractHistoryViewModel.deleteContract,
+                        // который каскадно удаляет контракт + связанные
+                        // Transaction + CardTransaction + корректирует баланс
+                        // арендатора и главной карты (ренверс суммы контракта
+                        // и ренверс доходов карты).
+                        onDeleteContract = { contractId ->
+                            contractHistoryViewModel.deleteContract(contractId)
+                        },
                         // ── Поисковая панель и панель действий (To'lov/Uzish/SMS)
                         // полностью удалены из контента таблицы арендаторов.
                         // Поиск живёт в TopAppBar (CompactSearchPanel), который
@@ -2785,6 +2799,11 @@ fun MainScreen(
                         batteryId2 = batt2,
                         additionalInfo = info
                     )
+                },
+                // Каскадное удаление существующего контракта из формы
+                // (кнопка ✕ в списке контрактов под календарём).
+                onDeleteExistingContract = { contractId ->
+                    contractHistoryViewModel.deleteContract(contractId)
                 }
             )
         }
@@ -2953,6 +2972,21 @@ fun RenterTable(
      * создаёт/удаляет Transaction, корректирует баланс и аудит-запись.
      */
     onToggleContractStatus: ((com.example.data.ContractHistoryEntry) -> Unit)? = null,
+    /**
+     * Каскадное удаление контракта по id.
+     *
+     * Вызывается при нажатии кнопки ✕ на строке контракта в раскрывающейся
+     * таблице контрактов под арендатором. Родитель делегирует в
+     * contractHistoryViewModel.deleteContract(id), который каскадно удаляет:
+     *   • сам контракт;
+     *   • все Transaction с contractId = id (история платежей);
+     *   • все CardTransaction с contractId = id (доходы на главной карте);
+     *   • корректирует баланс арендатора (ренверс суммы контракта);
+     *   • корректирует баланс главной карты (ренверс CardTransaction.amount).
+     *
+     * Если callback не передан — кнопка ✕ не отображается.
+     */
+    onDeleteContract: ((Int) -> Unit)? = null,
     /**
      * Опциональный header-блок, который рендерится как ПЕРВЫЙ элемент
      * LazyColumn (перед строками арендаторов). Используется чтобы полоса
@@ -3578,6 +3612,35 @@ fun RenterTable(
                                                         )
                                                     }
                                                 }
+                                                // ── Кнопка ✕ — каскадное удаление ──
+                                                // Удаляет контракт + связанные
+                                                // транзакции + корректирует баланс
+                                                // арендатора и главной карты (через
+                                                // contractHistoryViewModel.deleteContract).
+                                                // Визуально отличается от кнопки
+                                                // переключения статуса (минус):
+                                                // красный X на фоне ClaudeAccentBg.
+                                                if (onDeleteContract != null) {
+                                                    Spacer(Modifier.width(8.dp))
+                                                    Box(
+                                                        modifier = Modifier
+                                                            .size(36.dp)
+                                                            .clip(RoundedCornerShape(8.dp))
+                                                            .background(ClaudeAccentBg)
+                                                            .border(1.dp, ClaudeDivider, RoundedCornerShape(8.dp))
+                                                            .clickable {
+                                                                onDeleteContract.invoke(c.id)
+                                                            },
+                                                        contentAlignment = Alignment.Center
+                                                    ) {
+                                                        Icon(
+                                                            imageVector = Icons.Default.Close,
+                                                            contentDescription = "Kontraktni o'chirish",
+                                                            tint = StatusOverdue,
+                                                            modifier = Modifier.size(20.dp)
+                                                        )
+                                                    }
+                                                }
                                             }
                                         }
                                     }
@@ -3740,7 +3803,24 @@ fun RenterFormDialog(
         batteryId1: String,
         batteryId2: String,
         additionalInfo: String
-    ) -> Int = { _, _, _, _, _, _, _, _ -> -1 }
+    ) -> Int = { _, _, _, _, _, _, _, _ -> -1 },
+    /**
+     * Каскадное удаление существующего контракта из БД.
+     *
+     * Вызывается, когда пользователь нажимает «✕» на существующем контракте
+     * (existingContractId != null) в списке под календарём. Родитель
+     * делегирует в contractHistoryViewModel.deleteContract(id), который
+     * каскадно удаляет: сам контракт + все Transaction с contractId = id +
+     * все CardTransaction с contractId = id + корректирует баланс арендатора
+     * и баланс главной карты (ренверс суммы контракта и реверс доходов карты).
+     *
+     * После завершения форма удаляет контракт из локального state
+     * (contractGroups), чтобы UI сразу отразил удаление.
+     *
+     * Для новых контрактов (existingContractId == null) этот callback НЕ
+     * вызывается — они ещё не в БД, достаточно удалить из локального state.
+     */
+    onDeleteExistingContract: suspend (Int) -> Unit = {}
 ) {
     var name by remember { mutableStateOf(initialRenter?.name ?: "") }
     var phone by remember {
@@ -3880,6 +3960,18 @@ fun RenterFormDialog(
     var selectedScooterId by remember { mutableStateOf<Int?>(initialRenter?.scooterId) }
     var expandedScooter by remember { mutableStateOf(false) }
 
+    // ── Защита от авто-сброса выбранного скутера ──────────────────────
+    // Запоминаем «пользовательский выбор» скутера в этой сессии диалога.
+    // Используется в LaunchedEffect(rentedScooterIds) ниже, чтобы НЕ
+    // сбрасывать selectedScooterId автоматически, если пользователь сам
+    // выбрал скутер (даже если он оказался в rentedScooterIds из-за
+    // race condition с обновлением Flow). Без этого были бы баги:
+    //   • В режиме создания пользователь выбрал скутер → Flow обновился →
+    //     скутер попал в rentedScooterIds → выбор сбросился в null.
+    //   • Только что созданный через inline-форму скутер мог исчезнуть
+    //     из selectedScooterId при первом же обновлении Flow.
+    var userPickedScooterId by remember { mutableStateOf<Int?>(null) }
+
     // ── Inline-создание скутера: state ───────────────────────────────────
     // showCreateScooterInline — раскрыта ли внизу формы секция создания скутера.
     // pendingScooterName — имя скутера, который только что был создан через
@@ -3917,6 +4009,9 @@ fun RenterFormDialog(
             val match = scooters.firstOrNull { it.name.equals(pending, ignoreCase = true) }
             if (match != null) {
                 selectedScooterId = match.id
+                // Запоминаем как пользовательский выбор, чтобы LaunchedEffect
+                // сброса не удалил только что созданный пользователем скутер.
+                userPickedScooterId = match.id
                 pendingScooterName = null
             }
         }
@@ -3937,8 +4032,16 @@ fun RenterFormDialog(
     }
 
     // Если выбранный скутер уже арендован другим — сбрасываем выбор
+    // ТОЛЬКО если пользователь не выбирал его явно. После явного выбора
+    // (userPickedScooterId != null) мы доверяем выбору пользователя.
+    // Это предотвращает баг: пользователь выбрал скутер → Flow обновился →
+    // скутер попал в rentedScooterIds → выбор сбросился в null.
     LaunchedEffect(rentedScooterIds) {
-        if (selectedScooterId != null && selectedScooterId in rentedScooterIds) {
+        if (selectedScooterId != null &&
+            selectedScooterId in rentedScooterIds &&
+            selectedScooterId != userPickedScooterId &&
+            selectedScooterId != initialRenter?.scooterId
+        ) {
             selectedScooterId = null
         }
     }
@@ -4159,9 +4262,66 @@ fun RenterFormDialog(
                                 text = { Text(scooter.name) },
                                 onClick = {
                                     selectedScooterId = scooter.id
+                                    // Запоминаем как пользовательский выбор, чтобы
+                                    // LaunchedEffect(rentedScooterIds) не сбросил
+                                    // его автоматически при обновлении Flow.
+                                    userPickedScooterId = scooter.id
                                     expandedScooter = false
                                 }
                             )
+                        }
+                        // ── Занятые скутеры (показываем с пометкой «Band») ────
+                        // Пользователь явно просил: «когда тот или иной скутер
+                        // будет занят» — то есть показывать занятые скутеры тоже,
+                        // чтобы было видно, какие скутеры уже арендованы. Они
+                        // отображаются серым цветом с красной пометкой «Band»
+                        // (занят) и именем арендатора, который их занял.
+                        // disabled — выбрать нельзя.
+                        val occupiedScooters = scooters.filter { it.id !in availableScooters.map { s -> s.id } }
+                        if (occupiedScooters.isNotEmpty()) {
+                            HorizontalDivider(color = ClaudeDivider, thickness = 1.dp)
+                            occupiedScooters.forEach { scooter ->
+                                val occupier = activeRenters.firstOrNull {
+                                    it.scooterId == scooter.id && !it.isReturned
+                                }
+                                DropdownMenuItem(
+                                    text = {
+                                        Row(
+                                            verticalAlignment = Alignment.CenterVertically,
+                                            horizontalArrangement = Arrangement.spacedBy(6.dp)
+                                        ) {
+                                            Text(
+                                                scooter.name,
+                                                color = ClaudeTextSecondary,
+                                                style = MaterialTheme.typography.bodyMedium
+                                            )
+                                            Surface(
+                                                shape = RoundedCornerShape(4.dp),
+                                                color = StatusOverdueBg
+                                            ) {
+                                                Text(
+                                                    text = "Band",
+                                                    color = StatusOverdue,
+                                                    style = MaterialTheme.typography.labelSmall,
+                                                    fontWeight = FontWeight.SemiBold,
+                                                    modifier = Modifier.padding(horizontal = 4.dp, vertical = 1.dp)
+                                                )
+                                            }
+                                            if (occupier != null) {
+                                                Text(
+                                                    "· ${occupier.name}",
+                                                    color = ClaudeTextSecondary,
+                                                    style = MaterialTheme.typography.labelSmall,
+                                                    maxLines = 1,
+                                                    overflow = TextOverflow.Ellipsis
+                                                )
+                                            }
+                                        }
+                                    },
+                                    enabled = false,
+                                    onClick = {}
+                                )
+                            }
                         }
                         // ── Кнопка «+ Yangi skuter yaratish» в самом низу ────
                         // Сценарий: пользователь открывает список скутеров,
@@ -4250,6 +4410,17 @@ fun RenterFormDialog(
                             group.isResumeMarker -> "RESUME"
                             else -> idLabel
                         }
+                        // ── Имя скутера для строки контракта ──────────────
+                        // Для существующих контрактов берём из initialRenter.scooterName
+                        // (привязан в БД), для новых — из текущего выбора в форме
+                        // (selectedScooter). Маркеры Stop/Resume не показывают
+                        // скутер — они не привязаны к аренде.
+                        val contractScooterName = when {
+                            group.isStopMarker || group.isResumeMarker -> null
+                            group.existingContractId != null ->
+                                initialRenter?.scooterName ?: selectedScooter?.name
+                            else -> selectedScooter?.name
+                        }
 
                         Surface(
                             shape = RoundedCornerShape(8.dp),
@@ -4304,6 +4475,29 @@ fun RenterFormDialog(
                                     style = MaterialTheme.typography.bodySmall,
                                     modifier = Modifier.weight(1f)
                                 )
+                                // ── Имя скутера (показываем, какому скутеру
+                                // принадлежит этот контракт) ────────────────
+                                if (!contractScooterName.isNullOrBlank()) {
+                                    Row(
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(3.dp)
+                                    ) {
+                                        Icon(
+                                            Icons.Default.DirectionsBike,
+                                            contentDescription = null,
+                                            tint = ClaudeAccent,
+                                            modifier = Modifier.size(14.dp)
+                                        )
+                                        Text(
+                                            text = contractScooterName,
+                                            color = ClaudeAccent,
+                                            style = MaterialTheme.typography.labelSmall,
+                                            fontWeight = FontWeight.SemiBold,
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis
+                                        )
+                                    }
+                                }
                                 // ── Кнопка быстрого переключения статуса ────────
                                 // По просьбе пользователя: «каждый арендатор рядом
                                 // с кнопкой икс имел кнопку выбора статуса для
@@ -4370,17 +4564,13 @@ fun RenterFormDialog(
                                         modifier = Modifier.size(20.dp)
                                     )
                                 }
-                                // ── Кнопка удаления контракта ──────────────────
-                                // Используем Box + clickable вместо IconButton, чтобы:
-                                //   1. Увеличить тап-таргет (36dp вместо 28dp) — по
-                                //      гайдлайнам Material минимальный тап-таргет 48dp,
-                                //      но в плотном списке 36dp приемлемо.
-                                //   2. Избежать возможных проблем с перехватом кликов
-                                //      соседними Surface/Row. Box с явным clickable
-                                //      и ripple — более надёжный вариант.
-                                //   3. Явный фон (ClaudeAccentBg) и квадратная форма
-                                //      (RoundedCornerShape(8.dp)) делают кнопку
-                                //      визуально заметнее и единообразной с остальными.
+                                // ── Кнопка удаления контракта (каскадная) ──────
+                                // Для существующих контрактов (existingContractId != null):
+                                // вызывает onDeleteExistingContract(id) — каскадное
+                                // удаление из БД (контракт + Transaction + CardTransaction
+                                // + корректировка баланса арендатора и главной карты).
+                                // После завершения удаляем из локального state.
+                                // Для новых контрактов: просто удаляем из state.
                                 Box(
                                     modifier = Modifier
                                         .size(36.dp)
@@ -4388,8 +4578,23 @@ fun RenterFormDialog(
                                         .background(ClaudeAccentBg)
                                         .border(1.dp, ClaudeDivider, RoundedCornerShape(8.dp))
                                         .clickable {
-                                            contractGroups = contractGroups.filterNot { it.id == group.id }
-                                            if (activeGroupId == group.id) activeGroupId = null
+                                            val existingId = group.existingContractId
+                                            if (existingId != null) {
+                                                // Каскадное удаление существующего контракта
+                                                // через родительский callback.
+                                                dialogScope.launch {
+                                                    onDeleteExistingContract(existingId)
+                                                    // После удаления из БД убираем
+                                                    // из локального state.
+                                                    contractGroups = contractGroups.filterNot { it.id == group.id }
+                                                    if (activeGroupId == group.id) activeGroupId = null
+                                                }
+                                            } else {
+                                                // Новый контракт — просто убираем
+                                                // из локального state.
+                                                contractGroups = contractGroups.filterNot { it.id == group.id }
+                                                if (activeGroupId == group.id) activeGroupId = null
+                                            }
                                         },
                                     contentAlignment = Alignment.Center
                                 ) {
@@ -4625,6 +4830,9 @@ fun RenterFormDialog(
                                 // сохранении или перерисовке форма показывала
                                 // выбранный скутер.
                                 selectedScooterId = newScooterId
+                                // Запоминаем как пользовательский выбор, чтобы
+                                // LaunchedEffect сброса не удалил его.
+                                userPickedScooterId = newScooterId
                             }
                             pendingScooterName = nameToSave
                             showCreateScooterInline = false
