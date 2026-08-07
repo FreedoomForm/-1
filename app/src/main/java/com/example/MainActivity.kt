@@ -800,6 +800,18 @@ fun MainScreen(
         }
     }
 
+    // ── Одноразовая миграция: добавляем RESUME-маркеры ───────────────────
+    // на последние дни последних контрактов всем существующим арендаторам.
+    // По требованию пользователя: у всех прошлых арендаторов из прошлой
+    // базы должен быть день «Davom» (RESUME) на последнем дне окончания
+    // их последнего контракта. Миграция выполняется один раз — флаг
+    // v1_done хранится в SharedPreferences и переживает перезапуски.
+    // Внутри backfillResumeMarkersForAllRenters() есть защита от дубликатов:
+    // если маркер уже стоит на эту дату — пропускает.
+    LaunchedEffect(Unit) {
+        viewModel.backfillResumeMarkersForAllRenters()
+    }
+
     val renters by viewModel.rentersList.collectAsStateWithLifecycle()
     val liveRenters by viewModel.liveRenters.collectAsStateWithLifecycle()
     val trashedRenters by viewModel.trashedRenters.collectAsStateWithLifecycle()

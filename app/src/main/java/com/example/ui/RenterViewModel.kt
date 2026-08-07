@@ -569,6 +569,25 @@ class RenterViewModel(application: Application) : AndroidViewModel(application) 
                             }
                         }
                     }
+
+                    // ── Гарантируем RESUME-маркер на последнем дне ────────
+                    // последнего контракта для ВСЕХ сценариев (1-5).
+                    // По требованию пользователя: при создании контракта
+                    // (оплачено или не оплачено) на последнем дне самого
+                    // последнего контракта нового арендатора должен быть
+                    // день с «возобновлённым» статусом (RESUME_MARKER).
+                    // ensureResumeMarkerOnLastContractDay сама проверит,
+                    // не стоит ли уже маркер на эту дату — дубликатов не будет.
+                    ensureResumeMarkerOnLastContractDay(
+                        renterId = savedRenter.id,
+                        renterName = savedRenter.name,
+                        renterPhone = savedRenter.phoneNumber,
+                        scooterName = savedRenter.scooterName ?: "",
+                        passportData = savedRenter.passportData,
+                        address = savedRenter.address,
+                        pinfl = savedRenter.pinfl,
+                        scooter = scooter
+                    )
                 } catch (e: Exception) { Log.w(TAG, "History save xato", e) }
             }
 
@@ -1488,6 +1507,223 @@ class RenterViewModel(application: Application) : AndroidViewModel(application) 
 
         Log.d(TAG, "reconcile: completed for renter #${existing.id}, " +
                 "deleted=${toDelete.size}, updated=${toUpdate.size}, added=${toAdd.size}")
+
+        // ── 9. Гарантируем наличие RESUME-маркера на последнем дне ────────
+        // последнего контракта арендатора. По требованию пользователя:
+        // у каждого арендатора на последнем дне окончания его последнего
+        // контракта должна быть отметка «Davom» (RESUME). Это работает
+        // как визуальный сигнал «контракт закончился, готов к продлению».
+        // Если RESUME-маркер на эту дату уже существует (пользователь
+        // сам поставил или он остался с прошлой версии) — пропускаем.
+        ensureResumeMarkerOnLastContractDay(
+            renterId = existing.id,
+            renterName = newName,
+            renterPhone = newPhone,
+            scooterName = newScooterName ?: scooter?.name ?: "",
+            passportData = passportData,
+            address = address,
+            pinfl = pinfl,
+            scooter = scooter
+        )
+    }
+
+    /**
+     * Гарантирует наличие RESUME-маркера на последний день (weekEnd)
+     * последнего контракта арендатора.
+     *
+     * По требованию пользователя: у каждого арендатора на последнем дне
+     * окончания его последнего контракта должна быть отметка «Davom»
+     * (RESUME_MARKER). Это визуальный сигнал «контракт закончился,
+     * готов к продлению».
+     *
+     * Алгоритм:
+     *   1. Загружаем все контракты арендатора (TYPE_CREATED + TYPE_AUTO_RENEW).
+     *   2. Находим тот, у которого max(weekEnd) — это «последний контракт».
+     *   3. Загружаем все существующие RESUME-маркеры (TYPE_RETURNED +
+     *      notes="RESUME_MARKER").
+     *   4. Если уже есть маркер на дату weekEnd последнего контракта —
+     *      ничего не делаем.
+     *   5. Иначе вставляем новый RESUME_MARKER с weekStart=weekEnd=
+     *      lastContractWeekEnd.
+     *
+     * Не создаёт Transaction и не меняет баланс — маркеры только
+     * визуальные. Дату храним как есть (без нормализации на полночь),
+     * чтобы совпадение с датой контракта было точным.
+     *
+     * Эта функция вызывается:
+     *   • Из addRenter (после сохранения всех specs) — для нового арендатора.
+     *   • Из reconcileContractsFromGroups — после редактирования.
+     *   • Из одноразовой миграции backfillResumeMarkersForAllRenters()
+     *     в MainActivity.onCreate — для существующих арендаторов.
+     */
+    private suspend fun ensureResumeMarkerOnLastContractDay(
+        renterId: Int,
+        renterName: String,
+        renterPhone: String,
+        scooterName: String,
+        passportData: String,
+        address: String,
+        pinfl: String,
+        scooter: Scooter?
+    ) {
+        try {
+            // ── 1. Загружаем все обычные контракты ──────────────────────
+            // contractsForRenterOnce возвращает только TYPE_CREATED и
+            // TYPE_AUTO_RENEW (без маркеров STOP/RESUME).
+            val contracts = historyRepository.contractsForRenterOnce(renterId)
+            if (contracts.isEmpty()) {
+                Log.d(TAG, "ensureResumeMarker: renter #$renterId has no contracts — skip")
+                return
+            }
+
+            // ── 2. Находим последний контракт (max weekEnd) ─────────────
+            // weekEnd nullable в модели, но для обычных контрактов
+            // (TYPE_CREATED/AUTO_RENEW) он всегда заполнен. Если по какой-то
+            // причине weekEnd = null — пропускаем такой контракт.
+            val lastContract = contracts
+                .filter { it.weekEnd != null }
+                .maxByOrNull { it.weekEnd!! } ?: return
+            val lastDayMs: Long = lastContract.weekEnd!!
+
+            // ── 3. Загружаем все RESUME-маркеры ────────────────────────
+            // getForRenterOnce возвращает ВСЕ записи — включая маркеры.
+            val allEntries = historyRepository.getForRenterOnce(renterId)
+            val existingResumeMarkers = allEntries.filter {
+                it.type == ContractHistoryEntry.TYPE_RETURNED &&
+                it.notes == "RESUME_MARKER"
+            }
+
+            // ── 4. Проверяем, есть ли уже маркер на эту дату ────────────
+            // Используем день-гранулярность (сравниваем по Y/M/D, а не по
+            // миллисекундам — на случай если маркер и контракт сохранены
+            // с разным смещением от полуночи).
+            val cal = java.util.Calendar.getInstance()
+            cal.timeInMillis = lastDayMs
+            val lastYear = cal.get(java.util.Calendar.YEAR)
+            val lastMonth = cal.get(java.util.Calendar.MONTH)
+            val lastDay = cal.get(java.util.Calendar.DAY_OF_MONTH)
+
+            val alreadyExists = existingResumeMarkers.any { m ->
+                val ms = m.weekStart ?: return@any false
+                val mc = java.util.Calendar.getInstance()
+                mc.timeInMillis = ms
+                mc.get(java.util.Calendar.YEAR) == lastYear &&
+                mc.get(java.util.Calendar.MONTH) == lastMonth &&
+                mc.get(java.util.Calendar.DAY_OF_MONTH) == lastDay
+            }
+            if (alreadyExists) {
+                Log.d(TAG, "ensureResumeMarker: renter #$renterId already has RESUME_MARKER " +
+                        "on $lastDay-$lastMonth-$lastYear — skip")
+                return
+            }
+
+            // ── 5. Вставляем новый RESUME_MARKER ────────────────────────
+            // weekStart = weekEnd = lastDayMs (однодневный маркер).
+            // amount = 0, isPaid = false — маркеры не влияют на баланс.
+            val now = System.currentTimeMillis()
+            historyRepository.insert(ContractHistoryEntry(
+                renterId = renterId,
+                timestamp = now,
+                type = ContractHistoryEntry.TYPE_RETURNED,
+                amount = 0.0,
+                notes = "RESUME_MARKER",
+                renterName = renterName,
+                renterPhone = renterPhone,
+                scooterName = scooterName,
+                weekStart = lastDayMs,
+                weekEnd = lastDayMs,
+                weeklyPrice = 0.0,
+                passportData = passportData,
+                address = address,
+                pinfl = pinfl,
+                vinNumber = scooter?.vinNumber ?: "",
+                engineNumber = scooter?.engineNumber ?: "",
+                scooterSerialNumber = scooter?.scooterSerialNumber ?: "",
+                batteryId1 = scooter?.batteryId1 ?: "",
+                batteryId2 = scooter?.batteryId2 ?: "",
+                additionalInfo = scooter?.additionalInfo ?: "",
+                isPaid = false
+            ))
+            Log.d(TAG, "ensureResumeMarker: inserted RESUME_MARKER for renter #$renterId " +
+                    "at last contract day $lastDayMs")
+        } catch (e: Exception) {
+            Log.w(TAG, "ensureResumeMarker failed for renter #$renterId: ${e.message}")
+        }
+    }
+
+    /**
+     * Одноразовая миграция: добавляет RESUME-маркеры на последние дни
+     * последних контрактов ВСЕХ существующих арендаторов.
+     *
+     * Запускается из MainActivity.onCreate (через LaunchedEffect), используя
+     * SharedPreferences-флаг "resume_marker_backfill_v1" для гарантии
+     * одноразовости. Повторные запуски пропускаются, чтобы не плодить
+     * дубликаты при обновлениях приложения.
+     *
+     * Для каждого арендатора:
+     *   • Если есть хотя бы один обычный контракт (TYPE_CREATED/AUTO_RENEW)
+     *     — находит max(weekEnd) и вызывает ensureResumeMarkerOnLastContractDay.
+     *   • Если контрактов нет — пропускает.
+     *
+     * Поток: Dispatchers.IO (миграция может затронуть много арендаторов).
+     */
+    fun backfillResumeMarkersForAllRenters() {
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                val context = getApplication<Application>()
+                val prefs = context.getSharedPreferences("resume_marker_backfill", Context.MODE_PRIVATE)
+                if (prefs.getBoolean("v1_done", false)) {
+                    Log.d(TAG, "backfillResumeMarkers: already done — skip")
+                    return@launch
+                }
+
+                val allRenters = repository.getActiveRenters()
+                Log.d(TAG, "backfillResumeMarkers: processing ${allRenters.size} renters")
+
+                var processed = 0
+                var inserted = 0
+                for (renter in allRenters) {
+                    // getActiveRenters уже фильтрует isDeleted=1 (арендаторов
+                    // в корзине), так что отдельная проверка не нужна.
+
+                    val contracts = historyRepository.contractsForRenterOnce(renter.id)
+                    if (contracts.isEmpty()) continue
+
+                    // Считаем количество RESUME-маркеров до и после —
+                    // чтобы залогировать, сколько реально вставлено.
+                    val beforeCount = historyRepository.getForRenterOnce(renter.id)
+                        .count { it.type == ContractHistoryEntry.TYPE_RETURNED &&
+                                 it.notes == "RESUME_MARKER" }
+
+                    ensureResumeMarkerOnLastContractDay(
+                        renterId = renter.id,
+                        renterName = renter.name,
+                        renterPhone = renter.phoneNumber,
+                        scooterName = renter.scooterName ?: "",
+                        passportData = renter.passportData,
+                        address = renter.address,
+                        pinfl = renter.pinfl,
+                        scooter = renter.scooterId?.let { fetchScooterById(it) }
+                    )
+
+                    val afterCount = historyRepository.getForRenterOnce(renter.id)
+                        .count { it.type == ContractHistoryEntry.TYPE_RETURNED &&
+                                 it.notes == "RESUME_MARKER" }
+                    if (afterCount > beforeCount) inserted++
+
+                    processed++
+                }
+
+                prefs.edit().putBoolean("v1_done", true).apply()
+                Log.d(TAG, "backfillResumeMarkers: done — processed=$processed, " +
+                        "inserted_new=$inserted out of ${allRenters.size} renters")
+
+                // Обновляем виджеты — в календаре могут появиться новые маркеры
+                try { com.example.widget.WidgetUpdater.updateAll(context) } catch (_: Exception) {}
+            } catch (e: Exception) {
+                Log.e(TAG, "backfillResumeMarkers failed", e)
+            }
+        }
     }
 
     /**
