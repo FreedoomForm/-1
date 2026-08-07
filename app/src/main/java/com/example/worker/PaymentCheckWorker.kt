@@ -65,6 +65,62 @@ class PaymentCheckWorker(
                     continue
                 }
 
+                // ── Проверка STOP_MARKER без последующего RESUME_MARKER ──────
+                // Если у арендатора есть STOP-маркер (TYPE_TERMINATED + notes=
+                // "STOP_MARKER") и после него НЕТ RESUME-маркера (TYPE_RETURNED
+                // + notes="RESUME_MARKER") — значит аренда приостановлена и
+                // авто-продление НЕ должно создаваться. Это критично, иначе
+                // Worker будет плодить неоплаченные контракты даже после того,
+                // как пользователь явно остановил аренду через календарь.
+                //
+                //   • Если последний STOP в прошлом (дата уже наступила) —
+                //     аренда остановлена, пропускаем авто-продление.
+                //   • Если последний STOP в будущем — аренда ещё активна, но
+                //     мы не должны создавать контракты ЗА пределами STOP.
+                //     Сравниваем expiryTime (конец последнего контракта по
+                //     расчёту) с ближайшим будущим STOP: если expiry >= STOP,
+                //     не продлеваем.
+                val allEntries = db.contractHistoryDao().getForRenter(renter.id)
+                val stopMarkers = allEntries.filter {
+                    it.type == ContractHistoryEntry.TYPE_TERMINATED &&
+                        it.notes == "STOP_MARKER" &&
+                        it.weekStart != null
+                }
+                val resumeMarkers = allEntries.filter {
+                    it.type == ContractHistoryEntry.TYPE_RETURNED &&
+                        it.notes == "RESUME_MARKER" &&
+                        it.weekStart != null
+                }
+
+                // Ищем «активный» STOP: такой, после которого нет RESUME.
+                // Берём последний STOP по дате и проверяем, есть ли RESUME
+                // с датой СТРОГО больше STOP. Если нет — STOP активен.
+                val lastStop = stopMarkers.maxByOrNull { it.weekStart!! }
+                val activeStop = if (lastStop != null) {
+                    val hasResumeAfter = resumeMarkers.any { it.weekStart!! > lastStop.weekStart!! }
+                    if (!hasResumeAfter) lastStop else null
+                } else null
+
+                if (activeStop != null) {
+                    val stopDayStart = activeStop.weekStart!!
+                    val expiryTime = renter.rentStartDateTimestamp +
+                        (renter.rentDurationDays * 24L * 60 * 60 * 1000)
+                    // Если аренда уже истекла по сроку И STOP уже наступил —
+                    // это остановленный арендатор, не продлеваем.
+                    // Если срок ещё идёт, но STOP в будущем — продлеваем только
+                    // если expiry < STOP (новая неделя полностью до STOP).
+                    if (now >= expiryTime && stopDayStart <= now) {
+                        Log.d(TAG, "Skip auto-renew for renter #${renter.id}: " +
+                            "active STOP_MARKER at ${stopDayStart} (past, no RESUME)")
+                        continue
+                    }
+                    if (expiryTime >= stopDayStart) {
+                        Log.d(TAG, "Skip auto-renew for renter #${renter.id}: " +
+                            "new week would cross STOP_MARKER at ${stopDayStart}")
+                        continue
+                    }
+                }
+
                 val expiryTime = renter.rentStartDateTimestamp +
                     (renter.rentDurationDays * 24L * 60 * 60 * 1000)
 
