@@ -1637,6 +1637,38 @@ class RenterViewModel(application: Application) : AndroidViewModel(application) 
                 it.notes == "RESUME_MARKER"
             }
 
+            // ── 3a. Проверяем «активный» STOP (без последующего RESUME) ──
+            // Если у арендатора есть STOP_MARKER, после которого нет
+            // RESUME_MARKER — значит аренда приостановлена, и автоматически
+            // добавлять RESUME на последний день контракта НЕЛЬЗЯ: это
+            // выведет арендатора из архива и сломает логику. Пользователь
+            // должен явно поставить Resume, когда захочет возобновить аренду.
+            //
+            // Алгоритм:
+            //   1. Находим самый свежий STOP_MARKER.
+            //   2. Если есть RESUME_MARKER с датой СТРОГО больше — STOP не
+            //      активен, можно добавлять новый RESUME.
+            //   3. Иначе — STOP активен, пропускаем автоматическое добавление.
+            val stopMarkers = allEntries.filter {
+                it.type == ContractHistoryEntry.TYPE_TERMINATED &&
+                it.notes == "STOP_MARKER" &&
+                it.weekStart != null
+            }
+            if (stopMarkers.isNotEmpty()) {
+                val latestStop = stopMarkers.maxByOrNull { it.weekStart!! }
+                if (latestStop != null) {
+                    val hasResumeAfterStop = existingResumeMarkers.any {
+                        (it.weekStart ?: 0L) > (latestStop.weekStart ?: 0L)
+                    }
+                    if (!hasResumeAfterStop) {
+                        Log.d(TAG, "ensureResumeMarker: renter #$renterId has active STOP " +
+                                "at ${latestStop.weekStart} without RESUME after — skip " +
+                                "(renter is archived, do not auto-add RESUME)")
+                        return
+                    }
+                }
+            }
+
             // ── 4. Проверяем, есть ли уже маркер на эту дату ────────────
             // Используем день-гранулярность (сравниваем по Y/M/D, а не по
             // миллисекундам — на случай если маркер и контракт сохранены
