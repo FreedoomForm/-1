@@ -61,6 +61,16 @@ class RenterViewModel(application: Application) : AndroidViewModel(application) 
     val liveRenters: StateFlow<List<Renter>>
     /** Только удалённые в корзину (isDeleted=1) — для trash mode. */
     val trashedRenters: StateFlow<List<Renter>>
+    /**
+     * Архивные арендаторы — активные в БД (isDeleted=0), НО у которых
+     * есть STOP-маркер (TYPE_TERMINATED + notes="STOP_MARKER") в прошлом
+     * (weekStart < сегодня), и ПОСЛЕ этой даты нет ни одного RESUME-маркера
+     * (TYPE_RETURNED + notes="RESUME_MARKER").
+     *
+     * Это арендаторы, чья аренда приостановлена и не возобновлена —
+     * пользователь переводит их в «архив» долгим нажатием на «✎».
+     */
+    val archivedRenters: StateFlow<List<Renter>>
     /** TrashService для каскадного soft-delete/restore/permanent-delete. */
     val trashService: com.example.data.TrashService
 
@@ -92,6 +102,40 @@ class RenterViewModel(application: Application) : AndroidViewModel(application) 
             initialValue = emptyList()
         )
         trashedRenters = repository.trashedRenters.stateIn(
+            scope = viewModelScope,
+            started = SharingStarted.WhileSubscribed(5000),
+            initialValue = emptyList()
+        )
+        // ── Архивные арендаторы ────────────────────────────────────────────
+        // Арендатор считается архивным, если у него есть STOP-маркер
+        // (TYPE_TERMINATED + notes="STOP_MARKER") в прошлом (weekStart < сегодня),
+        // и ПОСЛЕ этой даты нет ни одного RESUME-маркера
+        // (TYPE_RETURNED + notes="RESUME_MARKER").
+        //
+        // combine(liveRenters, liveContracts) — когда меняется любой из
+        // источников, пересчитывается список архивных. liveContracts включает
+        // в себя маркеры STOP/RESUME (это просто TYPE_TERMINATED/RETURNED
+        // с isDeleted=0), поэтому реагирует на их добавление/удаление.
+        archivedRenters = kotlinx.coroutines.flow.combine(
+            repository.liveRenters,
+            historyRepository.liveContracts
+        ) { renters, contracts ->
+            val todayStart = run {
+                val cal = java.util.Calendar.getInstance()
+                cal.set(java.util.Calendar.HOUR_OF_DAY, 0)
+                cal.set(java.util.Calendar.MINUTE, 0)
+                cal.set(java.util.Calendar.SECOND, 0)
+                cal.set(java.util.Calendar.MILLISECOND, 0)
+                cal.timeInMillis
+            }
+            // Группируем все записи по renterId — нужно для проверки
+            // «есть ли RESUME после STOP».
+            val byRenter: Map<Int, List<ContractHistoryEntry>> =
+                contracts.groupBy { it.renterId }
+            renters.filter { renter ->
+                isRenterArchived(byRenter[renter.id] ?: emptyList(), todayStart)
+            }
+        }.stateIn(
             scope = viewModelScope,
             started = SharingStarted.WhileSubscribed(5000),
             initialValue = emptyList()
@@ -1722,6 +1766,112 @@ class RenterViewModel(application: Application) : AndroidViewModel(application) 
                 try { com.example.widget.WidgetUpdater.updateAll(context) } catch (_: Exception) {}
             } catch (e: Exception) {
                 Log.e(TAG, "backfillResumeMarkers failed", e)
+            }
+        }
+    }
+
+    /**
+     * Проверяет, является ли арендатор архивным по его history entries.
+     *
+     * Архивный = есть STOP-маркер (TYPE_TERMINATED + notes="STOP_MARKER")
+     * в прошлом (weekStart < todayStart), и ПОСЛЕ даты этого STOP-маркера
+     * нет ни одного RESUME-маркера (TYPE_RETURNED + notes="RESUME_MARKER").
+     *
+     * Алгоритм:
+     *   1. Фильтруем только STOP и RESUME маркеры.
+     *   2. Находим все STOP-маркеры в прошлом (weekStart < todayStart).
+     *   3. Если таких нет — не архивный.
+     *   4. Берём самый свежий из них (max weekStart).
+     *   5. Проверяем, есть ли RESUME-маркер с weekStart > этого STOP'а.
+     *   6. Если есть — не архивный (аренда возобновлена).
+     *   7. Иначе — архивный.
+     *
+     * todayStart передаётся снаружи, чтобы не вычислять его на каждой
+     * итерации в filter (экономия при обработке больших списков).
+     */
+    private fun isRenterArchived(
+        entries: List<ContractHistoryEntry>,
+        todayStart: Long
+    ): Boolean {
+        val stopMarkers = entries.filter {
+            it.type == ContractHistoryEntry.TYPE_TERMINATED &&
+            it.notes == "STOP_MARKER" &&
+            (it.weekStart ?: 0L) < todayStart
+        }
+        if (stopMarkers.isEmpty()) return false
+
+        val latestStop = stopMarkers.maxOf { it.weekStart ?: 0L }
+
+        val hasResumeAfter = entries.any {
+            it.type == ContractHistoryEntry.TYPE_RETURNED &&
+            it.notes == "RESUME_MARKER" &&
+            (it.weekStart ?: 0L) > latestStop
+        }
+        return !hasResumeAfter
+    }
+
+    /**
+     * Восстанавливает арендатора из архива.
+     *
+     * По логике архива: арендатор в архиве, потому что у него есть
+     * STOP-маркер в прошлом без RESUME после. Чтобы вернуть его в
+     * активные, нужно поставить RESUME-маркер на СЕГОДНЯ — это
+     * сигнализирует «аренда возобновлена с сегодняшнего дня».
+     *
+     * После вставки RESUME-маркера archivedRenters StateFlow автоматически
+     * пересчитается (он зависит от liveContracts), и арендатор исчезнет
+     * из архива и появится в активных.
+     *
+     * Дополнительно ensureResumeMarkerOnLastContractDay обновит
+     * RESUME-маркер на последнем дне последнего контракта (если
+     * последний контракт изменился после STOP'а).
+     */
+    fun restoreRenterFromArchive(renterId: Int) {
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                val renter = repository.getById(renterId) ?: return@launch
+                val now = System.currentTimeMillis()
+                val todayStart = run {
+                    val cal = java.util.Calendar.getInstance()
+                    cal.set(java.util.Calendar.HOUR_OF_DAY, 0)
+                    cal.set(java.util.Calendar.MINUTE, 0)
+                    cal.set(java.util.Calendar.SECOND, 0)
+                    cal.set(java.util.Calendar.MILLISECOND, 0)
+                    cal.timeInMillis
+                }
+                val scooter: Scooter? = renter.scooterId?.let { fetchScooterById(it) }
+
+                // Вставляем RESUME-маркер на сегодня — это выведет
+                // арендатора из архива (появится RESUME после STOP).
+                historyRepository.insert(ContractHistoryEntry(
+                    renterId = renterId,
+                    timestamp = now,
+                    type = ContractHistoryEntry.TYPE_RETURNED,
+                    amount = 0.0,
+                    notes = "RESUME_MARKER",
+                    renterName = renter.name,
+                    renterPhone = renter.phoneNumber,
+                    scooterName = renter.scooterName ?: "",
+                    weekStart = todayStart,
+                    weekEnd = todayStart,
+                    weeklyPrice = 0.0,
+                    passportData = renter.passportData,
+                    address = renter.address,
+                    pinfl = renter.pinfl,
+                    vinNumber = scooter?.vinNumber ?: "",
+                    engineNumber = scooter?.engineNumber ?: "",
+                    scooterSerialNumber = scooter?.scooterSerialNumber ?: "",
+                    batteryId1 = scooter?.batteryId1 ?: "",
+                    batteryId2 = scooter?.batteryId2 ?: "",
+                    additionalInfo = scooter?.additionalInfo ?: "",
+                    isPaid = false
+                ))
+                Log.d(TAG, "restoreRenterFromArchive: inserted RESUME_MARKER at $todayStart " +
+                        "for renter #$renterId — moved back to active")
+
+                try { com.example.widget.WidgetUpdater.updateAll(getApplication()) } catch (_: Exception) {}
+            } catch (e: Exception) {
+                Log.e(TAG, "restoreRenterFromArchive failed for renter #$renterId", e)
             }
         }
     }

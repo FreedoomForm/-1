@@ -653,6 +653,23 @@ fun MainScreen(
     // TopAppBar. При входе в trash mode выделение сбрасывается (чтобы старые
     // selectedRenters/Scooters/etc. из обычного режима не «протекали» в trash).
     var isTrashMode by remember { mutableStateOf(false) }
+    // ── Archive mode ─────────────────────────────────────────────────────
+    // Аналог trash mode, но для архивных арендаторов: тех, у кого есть
+    // STOP-маркер в прошлом (weekStart < сегодня), после которого нет
+    // RESUME-маркера. Это означает «аренда приостановлена и не возобновлена».
+    //
+    // Включается ДОЛГИМ нажатием на кнопку «✎» (Tahrirlash). При входе
+    // в archive mode:
+    //   • Кнопка «✎» красится в серый (но остаётся рабочей — можно
+    //     редактировать архивные записи).
+    //   • Кнопка «+» меняется на «↩» (Restore) — возвращает арендатора
+    //     из архива в активные (ставит RESUME-маркер на сегодня).
+    //   • Источник данных меняется с liveRenters на archivedRenters.
+    //
+    // В archive mode кнопка «🗑» (удалить) работает как обычно: мягкое
+    // удаление в корзину (как и в обычном режиме). Trash mode имеет
+    // приоритет — если isTrashMode=true, archive mode не активируется.
+    var isArchiveMode by remember { mutableStateOf(false) }
 
     // ── Навигация ────────────────────────────────────────────────────
     var navState by remember { mutableStateOf<NavigationState>(NavigationState.MainView) }
@@ -815,6 +832,7 @@ fun MainScreen(
     val renters by viewModel.rentersList.collectAsStateWithLifecycle()
     val liveRenters by viewModel.liveRenters.collectAsStateWithLifecycle()
     val trashedRenters by viewModel.trashedRenters.collectAsStateWithLifecycle()
+    val archivedRenters by viewModel.archivedRenters.collectAsStateWithLifecycle()
     val liveScooters by scooterViewModel.liveScooters.collectAsStateWithLifecycle()
     val trashedScooters by scooterViewModel.trashedScooters.collectAsStateWithLifecycle()
     val liveCards by finansiViewModel.liveCards.collectAsStateWithLifecycle()
@@ -1517,8 +1535,17 @@ fun MainScreen(
                         // В trash mode: ВОССТАНАВЛИВАЕТ выбранные удалённые объекты
                         //               (как просил пользователь: «+» теперь restore).
                         //               Иконка меняется с «+» на «↩» (Restore).
+                        // В archive mode (только для арендаторов, tab=0): тоже
+                        //               Restore — возвращает арендатора из архива
+                        //               в активные (ставит RESUME-маркер на сегодня).
+                        //               Иконка меняется с «+» на «↩» (Restore).
                         if (currentTab != 4 && currentTab != 6) {
-                            val addEnabled = if (isTrashMode) {
+                            // В archive mode кнопка «+» как Restore работает
+                            // только на вкладке арендаторов (0). На остальных
+                            // вкладках archive mode неактивен, поэтому
+                            // restoreEnabled = false, и кнопка просто disabled.
+                            val isRestoreMode = isTrashMode || (isArchiveMode && currentTab == 0)
+                            val addEnabled = if (isRestoreMode) {
                                 when (currentTab) {
                                     0 -> selectedRenters.isNotEmpty()
                                     1 -> selectedScooters.isNotEmpty()
@@ -1556,6 +1583,14 @@ fun MainScreen(
                                                 selectedCardIds = emptySet()
                                             }
                                         }
+                                    } else if (isArchiveMode && currentTab == 0) {
+                                        // ── RESTORE FROM ARCHIVE ──
+                                        // Возвращает выбранных арендаторов из архива
+                                        // в активные: ставит RESUME-маркер на сегодня,
+                                        // что автоматически выводит арендатора из
+                                        // archivedRenters (он возвращается в liveRenters).
+                                        selectedRenters.forEach { id -> viewModel.restoreRenterFromArchive(id) }
+                                        selectedRenters = emptySet()
                                     } else {
                                         // ── CREATE (normal mode) ──
                                         when (currentTab) {
@@ -1572,15 +1607,15 @@ fun MainScreen(
                                     .padding(end = 6.dp, start = 4.dp)
                                     .size(56.dp)
                                     .background(
-                                        if (isTrashMode) {
+                                        if (isRestoreMode) {
                                             if (addEnabled) StatusOk else StatusOk.copy(alpha = 0.4f)
                                         } else ClaudeAccent,
                                         RoundedCornerShape(8.dp)
                                     )
                             ) {
                                 Icon(
-                                    if (isTrashMode) Icons.Default.Restore else Icons.Default.Add,
-                                    contentDescription = if (isTrashMode) "Qayta tiklash" else "Qo'shish",
+                                    if (isRestoreMode) Icons.Default.Restore else Icons.Default.Add,
+                                    contentDescription = if (isRestoreMode) "Qayta tiklash" else "Qo'shish",
                                     tint = Color.White,
                                     modifier = Modifier.size(30.dp)
                                 )
@@ -1588,6 +1623,18 @@ fun MainScreen(
                         }
 
                         // ── Кнопка «✎ Tahrirlash» — скрыта на «Отчётах» (4) и «Sozlamalar» (6)
+                        // Поведение:
+                        //   • КРАТКОЕ нажатие: открывает диалог редактирования
+                        //     выбранной строки. Активна только если выбрано РОВНО 1.
+                        //     Работает ВО ВСЕХ режимах (обычный, trash, archive).
+                        //   • ДОЛГОЕ нажатие: переключает isArchiveMode (только на
+                        //     вкладке арендаторов, tab=0). При входе в archive mode:
+                        //       - кнопка красится в серый (но остаётся рабочей);
+                        //       - источник данных меняется на archivedRenters;
+                        //       - кнопка «+» превращается в «↩» (Restore).
+                        //     Trash mode имеет приоритет — если isTrashMode=true,
+                        //     долгое нажатие на «✎» не делает ничего (чтобы не
+                        //     путать режимы).
                         if (currentTab != 4 && currentTab != 6) {
                             val editEnabled = when (currentTab) {
                                 0 -> selectedRenters.size == 1
@@ -1597,38 +1644,98 @@ fun MainScreen(
                                 5 -> selectedCardIds.size == 1
                                 else -> false
                             }
-                            IconButton(
-                                onClick = {
-                                    when (currentTab) {
-                                        0 -> {
-                                            selectedRenters.firstOrNull()?.let { id ->
-                                                renterToEdit = renters.firstOrNull { it.id == id }
-                                            }
-                                        }
-                                        1 -> {
-                                            selectedScooters.firstOrNull()?.let { id ->
-                                                scooterToEdit = scooters.firstOrNull { it.id == id }
-                                            }
-                                        }
-                                        2 -> contractEditTrigger++
-                                        3 -> transactionEditTrigger++
-                                        5 -> cardEditTrigger++
-                                    }
-                                },
-                                enabled = editEnabled,
+                            // В archive mode кнопка красится в серый, но
+                            // остаётся рабочей (editEnabled по-прежнему зависит
+                            // от выделения).
+                            val editBgColor = when {
+                                isArchiveMode && currentTab == 0 ->
+                                    if (editEnabled) ClaudeDivider else ClaudeDivider.copy(alpha = 0.5f)
+                                else ->
+                                    if (editEnabled) Color.White else Color.White.copy(alpha = 0.5f)
+                            }
+                            val editBorderColor = when {
+                                isArchiveMode && currentTab == 0 -> ClaudeTextSecondary
+                                else -> ClaudeDivider
+                            }
+                            val editTint = when {
+                                isArchiveMode && currentTab == 0 ->
+                                    if (editEnabled) Color.DarkGray else ClaudeTextSecondary
+                                else ->
+                                    if (editEnabled) ClaudeAccent else ClaudeTextSecondary
+                            }
+                            Box(
                                 modifier = Modifier
                                     .padding(end = 6.dp)
                                     .size(56.dp)
-                                    .background(
-                                        if (editEnabled) Color.White else Color.White.copy(alpha = 0.5f),
-                                        RoundedCornerShape(8.dp)
-                                    )
-                                    .border(1.dp, ClaudeDivider, RoundedCornerShape(8.dp))
+                                    .background(editBgColor, RoundedCornerShape(8.dp))
+                                    .border(1.dp, editBorderColor, RoundedCornerShape(8.dp))
+                                    .combinedClickable(
+                                        onClick = {
+                                            if (!editEnabled) return@combinedClickable
+                                            when (currentTab) {
+                                                0 -> {
+                                                    selectedRenters.firstOrNull()?.let { id ->
+                                                        // В archive mode арендатор берётся из
+                                                        // archivedRenters, в trash — из trashedRenters,
+                                                        // иначе из liveRenters. Источник rentersSource
+                                                        // уже учёл режим, но здесь используем
+                                                        // объединённый renters (allRenters), чтобы
+                                                        // найти по id независимо от режима.
+                                                        renterToEdit = renters.firstOrNull { it.id == id }
+                                                    }
+                                                }
+                                                1 -> {
+                                                    selectedScooters.firstOrNull()?.let { id ->
+                                                        scooterToEdit = scooters.firstOrNull { it.id == id }
+                                                    }
+                                                }
+                                                2 -> contractEditTrigger++
+                                                3 -> transactionEditTrigger++
+                                                5 -> cardEditTrigger++
+                                            }
+                                        },
+                                        onLongClick = {
+                                            // ── TOGGLE ARCHIVE MODE ──
+                                            // Только на вкладке арендаторов (0) и только
+                                            // если не в trash mode (чтобы режимы не
+                                            // конфликтовали).
+                                            if (currentTab != 0) {
+                                                Toast.makeText(
+                                                    localContext,
+                                                    "Arxiv rejimi faqat ijarachilar tabida",
+                                                    Toast.LENGTH_SHORT
+                                                ).show()
+                                                return@combinedClickable
+                                            }
+                                            if (isTrashMode) {
+                                                Toast.makeText(
+                                                    localContext,
+                                                    "Avval chiqindixon rejimidan chiqing",
+                                                    Toast.LENGTH_SHORT
+                                                ).show()
+                                                return@combinedClickable
+                                            }
+                                            isArchiveMode = !isArchiveMode
+                                            // Сбрасываем выделение при переключении режима.
+                                            selectedRenters = emptySet()
+                                            selectedScooters = emptySet()
+                                            selectedContracts = emptySet()
+                                            selectedTxs = emptySet()
+                                            selectedCardIds = emptySet()
+                                            Toast.makeText(
+                                                localContext,
+                                                if (isArchiveMode) "Arxiv rejimi yoqildi"
+                                                else "Arxiv rejimi o'chirildi",
+                                                Toast.LENGTH_SHORT
+                                            ).show()
+                                        }
+                                    ),
+                                contentAlignment = Alignment.Center
                             ) {
                                 Icon(
                                     Icons.Default.Edit,
                                     contentDescription = "Tahrirlash",
-                                    tint = if (editEnabled) ClaudeAccent else ClaudeTextSecondary,
+                                    tint = editTint,
                                     modifier = Modifier.size(28.dp)
                                 )
                             }
@@ -1735,6 +1842,11 @@ fun MainScreen(
                                         onLongClick = {
                                             // ── TOGGLE TRASH MODE ──
                                             isTrashMode = !isTrashMode
+                                            // Если был в archive mode — выходим из него
+                                            // (режимы не должны сосуществовать).
+                                            if (isTrashMode && isArchiveMode) {
+                                                isArchiveMode = false
+                                            }
                                             // Сбрасываем выделение при переключении режима,
                                             // чтобы selected* из обычного режима не «протекали»
                                             // в trash mode (где они указывают на не те объекты).
@@ -2222,10 +2334,16 @@ fun MainScreen(
                     latestContractByRenter[r.id]?.weekEnd
                         ?: (r.rentStartDateTimestamp + (r.rentDurationDays * 24L * 60 * 60 * 1000))
 
-                // ── Источник данных зависит от isTrashMode ────────────────────
+                // ── Источник данных зависит от isTrashMode / isArchiveMode ──
                 // В обычном режиме показываем активных арендаторов (isDeleted=0),
-                // в trash mode — только удалённых (isDeleted=1).
-                val rentersSource = if (isTrashMode) trashedRenters else liveRenters
+                // в trash mode — только удалённых (isDeleted=1),
+                // в archive mode — только архивные (STOP без RESUME в прошлом).
+                // Trash mode имеет приоритет над archive mode.
+                val rentersSource = when {
+                    isTrashMode -> trashedRenters
+                    isArchiveMode -> archivedRenters
+                    else -> liveRenters
+                }
                 val filteredRenters = rentersSource.filter { renter ->
                     val textMatch = renter.name.contains(searchQuery, ignoreCase = true) ||
                         renter.phoneNumber.contains(searchQuery) ||
