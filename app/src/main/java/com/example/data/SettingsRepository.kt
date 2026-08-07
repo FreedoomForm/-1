@@ -126,6 +126,42 @@ class SettingsRepository(context: Context) {
         get() = prefs.getBoolean("auto_restore_attempted", false)
         set(value) = prefs.edit().putBoolean("auto_restore_attempted", value).apply()
 
+    /**
+     * Стоимость поломки аккумулятора. Сумма, которую должен заплатить
+     * арендатор при поломке аккумулятора. Используется в PDF-договоре
+     * аренды (отдельная секция о поломке аккумулятора). По умолчанию
+     * 2 400 000 сум.
+     */
+    var batteryDamagePrice: Double
+        get() = prefs.getFloat("battery_damage_price", DEFAULT_BATTERY_DAMAGE_PRICE.toFloat()).toDouble()
+        set(value) = prefs.edit().putFloat("battery_damage_price", value.toFloat()).apply()
+
+    /**
+     * Режим выбора размера текста PDF-договора.
+     *  • true  — AUTO. Размер автоматически уменьшается если текст не
+     *            помещается на одну страницу A4.
+     *  • false — MANUAL. Используется фиксированный размер [pdfFontSize]
+     *            выбранный пользователем.
+     *
+     * По умолчанию = true (авто), чтобы гарантировать что PDF всегда
+     * помещается на одну страницу даже при добавлении новой секции о
+     * поломке аккумулятора.
+     */
+    var pdfFontSizeAuto: Boolean
+        get() = prefs.getBoolean("pdf_font_size_auto", true)
+        set(value) = prefs.edit().putBoolean("pdf_font_size_auto", value).apply()
+
+    /**
+     * Фиксированный размер текста PDF-договора (в pt).
+     *
+     * Используется ТОЛЬКО когда [pdfFontSizeAuto] = false.
+     * По умолчанию = 10f (текущий размер body text, который был до
+     * добавления настройки). Допустимый диапазон: 7..14 (см. UI).
+     */
+    var pdfFontSize: Float
+        get() = prefs.getFloat("pdf_font_size", DEFAULT_PDF_FONT_SIZE)
+        set(value) = prefs.edit().putFloat("pdf_font_size", value).apply()
+
     companion object {
         /** Дневная ставка по умолчанию: 60 000 UZS (420 000 за неделю / 7). */
         const val DEFAULT_DAILY_PRICE = 60_000.0
@@ -136,6 +172,15 @@ class SettingsRepository(context: Context) {
 
         const val DEFAULT_PAYME_LINK = "https://transfer.paycom.uz/680a40043fc0407a2e48e8fe"
         const val DEFAULT_CALL_CENTER = "71 200 55 56"
+
+        /** Стоимость поломки аккумулятора по умолчанию: 2 400 000 UZS. */
+        const val DEFAULT_BATTERY_DAMAGE_PRICE = 2_400_000.0
+
+        /** Размер шрифта PDF по умолчанию (body text). */
+        const val DEFAULT_PDF_FONT_SIZE = 10f
+
+        /** Доступные размеры шрифта для ручного режима PDF (pt). */
+        val PDF_FONT_SIZE_OPTIONS = listOf(7f, 8f, 9f, 10f, 11f, 12f, 14f)
 
         /**
          * SMS-шаблон по умолчанию.

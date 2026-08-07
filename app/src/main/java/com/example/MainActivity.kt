@@ -2306,6 +2306,33 @@ fun MainScreen(
                             entries.maxByOrNull { it.weekEnd ?: it.timestamp }!!
                         }
                 }
+            // ── Latest REAL contract per renter (только CREATED + AUTO_RENEW) ──
+            // Карта для столбцов «Boshlanish» / «Tugash» в RenterTable. По
+            // требованию пользователя: в этих столбцах должны показываться
+            // даты последнего РЕАЛЬНОГО контракта аренды (со статусом
+            // «оплаченный» или «не оплаченный» — то есть с заполненным полем
+            // isPaid). Маркеры STOP (TYPE_TERMINATED + notes="STOP_MARKER") и
+            // RESUME (TYPE_RETURNED + notes="RESUME_MARKER") НЕ должны
+            // учитываться — у них weekStart == weekEnd (один день), из-за чего
+            // даты начала и конца показывались одинаковыми (например
+            // «08.06 - 08.06»). Также исключаются обычные TERMINATED/RETURNED
+            // записи — это транзакции расторжения/возврата, не контракты.
+            // existing latestContractByRenter остаётся для логики статуса
+            // скутеров (scooterStatusOf проверяет TYPE_TERMINATED).
+            val latestRealContractByRenter: Map<Int, com.example.data.ContractHistoryEntry> =
+                remember(contractHistoryAll) {
+                    contractHistoryAll
+                        .asSequence()
+                        .filter {
+                            it.type == com.example.data.ContractHistoryEntry.TYPE_CREATED ||
+                            it.type == com.example.data.ContractHistoryEntry.TYPE_AUTO_RENEW
+                        }
+                        .filter { it.renterId > 0 }
+                        .groupBy { it.renterId }
+                        .mapValues { (_, entries) ->
+                            entries.maxByOrNull { it.weekEnd ?: it.timestamp }!!
+                        }
+                }
 
             if (currentTab == 0) {
                 // ===== ТАБЛИЦА АРЕНДАТОРОВ =====
@@ -2357,11 +2384,15 @@ fun MainScreen(
                             }
                     }
 
-                // Helper: даты последнего контракта (с fallback на поля Renter).
+                // Helper: даты последнего РЕАЛЬНОГО контракта (CREATED/AUTO_RENEW)
+                // — без учёта STOP/RESUME маркеров и транзакций TERMINATED/RETURNED.
+                // Используется для фильтрации по диапазону дат и сортировки —
+                // чтобы датой аренды считалась именно дата последнего контракта
+                // со статусом оплаченный/не оплаченный, а не дата маркера.
                 fun latestStartTs(r: Renter): Long =
-                    latestContractByRenter[r.id]?.weekStart ?: r.rentStartDateTimestamp
+                    latestRealContractByRenter[r.id]?.weekStart ?: r.rentStartDateTimestamp
                 fun latestEndTs(r: Renter): Long =
-                    latestContractByRenter[r.id]?.weekEnd
+                    latestRealContractByRenter[r.id]?.weekEnd
                         ?: (r.rentStartDateTimestamp + (r.rentDurationDays * 24L * 60 * 60 * 1000))
 
                 // ── Источник данных зависит от isTrashMode / isArchiveMode ──
@@ -2458,6 +2489,7 @@ fun MainScreen(
                         sortState = renterSortState,
                         columnVisibility = renterColumnVisibility,
                         latestContractByRenter = latestContractByRenter,
+                        latestRealContractByRenter = latestRealContractByRenter,
                         contractsByRenter = contractsByRenter,
                         // ── Переключение статуса контракта из раскрытой строки ──
                         // Делегируем в ContractHistoryViewModel.updateContract —
@@ -3174,6 +3206,19 @@ fun RenterTable(
     columnVisibility: Map<String, Boolean>,
     latestContractByRenter: Map<Int, com.example.data.ContractHistoryEntry>,
     /**
+     * Последний РЕАЛЬНЫЙ контракт арендатора (только CREATED + AUTO_RENEW).
+     *
+     * Используется в столбцах «Boshlanish» / «Tugash» для отображения дат
+     * последнего контракта со статусом оплаченный/не оплаченный (поле isPaid).
+     * Маркеры STOP (TERMINATED) и RESUME (RETURNED) сюда НЕ входят — у них
+     * weekStart == weekEnd (один день), и они не являются реальными контрактами
+     * аренды, а лишь маркерами остановки/возобновления.
+     *
+     * Если параметр не передан (null) — используется [latestContractByRenter]
+     * (обратная совместимость).
+     */
+    latestRealContractByRenter: Map<Int, com.example.data.ContractHistoryEntry>? = null,
+    /**
      * Все контракты арендаторов, сгруппированные по renterId.
      * Используется для отображения раскрывающейся таблицы контрактов под
      * строкой арендатора (когда пользователь нажимает на стрелку раскрытия
@@ -3215,6 +3260,12 @@ fun RenterTable(
     onSelect: (Int, Boolean) -> Unit,
     onClick: (Renter) -> Unit
 ) {
+    // ── Latest REAL contract (только CREATED + AUTO_RENEW) ──────────────
+    // Для столбцов «Boshlanish» / «Tugash». Если вызывающая сторона не
+    // передала отдельную карту (null) — fallback на latestContractByRenter
+    // (обратная совместимость, хотя логически это менее корректно).
+    val realContracts = latestRealContractByRenter ?: latestContractByRenter
+
     // ── Видимость столбцов ───────────────────────────────────────────────
     // Каждая колонка по умолчанию видна (true), если в columnVisibility нет
     // явного значения false. Пользователь управляет видимостью через
@@ -3487,9 +3538,14 @@ fun RenterTable(
                                 overflow = TextOverflow.Visible
                             )
                         }
-                        // Boshlanish (дата начала ПОСЛЕДНЕГО контракта)
+                        // Boshlanish (дата начала ПОСЛЕДНЕГО РЕАЛЬНОГО контракта)
+                        // По требованию пользователя: показываем дату последнего
+                        // контракта со статусом оплаченный/не оплаченный (CREATED
+                        // или AUTO_RENEW). Маркеры STOP (TERMINATED) и RESUME
+                        // (RETURNED) НЕ учитываются — у них weekStart == weekEnd,
+                        // что приводило к багу «08.06 - 08.06».
                         if (showStart) {
-                            val latest = latestContractByRenter[renter.id]
+                            val latest = realContracts[renter.id]
                             val startTs = latest?.weekStart ?: renter.rentStartDateTimestamp
                             Text(
                                 dateFmt.format(Date(startTs)),
@@ -3503,9 +3559,10 @@ fun RenterTable(
                                 overflow = TextOverflow.Visible
                             )
                         }
-                        // Tugash (дата окончания ПОСЛЕДНЕГО контракта)
+                        // Tugash (дата окончания ПОСЛЕДНЕГО РЕАЛЬНОГО контракта)
+                        // Аналогично Boshlanish — только CREATED/AUTO_RENEW.
                         if (showEnd) {
-                            val latest = latestContractByRenter[renter.id]
+                            val latest = realContracts[renter.id]
                             val endTs = latest?.weekEnd
                                 ?: (renter.rentStartDateTimestamp +
                                     (renter.rentDurationDays * 24L * 60 * 60 * 1000))
@@ -5772,6 +5829,146 @@ fun SettingsScreen(
                         modifier = Modifier.fillMaxWidth(),
                         shape = RoundedCornerShape(8.dp)
                     )
+                    Spacer(modifier = Modifier.height(8.dp))
+                    // ── Цена поломки аккумулятора ────────────────────────────
+                    // Сумма, которую арендатор должен заплатить при поломке
+                    // аккумулятора. Подставляется в PDF-договор (пункт 3.13).
+                    // По умолчанию 2 400 000 сум.
+                    var batteryDamagePrice by remember {
+                        mutableStateOf(
+                            settingsRepo.batteryDamagePrice.let {
+                                if (it > 0) it.toLong().toString()
+                                else com.example.data.SettingsRepository.DEFAULT_BATTERY_DAMAGE_PRICE.toLong().toString()
+                            }
+                        )
+                    }
+                    OutlinedTextField(
+                        value = batteryDamagePrice,
+                        onValueChange = { batteryDamagePrice = it },
+                        label = { Text("Akku buzilganda to'lov (so'm)") },
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                        modifier = Modifier.fillMaxWidth(),
+                        shape = RoundedCornerShape(8.dp)
+                    )
+                    // Автосохранение цены аккумулятора
+                    LaunchedEffect(batteryDamagePrice) {
+                        settingsRepo.batteryDamagePrice = batteryDamagePrice.toDoubleOrNull()
+                            ?: com.example.data.SettingsRepository.DEFAULT_BATTERY_DAMAGE_PRICE
+                    }
+
+                    Spacer(modifier = Modifier.height(12.dp))
+                    // ── Размер текста PDF-договора ──────────────────────────
+                    // Две кнопки: Avto (авто-уменьшение если не влезает в A4)
+                    // и Qo'lda (ручной выбор размера из списка).
+                    Text(
+                        "PDF shartnoma shrift o'lchami",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = ClaudeText
+                    )
+                    Spacer(modifier = Modifier.height(4.dp))
+                    var pdfFontAuto by remember { mutableStateOf(settingsRepo.pdfFontSizeAuto) }
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        // Кнопка Avto
+                        Surface(
+                            modifier = Modifier
+                                .weight(1f)
+                                .clickable {
+                                    pdfFontAuto = true
+                                    settingsRepo.pdfFontSizeAuto = true
+                                },
+                            shape = RoundedCornerShape(8.dp),
+                            color = if (pdfFontAuto) ClaudeAccent else Color(0xFFF0F0F0)
+                        ) {
+                            Text(
+                                "Avto",
+                                modifier = Modifier.padding(vertical = 10.dp, horizontal = 12.dp),
+                                textAlign = TextAlign.Center,
+                                color = if (pdfFontAuto) Color.White else ClaudeText,
+                                fontWeight = FontWeight.SemiBold
+                            )
+                        }
+                        // Кнопка Qo'lda
+                        Surface(
+                            modifier = Modifier
+                                .weight(1f)
+                                .clickable {
+                                    pdfFontAuto = false
+                                    settingsRepo.pdfFontSizeAuto = false
+                                },
+                            shape = RoundedCornerShape(8.dp),
+                            color = if (!pdfFontAuto) ClaudeAccent else Color(0xFFF0F0F0)
+                        ) {
+                            Text(
+                                "Qo'lda",
+                                modifier = Modifier.padding(vertical = 10.dp, horizontal = 12.dp),
+                                textAlign = TextAlign.Center,
+                                color = if (!pdfFontAuto) Color.White else ClaudeText,
+                                fontWeight = FontWeight.SemiBold
+                            )
+                        }
+                    }
+                    Spacer(modifier = Modifier.height(4.dp))
+                    if (pdfFontAuto) {
+                        Text(
+                            "Avtomatik rejim: agar matn 1 A4 varoqga sig'masa, shrift o'lchami avtomatik kichrayadi.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = ClaudeTextSecondary
+                        )
+                    } else {
+                        // Ручной режим — dropdown со списком размеров
+                        var pdfSizeMenuOpen by remember { mutableStateOf(false) }
+                        var pdfFontSizeCurrent by remember { mutableStateOf(settingsRepo.pdfFontSize) }
+                        Box {
+                            Surface(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clickable { pdfSizeMenuOpen = true },
+                                shape = RoundedCornerShape(8.dp),
+                                color = Color(0xFFF8F8F8)
+                            ) {
+                                Row(
+                                    modifier = Modifier.padding(vertical = 12.dp, horizontal = 12.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.SpaceBetween
+                                ) {
+                                    Text(
+                                        "Shrift o'lchami: ${pdfFontSizeCurrent.toInt()} pt",
+                                        color = ClaudeText,
+                                        style = MaterialTheme.typography.bodyMedium
+                                    )
+                                    Icon(
+                                        imageVector = Icons.Default.ArrowDropDown,
+                                        contentDescription = null,
+                                        tint = ClaudeTextSecondary
+                                    )
+                                }
+                            }
+                            DropdownMenu(
+                                expanded = pdfSizeMenuOpen,
+                                onDismissRequest = { pdfSizeMenuOpen = false }
+                            ) {
+                                com.example.data.SettingsRepository.PDF_FONT_SIZE_OPTIONS.forEach { size ->
+                                    DropdownMenuItem(
+                                        text = { Text("${size.toInt()} pt") },
+                                        onClick = {
+                                            pdfFontSizeCurrent = size
+                                            settingsRepo.pdfFontSize = size
+                                            pdfSizeMenuOpen = false
+                                        }
+                                    )
+                                }
+                            }
+                        }
+                        Spacer(modifier = Modifier.height(4.dp))
+                        Text(
+                            "Qo'lda rejim: belgilangan o'lcham ishlatiladi (matn sig'masa 2-varaqqa o'tadi).",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = ClaudeTextSecondary
+                        )
+                    }
                 }
 
                 Column {

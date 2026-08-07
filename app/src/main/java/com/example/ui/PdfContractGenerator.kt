@@ -138,39 +138,24 @@ object PdfContractGenerator {
             // shortFill для battery IDs больше не используется здесь —
             // форматирование аккумуляторов вынесено в formatBatteryIds() (см. выше).
 
-            // ── Paints ───────────────────────────────────────────────────────
-            val titlePaint = TextPaint().apply {
-                color = Color.BLACK
-                textSize = 13f
-                typeface = Typeface.create(Typeface.DEFAULT, Typeface.BOLD)
-                isAntiAlias = true
-            }
-            val bodyPaint = TextPaint().apply {
-                color = Color.BLACK
-                textSize = 10f
-                typeface = Typeface.DEFAULT
-                isAntiAlias = true
-            }
-            val sectionPaint = TextPaint().apply {
-                color = Color.BLACK
-                textSize = 11f
-                typeface = Typeface.create(Typeface.DEFAULT, Typeface.BOLD)
-                isAntiAlias = true
-            }
-            val signaturePaint = TextPaint().apply {
-                color = Color.BLACK
-                textSize = 10f
-                typeface = Typeface.DEFAULT
-                isAntiAlias = true
-            }
-
+            // ── Настройки PDF: размер шрифта (auto/manual) + цена аккума ───
+            val settings = SettingsRepository(context)
             val contentWidth = (PAGE_WIDTH - 2 * MARGIN_X).toInt()
+            val batteryDamageAmount = settings.batteryDamagePrice
+            val batteryDamageText = formatAmountWithText(batteryDamageAmount)
 
-            // ── Сборка всех параграфов документа ────────────────────────────
-            val paragraphs = buildList {
+            // Лямбда строит параграфы для заданного базового размера шрифта.
+            // Используется и для auto-fit измерения, и для финального рендера.
+            fun buildParagraphsForSize(baseSize: Float): List<Paragraph> {
+                val paints = createPaints(baseSize)
+                val titlePaint = paints.titlePaint
+                val bodyPaint = paints.bodyPaint
+                val sectionPaint = paints.sectionPaint
+                val signaturePaint = paints.signaturePaint
+                return buildList {
                 // Заголовок
                 add(Paragraph("ЭЛЕКТР СКУТЕР ИЖАРАСИ ШАРТНОМАСИ № $contractNumber", titlePaint, alignment = Layout.Alignment.ALIGN_CENTER, spaceAfter = 8f))
-                add(Paragraph("«${dateFmt.format(Date(entry.timestamp)).take(2)}» $contractDate. Тошкент шаҳри", bodyPaint, spaceAfter = 12f))
+                add(Paragraph("«${dateFmt.format(Date(entry.timestamp)).take(2)}» $contractDate. Тошкент шаҳри", bodyPaint, spaceAfter = 8f))
 
                 // Преамбула
                 add(Paragraph(
@@ -191,7 +176,7 @@ object PdfContractGenerator {
                 ))
                 add(Paragraph(
                     "иккинчи томондан қуйидагилар тўғрисида ушбу шартномани туздилар:",
-                    bodyPaint, spaceAfter = 12f
+                    bodyPaint, spaceAfter = 8f
                 ))
 
                 // Раздел 1
@@ -214,7 +199,7 @@ object PdfContractGenerator {
                 ))
                 add(Paragraph(
                     "1.2. «Ижарага олувчи» электрли скутердан Тошкент шаҳри ҳудудида етказиб бериш (курьер) хизмати кўрсатиш мақсадида фойдаланади.",
-                    bodyPaint, spaceAfter = 12f
+                    bodyPaint, spaceAfter = 8f
                 ))
 
                 // Раздел 2
@@ -241,7 +226,7 @@ object PdfContractGenerator {
                 ))
                 add(Paragraph(
                     "2.5. Ушбу шартнома бўйича ижара муддати ${dateFmt.format(Date(weekStart))} санасидан ${dateFmt.format(Date(weekEnd))} санасига қадар белгиланади. Томонлар келишувига асосан ижара муддати узайтирилиши мумкин.",
-                    bodyPaint, spaceAfter = 12f
+                    bodyPaint, spaceAfter = 8f
                 ))
 
                 // Раздел 3
@@ -258,10 +243,11 @@ object PdfContractGenerator {
                     "3.9. «Ижарага олувчи» электр скутерни қайтариб топшириши ҳақида «Ижарага берувчи»ни камида 3 кун олдин хабардор қилиши лозим.",
                     "3.10. Ижара муддати давомида «Ижарага олувчи» томонидан Йўл ҳаракати қоидаларини бузиш оқибатида юзага келган ҳар қандай жарималар «Ижарага олувчи» томонидан тўланади.",
                     "3.11. Электр скутерни «Ижарага олувчи» томонидан бошқа учинчи шахсга фойдаланишга бериш қатъиян тақиқланади. Ушбу ҳолат аниқланган тақдирда «Ижарага берувчи» шартномани бир томонлама бекор қилиш ва электр скутерни қайтариб олиш ҳуқуқига эга.",
-                    "3.12. Электр скутер авария ҳолатида, техник носоз ёки фойдаланишга яроқсиз ҳолатда қайтарилган, шунингдек электр скутер ёки аккумуляторлар йўқотилган, ўғирланган ёки топширилмаган ҳолларда, етказилган зарар учун тўлиқ моддий жавобгарлик «Ижарага олувчи» зиммасига юклатилади."
+                    "3.12. Электр скутер авария ҳолатида, техник носоз ёки фойдаланишга яроқсиз ҳолатда қайтарилган, шунингдек электр скутер ёки аккумуляторлар йўқотилган, ўғирланган ёки топширилмаган ҳолларда, етказилган зарар учун тўлиқ моддий жавобгарлик «Ижарага олувчи» зиммасига юклатилади.",
+                    // ── 3.13 — поломка аккумулятора: сумма из настроек ─────────
+                    "3.13. АККУМУЛЯТОРНИНГ БУЗИЛИШИ ТАҚДИРИДА: агар ижарага олинган аккумулятор(лар) бузилса, зарарга учраса ёки ишламас ҳолатга келиб қолса ва бу ҳолатда таъмирлаш имкони бўлмаса, «Ижарага олувчи» ҳар бир бузилган аккумулятор учун $batteryDamageText миқдорида тўлов амалга ошириши шарт. Ушбу сумма «Ижарага берувчи»нинг реал зарарини қоплаш учун белгиланган бўлиб, аккумуляторни қайтариб бериш ёки алмаштириш шарт эмас."
                 )
-                section3.forEach { add(Paragraph(it, bodyPaint, spaceAfter = 4f)) }
-                add(Paragraph("", bodyPaint, spaceAfter = 8f))
+                section3.forEach { add(Paragraph(it, bodyPaint, spaceAfter = 3f)) }
 
                 // Раздел 4
                 add(Paragraph("4. Тарафларнинг жавобгарлиги ва низоларни ҳал қилиш тартиби", sectionPaint, spaceAfter = 6f))
@@ -271,7 +257,7 @@ object PdfContractGenerator {
                 ))
                 add(Paragraph(
                     "4.2. Тарафлар ўртасида келиб чиқадиган низолар тарафларнинг ўзаро келишуви асосида ҳал этилади. Тарафлар келишувга эришмаган тақдирда, низо белгиланган тартибда судда ҳал этилади.",
-                    bodyPaint, spaceAfter = 12f
+                    bodyPaint, spaceAfter = 8f
                 ))
 
                 // Раздел 5
@@ -290,7 +276,7 @@ object PdfContractGenerator {
                 ))
                 add(Paragraph(
                     "5.4. Мазкур шартномада назарда тутилмаган масалалар амалдаги қонун ҳужжатларига мувофиқ тартибга солинади.",
-                    bodyPaint, spaceAfter = 12f
+                    bodyPaint, spaceAfter = 8f
                 ))
 
                 // Раздел 6 — Реквизиты
@@ -314,17 +300,17 @@ object PdfContractGenerator {
 
                 add(Paragraph(
                     "Ижарага берувчи имзоси: _______________________     Ижарага Олувчи имзоси: _______________________",
-                    signaturePaint, spaceAfter = 16f
+                    signaturePaint, spaceAfter = 12f
                 ))
 
                 // ── Топшириқ-қабул қилиш далолатномаси ─────────────────────────
                 add(Paragraph(
                     "Топшириқ-қабул қилиш Далолатномаси",
-                    sectionPaint, alignment = Layout.Alignment.ALIGN_CENTER, spaceAfter = 8f
+                    sectionPaint, alignment = Layout.Alignment.ALIGN_CENTER, spaceAfter = 6f
                 ))
                 add(Paragraph(
                     "«${dateFmt.format(Date(entry.timestamp)).take(2)}» $contractDate. Тошкент шаҳри",
-                    bodyPaint, alignment = Layout.Alignment.ALIGN_CENTER, spaceAfter = 8f
+                    bodyPaint, alignment = Layout.Alignment.ALIGN_CENTER, spaceAfter = 6f
                 ))
                 add(Paragraph(
                     "Ушбу далолатнома шу ҳақдаки $LANDLORD_NAME (кейинги ўринларда “Ижарага берувчи”), корхона рахбари $LANDLORD_DIRECTOR ҳамда фуқаро $tenantName (кейинги ўринларда “Ижарага олувчи”) ўртасида «${dateFmt.format(Date(entry.timestamp))}» санасида имзоланган № $contractNumber сонли Электр скутер ижара шартномасига асосан қуйидаги Электр скутер аккумуляторлар билан биргаликда Ижарага олувчига топширилди:",
@@ -340,9 +326,7 @@ object PdfContractGenerator {
                     "Ижарага берувчи юқорида кўрсатилган мототранспорт воситасини кўздан кечирганда қуйидаги ҳолатлар аниқланди:",
                     bodyPaint, spaceAfter = 4f
                 ))
-                add(Paragraph("Рама ва корпус: соз ҳолатда", bodyPaint, spaceAfter = 2f))
-                add(Paragraph("Мотор: соз ҳолатда", bodyPaint, spaceAfter = 2f))
-                add(Paragraph("Бошқа қисмлар: соз ҳолатда", bodyPaint, spaceAfter = 8f))
+                add(Paragraph("Рама ва корпус: соз ҳолатда; Мотор: соз ҳолатда; Бошқа қисмлар: соз ҳолатда.", bodyPaint, spaceAfter = 6f))
                 add(Paragraph(
                     "Топширди: _______________________     Қабул қилди: _______________________",
                     signaturePaint, spaceAfter = 12f
@@ -352,40 +336,20 @@ object PdfContractGenerator {
                     signaturePaint, alignment = Layout.Alignment.ALIGN_CENTER
                 ))
             }
-
-            // ── Рендер с пагинацией ──────────────────────────────────────────
-            var pageNumber = 1
-            var page = doc.startPage(PdfDocument.PageInfo.Builder(PAGE_WIDTH, PAGE_HEIGHT, pageNumber).create())
-            var canvas = page.canvas
-            var y = MARGIN_TOP
-
-            for (para in paragraphs) {
-                val layout = StaticLayout.Builder
-                    .obtain(para.text, 0, para.text.length, para.paint, contentWidth)
-                    .setAlignment(para.alignment)
-                    .setLineSpacing(0f, 1.3f)
-                    .setIncludePad(false)
-                    .build()
-
-                val paraHeight = layout.height + para.spaceAfter
-
-                // If paragraph doesn't fit on current page — start new page
-                if (y + paraHeight > PAGE_HEIGHT - MARGIN_BOTTOM) {
-                    doc.finishPage(page)
-                    pageNumber++
-                    page = doc.startPage(PdfDocument.PageInfo.Builder(PAGE_WIDTH, PAGE_HEIGHT, pageNumber).create())
-                    canvas = page.canvas
-                    y = MARGIN_TOP
-                }
-
-                // Draw paragraph (with optional indent)
-                canvas.save()
-                canvas.translate(MARGIN_X + para.indent, y)
-                layout.draw(canvas)
-                canvas.restore()
-                y += paraHeight
             }
-            doc.finishPage(page)
+
+            // ── Подбор размера шрифта (auto: уменьшаем пока не влезет в 1 стр) ─
+            val baseFontSize = pickBaseFontSize(
+                autoFit = settings.pdfFontSizeAuto,
+                initialSize = SettingsRepository.DEFAULT_PDF_FONT_SIZE,
+                manualSize = settings.pdfFontSize,
+                buildParagraphs = ::buildParagraphsForSize,
+                contentWidth = contentWidth
+            )
+            val paragraphs = buildParagraphsForSize(baseFontSize)
+
+            // ── Рендер с пагинацией (если даже с minSize не влезло — будет >1 стр)
+            renderParagraphs(doc, paragraphs, contentWidth)
 
             // ── Сохранение в файл ──────────────────────────────────────────
             val dir = File(
@@ -471,35 +435,26 @@ object PdfContractGenerator {
             fun fill(value: String): String = value.ifBlank { "______________________________" }
             fun shortFill(value: String): String = value.ifBlank { "________" }
 
-            // ── Paints (те же, что и в generate) ──────────────────────────
-            val titlePaint = TextPaint().apply {
-                color = Color.BLACK; textSize = 13f
-                typeface = Typeface.create(Typeface.DEFAULT, Typeface.BOLD); isAntiAlias = true
-            }
-            val bodyPaint = TextPaint().apply {
-                color = Color.BLACK; textSize = 10f
-                typeface = Typeface.DEFAULT; isAntiAlias = true
-            }
-            val sectionPaint = TextPaint().apply {
-                color = Color.BLACK; textSize = 11f
-                typeface = Typeface.create(Typeface.DEFAULT, Typeface.BOLD); isAntiAlias = true
-            }
-            val signaturePaint = TextPaint().apply {
-                color = Color.BLACK; textSize = 10f
-                typeface = Typeface.DEFAULT; isAntiAlias = true
-            }
-
+            // ── Настройки PDF: размер шрифта (auto/manual) + цена аккума ───
+            val settings = SettingsRepository(context)
             val contentWidth = (PAGE_WIDTH - 2 * MARGIN_X).toInt()
+            val batteryDamageAmount = settings.batteryDamagePrice
+            val batteryDamageText = formatAmountWithText(batteryDamageAmount)
 
-            // ── Сборка параграфов ──────────────────────────────────────────
-            val paragraphs = buildList {
+            fun buildParagraphsForSize(baseSize: Float): List<Paragraph> {
+                val paints = createPaints(baseSize)
+                val titlePaint = paints.titlePaint
+                val bodyPaint = paints.bodyPaint
+                val sectionPaint = paints.sectionPaint
+                val signaturePaint = paints.signaturePaint
+                return buildList {
                 add(Paragraph(
                     "ЭЛЕКТР СКУТЕР ИЖАРАСИ ШАРТНОМАСИ № $contractNumber",
                     titlePaint, alignment = Layout.Alignment.ALIGN_CENTER, spaceAfter = 8f
                 ))
                 add(Paragraph(
                     "«${dateFmt.format(Date(now)).take(2)}» $contractDate. Тошкент шаҳри",
-                    bodyPaint, spaceAfter = 12f
+                    bodyPaint, spaceAfter = 8f
                 ))
 
                 // Преамбула
@@ -518,7 +473,7 @@ object PdfContractGenerator {
                 add(Paragraph("Телефон: $tenantPhone", bodyPaint, spaceAfter = 8f))
                 add(Paragraph(
                     "иккинчи томондан қуйидагилар тўғрисида ушбу шартномани туздилар:",
-                    bodyPaint, spaceAfter = 12f
+                    bodyPaint, spaceAfter = 8f
                 ))
 
                 // Раздел 1
@@ -541,7 +496,7 @@ object PdfContractGenerator {
                 ))
                 add(Paragraph(
                     "1.2. «Ижарага олувчи» электрли скутердан Тошкент шаҳри ҳудудида етказиб бериш (курьер) хизмати кўрсатиш мақсадида фойдаланади.",
-                    bodyPaint, spaceAfter = 12f
+                    bodyPaint, spaceAfter = 8f
                 ))
 
                 // Раздел 2 — с НЕОГРАНИЧЕННЫМ сроком
@@ -569,7 +524,7 @@ object PdfContractGenerator {
                 // ── КЛЮЧЕВОЕ ОТЛИЧИЕ: бессрочный договор ─────────────────────
                 add(Paragraph(
                     "2.5. Ушбу шартнома бўйича ижара муддати ${dateFmt.format(Date(weekStart))} санасидан бошлаб чексиз муддатга, яъни «Ижарага олувчи» шартномани расман тугатиш тўғрисида ёзма равишда билдиргунга қадар, шу вақтгача амал қилади. Шартнома «Ижарага олувчи» томонидан исталган вақтда, олдиндан камида 3 (уч) кун муддатда хабардор қилиниши шартли равишда, бекор қилиниши мумкин. Ҳар ҳафталик ижара тўловлари шартнома амал қилиш давомида тўлаб борилаверади, то «Ижарага олувчи» шартномани тугатиш тўғрисидаги ёзма аризани тақдим этгунча.",
-                    bodyPaint, spaceAfter = 12f
+                    bodyPaint, spaceAfter = 8f
                 ))
 
                 // Раздел 3
@@ -586,10 +541,11 @@ object PdfContractGenerator {
                     "3.9. «Ижарага олувчи» электр скутерни қайтариб топшириши ҳақида «Ижарага берувчи»ни камида 3 кун олдин хабардор қилиши лозим.",
                     "3.10. Ижара муддати давомида «Ижарага олувчи» томонидан Йўл ҳаракати қоидаларини бузиш оқибатида юзага келган ҳар қандай жарималар «Ижарага олувчи» томонидан тўланади.",
                     "3.11. Электр скутерни «Ижарага олувчи» томонидан бошқа учинчи шахсга фойдаланишга бериш қатъиян тақиқланади. Ушбу ҳолат аниқланган тақдирда «Ижарага берувчи» шартномани бир томонлама бекор қилиш ва электр скутерни қайтариб олиш ҳуқуқига эга.",
-                    "3.12. Электр скутер авария ҳолатида, техник носоз ёки фойдаланишга яроқсиз ҳолатда қайтарилган, шунингдек электр скутер ёки аккумуляторлар йўқотилган, ўғирланган ёки топширилмаган ҳолларда, етказилган зарар учун тўлиқ моддий жавобгарлик «Ижарага олувчи» зиммасига юклатилади."
+                    "3.12. Электр скутер авария ҳолатида, техник носоз ёки фойдаланишга яроқсиз ҳолатда қайтарилган, шунингдек электр скутер ёки аккумуляторлар йўқотилган, ўғирланган ёки топширилмаган ҳолларда, етказилган зарар учун тўлиқ моддий жавобгарлик «Ижарага олувчи» зиммасига юклатилади.",
+                    // ── 3.13 — поломка аккумулятора: сумма из настроек ─────────
+                    "3.13. АККУМУЛЯТОРНИНГ БУЗИЛИШИ ТАҚДИРИДА: агар ижарага олинган аккумулятор(лар) бузилса, зарарга учраса ёки ишламас ҳолатга келиб қолса ва бу ҳолатда таъмирлаш имкони бўлмаса, «Ижарага олувчи» ҳар бир бузилган аккумулятор учун $batteryDamageText миқдорида тўлов амалга ошириши шарт. Ушбу сумма «Ижарага берувчи»нинг реал зарарини қоплаш учун белгиланган бўлиб, аккумуляторни қайтариб бериш ёки алмаштириш шарт эмас."
                 )
-                section3.forEach { add(Paragraph(it, bodyPaint, spaceAfter = 4f)) }
-                add(Paragraph("", bodyPaint, spaceAfter = 8f))
+                section3.forEach { add(Paragraph(it, bodyPaint, spaceAfter = 3f)) }
 
                 // Раздел 4
                 add(Paragraph("4. Тарафларнинг жавобгарлиги ва низоларни ҳал қилиш тартиби", sectionPaint, spaceAfter = 6f))
@@ -599,7 +555,7 @@ object PdfContractGenerator {
                 ))
                 add(Paragraph(
                     "4.2. Тарафлар ўртасида келиб чиқадиган низолар тарафларнинг ўзаро келишуви асосида ҳал этилади. Тарафлар келишувга эришмаган тақдирда, низо белгиланган тартибда судда ҳал этилади.",
-                    bodyPaint, spaceAfter = 12f
+                    bodyPaint, spaceAfter = 8f
                 ))
 
                 // Раздел 5 — с бессрочным характером
@@ -619,7 +575,7 @@ object PdfContractGenerator {
                 ))
                 add(Paragraph(
                     "5.4. Мазкур шартномада назарда тутилмаган масалалар амалдаги қонун ҳужжатларига мувофиқ тартибга солинади.",
-                    bodyPaint, spaceAfter = 12f
+                    bodyPaint, spaceAfter = 8f
                 ))
 
                 // Раздел 6 — Реквизиты
@@ -643,17 +599,17 @@ object PdfContractGenerator {
 
                 add(Paragraph(
                     "Ижарага берувчи имзоси: _______________________     Ижарага Олувчи имзоси: _______________________",
-                    signaturePaint, spaceAfter = 16f
+                    signaturePaint, spaceAfter = 12f
                 ))
 
                 // Топшириқ-қабул қилиш далолатномаси
                 add(Paragraph(
                     "Топшириқ-қабул қилиш Далолатномаси",
-                    sectionPaint, alignment = Layout.Alignment.ALIGN_CENTER, spaceAfter = 8f
+                    sectionPaint, alignment = Layout.Alignment.ALIGN_CENTER, spaceAfter = 6f
                 ))
                 add(Paragraph(
                     "«${dateFmt.format(Date(now)).take(2)}» $contractDate. Тошкент шаҳри",
-                    bodyPaint, alignment = Layout.Alignment.ALIGN_CENTER, spaceAfter = 8f
+                    bodyPaint, alignment = Layout.Alignment.ALIGN_CENTER, spaceAfter = 6f
                 ))
                 add(Paragraph(
                     "Ушбу далолатнома шу ҳақдаки $LANDLORD_NAME (кейинги ўринларда “Ижарага берувчи”), корхона рахбари $LANDLORD_DIRECTOR ҳамда фуқаро $tenantName (кейинги ўринларда “Ижарага олувчи”) ўртасида «${dateFmt.format(Date(now))}» санасида имзоланган № $contractNumber сонли Электр скутер ижара шартномасига асосан қуйидаги Электр скутер аккумуляторлар билан биргаликда Ижарага олувчига топширилди:",
@@ -669,9 +625,7 @@ object PdfContractGenerator {
                     "Ижарага берувчи юқорида кўрсатилган мототранспорт воситасини кўздан кечирганда қуйидаги ҳолатлар аниқланди:",
                     bodyPaint, spaceAfter = 4f
                 ))
-                add(Paragraph("Рама ва корпус: соз ҳолатда", bodyPaint, spaceAfter = 2f))
-                add(Paragraph("Мотор: соз ҳолатда", bodyPaint, spaceAfter = 2f))
-                add(Paragraph("Бошқа қисмлар: соз ҳолатда", bodyPaint, spaceAfter = 8f))
+                add(Paragraph("Рама ва корпус: соз ҳолатда; Мотор: соз ҳолатда; Бошқа қисмлар: соз ҳолатда.", bodyPaint, spaceAfter = 6f))
                 add(Paragraph(
                     "Топширди: _______________________     Қабул қилди: _______________________",
                     signaturePaint, spaceAfter = 12f
@@ -681,38 +635,20 @@ object PdfContractGenerator {
                     signaturePaint, alignment = Layout.Alignment.ALIGN_CENTER
                 ))
             }
-
-            // ── Рендер с пагинацией ──────────────────────────────────────────
-            var pageNumber = 1
-            var page = doc.startPage(PdfDocument.PageInfo.Builder(PAGE_WIDTH, PAGE_HEIGHT, pageNumber).create())
-            var canvas = page.canvas
-            var y = MARGIN_TOP
-
-            for (para in paragraphs) {
-                val layout = StaticLayout.Builder
-                    .obtain(para.text, 0, para.text.length, para.paint, contentWidth)
-                    .setAlignment(para.alignment)
-                    .setLineSpacing(0f, 1.3f)
-                    .setIncludePad(false)
-                    .build()
-
-                val paraHeight = layout.height + para.spaceAfter
-
-                if (y + paraHeight > PAGE_HEIGHT - MARGIN_BOTTOM) {
-                    doc.finishPage(page)
-                    pageNumber++
-                    page = doc.startPage(PdfDocument.PageInfo.Builder(PAGE_WIDTH, PAGE_HEIGHT, pageNumber).create())
-                    canvas = page.canvas
-                    y = MARGIN_TOP
-                }
-
-                canvas.save()
-                canvas.translate(MARGIN_X + para.indent, y)
-                layout.draw(canvas)
-                canvas.restore()
-                y += paraHeight
             }
-            doc.finishPage(page)
+
+            // ── Подбор размера шрифта (auto: уменьшаем пока не влезет в 1 стр) ─
+            val baseFontSize = pickBaseFontSize(
+                autoFit = settings.pdfFontSizeAuto,
+                initialSize = SettingsRepository.DEFAULT_PDF_FONT_SIZE,
+                manualSize = settings.pdfFontSize,
+                buildParagraphs = ::buildParagraphsForSize,
+                contentWidth = contentWidth
+            )
+            val paragraphs = buildParagraphsForSize(baseFontSize)
+
+            // ── Рендер с пагинацией (если даже с minSize не влезло — будет >1 стр)
+            renderParagraphs(doc, paragraphs, contentWidth)
 
             // ── Сохранение ────────────────────────────────────────────────
             val dir = File(
@@ -748,5 +684,166 @@ object PdfContractGenerator {
 
     private fun TextPaint.applyBold(): TextPaint = TextPaint(this).apply {
         typeface = Typeface.create(Typeface.DEFAULT, Typeface.BOLD)
+    }
+
+    // ── Auto-fit helpers ──────────────────────────────────────────────────
+    // Позволяют динамически подбирать размер шрифта так, чтобы весь документ
+    // поместился на одну страницу A4. Без этого при добавлении новой секции
+    // о поломке аккумулятора PDF мог переходить на вторую страницу.
+
+    /**
+     * Контейнер для четырёх paints, параметризованных базовым размером.
+     *  • titlePaint    — baseSize + 3 (заголовок договора)
+     *  • sectionPaint  — baseSize + 1 (заголовки разделов)
+     *  • bodyPaint     — baseSize (основной текст)
+     *  • signaturePaint — baseSize (подписи)
+     */
+    private data class PdfPaints(
+        val titlePaint: TextPaint,
+        val bodyPaint: TextPaint,
+        val sectionPaint: TextPaint,
+        val signaturePaint: TextPaint
+    )
+
+    private fun createPaints(baseSize: Float): PdfPaints {
+        val titlePaint = TextPaint().apply {
+            color = Color.BLACK
+            textSize = baseSize + 3f
+            typeface = Typeface.create(Typeface.DEFAULT, Typeface.BOLD)
+            isAntiAlias = true
+        }
+        val bodyPaint = TextPaint().apply {
+            color = Color.BLACK
+            textSize = baseSize
+            typeface = Typeface.DEFAULT
+            isAntiAlias = true
+        }
+        val sectionPaint = TextPaint().apply {
+            color = Color.BLACK
+            textSize = baseSize + 1f
+            typeface = Typeface.create(Typeface.DEFAULT, Typeface.BOLD)
+            isAntiAlias = true
+        }
+        val signaturePaint = TextPaint().apply {
+            color = Color.BLACK
+            textSize = baseSize
+            typeface = Typeface.DEFAULT
+            isAntiAlias = true
+        }
+        return PdfPaints(titlePaint, bodyPaint, sectionPaint, signaturePaint)
+    }
+
+    /**
+     * Измеряет суммарную высоту всех параграфов (с учётом spaceAfter и
+     * переносов строк). Не рисует — только считает.
+     *
+     * Возвращает пару (totalHeight, pageCount). pageCount > 1 значит
+     * документ не помещается на одну страницу A4.
+     */
+    private fun measureParagraphs(
+        paragraphs: List<Paragraph>,
+        contentWidth: Int
+    ): Pair<Float, Int> {
+        val usableHeight = PAGE_HEIGHT - MARGIN_TOP - MARGIN_BOTTOM
+        var totalHeight = 0f
+        var pageCount = 1
+        var pageUsed = 0f
+        for (para in paragraphs) {
+            val layout = StaticLayout.Builder
+                .obtain(para.text, 0, para.text.length, para.paint, contentWidth)
+                .setAlignment(para.alignment)
+                .setLineSpacing(0f, 1.3f)
+                .setIncludePad(false)
+                .build()
+            val paraHeight = layout.height + para.spaceAfter
+            totalHeight += paraHeight
+            if (pageUsed + paraHeight > usableHeight) {
+                pageCount++
+                pageUsed = paraHeight
+            } else {
+                pageUsed += paraHeight
+            }
+        }
+        return totalHeight to pageCount
+    }
+
+    /**
+     * Подбирает размер шрифта так, чтобы документ поместился на 1 страницу.
+     *
+     * Если autoFit=true — начинает с [initialSize] и уменьшает на 0.5f
+     * за шаг, пока не поместится или не достигнет [minSize].
+     * Если autoFit=false — возвращает [manualSize] (без подгонки).
+     */
+    private fun pickBaseFontSize(
+        autoFit: Boolean,
+        initialSize: Float,
+        manualSize: Float,
+        minSize: Float = 7f,
+        buildParagraphs: (Float) -> List<Paragraph>,
+        contentWidth: Int
+    ): Float {
+        if (!autoFit) return manualSize
+        var size = initialSize
+        while (size >= minSize) {
+            val paragraphs = buildParagraphs(size)
+            val (_, pages) = measureParagraphs(paragraphs, contentWidth)
+            if (pages <= 1) return size
+            size -= 0.5f
+        }
+        return minSize
+    }
+
+    /**
+     * Рендерит список параграфов в PdfDocument с пагинацией (на случай если
+     * документ всё же не уместился на одну страницу — например при manual
+     * режиме с большим размером шрифта).
+     */
+    private fun renderParagraphs(
+        doc: PdfDocument,
+        paragraphs: List<Paragraph>,
+        contentWidth: Int
+    ) {
+        var pageNumber = 1
+        var page = doc.startPage(PdfDocument.PageInfo.Builder(PAGE_WIDTH, PAGE_HEIGHT, pageNumber).create())
+        var canvas = page.canvas
+        var y = MARGIN_TOP
+
+        for (para in paragraphs) {
+            val layout = StaticLayout.Builder
+                .obtain(para.text, 0, para.text.length, para.paint, contentWidth)
+                .setAlignment(para.alignment)
+                .setLineSpacing(0f, 1.3f)
+                .setIncludePad(false)
+                .build()
+
+            val paraHeight = layout.height + para.spaceAfter
+
+            if (y + paraHeight > PAGE_HEIGHT - MARGIN_BOTTOM) {
+                doc.finishPage(page)
+                pageNumber++
+                page = doc.startPage(PdfDocument.PageInfo.Builder(PAGE_WIDTH, PAGE_HEIGHT, pageNumber).create())
+                canvas = page.canvas
+                y = MARGIN_TOP
+            }
+
+            canvas.save()
+            canvas.translate(MARGIN_X + para.indent, y)
+            layout.draw(canvas)
+            canvas.restore()
+            y += paraHeight
+        }
+        doc.finishPage(page)
+    }
+
+    /**
+     * Форматирует сумму прописью на узбекском для PDF-договора.
+     *
+     * Упрощённая версия: возвращает сумму цифрами с разделением разрядов
+     * пробелом + "сўм" + копейки "00 тийин". Используется в новой секции
+     * о поломке аккумулятора.
+     */
+    private fun formatAmountWithText(amount: Double): String {
+        val longVal = amount.toLong()
+        return "${"%,d".format(longVal).replace(",", " ")} сўм 00 тийин"
     }
 }

@@ -107,10 +107,26 @@ class RenterViewModel(application: Application) : AndroidViewModel(application) 
             initialValue = emptyList()
         )
         // ── Архивные арендаторы ────────────────────────────────────────────
-        // Арендатор считается архивным, если у него есть STOP-маркер
-        // (TYPE_TERMINATED + notes="STOP_MARKER") в прошлом (weekStart < сегодня),
-        // и ПОСЛЕ этой даты нет ни одного RESUME-маркера
-        // (TYPE_RETURNED + notes="RESUME_MARKER").
+        // Арендатор считается архивным по следующей логике (по требованию
+        // пользователя, обновлённая версия):
+        //   1. Есть STOP-маркер (TYPE_TERMINATED + notes="STOP_MARKER")
+        //      с датой <= сегодня (STOP сегодня или в прошлом).
+        //   2. Берём ПОСЛЕДНИЙ (самый поздний) такой STOP.
+        //   3. После этого STOP НЕТ ни одного RESUME-маркера
+        //      (TYPE_RETURNED + notes="RESUME_MARKER") — ни между STOP-днём
+        //      и сегодня, ни сегодня, ни в будущем.
+        // Если все три условия → арендатор в архиве.
+        //
+        // Это покрывает два сценария пользователя:
+        //   A. STOP сегодня + нет RESUME в будущем → архив.
+        //   B. STOP в прошлом + нет RESUME после него (между STOP и сегодня,
+        //      сегодня, или в будущем) → архив.
+        //   Если после последнего STOP есть RESUME (в любой день — прошлый
+        //   между STOP и сегодня, сегодня, или будущий) → активен.
+        //
+        // Все STOP и RESUME маркеры сохраняются в БД — архивация не удаляет
+        // их. Пользователь может вывести арендатора из архива, поставив
+        // RESUME-маркер на сегодня (restoreRenterFromArchive).
         //
         // combine(liveRenters, liveContracts) — когда меняется любой из
         // источников, пересчитывается список архивных. liveContracts включает
@@ -1206,21 +1222,45 @@ class RenterViewModel(application: Application) : AndroidViewModel(application) 
         // ── 1б. Загружаем текущие Stop/Resume маркеры из БД ────────────
         // Это нужно, чтобы корректно удалить старые маркеры, которых больше
         // нет в новом списке групп (пользователь их стёр в календаре).
+        // ВАЖНО: фильтруем ТОЛЬКО по notes="STOP_MARKER" / "RESUME_MARKER" —
+        // обычные TYPE_TERMINATED / TYPE_RETURNED записи (без маркерных notes)
+        // НЕ должны удаляться здесь, они обрабатываются в regularGroups.
         val currentMarkers = currentContracts.filter {
-            it.type == ContractHistoryEntry.TYPE_TERMINATED ||
-            it.type == ContractHistoryEntry.TYPE_RETURNED
+            (it.type == ContractHistoryEntry.TYPE_TERMINATED && it.notes == "STOP_MARKER") ||
+            (it.type == ContractHistoryEntry.TYPE_RETURNED && it.notes == "RESUME_MARKER")
         }
 
         // ── 2. Разделяем на удаление / обновление / добавление ─────────
         val keepIds = regularGroups.mapNotNull { it.existingId }.toSet()
         val toDelete = currentContracts.filter { it.id !in keepIds && it.id !in currentMarkers.map { m -> m.id } }
 
-        // Также удаляем старые маркеры (они всегда пересоздаются, т.к.
-        // пользователь мог изменить их дату или тип).
-        val markersToDelete = currentMarkers
+        // ── 2а. Удаляем только те маркеры, которых БОЛЬШЕ НЕТ в форме ──
+        // Раньше здесь удалялись ВСЕ текущие маркеры и пересоздавались из
+        // формы. Это приводило к багу: если форма по какой-то причине не
+        // содержала RESUME-маркер (например, при редактировании арендатора
+        // с STOP+RESUME последовательностью), RESUME безвозвратно терялся.
+        //
+        // Новый подход: удаляем только маркеры, которых НЕТ в новом списке
+        // групп (сопоставление по типу + дате). Маркеры, которые есть в
+        // форме, остаются в БД как есть (не нужно удалять и пересоздавать).
+        //
+        // Это также предотвращает потерю RESUME-маркера после STOP-маркера:
+        // даже если форма не пересоздаёт RESUME, он остаётся в БД.
+        val newMarkerKeys = (stopMarkers.map { "STOP" to it.startMs } +
+                             resumeMarkers.map { "RESUME" to it.startMs }).toSet()
+        val markersToDelete = currentMarkers.filter { marker ->
+            val key = when {
+                marker.type == ContractHistoryEntry.TYPE_TERMINATED &&
+                marker.notes == "STOP_MARKER" -> "STOP" to (marker.weekStart ?: 0L)
+                marker.type == ContractHistoryEntry.TYPE_RETURNED &&
+                marker.notes == "RESUME_MARKER" -> "RESUME" to (marker.weekStart ?: 0L)
+                else -> return@filter false
+            }
+            key !in newMarkerKeys
+        }
         for (marker in markersToDelete) {
             deleteContractWithCascadeInternal(marker)
-            Log.d(TAG, "reconcile: deleted old marker #${marker.id} (type=${marker.type})")
+            Log.d(TAG, "reconcile: deleted removed marker #${marker.id} (type=${marker.type})")
         }
 
         // Для обновления: existingId есть в regularGroups, но isPaid или даты изменились.
@@ -1349,8 +1389,26 @@ class RenterViewModel(application: Application) : AndroidViewModel(application) 
         //   • Для каждого Resume генерируем неоплаченные weekly-контракты
         //     вперёд до ближайшего Stop (или +7 дней) и назад до сегодня,
         //     если в [today, R-1] нет Stop-маркера.
+        //
+        // ВАЖНО: маркеры, которые уже есть в БД (не были удалены на шаге 2а),
+        // НЕ пересоздаём — чтобы не плодить дубликаты. Проверяем по ключу
+        // (тип + weekStart). Это предотвращает потерю RESUME-маркера после
+        // STOP-маркера при редактировании формы.
         val weekMs = 7L * dayMs
+        val existingStopKeys = currentMarkers
+            .filter { it.type == ContractHistoryEntry.TYPE_TERMINATED }
+            .map { it.weekStart ?: 0L }
+            .toSet()
+        val existingResumeKeys = currentMarkers
+            .filter { it.type == ContractHistoryEntry.TYPE_RETURNED }
+            .map { it.weekStart ?: 0L }
+            .toSet()
         for (sm in stopMarkers) {
+            // Пропускаем, если маркер с этой датой уже есть в БД.
+            if (sm.startMs in existingStopKeys) {
+                Log.d(TAG, "reconcile: STOP_MARKER at ${sm.startMs} already in DB — skip re-insert")
+                continue
+            }
             try {
                 historyRepository.insert(ContractHistoryEntry(
                     renterId = existing.id,
@@ -1493,7 +1551,13 @@ class RenterViewModel(application: Application) : AndroidViewModel(application) 
             } else {
                 Log.d(TAG, "reconcile: Resume marker at $resumeStart already covered by regularGroups — skipping auto-generation")
             }
-            // Сохраняем сам Resume-маркер (однодневный)
+            // Сохраняем сам Resume-маркер (однодневный).
+            // Пропускаем, если маркер с этой датой уже есть в БД — чтобы
+            // не плодить дубликаты (маркеры, не удалённые на шаге 2а,
+            // остаются в БД и не нуждаются в пересоздании).
+            if (rm.startMs in existingResumeKeys) {
+                Log.d(TAG, "reconcile: RESUME_MARKER at ${rm.startMs} already in DB — skip re-insert")
+            } else
             try {
                 historyRepository.insert(ContractHistoryEntry(
                     renterId = existing.id,
@@ -1814,18 +1878,32 @@ class RenterViewModel(application: Application) : AndroidViewModel(application) 
     /**
      * Проверяет, является ли арендатор архивным по его history entries.
      *
-     * Архивный = есть STOP-маркер (TYPE_TERMINATED + notes="STOP_MARKER")
-     * в прошлом (weekStart < todayStart), и ПОСЛЕ даты этого STOP-маркера
-     * нет ни одного RESUME-маркера (TYPE_RETURNED + notes="RESUME_MARKER").
+     * Логика архивации (по требованию пользователя, обновлённая версия):
+     *   Каждый день проверяем два сценария — оба сводятся к одному правилу:
+     *   "после последнего STOP-маркера нет ни одного RESUME-маркера".
      *
-     * Алгоритм:
-     *   1. Фильтруем только STOP и RESUME маркеры.
-     *   2. Находим все STOP-маркеры в прошлом (weekStart < todayStart).
-     *   3. Если таких нет — не архивный.
-     *   4. Берём самый свежий из них (max weekStart).
-     *   5. Проверяем, есть ли RESUME-маркер с weekStart > этого STOP'а.
-     *   6. Если есть — не архивный (аренда возобновлена).
-     *   7. Иначе — архивный.
+     *   Сценарий A (STOP сегодня):
+     *     1. Есть ли STOP-маркер сегодня или в прошлом?
+     *     2. После последнего STOP есть ли RESUME (сегодня или в будущем)?
+     *        — Если есть → не архивный (ожидаем возобновление или уже возобновлён).
+     *        — Если нет → архивный.
+     *
+     *   Сценарий B (STOP был в прошлом, без возобновления):
+     *     1. Есть ли STOP-маркер в прошлом (weekStart < today)?
+     *     2. После этого STOP есть ли RESUME — между STOP-днём и сегодня,
+     *        сегодня, или в будущем?
+     *        — Если есть → не архивный (возобновление уже было или запланировано).
+     *        — Если нет → архивный (STOP был, возобновления нет и не предвидится).
+     *
+     *   Объединённое правило: берём последний STOP с датой <= сегодня;
+     *   если после него нет ни одного RESUME (в любой день — прошлый между
+     *   STOP и сегодня, сегодня, или будущий) → архивный. Иначе → активен.
+     *
+     * ВАЖНО: все STOP и RESUME маркеры СОХРАНЯЮТСЯ в БД при архивации —
+     * архивация это вычисляемое состояние (StateFlow), а не изменение в БД.
+     * Пользователь может вывести арендатора из архива, поставив RESUME-маркер
+     * на сегодня (см. restoreRenterFromArchive) — RESUME сегодня (timestamp
+     * больше timestamp STOP'а) считается "возобновлённым" и выводит из архива.
      *
      * todayStart передаётся снаружи, чтобы не вычислять его на каждой
      * итерации в filter (экономия при обработке больших списков).
@@ -1834,21 +1912,50 @@ class RenterViewModel(application: Application) : AndroidViewModel(application) 
         entries: List<ContractHistoryEntry>,
         todayStart: Long
     ): Boolean {
-        val stopMarkers = entries.filter {
-            it.type == ContractHistoryEntry.TYPE_TERMINATED &&
-            it.notes == "STOP_MARKER" &&
-            (it.weekStart ?: 0L) < todayStart
-        }
-        if (stopMarkers.isEmpty()) return false
+        // ── Шаг 1: Найти все STOP-маркеры с датой <= сегодня ─────────────
+        // STOP "сегодня или в прошлом" — аренда была приостановлена. STOP в
+        // будущем не считаем (аренда ещё активна, STOP только запланирован).
+        val stopMarkersTodayOrPast = entries
+            .filter {
+                it.type == ContractHistoryEntry.TYPE_TERMINATED &&
+                it.notes == "STOP_MARKER" &&
+                (it.weekStart ?: 0L) <= todayStart
+            }
+        if (stopMarkersTodayOrPast.isEmpty()) return false
 
-        val latestStop = stopMarkers.maxOf { it.weekStart ?: 0L }
+        // ── Шаг 2: Найти последний (самый поздний) STOP-маркер ──────────
+        // Если последний STOP уже был "перекрыт" RESUME'ом, и после не было
+        // нового STOP — арендатор активен. Если после последнего STOP нет
+        // RESUME — арендатор архивный (независимо от того, был ли STOP сегодня
+        // или в прошлом — главное, что возобновления не было до сих пор).
+        val lastStop = stopMarkersTodayOrPast.maxByOrNull { it.weekStart ?: 0L }!!
 
-        val hasResumeAfter = entries.any {
-            it.type == ContractHistoryEntry.TYPE_RETURNED &&
-            it.notes == "RESUME_MARKER" &&
-            (it.weekStart ?: 0L) > latestStop
+        // ── Шаг 3: Есть ли RESUME-маркер ПОСЛЕ последнего STOP? ──────────
+        // RESUME должен быть строго после STOP — он "возобновляет" аренду.
+        // Сравнение по weekStart (начало дня). Если STOP и RESUME в один
+        // день (weekStart равны) — сравниваем по timestamp создания записи,
+        // чтобы корректно обработать restoreRenterFromArchive (RESUME сегодня
+        // ставится ПОСЛЕ STOP'а в тот же день).
+        //
+        // Это покрывает оба сценария по требованию пользователя:
+        //   • STOP сегодня + нет RESUME в будущем → архив.
+        //   • STOP в прошлом + нет RESUME между STOP-днём и сегодня → архив.
+        //   • STOP сегодня/в прошлом + есть RESUME после → активен.
+        val lastStopWeekStart = lastStop.weekStart ?: 0L
+        val lastStopTimestamp = lastStop.timestamp
+        val hasResumeAfterLastStop = entries.any {
+            if (it.type != ContractHistoryEntry.TYPE_RETURNED ||
+                it.notes != "RESUME_MARKER"
+            ) return@any false
+            val rStart = it.weekStart ?: 0L
+            when {
+                rStart > lastStopWeekStart -> true           // RESUME в более поздний день
+                rStart < lastStopWeekStart -> false          // RESUME раньше STOP — не считается
+                else -> it.timestamp > lastStopTimestamp     // тот же день — по времени создания
+            }
         }
-        return !hasResumeAfter
+        // Если есть RESUME после последнего STOP → не архивный. Иначе → архивный.
+        return !hasResumeAfterLastStop
     }
 
     /**
