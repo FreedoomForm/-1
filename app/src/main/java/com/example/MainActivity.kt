@@ -609,6 +609,16 @@ fun MainScreen(
     var showAddDialog by remember { mutableStateOf(false) }
     var showAddScooterDialog by remember { mutableStateOf(false) }
     var renterToEdit by remember { mutableStateOf<Renter?>(null) }
+    // ── Диалог списка выбранных арендаторов для пакетного редактирования ──
+    // Когда пользователь выделил 2+ арендаторов и нажал универсальную кнопку
+    // «✎ Tahrirlash», открывается этот диалог со списком выбранных арендаторов.
+    // Пользователь тапает по любому → открывается обычный RenterFormDialog для
+    // этого арендатора. При сохранении/отмене формы мы возвращаемся ОБРАТНО в
+    // этот список (а не в главный экран) — чтобы можно было отредактировать
+    // нескольких арендаторов подряд без повторного выделения.
+    // Реализация: see `if (showSelectedRentersDialog)` ниже + изменения в
+    // onDismiss/onSave RenterFormDialog (проверяют showSelectedRentersDialog).
+    var showSelectedRentersDialog by remember { mutableStateOf(false) }
     var scooterToEdit by remember { mutableStateOf<Scooter?>(null) }
     var contractToEdit by remember { mutableStateOf<com.example.data.ContractHistoryEntry?>(null) }
     var selectedRenters by remember { mutableStateOf(setOf<Int>()) }
@@ -1639,8 +1649,14 @@ fun MainScreen(
                         //     долгое нажатие на «✎» не делает ничего (чтобы не
                         //     путать режимы).
                         if (currentTab != 4 && currentTab != 6) {
+                            // ── Для вкладки арендаторов (0) кнопка «✎» активна при
+                            //    выделении 1+ арендаторов: при 1 — прямой переход в
+                            //    RenterFormDialog (старое поведение), при 2+ —
+                            //    открывается диалог списка выбранных арендаторов,
+                            //    из которого пользователь выбирает кого редактировать.
+                            //    После сохранения/отмены формы возвращаемся в список.
                             val editEnabled = when (currentTab) {
-                                0 -> selectedRenters.size == 1
+                                0 -> selectedRenters.isNotEmpty()
                                 1 -> selectedScooters.size == 1
                                 2 -> selectedContracts.size == 1
                                 3 -> selectedTxs.size == 1
@@ -1677,14 +1693,25 @@ fun MainScreen(
                                             if (!editEnabled) return@combinedClickable
                                             when (currentTab) {
                                                 0 -> {
-                                                    selectedRenters.firstOrNull()?.let { id ->
-                                                        // В archive mode арендатор берётся из
-                                                        // archivedRenters, в trash — из trashedRenters,
-                                                        // иначе из liveRenters. Источник rentersSource
-                                                        // уже учёл режим, но здесь используем
-                                                        // объединённый renters (allRenters), чтобы
-                                                        // найти по id независимо от режима.
-                                                        renterToEdit = renters.firstOrNull { it.id == id }
+                                                    // ── Поведение кнопки «✎» на вкладке арендаторов ──
+                                                    // • 1 выделенный → сразу открываем RenterFormDialog
+                                                    //   (старое поведение, без промежуточного окна).
+                                                    // • 2+ выделенных → открываем диалог списка
+                                                    //   выбранных арендаторов. Пользователь тапает по
+                                                    //   строке → открывается RenterFormDialog для этого
+                                                    //   арендатора, при save/cancel возвращаемся в список.
+                                                    if (selectedRenters.size >= 2) {
+                                                        showSelectedRentersDialog = true
+                                                    } else {
+                                                        selectedRenters.firstOrNull()?.let { id ->
+                                                            // В archive mode арендатор берётся из
+                                                            // archivedRenters, в trash — из trashedRenters,
+                                                            // иначе из liveRenters. Источник rentersSource
+                                                            // уже учёл режим, но здесь используем
+                                                            // объединённый renters (allRenters), чтобы
+                                                            // найти по id независимо от режима.
+                                                            renterToEdit = renters.firstOrNull { it.id == id }
+                                                        }
                                                     }
                                                 }
                                                 1 -> {
@@ -2863,8 +2890,18 @@ fun MainScreen(
                 archivedRenterIds = archivedRenters.map { it.id }.toSet(),
                 existingContracts = existingContractsForFormSafe,
                 onDismiss = {
-                    showAddDialog = false
-                    renterToEdit = null
+                    // ── Возврат в диалог списка выбранных арендаторов ──
+                    // Если открыта пакетная форма (showSelectedRentersDialog=true),
+                    // мы НЕ сбрасываем её — пользователь возвращается в список
+                    // выбранных арендаторов и может выбрать другого для редактирования.
+                    // Только сбрасываем renterToEdit, чтобы закрыть RenterFormDialog.
+                    // В противном случае (обычный режим) — сбрасываем всё.
+                    if (showSelectedRentersDialog) {
+                        renterToEdit = null
+                    } else {
+                        showAddDialog = false
+                        renterToEdit = null
+                    }
                 },
                 onSave = { result ->
                     if (isEdit) {
@@ -2916,8 +2953,16 @@ fun MainScreen(
                             contractGroupsWithMarkers = result.contractGroupsWithIds
                         )
                     }
-                    showAddDialog = false
-                    renterToEdit = null
+                    // ── Возврат в диалог списка выбранных арендаторов ──
+                    // Аналогично onDismiss: если открыта пакетная форма,
+                    // сохраняем showSelectedRentersDialog=true, чтобы пользователь
+                    // мог продолжить редактирование остальных выбранных арендаторов.
+                    if (showSelectedRentersDialog) {
+                        renterToEdit = null
+                    } else {
+                        showAddDialog = false
+                        renterToEdit = null
+                    }
                 },
                 // ── Inline-создание скутера ────────────────────────────────
                 // Пользователь может внутри формы арендатора создать новый
@@ -3072,6 +3117,41 @@ fun MainScreen(
                         icon = Icons.Default.Close,
                         onClick = { showSmsAutoSendConfirmDialog = false }
                     )
+                }
+            )
+        }
+
+        // ===== Диалог списка выбранных арендаторов (пакетное редактирование) =====
+        // Открывается, когда пользователь выделил 2+ арендаторов и нажал
+        // универсальную кнопку «✎ Tahrirlash». Показывает список выбранных
+        // арендаторов — тап по строке открывает RenterFormDialog для этого
+        // арендатора. При сохранении/отмене формы возвращаемся ОБРАТНО сюда
+        // (см. onDismiss/onSave RenterFormDialog выше — они проверяют
+        // showSelectedRentersDialog и не сбрасывают его).
+        //
+        // RenterFormDialog рендерится ВЫШЕ (см. `if (showAddDialog || renterToEdit != null)`),
+        // поэтому при одновременном открытии обоих диалогов форма арендатора
+        // будет показана ПОВЕРХ списка — это и нужно (визуально overlay).
+        // AlertDialog Material3 сам управляет z-order: второй по композици
+        // диалог рисуется поверх первого.
+        if (showSelectedRentersDialog) {
+            SelectedRentersListDialog(
+                // Берём всех арендаторов (live + archived + trashed), чтобы
+                // корректно работать в любом режиме. Фильтруем по selectedRenters.
+                renters = renters.filter { it.id in selectedRenters },
+                scooters = scooters,
+                onPickRenter = { renter ->
+                    // Открываем RenterFormDialog для выбранного арендатора.
+                    // showSelectedRentersDialog НЕ сбрасываем — после закрытия
+                    // формы пользователь вернётся в этот список.
+                    renterToEdit = renter
+                },
+                onDismiss = {
+                    // Пользователь нажал «Yopish» — закрываем список и
+                    // сбрасываем выделение (стандартное поведение универсальной
+                    // кнопки: после редактирования выделение снимается).
+                    showSelectedRentersDialog = false
+                    selectedRenters = emptySet()
                 }
             )
         }
@@ -4927,16 +5007,15 @@ fun RenterFormDialog(
                 // По просьбе пользователя кнопка выбора скутера перенесена
                 // выше — под календарь, над списком контрактов, в виде
                 // большой квадратной плитки (см. код выше после ContractCalendar).
-                // Здесь остаётся только поле долга.
 
-                OutlinedTextField(
-                    value = debt,
-                    onValueChange = { debt = it },
-                    label = { Text("Qarz miqdori") },
-                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                    modifier = Modifier.fillMaxWidth(),
-                    shape = RoundedCornerShape(8.dp)
-                )
+                // ── ПОЛЕ «QARZ MIQDORI» УДАЛЕНО ─────────────────────────────
+                // Раньше здесь был OutlinedTextField с label="Qarz miqdori"
+                // для ручного ввода долга арендатора. По просьбе пользователя
+                // поле удалено из UI — долг теперь рассчитывается автоматически
+                // на основе неоплачанных контрактов (см. RenterViewModel).
+                // Локальная переменная `debt` сохранена для совместимости с
+                // RenterFormResult.debt — при редактировании туда подставляется
+                // текущее значение из БД (balance/debtAmount), при создании — 0.
 
                 // ── Реквизиты арендатора для PDF-договора (всегда видны) ────
                 HorizontalDivider(color = ClaudeDivider, thickness = 1.dp)
@@ -5191,6 +5270,176 @@ fun RenterFormDialog(
                 icon = Icons.Default.Close,
                 onClick = onDismiss
             )
+        }
+    )
+}
+
+/**
+ * Диалог списка выбранных арендаторов для пакетного редактирования.
+ *
+ * Открывается, когда пользователь выделил 2+ арендаторов и нажал универсальную
+ * кнопку «✎ Tahrirlash» (см. MainScreen). Показывает прокручиваемый список
+ * выбранных арендаторов — тап по строке открывает обычный RenterFormDialog
+ * для этого арендатора. При сохранении/отмене формы пользователь возвращается
+ * ОБРАТНО в этот список (а не в главный экран), чтобы можно было отредактировать
+ * нескольких арендаторов подряд без повторного выделения.
+ *
+ * Кнопка «Yopish» — закрывает список и сбрасывает выделение.
+ *
+ * @param renters Список выбранных арендаторов (уже отфильтрованный по
+ *                selectedRenters в родителе). Передаётся как параметр, чтобы
+ *                комposable был stateless и переиспользуемым.
+ * @param scooters Список всех скутеров — для отображения имени скутера
+ *                 рядом с именем арендатора (lookup by scooterId).
+ * @param onPickRenter Колбэк при тапе по строке — открывает RenterFormDialog
+ *                     для выбранного арендатора.
+ * @param onDismiss   Колбэк при нажатии «Yopish» — закрывает список и
+ *                    сбрасывает выделение.
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun SelectedRentersListDialog(
+    renters: List<Renter>,
+    scooters: List<Scooter>,
+    onPickRenter: (Renter) -> Unit,
+    onDismiss: () -> Unit
+) {
+    val scrollState = rememberScrollState()
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = {
+            Column {
+                Text(
+                    "Tanlangan ijarachilar",
+                    style = MaterialTheme.typography.titleLarge,
+                    color = ClaudeText
+                )
+                Text(
+                    "${renters.size} ta ijarachi tanlandi. Tahrirlash uchun bittasini tanlang.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = ClaudeTextSecondary
+                )
+            }
+        },
+        containerColor = ClaudeCard,
+        titleContentColor = ClaudeText,
+        textContentColor = ClaudeText,
+        // Свой confirmButton не нужен — кнопка «Yopish» работает как dismiss.
+        // Используем dismissButton для «Yopish».
+        confirmButton = {},
+        dismissButton = {
+            TextActionButton(
+                label = "Yopish",
+                icon = Icons.Default.Close,
+                onClick = onDismiss
+            )
+        },
+        text = {
+            if (renters.isEmpty()) {
+                // Защита: родитель должен фильтровать по selectedRenters, но
+                // на всякий случай показываем понятное сообщение, если список
+                // оказался пуст (например, арендаторы были удалены между
+                // выделением и открытием диалога).
+                Text(
+                    "Tanlangan ijarachilar topilmadi.",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = ClaudeTextSecondary
+                )
+            } else {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .verticalScroll(scrollState),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    renters.forEach { renter ->
+                        val status = statusOf(renter)
+                        val sColor = statusColor(status)
+                        val sLabel = statusLabel(status)
+                        // Имя скутера (если есть) — ищем по scooterId.
+                        val scooterName = renter.scooterId?.let { sid ->
+                            scooters.firstOrNull { it.id == sid }?.name
+                        }
+
+                        // ── Карточка строки арендатора ──
+                        // Вся строка кликабельна — тап открывает RenterFormDialog.
+                        // Левая цветная полоска = статус (зелёный/красный/серый),
+                        // чтобы пользователь сразу видел, кто просрочен.
+                        Surface(
+                            onClick = { onPickRenter(renter) },
+                            shape = RoundedCornerShape(10.dp),
+                            color = ClaudeCard,
+                            border = androidx.compose.foundation.BorderStroke(
+                                1.dp, ClaudeDivider
+                            ),
+                            tonalElevation = 0.dp,
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(horizontal = 12.dp, vertical = 10.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                // Цветная точка статуса
+                                Box(
+                                    modifier = Modifier
+                                        .size(10.dp)
+                                        .background(sColor, CircleShape)
+                                )
+                                Spacer(Modifier.width(12.dp))
+                                // Имя + телефон + скутер
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text(
+                                        renter.name.ifBlank { "(Ism yo'q)" },
+                                        style = MaterialTheme.typography.bodyLarge,
+                                        color = ClaudeText,
+                                        fontWeight = FontWeight.SemiBold,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
+                                    val phoneDisplay = renter.phoneNumber
+                                        .filter { it.isDigit() }
+                                        .takeLast(9)
+                                        .let {
+                                            if (it.length == 9) "${it.take(2)} ${it.drop(2).take(3)} ${it.drop(5)}"
+                                            else renter.phoneNumber
+                                        }
+                                    Text(
+                                        buildString {
+                                            if (phoneDisplay.isNotBlank()) append(phoneDisplay)
+                                            if (scooterName != null) {
+                                                if (isNotEmpty()) append("  •  ")
+                                                append(scooterName)
+                                            }
+                                        }.ifBlank { "—" },
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = ClaudeTextSecondary,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
+                                }
+                                Spacer(Modifier.width(8.dp))
+                                // Статус-метка справа
+                                Text(
+                                    sLabel,
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = sColor,
+                                    fontWeight = FontWeight.Medium
+                                )
+                                Spacer(Modifier.width(4.dp))
+                                // Иконка-шеврон «›» — подсказка, что строка кликабельна
+                                Icon(
+                                    Icons.Default.KeyboardArrowRight,
+                                    contentDescription = null,
+                                    tint = ClaudeTextSecondary,
+                                    modifier = Modifier.size(20.dp)
+                                )
+                            }
+                        }
+                    }
+                }
+            }
         }
     )
 }
