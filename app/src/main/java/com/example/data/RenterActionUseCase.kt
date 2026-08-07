@@ -213,7 +213,9 @@ class RenterActionUseCase(
                 historyRepository.update(updatedUnpaid)
 
                 // 5. Создаём новый оплаченный контракт на paidDays дней
-                val newPaidEnd = originalStart + paidDays * dayMs - 1
+                // Модель «отель/ночь»: weekEnd = weekStart + paidDays*dayMs (БЕЗ -1),
+                // дата окончания = «день выезда» (check-out).
+                val newPaidEnd = originalStart + paidDays * dayMs
                 val newPaidContract = ContractHistoryEntry(
                     renterId = renter.id, timestamp = now,
                     type = ContractHistoryEntry.TYPE_AUTO_RENEW, amount = actualPaidAmount,

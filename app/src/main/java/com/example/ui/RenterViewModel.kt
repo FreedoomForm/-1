@@ -320,23 +320,28 @@ class RenterViewModel(application: Application) : AndroidViewModel(application) 
                         }
                         if (alreadyCovered) continue
 
-                        // Forward: R → next Stop or R+7
+                        // Forward: R → next Stop or R+7d
+                        // Модель «отель/ночь»: endMs = start + N*dayMs (БЕЗ -1),
+                        // дата окончания = «день выезда» (check-out).
+                        // Если Stop в пределах недели — контракт до Stop-дня
+                        // (Stop-день = check-out, не оплачивается).
                         val nextStop = stopMarkers.map { it.first }
                             .filter { it > resumeStart }
                             .minOrNull()
                         val forwardEnd = when {
-                            nextStop != null && nextStop <= resumeStart + weekMs -> {
-                                // Stop в пределах недели → контракт до Stop-дня
-                                // (включительно, что Stop-маркер рисуется на этот день).
-                                nextStop - 1L // конец дня перед Stop
-                            }
-                            else -> resumeStart + weekMs - 1L // неделя вперёд
+                            nextStop != null && nextStop <= resumeStart + weekMs -> nextStop
+                            else -> resumeStart + weekMs
                         }
                         if (forwardEnd > resumeStart) {
                             generated.add(ContractSpec(resumeStart, forwardEnd, isPaid = false))
                         }
 
                         // Backward: если нет контрактов в [today, R-1], заполнить
+                        // Модель «отель/ночь»: каждый backward-контракт = 7 дней,
+                        // end = start + 7d. Контракты делят конечные точки:
+                        //   [R-7d, R], [R-14d, R-7d], [R-21d, R-14d], ...
+                        // R-день = check-out последнего backward-контракта =
+                        // check-in forward-контракта (разделяемый день).
                         val todayStart = run {
                             val cal = java.util.Calendar.getInstance()
                             cal.set(java.util.Calendar.HOUR_OF_DAY, 0)
@@ -345,7 +350,7 @@ class RenterViewModel(application: Application) : AndroidViewModel(application) 
                             cal.set(java.util.Calendar.MILLISECOND, 0)
                             cal.timeInMillis
                         }
-                        if (resumeStart > todayStart + dayMs) {
+                        if (resumeStart > todayStart) {
                             // Есть «пустота» между today и Resume-днём.
                             // Создаём weekly-контракты назад, НЕ заходя за Stop-маркер.
                             // Если в [today, R-1] есть Stop-маркер, то назад не заполняем
@@ -353,13 +358,13 @@ class RenterViewModel(application: Application) : AndroidViewModel(application) 
                             val stopInGap = stopMarkers.map { it.first }
                                 .any { it in (todayStart until resumeStart) }
                             if (!stopInGap) {
-                                var cursor = resumeStart - dayMs // день перед Resume
+                                var end = resumeStart
                                 var guard = 0
-                                while (cursor >= todayStart && guard < 60) {
-                                    val ws = cursor - 6 * dayMs // неделя назад
+                                while (end > todayStart && guard < 60) {
+                                    val ws = end - 7 * dayMs
                                     val realWs = maxOf(ws, todayStart)
-                                    generated.add(ContractSpec(realWs, cursor, isPaid = false))
-                                    cursor = realWs - dayMs
+                                    generated.add(ContractSpec(realWs, end, isPaid = false))
+                                    end = realWs
                                     guard++
                                 }
                             }
@@ -1392,11 +1397,12 @@ class RenterViewModel(application: Application) : AndroidViewModel(application) 
                 resumeStart >= g.startMs && resumeStart <= g.endMs
             }
             if (!alreadyCovered) {
-                // Forward
+                // Forward — модель «отель/ночь»: endMs = start + N*dayMs (БЕЗ -1).
+                // Stop-день = check-out (не оплачивается).
                 val nextStop = stopDays.firstOrNull { it > resumeStart }
                 val forwardEnd = when {
-                    nextStop != null && nextStop <= resumeStart + weekMs -> nextStop - 1L
-                    else -> resumeStart + weekMs - 1L
+                    nextStop != null && nextStop <= resumeStart + weekMs -> nextStop
+                    else -> resumeStart + weekMs
                 }
                 if (forwardEnd > resumeStart) {
                     val daysCount = kotlin.math.ceil((forwardEnd - resumeStart).toDouble() / dayMs).toInt()
@@ -1430,6 +1436,9 @@ class RenterViewModel(application: Application) : AndroidViewModel(application) 
                     )
                 }
                 // Backward (только если нет Stop в [today, R-1])
+                // Модель «отель/ночь»: каждый backward-контракт = 7 дней,
+                // end = start + 7d. Контракты делят конечные точки:
+                //   [R-7d, R], [R-14d, R-7d], [R-21d, R-14d], ...
                 val todayStart = run {
                     val cal = java.util.Calendar.getInstance()
                     cal.set(java.util.Calendar.HOUR_OF_DAY, 0)
@@ -1438,15 +1447,15 @@ class RenterViewModel(application: Application) : AndroidViewModel(application) 
                     cal.set(java.util.Calendar.MILLISECOND, 0)
                     cal.timeInMillis
                 }
-                if (resumeStart > todayStart + dayMs) {
+                if (resumeStart > todayStart) {
                     val stopInGap = stopDays.any { it in (todayStart until resumeStart) }
                     if (!stopInGap) {
-                        var cursor = resumeStart - dayMs
+                        var end = resumeStart
                         var guard = 0
-                        while (cursor >= todayStart && guard < 60) {
-                            val ws = cursor - 6 * dayMs
+                        while (end > todayStart && guard < 60) {
+                            val ws = end - 7 * dayMs
                             val realWs = maxOf(ws, todayStart)
-                            val daysCount = kotlin.math.ceil((cursor - realWs).toDouble() / dayMs).toInt()
+                            val daysCount = kotlin.math.ceil((end - realWs).toDouble() / dayMs).toInt()
                                 .coerceAtLeast(1)
                             val amount = dailyPrice * daysCount
                             historyRepository.insert(ContractHistoryEntry(
@@ -1459,7 +1468,7 @@ class RenterViewModel(application: Application) : AndroidViewModel(application) 
                                 renterPhone = newPhone,
                                 scooterName = newScooterName ?: scooter?.name ?: "",
                                 weekStart = realWs,
-                                weekEnd = cursor,
+                                weekEnd = end,
                                 weeklyPrice = amount,
                                 passportData = passportData,
                                 address = address,
@@ -1476,7 +1485,7 @@ class RenterViewModel(application: Application) : AndroidViewModel(application) 
                                 balance = renter.balance - amount,
                                 debtAmount = maxOf(0.0, -(renter.balance - amount))
                             )
-                            cursor = realWs - dayMs
+                            end = realWs
                             guard++
                         }
                     }

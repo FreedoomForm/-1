@@ -601,15 +601,18 @@ fun ContractCalendar(
                                         // ── Если Resume — авто-создаём недельные контракты ──
                                         if (dayMarkerMode == 2) {
                                             // Forward: до ближайшего Stop в [ms, ms+7d]
-                                            // или до ms+7d-1 если Stop нет.
+                                            // или до ms+7d если Stop нет.
+                                            // Модель «отель/ночь»: endMs = start + N*dayMs
+                                            // (БЕЗ -1), чтобы дата окончания отображалась
+                                            // как «день выезда» (check-out), а не «день до».
                                             val stopDays = groups
                                                 .filter { it.isStopMarker }
                                                 .map { it.startMs }
                                                 .sorted()
                                             val nextStop = stopDays.firstOrNull { it > ms }
                                             val forwardEnd = when {
-                                                nextStop != null && nextStop <= ms + weekMs -> nextStop - 1L
-                                                else -> ms + weekMs - 1L
+                                                nextStop != null && nextStop <= ms + weekMs -> nextStop
+                                                else -> ms + weekMs
                                             }
                                             if (forwardEnd > ms) {
                                                 var idCounter = newIdBase + 2
@@ -623,8 +626,12 @@ fun ContractCalendar(
                                                 )
                                             }
 
-                                            // Backward: недельные контракты от R-1 до
+                                            // Backward: недельные контракты от R до
                                             // сегодня, если в [today, R-1] нет Stop.
+                                            // Модель «отель/ночь»: каждый backward-контракт
+                                            // = 7 дней, end = start + 7d. Контракты делят
+                                            // конечные точки (check-out = check-in следующего):
+                                            //   [R-7d, R], [R-14d, R-7d], [R-21d, R-14d], ...
                                             val todayStart = run {
                                                 val cal = java.util.Calendar.getInstance()
                                                 cal.set(java.util.Calendar.HOUR_OF_DAY, 0)
@@ -633,24 +640,24 @@ fun ContractCalendar(
                                                 cal.set(java.util.Calendar.MILLISECOND, 0)
                                                 cal.timeInMillis
                                             }
-                                            if (ms > todayStart + dayMs) {
+                                            if (ms > todayStart) {
                                                 val stopInGap = stopDays.any { it in (todayStart until ms) }
                                                 if (!stopInGap) {
-                                                    var cursor = ms - dayMs
+                                                    var end = ms
                                                     var guard = 0
                                                     var idCounter = (newGroups.maxOfOrNull { it.id } ?: 0) + 1
-                                                    while (cursor >= todayStart && guard < 60) {
-                                                        val ws = cursor - 6 * dayMs
+                                                    while (end > todayStart && guard < 60) {
+                                                        val ws = end - 7 * dayMs
                                                         val realWs = maxOf(ws, todayStart)
                                                         newGroups = newGroups + ContractGroup(
                                                             id = idCounter++,
                                                             startMs = realWs,
-                                                            endMs = cursor,
+                                                            endMs = end,
                                                             isPaid = false,
                                                             scooterId = selectedScooterId,
                                                             scooterName = selectedScooterName
                                                         )
-                                                        cursor = realWs - dayMs
+                                                        end = realWs
                                                         guard++
                                                     }
                                                 }
@@ -838,11 +845,15 @@ private fun handleDayClick(
         val isSameDayTap = isSameDay(pendingStartMs, ms)
         if (isSameDayTap) {
             // ── Двойной клик на одну дату → недельный контракт с авто-статусом ──
+            // Модель «отель/ночь»: 7 дней = день 1 (чт) → день 8 (след. чт).
+            // realEnd = start + 7d (БЕЗ -1) — отображаемая дата окончания
+            // становится «следующим четвергом», а не «средой перед ним».
+            // Сумма: ceil((start+7d - start)/dayMs) = 7 → 7×60000 = 420000.
             val now = System.currentTimeMillis()
             val isOverdue = (now - ms) > weekMs
             val autoIsPaid = !isOverdue
             val start = ms
-            val realEnd = ms + weekMs - 1
+            val realEnd = ms + weekMs
             val newId = (groups.maxOfOrNull { it.id } ?: 0) + 1
             val newGroup = ContractGroup(
                 id = newId, startMs = start, endMs = realEnd, isPaid = autoIsPaid,
@@ -897,11 +908,13 @@ private fun handleDayClickWithAddCallback(
         // ── Та же legacy-логика автоопределения статуса по дате ──────
         val isSameDayTap = isSameDay(pendingStartMs, ms)
         if (isSameDayTap) {
+            // Модель «отель/ночь»: realEnd = ms + weekMs (БЕЗ -1),
+            // конец = следующий четверг. См. комментарий в handleDayClick.
             val now = System.currentTimeMillis()
             val isOverdue = (now - ms) > weekMs
             val autoIsPaid = !isOverdue
             val start = ms
-            val realEnd = ms + weekMs - 1
+            val realEnd = ms + weekMs
             // Используем отрицательный id как временный — реальный id
             // присвоит БД при создании контракта. Колбэк onAddGroup должен
             // проигнорировать это поле и использовать startMs/endMs/isPaid.
