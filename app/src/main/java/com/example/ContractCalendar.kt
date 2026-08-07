@@ -120,7 +120,26 @@ data class ContractGroup(
      * Сохраняется как ContractHistoryEntry с type=RETURNED и isResumeMarker=true
      * (используется поле notes для хранения флага, чтобы не менять схему БД).
      */
-    val isResumeMarker: Boolean = false
+    val isResumeMarker: Boolean = false,
+    /**
+     * ID скутера, привязанного к этой группе/контракту.
+     * - Для новых групп, созданных в календаре формы: capturing текущий
+     *   selectedScooterId в момент тапа по второй дате (или по дню для маркера).
+     *   Это позволяет ПОКАЗЫВАТЬ имя скутера над каждым периодом в списке
+     *   контрактов под календарём, чтобы было видно, к какому скутеру
+     *   относится каждый контракт — как просил пользователь.
+     * - Для существующих контрактов (loaded из БД): ID скутера берётся из
+     *   Renter.scooterId (или из scooterName контракта, если доступно).
+     * - null = скутер не выбран (для STOP/RESUME маркеров, где скутер опционален).
+     */
+    val scooterId: Int? = null,
+    /**
+     * Имя скутера, привязанного к этой группе. Используется ТОЛЬКО для
+     * отображения в UI (список контрактов под календарём в форме и в
+     * раскрытой карточке арендатора на странице арендаторов). При сохранении
+     * в БД берётся из Scooter по scooterId (или из renter.scooterName).
+     */
+    val scooterName: String? = null
 ) {
     /** Цветовая метка группы (циклический выбор по id). */
     val colorIndex: Int get() = ((id - 1).coerceAtLeast(0)) % 6
@@ -170,6 +189,21 @@ fun ContractCalendar(
      * игнорируются, и пользователю показывается подсказка «Skuterni tanlang».
      */
     scooterSelected: Boolean = true,
+    /**
+     * ID выбранного скутера в форме арендатора.
+     * Передаётся в каждую новую группу, создаваемую в календаре, чтобы
+     * потом в списке контрактов под календарём показать имя скутера над
+     * каждым периодом (требование пользователя: «в календаре должен
+     * показываться скутер имя скутера сверху выбранного периода контракта
+     * к которому прикреплён этот скутер»).
+     * null = скутер не выбран (для STOP/RESUME маркеров опционален).
+     */
+    selectedScooterId: Int? = null,
+    /**
+     * Имя выбранного скутера — для отображения в новых группах.
+     * Берётся из Scooter.name по selectedScooterId в родителе.
+     */
+    selectedScooterName: String? = null,
     /**
      * Текущие группы.
      * - Для editable=true (форма): локальный список, который пользователь собирает.
@@ -530,9 +564,39 @@ fun ContractCalendar(
                                             endMs = dayEnd,
                                             isPaid = false,
                                             isStopMarker = dayMarkerMode == 1,
-                                            isResumeMarker = dayMarkerMode == 2
+                                            isResumeMarker = dayMarkerMode == 2,
+                                            // Для STOP/RESUME маркеров скутер опционален,
+                                            // но если выбран — фиксируем его в группе,
+                                            // чтобы показать имя над периодом и чтобы
+                                            // auto-контракты после RESUME создавались
+                                            // с этим скутером.
+                                            scooterId = selectedScooterId,
+                                            scooterName = selectedScooterName
                                         )
                                         var newGroups = groups + markerGroup
+
+                                        // ── Если STOP — удаляем все RESUME-маркеры ──────
+                                        // которые находятся ПОСЛЕ даты STOP. Это критично
+                                        // для логики архива: если у арендатора есть
+                                        // STOP_MARKER в прошлом и после него НЕТ
+                                        // RESUME_MARKER — арендатор архивируется.
+                                        //
+                                        // Раньше auto-added RESUME_MARKER (на последний
+                                        // день последнего контракта) оставался в БД
+                                        // после добавления STOP, и isRenterArchived
+                                        // возвращал false → арендатор не попадал в архив.
+                                        //
+                                        // Теперь: при добавлении STOP_MARKER удаляем
+                                        // все RESUME_MARKER с startMs > STOP.startMs.
+                                        // Пользователь явно сигнализирует «стоп с этой
+                                        // даты» — любые будущие RESUME не имеют смысла.
+                                        // Если пользователь хочет возобновить — он
+                                        // поставит новый RESUME после STOP.
+                                        if (dayMarkerMode == 1) {
+                                            newGroups = newGroups.filterNot { g ->
+                                                g.isResumeMarker && g.startMs > ms
+                                            }
+                                        }
 
                                         // ── Если Resume — авто-создаём недельные контракты ──
                                         if (dayMarkerMode == 2) {
@@ -553,7 +617,9 @@ fun ContractCalendar(
                                                     id = idCounter,
                                                     startMs = ms,
                                                     endMs = forwardEnd,
-                                                    isPaid = false
+                                                    isPaid = false,
+                                                    scooterId = selectedScooterId,
+                                                    scooterName = selectedScooterName
                                                 )
                                             }
 
@@ -580,7 +646,9 @@ fun ContractCalendar(
                                                             id = idCounter++,
                                                             startMs = realWs,
                                                             endMs = cursor,
-                                                            isPaid = false
+                                                            isPaid = false,
+                                                            scooterId = selectedScooterId,
+                                                            scooterName = selectedScooterName
                                                         )
                                                         cursor = realWs - dayMs
                                                         guard++
@@ -622,7 +690,12 @@ fun ContractCalendar(
                                             newGroupIsPaid = newGroupIsPaid,
                                             onGroupsChange = onGroupsChange,
                                             onActiveGroupChange = onActiveGroupChange,
-                                            onPeriodCreated = { hasSelectedStatus = false }
+                                            onPeriodCreated = { hasSelectedStatus = false },
+                                            // Передаём скутер в новую группу — это позволит
+                                            // показать имя скутера над периодом в списке
+                                            // контрактов под календарём.
+                                            scooterId = selectedScooterId,
+                                            scooterName = selectedScooterName
                                         )
                                     } else if (onAddGroup != null) {
                                         // Режим просмотра с возможностью добавления —
@@ -742,7 +815,12 @@ private fun handleDayClick(
     newGroupIsPaid: Boolean,
     onGroupsChange: (List<ContractGroup>) -> Unit,
     onActiveGroupChange: (Int?) -> Unit,
-    onPeriodCreated: () -> Unit = {}
+    onPeriodCreated: () -> Unit = {},
+    /** ID выбранного скутера — копируется в новую группу, чтобы потом
+     *  показать имя скутера над периодом в списке контрактов. */
+    scooterId: Int? = null,
+    /** Имя выбранного скутера — копируется в новую группу для UI. */
+    scooterName: String? = null
 ) {
     // Если открыта существующая группа — ничего не делаем (только просмотр).
     if (activeGroupId != null) return
@@ -767,7 +845,8 @@ private fun handleDayClick(
             val realEnd = ms + weekMs - 1
             val newId = (groups.maxOfOrNull { it.id } ?: 0) + 1
             val newGroup = ContractGroup(
-                id = newId, startMs = start, endMs = realEnd, isPaid = autoIsPaid
+                id = newId, startMs = start, endMs = realEnd, isPaid = autoIsPaid,
+                scooterId = scooterId, scooterName = scooterName
             )
             onGroupsChange(groups + newGroup)
             onActiveGroupChange(newId)
@@ -779,7 +858,8 @@ private fun handleDayClick(
             val realEnd = maxOf(pendingStartMs, ms) + dayMs - 1
             val newId = (groups.maxOfOrNull { it.id } ?: 0) + 1
             val newGroup = ContractGroup(
-                id = newId, startMs = start, endMs = realEnd, isPaid = newGroupIsPaid
+                id = newId, startMs = start, endMs = realEnd, isPaid = newGroupIsPaid,
+                scooterId = scooterId, scooterName = scooterName
             )
             onGroupsChange(groups + newGroup)
             onActiveGroupChange(newId)
@@ -1093,11 +1173,13 @@ private fun BigStatusTile(
 
     // ── Вычисление цветов с учётом solidBg / solidFg ──
     // Для Stop/Resume используем сплошной фон независимо от selected.
-    // Для Paid/Unpaid — прежняя логика: при selected фон = color.copy(0.35),
-    // иначе нейтральный ClaudeAccentBg.
+    // Для Paid/Unpaid — УСИЛЕННАЯ визуальная обратная связь: при selected
+    // фон заливается цветом статуса с alpha 0.55 (заметно ярче, чем 0.35),
+    // плюс рамка 3dp вместо 2dp. Это решает жалобу «при нажатии статуса
+    // ничего не происходит» — теперь выбор очевиден.
     val bgColor = when {
         solidBg != null -> if (selected) solidBg else solidBg.copy(alpha = 0.45f)
-        selected -> color.copy(alpha = 0.35f)
+        selected -> color.copy(alpha = 0.55f)
         else -> ClaudeAccentBg
     }
     val fgColor = when {
@@ -1118,7 +1200,7 @@ private fun BigStatusTile(
             .clip(RoundedCornerShape(10.dp))
             .background(bgColor)
             .border(
-                width = if (selected) 2.dp else 1.dp,
+                width = if (selected) 3.dp else 1.dp,
                 color = borderColor,
                 shape = RoundedCornerShape(10.dp)
             )

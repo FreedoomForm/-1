@@ -3663,7 +3663,35 @@ fun RenterTable(
                                                 )
                                                 // Muddat (hafta) — дата → дата
                                                 // + статус-точка + примечание
+                                                // СВЕРХУ периода: имя скутера
+                                                // (требование пользователя: «в
+                                                // календаре должен показываться
+                                                // скутер имя скутера сверху
+                                                // выбранного периода контракта»).
                                                 Column(modifier = Modifier.weight(1.8f)) {
+                                                    // ── Имя скутера над периодом ──
+                                                    if (!c.scooterName.isNullOrBlank()) {
+                                                        Row(
+                                                            verticalAlignment = Alignment.CenterVertically,
+                                                            horizontalArrangement = Arrangement.spacedBy(3.dp)
+                                                        ) {
+                                                            Icon(
+                                                                Icons.Default.DirectionsBike,
+                                                                contentDescription = null,
+                                                                tint = ClaudeAccent,
+                                                                modifier = Modifier.size(11.dp)
+                                                            )
+                                                            Text(
+                                                                text = c.scooterName!!,
+                                                                style = MaterialTheme.typography.labelSmall,
+                                                                color = ClaudeAccent,
+                                                                fontWeight = FontWeight.SemiBold,
+                                                                maxLines = 1,
+                                                                overflow = TextOverflow.Ellipsis
+                                                            )
+                                                        }
+                                                        Spacer(Modifier.height(2.dp))
+                                                    }
                                                     Text(
                                                         text = buildString {
                                                             c.weekStart?.let { append(dateFmt.format(Date(it))) }
@@ -4060,7 +4088,14 @@ fun RenterFormDialog(
                         isPaid = entry.isPaid,
                         existingContractId = entry.id,
                         isStopMarker = isStopMarker,
-                        isResumeMarker = isResumeMarker
+                        isResumeMarker = isResumeMarker,
+                        // Сохраняем имя скутера из контракта, чтобы показать
+                        // его над периодом в списке контрактов под календарём
+                        // (требование пользователя). ID скутера берём из
+                        // initialRenter.scooterId как fallback (контракт в БД
+                        // не хранит scooterId, только scooterName).
+                        scooterId = initialRenter?.scooterId,
+                        scooterName = entry.scooterName ?: initialRenter?.scooterName
                     )
                 }
         } else emptyList()
@@ -4578,6 +4613,8 @@ fun RenterFormDialog(
                 ContractCalendar(
                     editable = true,
                     scooterSelected = scooterSelectedForCalendar,
+                    selectedScooterId = selectedScooterId,
+                    selectedScooterName = selectedScooter?.name,
                     groups = contractGroups,
                     activeGroupId = activeGroupId,
                     onGroupsChange = { contractGroups = it },
@@ -4716,7 +4753,40 @@ fun RenterFormDialog(
                                         maxLines = 1
                                     )
                                     // Muddat — дата → дата + статус-точка
+                                    // СВЕРХУ периода: имя скутера, привязанного
+                                    // к этому контракту (требование пользователя:
+                                    // «в календаре должен показываться скутер имя
+                                    // скутера сверху выбранного периода контракта
+                                    // к которому прикреплён этот скутер»).
                                     Column(modifier = Modifier.weight(1.8f)) {
+                                        // ── Имя скутера над периодом ──
+                                        // Берём из группы (для новых — выбранный
+                                        // в форме скутер; для существующих — из БД).
+                                        val groupScooterName = group.scooterName
+                                            ?: selectedScooter?.name
+                                            ?: initialRenter?.scooterName
+                                        if (!groupScooterName.isNullOrBlank()) {
+                                            Row(
+                                                verticalAlignment = Alignment.CenterVertically,
+                                                horizontalArrangement = Arrangement.spacedBy(3.dp)
+                                            ) {
+                                                Icon(
+                                                    Icons.Default.DirectionsBike,
+                                                    contentDescription = null,
+                                                    tint = ClaudeAccent,
+                                                    modifier = Modifier.size(11.dp)
+                                                )
+                                                Text(
+                                                    text = groupScooterName,
+                                                    style = MaterialTheme.typography.labelSmall,
+                                                    color = ClaudeAccent,
+                                                    fontWeight = FontWeight.SemiBold,
+                                                    maxLines = 1,
+                                                    overflow = TextOverflow.Ellipsis
+                                                )
+                                            }
+                                            Spacer(Modifier.height(2.dp))
+                                        }
                                         Text(
                                             text = "$startDate → $endDate",
                                             style = MaterialTheme.typography.labelMedium,
@@ -5100,7 +5170,13 @@ fun RenterFormDialog(
                                         endMs = it.endMs,
                                         isPaid = it.isPaid,
                                         isStopMarker = it.isStopMarker,
-                                        isResumeMarker = it.isResumeMarker
+                                        isResumeMarker = it.isResumeMarker,
+                                        // Передаём скутер, выбранный пользователем
+                                        // в момент создания группы. Для существующих
+                                        // контрактов это поле ignored (в БД уже есть
+                                        // scooterName). Для новых — сохраняется в БД.
+                                        scooterId = it.scooterId ?: effectiveScooterId,
+                                        scooterName = it.scooterName ?: effectiveScooterName
                                     )
                                 }
                             )
@@ -5226,7 +5302,18 @@ data class RenterFormContractGroup(
      * weekly-контрактов от этого дня вперёд до ближайшего Stop или
      * до +7 дней (см. applyResumeAutoContracts в RenterViewModel).
      */
-    val isResumeMarker: Boolean = false
+    val isResumeMarker: Boolean = false,
+    /**
+     * ID скутера, привязанного к этой группе (для новых контрактов).
+     * Для STOP/RESUME маркеров опционален, но если указан —
+     * auto-контракты после RESUME будут созданы с этим скутером.
+     * Для существующих контрактов ignored (в БД scooterName уже сохранён).
+     */
+    val scooterId: Int? = null,
+    /**
+     * Имя скутера для отображения в UI. Сохраняется в ContractHistoryEntry.scooterName.
+     */
+    val scooterName: String? = null
 )
 
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)

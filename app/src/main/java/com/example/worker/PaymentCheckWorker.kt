@@ -175,9 +175,12 @@ class PaymentCheckWorker(
      *   3. newWeekStart = lastContractWeekEnd + 1ms (т.е. сразу после).
      *   4. Если нет контрактов (только что создан renter без CREATED) —
      *      используем rentStartDateTimestamp как fallback.
-     *   5. Если newWeekStart + 7d > now (новая неделя ещё не закончилась) —
-     *      не создаём, выходим (это нормально — ждать окончания недели).
-     *   6. Иначе создаём AUTO_RENEW с newWeekStart → newWeekStart + 7d.
+     *   5. Если newWeekStart > now (новая неделя ещё не началась) —
+     *      не создаём, выходим.
+     *   6. Иначе создаём AUTO_RENEW с newWeekStart → newWeekStart + 7d
+     *      и ЦИКЛИЧЕСКИ продолжаем, пока новая неделя уже началась.
+     *      Это позволяет «догнать» пропущенные недели за один запуск Worker,
+     *      вместо того чтобы создавать по одному контракту в час.
      *
      * Возвращает новый баланс (для решения о SMS-уведомлении).
      */
@@ -193,99 +196,137 @@ class PaymentCheckWorker(
             if (it > 0) it else SettingsRepository.DEFAULT_WEEKLY_PRICE
         }
 
-        // ── Загружаем все обычные контракты арендатора ──────────────────
-        // contractsForRenterOnce возвращает только CREATED и AUTO_RENEW
-        // (без STOP/RESUME маркеров). Находим последний по weekEnd.
-        val allContracts = db.contractHistoryDao().getContractsForRenterOnce(renter.id)
-        val lastContract = allContracts
-            .filter { it.weekEnd != null }
-            .maxByOrNull { it.weekEnd!! }
+        var currentBalance = renter.balance
+        var currentDuration = renter.rentDurationDays
+        var iterations = 0
+        val maxIterations = 60  // защита от бесконечного цикла (~1 год)
 
-        // ── Вычисляем начало новой недели ───────────────────────────────
-        // Если есть последний контракт — новая неделя начинается СРАЗУ после
-        // его окончания. Это критично для RESUME_MARKER сценария:
-        //   RESUME на 14.01 → система уже создала контракт 14.01→21.01
-        //   → next week = 21.01 → 28.01 (не от rentStartDateTimestamp!)
-        // Если контрактов нет — fallback на rentStartDateTimestamp (как раньше).
-        val newWeekStart: Long = if (lastContract != null) {
-            lastContract.weekEnd!! + 1L  // +1ms — не накладывается на последний день
-        } else {
-            renter.rentStartDateTimestamp +
-                renter.rentDurationDays * dayMs
-        }
-        val newWeekEnd = newWeekStart + sevenDays
+        // ── Цикл создания контрактов «догоняющим» режимом ──────────────
+        // На каждой итерации:
+        //   1. Загружаем все обычные контракты (CREATED + AUTO_RENEW).
+        //   2. Находим последний (max weekEnd).
+        //   3. newWeekStart = lastContract.weekEnd + 1ms.
+        //   4. Проверяем активный STOP_MARKER — если newWeekStart >= STOP,
+        //      прекращаем (не создаём контракты за пределами STOP).
+        //   5. Если newWeekStart > now — новая неделя ещё не началась,
+        //      прекращаем (раньше здесь было newWeekEnd > now, что заставляло
+        //      Worker ждать неделю после RESUME_MARKER — это и было источником
+        //      жалобы «auto-RESUME_MARKER не работает»).
+        //   6. Если для этой недели уже есть контракт (дедупликация) — прекращаем.
+        //   7. Создаём AUTO_RENEW, обновляем баланс и длительность арендатора.
+        //   8. Повторяем.
+        while (iterations < maxIterations) {
+            iterations++
 
-        // ── Если новая неделя ещё НЕ закончилась — не создаём ───────────
-        // Это предотвращает «догоняющее» создание контрактов для старых
-        // арендаторов с RESUME_MARKER в далёком прошлом. Если lastContract
-        // закончился вчера, а RESUME_MARKER стоит на 14.01 (давно), мы НЕ
-        // должны создавать 50 контрактов за все прошедшие недели — только
-        // одну следующую, и то только когда она пройдёт.
-        //
-        // Примечание: для старых арендаторов с историей (где lastContract
-        // уже в прошлом, а новая неделя уже закончилась) — создаём как обычно.
-        if (newWeekEnd > now) {
-            Log.d(TAG, "Skip auto-renew for renter #${renter.id}: new week " +
-                "$newWeekStart → $newWeekEnd hasn't ended yet (now=$now)")
-            return renter.balance
-        }
+            // ── Загружаем все обычные контракты арендатора ──────────────
+            val allContracts = db.contractHistoryDao().getContractsForRenterOnce(renter.id)
+            val lastContract = allContracts
+                .filter { it.weekEnd != null }
+                .maxByOrNull { it.weekEnd!! }
 
-        val newBalance = renter.balance - weeklyPrice
-        val renewed = renter.copy(
-            // ВАЖНО: rentStartDateTimestamp НЕ трогаем — это первоначальная дата.
-            rentDurationDays = renter.rentDurationDays + 7,
-            balance = newBalance,
-            debtAmount = maxOf(0.0, -newBalance),
-            isOverdueSmsSent = false
-        )
-        db.renterDao().updateRenter(renewed)
+            // ── Вычисляем начало новой недели ───────────────────────────
+            val newWeekStart: Long = if (lastContract != null) {
+                lastContract.weekEnd!! + 1L  // +1ms — не накладывается на последний день
+            } else {
+                renter.rentStartDateTimestamp + currentDuration * dayMs
+            }
+            val newWeekEnd = newWeekStart + sevenDays
 
-        // ── Подтягиваем реквизиты скутера для PDF-денормализации ──────────
-        val scooter = renter.scooterId?.let { db.scooterDao().getScooterById(it) }
+            // ── Проверка STOP_MARKER ────────────────────────────────────
+            // Если есть активный STOP_MARKER (без последующего RESUME_MARKER),
+            // и newWeekStart >= STOP — прекращаем создание контрактов.
+            // Это prevents создание контрактов после STOP.
+            val allEntries = db.contractHistoryDao().getForRenter(renter.id)
+            val stopMarkers = allEntries.filter {
+                it.type == ContractHistoryEntry.TYPE_TERMINATED &&
+                    it.notes == "STOP_MARKER" &&
+                    it.weekStart != null
+            }
+            val resumeMarkers = allEntries.filter {
+                it.type == ContractHistoryEntry.TYPE_RETURNED &&
+                    it.notes == "RESUME_MARKER" &&
+                    it.weekStart != null
+            }
+            val lastStop = stopMarkers.maxByOrNull { it.weekStart!! }
+            val activeStop = if (lastStop != null) {
+                val hasResumeAfter = resumeMarkers.any { it.weekStart!! > lastStop.weekStart!! }
+                if (!hasResumeAfter) lastStop else null
+            } else null
+            if (activeStop != null && newWeekStart >= activeStop.weekStart!!) {
+                Log.d(TAG, "autoRenew: stop creating for renter #${renter.id} at " +
+                    "newWeekStart=$newWeekStart — would cross STOP_MARKER " +
+                    "at ${activeStop.weekStart}")
+                break
+            }
 
-        // ── Защита от дубликатов ───────────────────────────────────────────
-        // Если для этой недели уже существует контракт (CREATED или AUTO_RENEW),
-        // НЕ создаём второй. Это критично после импорта старой базы: у
-        // пользователя может быть 11+ просроченных арендаторов, и если Worker
-        // запустится дважды (например, после импорта и сразу при старте приложения),
-        // без этой проверки каждый получил бы по 2 контракта на одну и ту же
-        // неделю — ровно та проблема, на которую жалуется пользователь
-        // («отрицательный и положительный контракт на одну и ту же дату»).
-        val existing = db.contractHistoryDao().getContractForWeek(renter.id, newWeekStart)
-        if (existing != null) {
-            Log.d(TAG, "Skip auto-renew for renter #${renter.id}: contract #${existing.id} " +
-                "for weekStart=$newWeekStart already exists")
-            return newBalance
-        }
+            // ── Если новая неделя ещё НЕ началась — прекращаем ─────────
+            // Раньше: if (newWeekEnd > now) — это заставляло Worker ждать
+            // неделю после RESUME_MARKER, и пользователь не видел новых
+            // контрактов. Теперь: создаём контракт для любой начавшейся
+            // недели — даже если она ещё не закончилась.
+            if (newWeekStart > now) {
+                Log.d(TAG, "autoRenew: stop for renter #${renter.id} — newWeekStart " +
+                    "$newWeekStart is in the future (now=$now), iter=$iterations")
+                break
+            }
 
-        db.contractHistoryDao().insert(
-            ContractHistoryEntry(
-                renterId = renter.id,
-                timestamp = now,
-                type = ContractHistoryEntry.TYPE_AUTO_RENEW,
-                amount = weeklyPrice,
-                notes = "Avtomatik yangilanish +7 kun",
-                renterName = renter.name,
-                renterPhone = renter.phoneNumber,
-                scooterName = renter.scooterName,
-                weekStart = newWeekStart,
-                weekEnd = newWeekEnd,
-                weeklyPrice = weeklyPrice,
-                passportData = renter.passportData,
-                address = renter.address,
-                pinfl = renter.pinfl,
-                vinNumber = scooter?.vinNumber ?: "",
-                engineNumber = scooter?.engineNumber ?: "",
-                scooterSerialNumber = scooter?.scooterSerialNumber ?: "",
-                batteryId1 = scooter?.batteryId1 ?: "",
-                batteryId2 = scooter?.batteryId2 ?: "",
-                additionalInfo = scooter?.additionalInfo ?: "",
-                isPaid = false  // авто-продление создаёт НЕОПЛАЧЕННЫЙ контракт (долг)
+            // ── Защита от дубликатов ───────────────────────────────────
+            val existing = db.contractHistoryDao().getContractForWeek(renter.id, newWeekStart)
+            if (existing != null) {
+                Log.d(TAG, "autoRenew: stop for renter #${renter.id} — contract " +
+                    "#${existing.id} for weekStart=$newWeekStart already exists")
+                break
+            }
+
+            // ── Создаём AUTO_RENEW контракт ────────────────────────────
+            currentBalance = currentBalance - weeklyPrice
+            currentDuration = currentDuration + 7
+            val renewed = renter.copy(
+                // ВАЖНО: rentStartDateTimestamp НЕ трогаем — это первоначальная дата.
+                rentDurationDays = currentDuration,
+                balance = currentBalance,
+                debtAmount = maxOf(0.0, -currentBalance),
+                isOverdueSmsSent = false
             )
-        )
-        Log.d(TAG, "Auto-renewed renter #${renter.id} for 1 week ($newWeekStart → $newWeekEnd), " +
-                "balance ${renter.balance} → $newBalance")
-        return newBalance
+            db.renterDao().updateRenter(renewed)
+
+            // ── Подтягиваем реквизиты скутера для PDF-денормализации ──────
+            val scooter = renter.scooterId?.let { db.scooterDao().getScooterById(it) }
+
+            db.contractHistoryDao().insert(
+                ContractHistoryEntry(
+                    renterId = renter.id,
+                    timestamp = now,
+                    type = ContractHistoryEntry.TYPE_AUTO_RENEW,
+                    amount = weeklyPrice,
+                    notes = "Avtomatik yangilanish +7 kun",
+                    renterName = renter.name,
+                    renterPhone = renter.phoneNumber,
+                    scooterName = renter.scooterName,
+                    weekStart = newWeekStart,
+                    weekEnd = newWeekEnd,
+                    weeklyPrice = weeklyPrice,
+                    passportData = renter.passportData,
+                    address = renter.address,
+                    pinfl = renter.pinfl,
+                    vinNumber = scooter?.vinNumber ?: "",
+                    engineNumber = scooter?.engineNumber ?: "",
+                    scooterSerialNumber = scooter?.scooterSerialNumber ?: "",
+                    batteryId1 = scooter?.batteryId1 ?: "",
+                    batteryId2 = scooter?.batteryId2 ?: "",
+                    additionalInfo = scooter?.additionalInfo ?: "",
+                    isPaid = false  // авто-продление создаёт НЕОПЛАЧЕННЫЙ контракт (долг)
+                )
+            )
+            Log.d(TAG, "autoRenew: renter #${renter.id} week $newWeekStart → $newWeekEnd " +
+                    "created (iter=$iterations), balance now $currentBalance")
+        }
+
+        if (iterations > 1) {
+            Log.d(TAG, "autoRenew: created ${iterations - 1} contract(s) for renter #${renter.id} " +
+                    "in one worker run")
+        }
+        return currentBalance
     }
 
     private suspend fun handleOneTimeNotification(
