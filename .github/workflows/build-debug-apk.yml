@@ -112,8 +112,8 @@ jobs:
         id: version
         if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
         run: |
-          BASE_VERSION=$(grep 'versionName' app/build.gradle.kts | head -1 | sed 's/.*versionName.*=.*"\(.*\)".*/\1/')
-          GRADLE_VERSION_CODE=$(grep 'versionCode' app/build.gradle.kts | head -1 | sed 's/.*versionCode.*=.*\([0-9]\+\).*/\1/')
+          BASE_VERSION=$(grep 'versionName' app/build.gradle.kts | head -1 | sed 's/.*versionName[^"]*"\(.*\)".*/\1/')
+          GRADLE_VERSION_CODE=$(grep 'versionCode' app/build.gradle.kts | head -1 | sed 's/.*versionCode[^0-9]*\([0-9]\+\).*/\1/')
           FULL_VERSION="${BASE_VERSION}.${{ github.run_number }}"
           echo "Base version: $BASE_VERSION"
           echo "Full version: $FULL_VERSION"
