@@ -245,8 +245,18 @@ class RenterViewModel(application: Application) : AndroidViewModel(application) 
             // Для остальных сценариев — effectiveWeeklyPrice (совместимость).
             fun contractAmountFor(startMs: Long, endMs: Long, isCalendarGroup: Boolean): Double {
                 if (!isCalendarGroup) return effectiveWeeklyPrice
+                // ── Модель «отель/ночь» ───────────────────────────────────────
+                // Период 7→14 = 7 дней аренды (день выезда не оплачивается).
+                // Используем ЦЕЛОЧИСЛЕННОЕ деление (floor), а не ceil:
+                //   • Если endMs = start + N*dayMs (точное кратное) → days = N.
+                //   • Если есть «хвост» (< 1 дня, например от старых контрактов
+                //     с endMs = конец дня 23:59:59.999) → он отбрасывается,
+                //     чтобы не было лишнего дня.
+                // Раньше ceil давал 8 дней для периода 7→14 если endMs имел
+                // любой ненулевой хвост (даже 1 мс) — пользователь видел 480000
+                // вместо ожидаемых 420000.
                 val days = if (endMs > startMs) {
-                    kotlin.math.ceil((endMs - startMs).toDouble() / dayMs).toInt()
+                    ((endMs - startMs) / dayMs).toInt().coerceAtLeast(1)
                 } else 1
                 return effectiveDailyPrice * days
             }
@@ -1307,10 +1317,13 @@ class RenterViewModel(application: Application) : AndroidViewModel(application) 
 
         for (g in allToAdd) {
             // ── Вычисляем сумму по фактической длине контракта в днях ──────
-            // 9 дней × 60000 = 540000, 7 дней × 60000 = 420000, и т.д.
-            // Используем ceil: даже 1 час на 8-й день = полные 8 дней.
+            // Модель «отель/ночь»: 7→14 = 7 дней (день выезда не оплачивается).
+            // Используем ЦЕЛОЧИСЛЕННОЕ деление (floor), а не ceil, чтобы:
+            //   • Точное кратное 7 дней → 7 дней (420000 при 60000/день).
+            //   • Хвост < 1 дня (например от старых контрактов с endMs =
+            //     23:59:59.999) отбрасывался — не давал лишний 8-й день.
             val daysCount = if (g.endMs > g.startMs) {
-                kotlin.math.ceil((g.endMs - g.startMs).toDouble() / dayMs).toInt()
+                ((g.endMs - g.startMs) / dayMs).toInt().coerceAtLeast(1)
             } else 1
             val contractAmount = dailyPrice * daysCount
 
@@ -1463,7 +1476,8 @@ class RenterViewModel(application: Application) : AndroidViewModel(application) 
                     else -> resumeStart + weekMs
                 }
                 if (forwardEnd > resumeStart) {
-                    val daysCount = kotlin.math.ceil((forwardEnd - resumeStart).toDouble() / dayMs).toInt()
+                    // Модель «отель/ночь»: целочисленное деление (floor).
+                    val daysCount = ((forwardEnd - resumeStart) / dayMs).toInt().coerceAtLeast(1)
                     val amount = dailyPrice * daysCount
                     historyRepository.insert(ContractHistoryEntry(
                         renterId = existing.id,
@@ -1513,8 +1527,8 @@ class RenterViewModel(application: Application) : AndroidViewModel(application) 
                         while (end > todayStart && guard < 60) {
                             val ws = end - 7 * dayMs
                             val realWs = maxOf(ws, todayStart)
-                            val daysCount = kotlin.math.ceil((end - realWs).toDouble() / dayMs).toInt()
-                                .coerceAtLeast(1)
+                            // Модель «отель/ночь»: целочисленное деление (floor).
+                            val daysCount = ((end - realWs) / dayMs).toInt().coerceAtLeast(1)
                             val amount = dailyPrice * daysCount
                             historyRepository.insert(ContractHistoryEntry(
                                 renterId = existing.id,
@@ -1871,6 +1885,61 @@ class RenterViewModel(application: Application) : AndroidViewModel(application) 
                 try { com.example.widget.WidgetUpdater.updateAll(context) } catch (_: Exception) {}
             } catch (e: Exception) {
                 Log.e(TAG, "backfillResumeMarkers failed", e)
+            }
+        }
+    }
+
+    /**
+     * Пересчитывает ЭФФЕКТИВНЫЙ баланс для ВСЕХ активных арендаторов на основе
+     * их контрактов и текущего времени. Использует новую модель «отель/ночь»
+     * (см. [ContractHistoryEntry.computeEffectiveBalance]):
+     *
+     *   • Оплаченный контракт, период которого полностью прошёл → 0
+     *     (скутер отработал оплату, никто никому не должен).
+     *   • Оплаченный контракт, период ещё идёт или в будущем → +amount
+     *     (предоплата — мы должны услугу).
+     *   • Неоплаченный контракт, период начался → −amount (долг).
+     *   • Неоплаченный контракт, период не начался → 0 (платить рано).
+     *
+     * Запускается:
+     *   • Из MainActivity.onCreate (через LaunchedEffect) — мгновенное
+     *     обновление при старте приложения.
+     *   • Из PaymentCheckWorker — ежечасно.
+     *
+     * Это критично для сценария «первый день последнего неоплаченного
+     * контракта = сегодня» — баланс должен стать минусом, а статус — красным.
+     * Раньше баланс оставался «плюсом» из-за прошлых оплаченных контрактов.
+     */
+    fun refreshAllBalances() {
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                val allRenters = repository.getActiveRenters()
+                val now = System.currentTimeMillis()
+                var updated = 0
+                for (renter in allRenters) {
+                    try {
+                        val contracts = historyRepository.contractsForRenterOnce(renter.id)
+                        val effective = ContractHistoryEntry.computeEffectiveBalance(contracts, now)
+                        if (kotlin.math.abs(effective - renter.balance) > 1.0) {
+                            repository.update(renter.copy(
+                                balance = effective,
+                                debtAmount = maxOf(0.0, -effective)
+                            ))
+                            updated++
+                        }
+                    } catch (e: Exception) {
+                        Log.e(TAG, "refreshAllBalances: failed for renter #${renter.id}", e)
+                    }
+                }
+                if (updated > 0) {
+                    Log.d(TAG, "refreshAllBalances: updated $updated/${allRenters.size} renters")
+                    // Обновляем виджеты — балансы могли измениться.
+                    try {
+                        com.example.widget.WidgetUpdater.updateAll(getApplication())
+                    } catch (_: Exception) {}
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "refreshAllBalances failed", e)
             }
         }
     }

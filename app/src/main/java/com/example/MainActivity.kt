@@ -837,6 +837,14 @@ fun MainScreen(
     // если маркер уже стоит на эту дату — пропускает.
     LaunchedEffect(Unit) {
         viewModel.backfillResumeMarkersForAllRenters()
+        // ── Мгновенное обновление балансов при старте приложения ──────
+        // По требованию пользователя: при открытии приложения баланс и
+        // статус должны отражать ТЕКУЩУЮ дату (модель «отель/ночь»).
+        // Например, если сегодня = первый день неоплаченного контракта,
+        // баланс сразу должен быть минусом, а статус — красным. Без этого
+        // пользователю пришлось бы ждать до 1 часа, пока сработает
+        // PaymentCheckWorker. См. ContractHistoryEntry.computeEffectiveBalance.
+        viewModel.refreshAllBalances()
     }
 
     val renters by viewModel.rentersList.collectAsStateWithLifecycle()
@@ -4850,12 +4858,15 @@ fun RenterFormDialog(
                                 }
                                 // Сумма для обычных контрактов — dailyPrice × days,
                                 // для маркеров — 0.
+                                // Модель «отель/ночь»: целочисленное деление (floor),
+                                // чтобы период 7→14 = 7 дней (420000 при 60000/день),
+                                // а не 8 дней с лишним днём от хвоста конца дня.
                                 val contractSum = when {
                                     group.isStopMarker || group.isResumeMarker -> 0.0
                                     else -> {
                                         val dayMs = 24L * 60 * 60 * 1000
                                         val days = if (group.endMs > group.startMs) {
-                                            kotlin.math.ceil((group.endMs - group.startMs).toDouble() / dayMs).toInt()
+                                            ((group.endMs - group.startMs) / dayMs).toInt().coerceAtLeast(1)
                                         } else 1
                                         val daily = if (dailyPrice > 0) dailyPrice
                                                     else com.example.data.SettingsRepository.DEFAULT_DAILY_PRICE

@@ -137,6 +137,42 @@ class PaymentCheckWorker(
                     }
                 }
             }
+
+            // ── Пересчёт ЭФФЕКТИВНОГО баланса для ВСЕХ активных арендаторов ──
+            // По требованию пользователя: баланс должен отражать ТЕКУЩЕЕ
+            // состояние долгов и предоплат, а не «историческую» сумму всех
+            // контрактов. Логика (см. ContractHistoryEntry.computeEffectiveBalance):
+            //   • Оплаченный контракт с weekEnd > now  → +amount (предоплата).
+            //   • Оплаченный контракт с weekEnd <= now → 0 (скутер отработал).
+            //   • Неоплаченный контракт с weekStart <= now → −amount (долг).
+            //   • Неоплаченный контракт с weekStart > now → 0 (платить рано).
+            //
+            // Это критично для сценария «первый день последнего неоплаченного
+            // контракта = сегодня» — баланс должен стать минусом, а статус —
+            // красным. Раньше баланс оставался «плюсом» из-за прошлых
+            // оплаченных контрактов, и статус был зелёным.
+            //
+            // Запускается КАЖДЫЙ час (вместе с PaymentCheckWorker), поэтому
+            // баланс всегда свежий (с погрешностью до 1 часа).
+            for (renter in activeRenters) {
+                try {
+                    val contracts = db.contractHistoryDao().getContractsForRenterOnce(renter.id)
+                    val effectiveBalance = ContractHistoryEntry.computeEffectiveBalance(contracts, now)
+                    // Сравниваем с сохранённым балансом. Если отличается
+                    // больше чем на 1 сум — обновляем (защита от дробления).
+                    if (kotlin.math.abs(effectiveBalance - renter.balance) > 1.0) {
+                        val updated = renter.copy(
+                            balance = effectiveBalance,
+                            debtAmount = maxOf(0.0, -effectiveBalance)
+                        )
+                        db.renterDao().updateRenter(updated)
+                        Log.d(TAG, "refreshBalance: renter #${renter.id} " +
+                            "${renter.balance} → $effectiveBalance")
+                    }
+                } catch (e: Exception) {
+                    Log.e(TAG, "refreshBalance failed for renter #${renter.id}", e)
+                }
+            }
             Result.success()
         } catch (e: Exception) {
             Log.e(TAG, "PaymentCheckWorker failed", e)
