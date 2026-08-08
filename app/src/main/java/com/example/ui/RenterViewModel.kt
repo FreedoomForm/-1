@@ -1725,35 +1725,21 @@ class RenterViewModel(application: Application) : AndroidViewModel(application) 
             }
 
             // ── 3a. Проверяем «активный» STOP (без последующего RESUME) ──
-            // Если у арендатора есть STOP_MARKER, после которого нет
-            // RESUME_MARKER — значит аренда приостановлена, и автоматически
-            // добавлять RESUME на последний день контракта НЕЛЬЗЯ: это
-            // выведет арендатора из архива и сломает логику. Пользователь
-            // должен явно поставить Resume, когда захочет возобновить аренду.
+            // Если у арендатора есть активный STOP-маркер (последний маркер
+            // в глобальном порядке — STOP, см. ContractHistoryEntry.
+            // activeStopMarker) — значит аренда приостановлена, и автоматически
+            // добавлять RESUME на последний день контракта НЕЛЬЗЯ: это выведет
+            // арендатора из архива и сломает логику. Пользователь должен явно
+            // поставить Resume, когда захочет возобновить аренду.
             //
-            // Алгоритм:
-            //   1. Находим самый свежий STOP_MARKER.
-            //   2. Если есть RESUME_MARKER с датой СТРОГО больше — STOP не
-            //      активен, можно добавлять новый RESUME.
-            //   3. Иначе — STOP активен, пропускаем автоматическое добавление.
-            val stopMarkers = allEntries.filter {
-                it.type == ContractHistoryEntry.TYPE_TERMINATED &&
-                it.notes == "STOP_MARKER" &&
-                it.weekStart != null
-            }
-            if (stopMarkers.isNotEmpty()) {
-                val latestStop = stopMarkers.maxByOrNull { it.weekStart!! }
-                if (latestStop != null) {
-                    val hasResumeAfterStop = existingResumeMarkers.any {
-                        (it.weekStart ?: 0L) > (latestStop.weekStart ?: 0L)
-                    }
-                    if (!hasResumeAfterStop) {
-                        Log.d(TAG, "ensureResumeMarker: renter #$renterId has active STOP " +
-                                "at ${latestStop.weekStart} without RESUME after — skip " +
-                                "(renter is archived, do not auto-add RESUME)")
-                        return
-                    }
-                }
+            // Используем единый хелпер activeStopMarker, чтобы логика была
+            // консистентна с isRenterArchived и PaymentCheckWorker: одинаковые
+            // правила «последний маркер побеждает» для той же даты (по timestamp).
+            if (ContractHistoryEntry.activeStopMarker(allEntries) != null) {
+                Log.d(TAG, "ensureResumeMarker: renter #$renterId has active STOP " +
+                        "(last marker is STOP) — skip (renter is archived, " +
+                        "do not auto-add RESUME)")
+                return
             }
 
             // ── 4. Проверяем, есть ли уже маркер на эту дату ────────────
@@ -1947,84 +1933,31 @@ class RenterViewModel(application: Application) : AndroidViewModel(application) 
     /**
      * Проверяет, является ли арендатор архивным по его history entries.
      *
-     * Логика архивации (по требованию пользователя, обновлённая версия):
-     *   Каждый день проверяем два сценария — оба сводятся к одному правилу:
-     *   "после последнего STOP-маркера нет ни одного RESUME-маркера".
+     * НОВАЯ модель (по требованию пользователя): «глобально последний маркер
+     * побеждает». Делегирует в [ContractHistoryEntry.activeStopMarker]:
+     *   • Берём все STOP/RESUME маркеры и сортируем по (weekStart, timestamp).
+     *   • Если последний — STOP → арендатор в архиве.
+     *   • Иначе (последний RESUME, или маркеров нет) → активен.
      *
-     *   Сценарий A (STOP сегодня):
-     *     1. Есть ли STOP-маркер сегодня или в прошлом?
-     *     2. После последнего STOP есть ли RESUME (сегодня или в будущем)?
-     *        — Если есть → не архивный (ожидаем возобновление или уже возобновлён).
-     *        — Если нет → архивный.
+     * Это чинит баг повторной архивации: после restore-from-archive в БД
+     * остаётся синтетический RESUME@сегодня. Раньше новый STOP в будущем НЕ
+     * архивировал арендатора, потому что будущий STOP игнорировался (искался
+     * только «сегодня/прошлое»), а RESUME@сегодня числился после старого
+     * STOP. Теперь новый STOP (с любым днём) получает свежий timestamp и
+     * становится последним маркером → архив снова.
      *
-     *   Сценарий B (STOP был в прошлом, без возобновления):
-     *     1. Есть ли STOP-маркер в прошлом (weekStart < today)?
-     *     2. После этого STOP есть ли RESUME — между STOP-днём и сегодня,
-     *        сегодня, или в будущем?
-     *        — Если есть → не архивный (возобновление уже было или запланировано).
-     *        — Если нет → архивный (STOP был, возобновления нет и не предвидится).
+     * Также это реализует приоритет статусов на один день: последний
+     * установленный маркер (по timestamp) побеждает.
      *
-     *   Объединённое правило: берём последний STOP с датой <= сегодня;
-     *   если после него нет ни одного RESUME (в любой день — прошлый между
-     *   STOP и сегодня, сегодня, или будущий) → архивный. Иначе → активен.
-     *
-     * ВАЖНО: все STOP и RESUME маркеры СОХРАНЯЮТСЯ в БД при архивации —
-     * архивация это вычисляемое состояние (StateFlow), а не изменение в БД.
-     * Пользователь может вывести арендатора из архива, поставив RESUME-маркер
-     * на сегодня (см. restoreRenterFromArchive) — RESUME сегодня (timestamp
-     * больше timestamp STOP'а) считается "возобновлённым" и выводит из архива.
-     *
-     * todayStart передаётся снаружи, чтобы не вычислять его на каждой
-     * итерации в filter (экономия при обработке больших списков).
+     * todayStart больше не используется для фильтрации STOP (глобальный
+     * порядок учитывает все маркеры), но сохранён в сигнатуре для обратной
+     * совместимости с вызовом из [archivedRenters] combine.
      */
     private fun isRenterArchived(
         entries: List<ContractHistoryEntry>,
-        todayStart: Long
+        @Suppress("UNUSED_PARAMETER") todayStart: Long
     ): Boolean {
-        // ── Шаг 1: Найти все STOP-маркеры с датой <= сегодня ─────────────
-        // STOP "сегодня или в прошлом" — аренда была приостановлена. STOP в
-        // будущем не считаем (аренда ещё активна, STOP только запланирован).
-        val stopMarkersTodayOrPast = entries
-            .filter {
-                it.type == ContractHistoryEntry.TYPE_TERMINATED &&
-                it.notes == "STOP_MARKER" &&
-                (it.weekStart ?: 0L) <= todayStart
-            }
-        if (stopMarkersTodayOrPast.isEmpty()) return false
-
-        // ── Шаг 2: Найти последний (самый поздний) STOP-маркер ──────────
-        // Если последний STOP уже был "перекрыт" RESUME'ом, и после не было
-        // нового STOP — арендатор активен. Если после последнего STOP нет
-        // RESUME — арендатор архивный (независимо от того, был ли STOP сегодня
-        // или в прошлом — главное, что возобновления не было до сих пор).
-        val lastStop = stopMarkersTodayOrPast.maxByOrNull { it.weekStart ?: 0L }!!
-
-        // ── Шаг 3: Есть ли RESUME-маркер ПОСЛЕ последнего STOP? ──────────
-        // RESUME должен быть строго после STOP — он "возобновляет" аренду.
-        // Сравнение по weekStart (начало дня). Если STOP и RESUME в один
-        // день (weekStart равны) — сравниваем по timestamp создания записи,
-        // чтобы корректно обработать restoreRenterFromArchive (RESUME сегодня
-        // ставится ПОСЛЕ STOP'а в тот же день).
-        //
-        // Это покрывает оба сценария по требованию пользователя:
-        //   • STOP сегодня + нет RESUME в будущем → архив.
-        //   • STOP в прошлом + нет RESUME между STOP-днём и сегодня → архив.
-        //   • STOP сегодня/в прошлом + есть RESUME после → активен.
-        val lastStopWeekStart = lastStop.weekStart ?: 0L
-        val lastStopTimestamp = lastStop.timestamp
-        val hasResumeAfterLastStop = entries.any {
-            if (it.type != ContractHistoryEntry.TYPE_RETURNED ||
-                it.notes != "RESUME_MARKER"
-            ) return@any false
-            val rStart = it.weekStart ?: 0L
-            when {
-                rStart > lastStopWeekStart -> true           // RESUME в более поздний день
-                rStart < lastStopWeekStart -> false          // RESUME раньше STOP — не считается
-                else -> it.timestamp > lastStopTimestamp     // тот же день — по времени создания
-            }
-        }
-        // Если есть RESUME после последнего STOP → не архивный. Иначе → архивный.
-        return !hasResumeAfterLastStop
+        return ContractHistoryEntry.activeStopMarker(entries) != null
     }
 
     /**
@@ -2039,9 +1972,20 @@ class RenterViewModel(application: Application) : AndroidViewModel(application) 
      * пересчитается (он зависит от liveContracts), и арендатор исчезнет
      * из архива и появится в активных.
      *
-     * Дополнительно ensureResumeMarkerOnLastContractDay обновит
-     * RESUME-маркер на последнем дне последнего контракта (если
-     * последний контракт изменился после STOP'а).
+     * ── Логика скутера при восстановлении (по требованию пользователя) ──
+     * Когда арендатор был в архиве, его скутер считался «свободным» и мог
+     * быть выбран другим арендатором. При восстановлении решаем, какой скутер
+     * теперь у арендатора:
+     *   1. Прежний скутер (renter.scooterId) всё ещё свободен (не занят
+     *      другим активным, не-архивным арендатором) → оставляем его.
+     *   2. Прежний скутер занят → ищем ЛЮБОЙ свободный скутер в базе.
+     *      Если нашли → назначаем его.
+     *   3. Свободных скутеров нет → помечаем «нет скутера»
+     *      (scooterId = null, scooterName = null).
+     *
+     * «Занятый» скутер = scooterId принадлежит другому живому (isDeleted=0),
+     * не-возвращённому (isReturned=false), не-архивному арендатору. Скутеры
+     * архивных арендаторов считаются свободными — их аренда остановлена.
      */
     fun restoreRenterFromArchive(renterId: Int) {
         viewModelScope.launch(Dispatchers.IO) {
@@ -2056,10 +2000,57 @@ class RenterViewModel(application: Application) : AndroidViewModel(application) 
                     cal.set(java.util.Calendar.MILLISECOND, 0)
                     cal.timeInMillis
                 }
-                val scooter: Scooter? = renter.scooterId?.let { fetchScooterById(it) }
 
-                // Вставляем RESUME-маркер на сегодня — это выведет
-                // арендатора из архива (появится RESUME после STOP).
+                // ── 1. Вычисляем занятые скутеры ДРУГИМИ активными арендаторами ──
+                // Арендатор считается «держателем» скутера, если он:
+                //   • живой (isDeleted = 0),
+                //   • не возвращён (isReturned = false),
+                //   • НЕ в архиве (нет активного STOP без RESUME),
+                //   • это НЕ тот арендатор, которого мы сейчас восстанавливаем.
+                val allRenters = repository.getAllRentersOnce().filter { !it.isDeleted }
+                val allContracts = historyRepository.getAllOnce()
+                val byRenter: Map<Int, List<ContractHistoryEntry>> =
+                    allContracts.filter { !it.isDeleted }.groupBy { it.renterId }
+                val rentedScooterIds: Set<Int> = allRenters
+                    .asSequence()
+                    .filter { it.id != renterId }
+                    .filter { !it.isReturned }
+                    .filter { it.scooterId != null }
+                    .filter { renterEntry ->
+                        // Исключаем арендаторов, которые сами в архиве: их
+                        // скутеры свободны. isRenterArchived делегирует в
+                        // activeStopMarker (глобально последний маркер).
+                        !isRenterArchived(
+                            byRenter[renterEntry.id] ?: emptyList(),
+                            todayStart
+                        )
+                    }
+                    .mapNotNull { it.scooterId }
+                    .toSet()
+
+                // ── 2. Все живые скутеры (не в корзине) ──
+                val allScooters = AppDatabase.getDatabase(getApplication())
+                    .scooterDao().getAllScootersOnce()
+                    .filter { !it.isDeleted }
+
+                // ── 3. Решаем, какой скутер назначить ──
+                val prevScooterId = renter.scooterId
+                val prevScooterStillFree = prevScooterId != null &&
+                    prevScooterId !in rentedScooterIds &&
+                    allScooters.any { it.id == prevScooterId }
+
+                val newScooter: Scooter? = when {
+                    // Прежний скутер свободен → оставляем его.
+                    prevScooterStillFree -> allScooters.firstOrNull { it.id == prevScooterId }
+                    // Прежний занят/удалён → ищем любой свободный.
+                    else -> allScooters.firstOrNull { it.id !in rentedScooterIds }
+                }
+                // Если newScooter == null → свободных скутеров нет → «нет скутера».
+
+                val scooterForMarker: Scooter? = renter.scooterId?.let { fetchScooterById(it) }
+
+                // ── 4. Вставляем RESUME-маркер на сегодня ──
+                // Это выведет арендатора из архива (появится RESUME после STOP).
                 historyRepository.insert(ContractHistoryEntry(
                     renterId = renterId,
                     timestamp = now,
@@ -2068,23 +2059,42 @@ class RenterViewModel(application: Application) : AndroidViewModel(application) 
                     notes = "RESUME_MARKER",
                     renterName = renter.name,
                     renterPhone = renter.phoneNumber,
-                    scooterName = renter.scooterName ?: "",
+                    scooterName = newScooter?.name ?: renter.scooterName ?: "",
                     weekStart = todayStart,
                     weekEnd = todayStart,
                     weeklyPrice = 0.0,
                     passportData = renter.passportData,
                     address = renter.address,
                     pinfl = renter.pinfl,
-                    vinNumber = scooter?.vinNumber ?: "",
-                    engineNumber = scooter?.engineNumber ?: "",
-                    scooterSerialNumber = scooter?.scooterSerialNumber ?: "",
-                    batteryId1 = scooter?.batteryId1 ?: "",
-                    batteryId2 = scooter?.batteryId2 ?: "",
-                    additionalInfo = scooter?.additionalInfo ?: "",
+                    vinNumber = newScooter?.vinNumber ?: scooterForMarker?.vinNumber ?: "",
+                    engineNumber = newScooter?.engineNumber ?: scooterForMarker?.engineNumber ?: "",
+                    scooterSerialNumber = newScooter?.scooterSerialNumber ?: scooterForMarker?.scooterSerialNumber ?: "",
+                    batteryId1 = newScooter?.batteryId1 ?: scooterForMarker?.batteryId1 ?: "",
+                    batteryId2 = newScooter?.batteryId2 ?: scooterForMarker?.batteryId2 ?: "",
+                    additionalInfo = newScooter?.additionalInfo ?: scooterForMarker?.additionalInfo ?: "",
                     isPaid = false
                 ))
                 Log.d(TAG, "restoreRenterFromArchive: inserted RESUME_MARKER at $todayStart " +
                         "for renter #$renterId — moved back to active")
+
+                // ── 5. Обновляем скутер арендатора ──
+                // Если скутер изменился (прежде занят → другой/нет) — пишем в БД.
+                val newScooterId = newScooter?.id
+                val newScooterName = newScooter?.name
+                val scooterChanged = newScooterId != renter.scooterId
+                if (scooterChanged) {
+                    val updated = renter.copy(
+                        scooterId = newScooterId,
+                        scooterName = newScooterName
+                    )
+                    repository.update(updated)
+                    Log.d(TAG, "restoreRenterFromArchive: renter #$renterId scooter reassigned " +
+                            "prev=${renter.scooterId} new=$newScooterId " +
+                            "(name=${newScooterName ?: "null"})")
+                } else {
+                    Log.d(TAG, "restoreRenterFromArchive: renter #$renterId keeps scooter " +
+                            "$prevScooterId (still free)")
+                }
 
                 try { com.example.widget.WidgetUpdater.updateAll(getApplication()) } catch (_: Exception) {}
             } catch (e: Exception) {

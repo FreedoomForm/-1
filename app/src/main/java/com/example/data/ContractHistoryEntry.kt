@@ -126,5 +126,71 @@ data class ContractHistoryEntry(
                     }
                 }
         }
+
+        /**
+         * Единый источник истины для логики «остановлен ли арендатор».
+         *
+         * Модель: «глобально последний маркер побеждает» (last writer wins).
+         *
+         * Берём ВСЕ маркеры STOP (TYPE_TERMINATED + notes="STOP_MARKER") и
+         * RESUME (TYPE_RETURNED + notes="RESUME_MARKER") и сортируем их по
+         * ключу (weekStart, timestamp):
+         *   • сначала по дню маркера (weekStart),
+         *   • при совпадении дня — по времени создания записи (timestamp).
+         *
+         * Если последний в этом порядке — STOP → арендатор «остановлен»
+         * (в архиве). Функция возвращает этот STOP-маркер.
+         * Если последний — RESUME, или маркеров нет, или есть только RESUME →
+         * возвращается null (арендатор активен).
+         *
+         * Эта модель корректно обрабатывает все сценарии пользователя:
+         *
+         *   1. Первая установка STOP → архив (последний = STOP).
+         *   2. Restore-from-archive ставит RESUME@сегодня (timestamp новее
+         *      исходного STOP) → последний = RESUME → активен.
+         *   3. Повторная установка STOP (вчера/сегодня/завтра) после restore:
+         *      новый STOP получает свежий timestamp и становится последним →
+         *      архив снова. Это чинит баг, когда будущий STOP не архивировал,
+         *      потому что старый RESUME@сегодня «перекрывал» прошлый STOP.
+         *   4. Приоритет статусов на один день: если на один день поставить
+         *      RESUME потом STOP — STOP побеждает (его timestamp новее, он
+         *      последний). Если сначала STOP потом RESUME — RESUME побеждает
+         *      (его timestamp новее). Точно по требованию пользователя.
+         *
+         * Записи с isDeleted = true игнорируются (мягко удалённые).
+         *
+         * Возвращает «активный» STOP-маркер (последний в глобальном порядке,
+         * если он STOP) или null.
+         */
+        fun activeStopMarker(entries: List<ContractHistoryEntry>): ContractHistoryEntry? {
+            // Собираем только живые STOP/RESUME маркеры.
+            val markers = entries.asSequence()
+                .filter { !it.isDeleted }
+                .filter {
+                    (it.type == TYPE_TERMINATED && it.notes == "STOP_MARKER") ||
+                    (it.type == TYPE_RETURNED && it.notes == "RESUME_MARKER")
+                }
+                .toList()
+            if (markers.isEmpty()) return null
+            // Сортируем по (weekStart, timestamp). weekStart nullable —
+            // используем 0 для null (маркеры всегда имеют weekStart).
+            val last = markers.maxWithOrNull(compareBy(
+                { it.weekStart ?: 0L },
+                { it.timestamp }
+            )) ?: return null
+            return if (last.type == TYPE_TERMINATED && last.notes == "STOP_MARKER") {
+                last
+            } else {
+                null
+            }
+        }
+
+        /**
+         * convenience-обёртка над [activeStopMarker]: true, если у арендатора
+         * есть «активный» STOP-маркер (последний маркер — STOP), т.е. аренда
+         * приостановлена и не возобновлена → арендатор в архиве.
+         */
+        fun isArchivedByEntries(entries: List<ContractHistoryEntry>): Boolean =
+            activeStopMarker(entries) != null
     }
 }

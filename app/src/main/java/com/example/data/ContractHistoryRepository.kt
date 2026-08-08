@@ -17,6 +17,14 @@ class ContractHistoryRepository(private val dao: ContractHistoryDao) {
     suspend fun getById(id: Int): ContractHistoryEntry? = dao.getById(id)
     suspend fun getForRenterOnce(renterId: Int): List<ContractHistoryEntry> = dao.getForRenter(renterId)
     suspend fun contractsForRenterOnce(renterId: Int): List<ContractHistoryEntry> = dao.getContractsForRenterOnce(renterId)
+
+    /**
+     * Возвращает ВСЕ записи истории контрактов (включая STOP/RESUME маркеры и
+     * мягко удалённые). Используется в [RenterViewModel.restoreRenterFromArchive]
+     * для вычисления «какие арендаторы сейчас в архиве» при пересчёте
+     * занятости скутеров (нужно знать, чьи скутеры считать свободными).
+     */
+    suspend fun getAllOnce(): List<ContractHistoryEntry> = dao.getAllOnce()
     suspend fun getEarliestUnpaidContract(renterId: Int): ContractHistoryEntry? =
         dao.getEarliestUnpaidContract(renterId)
     suspend fun getUnpaidContractsForRenter(renterId: Int): List<ContractHistoryEntry> =
