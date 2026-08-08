@@ -575,26 +575,47 @@ fun ContractCalendar(
                                         )
                                         var newGroups = groups + markerGroup
 
-                                        // ── Если STOP — удаляем все RESUME-маркеры ──────
-                                        // которые находятся ПОСЛЕ даты STOP. Это критично
-                                        // для логики архива: если у арендатора есть
-                                        // STOP_MARKER в прошлом и после него НЕТ
+                                        // ── Если STOP — удаляем конфликтующие маркеры ──
+                                        // Это критично для логики архива: если у арендатора
+                                        // есть STOP_MARKER в прошлом и после него НЕТ
                                         // RESUME_MARKER — арендатор архивируется.
                                         //
-                                        // Раньше auto-added RESUME_MARKER (на последний
-                                        // день последнего контракта) оставался в БД
-                                        // после добавления STOP, и isRenterArchived
-                                        // возвращал false → арендатор не попадал в архив.
+                                        // Проблема: после restore-from-archive в БД остаётся
+                                        // синтетический RESUME_MARKER на сегодня (с timestamp
+                                        // НОВЕЕ исходного STOP). Если пользователь хочет снова
+                                        // остановить арендатора и ставит новый STOP, старый
+                                        // RESUME «перекрывает» STOP → isRenterArchived=false.
                                         //
-                                        // Теперь: при добавлении STOP_MARKER удаляем
-                                        // все RESUME_MARKER с startMs > STOP.startMs.
-                                        // Пользователь явно сигнализирует «стоп с этой
-                                        // даты» — любые будущие RESUME не имеют смысла.
-                                        // Если пользователь хочет возобновить — он
-                                        // поставит новый RESUME после STOP.
+                                        // Удаляем три категории маркеров:
+                                        //   1. RESUME на/после нового STOP (startMs >= ms):
+                                        //      пользователь явно сигнализирует «стоп с этой
+                                        //      даты» — любые будущие RESUME не имеют смысла.
+                                        //      Включая тот же день — RESUME и STOP на один
+                                        //      день не имеют смысла вместе.
+                                        //   2. RESUME на тот же день что и ЛЮБОЙ существующий
+                                        //      STOP: это синтетический RESUME от restore-from-
+                                        //      archive (он ставится на today, а STOP тоже был
+                                        //      на today или раньше). Удаляем чтобы новый STOP
+                                        //      не «перекрывался» старым RESUME.
+                                        //   3. Существующие STOP на тот же день что и новый
+                                        //      STOP: новый STOP заменяет старый (у старого
+                                        //      timestamp меньше, и если его оставить —
+                                        //      reconcile пропустит вставку нового STOP из-за
+                                        //      existingStopKeys, и старый STOP с старым
+                                        //      timestamp останется в БД).
                                         if (dayMarkerMode == 1) {
+                                            val existingStopDates = groups
+                                                .filter { it.isStopMarker }
+                                                .map { it.startMs }
+                                                .toSet()
                                             newGroups = newGroups.filterNot { g ->
-                                                g.isResumeMarker && g.startMs > ms
+                                                // 1. RESUME на/после нового STOP
+                                                (g.isResumeMarker && g.startMs >= ms) ||
+                                                // 2. RESUME на тот же день что и любой STOP
+                                                (g.isResumeMarker && g.startMs in existingStopDates) ||
+                                                // 3. Существующий STOP на день нового STOP
+                                                //    (НЕ удаляем сам новый markerGroup)
+                                                (g.isStopMarker && g.startMs == ms && g.id != markerGroup.id)
                                             }
                                         }
 
