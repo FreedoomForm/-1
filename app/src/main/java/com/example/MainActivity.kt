@@ -1066,24 +1066,30 @@ fun MainScreen(
                     monthlyPrice = monthly,
                     dailyPrice = dailyForHistory,
                     scooters = scooters,
-                    activeRenters = renters,
+                    activeRenters = liveRenters,
+                    renterCandidates = renters,
                     archivedRenterIds = archivedRenters.map { it.id }.toSet(),
                     existingContracts = existingContractsForHistorySafe,
                     onDismiss = { renterToEdit = null },
                     onSave = { result ->
+                        if (result.selectedExistingRenterId != null) {
+                            viewModel.restoreRenterFromPicker(result.selectedExistingRenterId)
+                        }
                         renterToEdit?.let {
-                            viewModel.updateRenterWithContracts(
-                                existing = it,
-                                newName = result.name, newPhone = result.phone, newDebt = result.debt,
-                                newDuration = result.duration, newStartTimestamp = result.startTimestamp,
-                                newScooterId = result.scooterId, newScooterName = result.scooterName,
-                                newIsActive = result.isActive, weeklyPrice = weekly,
-                                passportData = result.passportData,
-                                address = result.address,
-                                pinfl = result.pinfl,
-                                autoRenewMode = result.autoRenewMode,
-                                contractGroupsWithIds = result.contractGroupsWithIds
-                            )
+                            if (result.selectedExistingRenterId == null) {
+                                viewModel.updateRenterWithContracts(
+                                    existing = it,
+                                    newName = result.name, newPhone = result.phone, newDebt = result.debt,
+                                    newDuration = result.duration, newStartTimestamp = result.startTimestamp,
+                                    newScooterId = result.scooterId, newScooterName = result.scooterName,
+                                    newIsActive = result.isActive, weeklyPrice = weekly,
+                                    passportData = result.passportData,
+                                    address = result.address,
+                                    pinfl = result.pinfl,
+                                    autoRenewMode = result.autoRenewMode,
+                                    contractGroupsWithIds = result.contractGroupsWithIds
+                                )
+                            }
                         }
                         renterToEdit = null
                     },
@@ -2926,7 +2932,8 @@ fun MainScreen(
                 monthlyPrice = monthly,
                 dailyPrice = dailyForForm,
                 scooters = scooters,
-                activeRenters = renters,
+                activeRenters = liveRenters,
+                renterCandidates = renters,
                 archivedRenterIds = archivedRenters.map { it.id }.toSet(),
                 existingContracts = existingContractsForFormSafe,
                 onDismiss = {
@@ -2968,6 +2975,10 @@ fun MainScreen(
                                 contractGroupsWithIds = result.contractGroupsWithIds
                             )
                         }
+                    } else if (result.selectedExistingRenterId != null) {
+                        // Выбор неактивного/удалённого арендатора в форме означает
+                        // восстановление существующей записи, а не создание дубликата.
+                        viewModel.restoreRenterFromPicker(result.selectedExistingRenterId)
                     } else {
                         viewModel.addRenter(
                             name = result.name,
@@ -4087,6 +4098,12 @@ fun RenterFormDialog(
     scooters: List<Scooter> = emptyList(),
     activeRenters: List<Renter> = emptyList(),
     /**
+     * Все арендаторы для автодополнения имени. Включает активных, неактивных
+     * и мягко удалённых арендаторов; в подсказках используются только последние
+     * две категории.
+     */
+    renterCandidates: List<Renter> = emptyList(),
+    /**
      * ID арендаторов, которые находятся в архиве (STOP_MARKER в прошлом
      * без последующего RESUME_MARKER). Их скутеры считаются СВОБОДНЫМИ
      * для выбора новым арендатором, потому что аренда фактически остановлена.
@@ -4150,6 +4167,11 @@ fun RenterFormDialog(
     onDeleteExistingContract: suspend (Int) -> Unit = {}
 ) {
     var name by remember { mutableStateOf(initialRenter?.name ?: "") }
+    // Если пользователь выбрал запись из автодополнения, сохраняем её ID.
+    // При подтверждении формы родитель восстановит существующего арендатора,
+    // а не создаст вторую запись с тем же именем.
+    var selectedExistingRenterId by remember(initialRenter?.id) { mutableStateOf<Int?>(null) }
+    var renterCandidateMenuExpanded by remember(initialRenter?.id) { mutableStateOf(false) }
     var phone by remember {
         mutableStateOf(initialRenter?.phoneNumber?.filter { it.isDigit() }?.takeLast(9) ?: "")
     }
@@ -4418,13 +4440,33 @@ fun RenterFormDialog(
                 // ── Секция: Шахсий маълумотлар ──────────────────────────
                 SectionLabel("Шахсий маълумотлар")
 
-                OutlinedTextField(
-                    value = name,
-                    onValueChange = { name = it },
-                    label = { Text("To'liq ism (ФИШ)") },
-                    modifier = Modifier.fillMaxWidth(),
-                    shape = RoundedCornerShape(8.dp),
-                    isError = isNameDuplicate,
+                val inactiveRenterCandidates = renterCandidates
+                    .asSequence()
+                    .filter { it.id != editRenterId }
+                    .filter { it.isDeleted || it.isReturned || it.id in archivedRenterIds }
+                    .filter { candidate ->
+                        val queryParts = name.trim().lowercase()
+                            .split(Regex("\\s+"))
+                            .filter { it.isNotBlank() }
+                        queryParts.isEmpty() || queryParts.all { part ->
+                            candidate.name.lowercase().contains(part)
+                        }
+                    }
+                    .sortedWith(compareBy<Renter> { it.isDeleted }.thenBy { it.name.lowercase() })
+                    .toList()
+
+                Box(modifier = Modifier.fillMaxWidth()) {
+                    OutlinedTextField(
+                        value = name,
+                        onValueChange = {
+                            name = it
+                            selectedExistingRenterId = null
+                            renterCandidateMenuExpanded = true
+                        },
+                        label = { Text("To'liq ism (ФИШ)") },
+                        modifier = Modifier.fillMaxWidth(),
+                        shape = RoundedCornerShape(8.dp),
+                        isError = isNameDuplicate,
                     supportingText = {
                         if (isNameDuplicate) {
                             Text(
@@ -4434,11 +4476,66 @@ fun RenterFormDialog(
                             )
                         }
                     },
-                    colors = OutlinedTextFieldDefaults.colors(
-                        unfocusedBorderColor = if (isNameDuplicate) errorBorder else ClaudeDivider,
-                        focusedBorderColor = if (isNameDuplicate) dupFocused else ClaudeTextSecondary
+                        colors = OutlinedTextFieldDefaults.colors(
+                            unfocusedBorderColor = if (isNameDuplicate) errorBorder else ClaudeDivider,
+                            focusedBorderColor = if (isNameDuplicate) dupFocused else ClaudeTextSecondary
+                        )
                     )
-                )
+                    DropdownMenu(
+                        expanded = renterCandidateMenuExpanded,
+                        onDismissRequest = { renterCandidateMenuExpanded = false },
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        if (inactiveRenterCandidates.isEmpty()) {
+                            DropdownMenuItem(
+                                text = {
+                                    Text(
+                                        if (name.isBlank()) "Неактивных и удалённых арендаторов нет"
+                                        else "Совпадений нет — будет создан новый арендатор",
+                                        color = ClaudeTextSecondary
+                                    )
+                                },
+                                enabled = false,
+                                onClick = {}
+                            )
+                        } else {
+                            inactiveRenterCandidates.forEach { candidate ->
+                                DropdownMenuItem(
+                                    text = {
+                                        Column {
+                                            Text(candidate.name, fontWeight = FontWeight.SemiBold)
+                                            Text(
+                                                when {
+                                                    candidate.isDeleted -> "Удалённый арендатор"
+                                                    candidate.id in archivedRenterIds -> "Неактивный арендатор"
+                                                    else -> "Неактивный арендатор"
+                                                },
+                                                style = MaterialTheme.typography.labelSmall,
+                                                color = ClaudeTextSecondary
+                                            )
+                                        }
+                                    },
+                                    onClick = {
+                                        selectedExistingRenterId = candidate.id
+                                        name = candidate.name
+                                        phone = candidate.phoneNumber.filter { it.isDigit() }.takeLast(9)
+                                        val candidateDebt = if (candidate.balance < 0) -candidate.balance else candidate.debtAmount
+                                        debt = candidateDebt.toString()
+                                        duration = candidate.rentDurationDays.toString()
+                                        startTimestamp = candidate.rentStartDateTimestamp
+                                        isActive = true
+                                        passportData = candidate.passportData
+                                        address = candidate.address
+                                        pinfl = candidate.pinfl
+                                        selectedScooterId = candidate.scooterId
+                                        userPickedScooterId = candidate.scooterId
+                                        renterCandidateMenuExpanded = false
+                                    }
+                                )
+                            }
+                        }
+                    }
+                }
                 OutlinedTextField(
                     value = phone,
                     onValueChange = { newValue ->
@@ -4910,9 +5007,13 @@ fun RenterFormDialog(
                                         // ── Имя скутера над периодом ──
                                         // Берём из группы (для новых — выбранный
                                         // в форме скутер; для существующих — из БД).
-                                        val groupScooterName = group.scooterName
-                                            ?: selectedScooter?.name
-                                            ?: initialRenter?.scooterName
+                                        val groupScooterName = if (selectedScooterId != null) {
+                                            // Выбранный в форме скутер имеет приоритет
+                                            // над денормализованным старым именем группы.
+                                            selectedScooter?.name
+                                        } else {
+                                            group.scooterName ?: initialRenter?.scooterName
+                                        }
                                         if (!groupScooterName.isNullOrBlank()) {
                                             Row(
                                                 verticalAlignment = Alignment.CenterVertically,
@@ -5305,6 +5406,7 @@ fun RenterFormDialog(
                                 address = address.trim(),
                                 pinfl = pinfl.trim(),
                                 autoRenewMode = autoRenewMode,
+                                selectedExistingRenterId = selectedExistingRenterId,
                                 contractGroups = contractGroups.map { Triple(it.startMs, it.endMs, it.isPaid) },
                                 // Передаём полный список групп с existingContractId —
                                 // updateRenterWithContracts использует его для
@@ -5570,6 +5672,8 @@ data class RenterFormResult(
      * По умолчанию AUTO — автоматическое создание контрактов для новых арендаторов.
      */
     val autoRenewMode: String = com.example.data.RenterAutoRenewMode.AUTO,
+    /** ID существующего неактивного/удалённого арендатора, выбранного из подсказок. */
+    val selectedExistingRenterId: Int? = null,
     // Группы контрактов, выбранные в календаре (если пусто — используется
     // автоматическая логика по выбранной дате). Каждая группа =
     // Triple<startMs, endMs, isPaid>.

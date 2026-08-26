@@ -1309,10 +1309,52 @@ class RenterViewModel(application: Application) : AndroidViewModel(application) 
         // ── 4. Перечитываем арендатора — баланс мог измениться после удалений ─
         var renter = repository.getById(existing.id) ?: existing
 
-        // ── 5. Добавляем новые контракты (включая обновлённые) ──────────
+        // ── 5. Синхронизируем реквизиты арендатора и скутера ─────────────
+        // История контрактов хранит имя скутера денормализованно. Раньше при
+        // смене скутера обновлялась только сущность Renter, а существующие
+        // ContractHistoryEntry оставались со старым scooterName. Из-за этого
+        // таблица и список периодов продолжали показывать прежний скутер.
+        // Обновляем записи на месте: ID, оплаты, транзакции и баланс не меняются.
+        val scooter: Scooter? = newScooterId?.let { fetchScooterById(it) }
+        val effectiveScooterName = newScooterName ?: scooter?.name ?: ""
+
+        fun ContractHistoryEntry.withCurrentRenterAndScooterData(): ContractHistoryEntry = copy(
+            renterName = newName,
+            renterPhone = newPhone,
+            scooterName = effectiveScooterName,
+            passportData = passportData,
+            address = address,
+            pinfl = pinfl,
+            vinNumber = scooter?.vinNumber ?: "",
+            engineNumber = scooter?.engineNumber ?: "",
+            scooterSerialNumber = scooter?.scooterSerialNumber ?: "",
+            batteryId1 = scooter?.batteryId1 ?: "",
+            batteryId2 = scooter?.batteryId2 ?: "",
+            additionalInfo = scooter?.additionalInfo ?: ""
+        )
+
+        for (g in regularGroups) {
+            val existingContract = g.existingId?.let { id -> currentContracts.firstOrNull { it.id == id } }
+                ?: continue
+            if (existingContract.type == ContractHistoryEntry.TYPE_CREATED ||
+                existingContract.type == ContractHistoryEntry.TYPE_AUTO_RENEW) {
+                val synchronized = existingContract.withCurrentRenterAndScooterData()
+                if (synchronized != existingContract &&
+                    existingContract !in toUpdate.map { it.oldContract }) {
+                    historyRepository.update(synchronized)
+                }
+            }
+        }
+        // STOP/RESUME-маркеры также должны содержать актуальный скутер,
+        // иначе после повторного открытия календаря будет видно старое имя.
+        currentMarkers.forEach { marker ->
+            val synchronized = marker.withCurrentRenterAndScooterData()
+            if (synchronized != marker) historyRepository.update(synchronized)
+        }
+
+        // ── 5а. Добавляем новые контракты (включая обновлённые) ──────────
         // Все они создаются как TYPE_AUTO_RENEW с актуальными isPaid и датами.
         // Если isPaid=true → создаём Transaction и зачисляем на главную карту.
-        val scooter: Scooter? = newScooterId?.let { fetchScooterById(it) }
         val allToAdd: List<com.example.RenterFormContractGroup> = toAdd + toUpdate.map { it.newGroup }
 
         for (g in allToAdd) {
@@ -1335,7 +1377,7 @@ class RenterViewModel(application: Application) : AndroidViewModel(application) 
                 notes = "Kalendar orqali tahrirlandi${if (g.isPaid) " (to'langan)" else " (to'lanmagan)"} — $daysCount kun",
                 renterName = newName,
                 renterPhone = newPhone,
-                scooterName = newScooterName ?: scooter?.name ?: "",
+                scooterName = effectiveScooterName,
                 weekStart = g.startMs,
                 weekEnd = g.endMs,
                 weeklyPrice = contractAmount,
@@ -2096,9 +2138,161 @@ class RenterViewModel(application: Application) : AndroidViewModel(application) 
                             "$prevScooterId (still free)")
                 }
 
+                // После восстановления архивного арендатора активируем сегодняшний
+                // день и запускаем автосоздание контракта от этой даты.
+                ensureActiveDayAndAutoContract(renterId)
                 try { com.example.widget.WidgetUpdater.updateAll(getApplication()) } catch (_: Exception) {}
             } catch (e: Exception) {
                 Log.e(TAG, "restoreRenterFromArchive failed for renter #$renterId", e)
+            }
+        }
+    }
+
+    /**
+     * Делает восстановленного арендатора активным начиная с сегодняшнего дня.
+     * Операция идемпотентна: повторный вызов не создаёт второй RESUME-маркер
+     * или второй контракт на тот же период.
+     */
+    private suspend fun ensureActiveDayAndAutoContract(renterId: Int) {
+        val renter = repository.getById(renterId) ?: return
+        val dayMs = 24L * 60 * 60 * 1000
+        val weekMs = 7L * dayMs
+        val todayStart = java.util.Calendar.getInstance().apply {
+            set(java.util.Calendar.HOUR_OF_DAY, 0)
+            set(java.util.Calendar.MINUTE, 0)
+            set(java.util.Calendar.SECOND, 0)
+            set(java.util.Calendar.MILLISECOND, 0)
+        }.timeInMillis
+        val now = System.currentTimeMillis()
+        val entries = historyRepository.getForRenterOnce(renterId)
+        val scooter = renter.scooterId?.let { fetchScooterById(it) }
+        val scooterName = scooter?.name ?: renter.scooterName ?: ""
+
+        fun sameDay(first: Long?, second: Long): Boolean {
+            if (first == null) return false
+            val a = java.util.Calendar.getInstance().apply { timeInMillis = first }
+            val b = java.util.Calendar.getInstance().apply { timeInMillis = second }
+            return a.get(java.util.Calendar.ERA) == b.get(java.util.Calendar.ERA) &&
+                a.get(java.util.Calendar.YEAR) == b.get(java.util.Calendar.YEAR) &&
+                a.get(java.util.Calendar.DAY_OF_YEAR) == b.get(java.util.Calendar.DAY_OF_YEAR)
+        }
+
+        val hasResumeToday = entries.any {
+            it.type == ContractHistoryEntry.TYPE_RETURNED &&
+                it.notes == "RESUME_MARKER" && sameDay(it.weekStart, todayStart)
+        }
+        if (!hasResumeToday) {
+            historyRepository.insert(
+                ContractHistoryEntry(
+                    renterId = renterId,
+                    timestamp = now,
+                    type = ContractHistoryEntry.TYPE_RETURNED,
+                    amount = 0.0,
+                    notes = "RESUME_MARKER",
+                    renterName = renter.name,
+                    renterPhone = renter.phoneNumber,
+                    scooterName = scooterName,
+                    weekStart = todayStart,
+                    weekEnd = todayStart,
+                    weeklyPrice = 0.0,
+                    passportData = renter.passportData,
+                    address = renter.address,
+                    pinfl = renter.pinfl,
+                    vinNumber = scooter?.vinNumber ?: "",
+                    engineNumber = scooter?.engineNumber ?: "",
+                    scooterSerialNumber = scooter?.scooterSerialNumber ?: "",
+                    batteryId1 = scooter?.batteryId1 ?: "",
+                    batteryId2 = scooter?.batteryId2 ?: "",
+                    additionalInfo = scooter?.additionalInfo ?: "",
+                    isPaid = false
+                )
+            )
+        }
+
+        val regularContracts = entries.filter {
+            !it.isDeleted &&
+                (it.type == ContractHistoryEntry.TYPE_CREATED ||
+                    it.type == ContractHistoryEntry.TYPE_AUTO_RENEW) &&
+                it.weekStart != null && it.weekEnd != null
+        }
+        // Если сегодня уже покрыт восстановленным или ранее созданным
+        // контрактом, дополнительный контракт не нужен.
+        val alreadyCoveredToday = regularContracts.any {
+            todayStart >= it.weekStart!! && todayStart < it.weekEnd!!
+        }
+        if (alreadyCoveredToday) {
+            // Старый контракт уже даёт активное покрытие на сегодня, поэтому
+            // новый контракт не нужен, но статус арендатора всё равно надо
+            // вернуть из неактивного в активный.
+            repository.update(renter.copy(isReturned = false, isOverdueSmsSent = false))
+            return
+        }
+
+        val settingsRepo = SettingsRepository(getApplication())
+        val dailyPrice = if (settingsRepo.dailyPrice > 0) settingsRepo.dailyPrice
+            else SettingsRepository.DEFAULT_DAILY_PRICE
+        val amount = dailyPrice * 7
+        val contractEnd = todayStart + weekMs
+        val contractAlreadyExists = regularContracts.any {
+            sameDay(it.weekStart, todayStart) && it.weekEnd == contractEnd
+        }
+        if (!contractAlreadyExists) {
+            historyRepository.insert(
+                ContractHistoryEntry(
+                    renterId = renterId,
+                    timestamp = now,
+                    type = ContractHistoryEntry.TYPE_AUTO_RENEW,
+                    amount = amount,
+                    notes = "Tiklashdan avtomatik kontrakt — 7 kun (to'lanmagan)",
+                    renterName = renter.name,
+                    renterPhone = renter.phoneNumber,
+                    scooterName = scooterName,
+                    weekStart = todayStart,
+                    weekEnd = contractEnd,
+                    weeklyPrice = amount,
+                    passportData = renter.passportData,
+                    address = renter.address,
+                    pinfl = renter.pinfl,
+                    vinNumber = scooter?.vinNumber ?: "",
+                    engineNumber = scooter?.engineNumber ?: "",
+                    scooterSerialNumber = scooter?.scooterSerialNumber ?: "",
+                    batteryId1 = scooter?.batteryId1 ?: "",
+                    batteryId2 = scooter?.batteryId2 ?: "",
+                    additionalInfo = scooter?.additionalInfo ?: "",
+                    isPaid = false
+                )
+            )
+        }
+
+        val effectiveStart = minOf(renter.rentStartDateTimestamp, todayStart)
+        val effectiveDuration = ((contractEnd - effectiveStart) / dayMs)
+            .toInt().coerceAtLeast(1)
+        val updated = renter.copy(
+            isReturned = false,
+            rentStartDateTimestamp = effectiveStart,
+            rentDurationDays = maxOf(renter.rentDurationDays, effectiveDuration),
+            balance = renter.balance - amount,
+            debtAmount = maxOf(0.0, -(renter.balance - amount)),
+            isOverdueSmsSent = false
+        )
+        repository.update(updated)
+        Log.d(TAG, "ensureActiveDayAndAutoContract: renter #$renterId active from $todayStart")
+    }
+
+    /** Восстановление из формы выбора неактивного/удалённого арендатора. */
+    fun restoreRenterFromPicker(renterId: Int) {
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                val renter = repository.getById(renterId) ?: return@launch
+                if (renter.isDeleted) {
+                    trashService.restoreRenterFromTrash(renterId)
+                }
+                // Для удалённых и архивных записей используется один и тот же
+                // календарный переход: RESUME сегодня + автоконтракт.
+                ensureActiveDayAndAutoContract(renterId)
+                try { com.example.widget.WidgetUpdater.updateAll(getApplication()) } catch (_: Exception) {}
+            } catch (e: Exception) {
+                Log.e(TAG, "restoreRenterFromPicker failed for #$renterId", e)
             }
         }
     }
@@ -2309,9 +2503,10 @@ class RenterViewModel(application: Application) : AndroidViewModel(application) 
      * Восстанавливает арендатора из корзины (вместе с дочерними сущностями).
      */
     fun restoreRenterFromTrash(id: Int) {
-        viewModelScope.launch {
+        viewModelScope.launch(Dispatchers.IO) {
             try {
                 trashService.restoreRenterFromTrash(id)
+                ensureActiveDayAndAutoContract(id)
                 com.example.widget.WidgetUpdater.updateAll(getApplication())
             } catch (e: Exception) {
                 Log.e(TAG, "restoreRenterFromTrash failed for #$id", e)

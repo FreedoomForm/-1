@@ -49,6 +49,47 @@ class TrashService(
         if (txIds.isNotEmpty()) transactionRepository.moveToTrashBatch(txIds)
         // Сам арендатор.
         renterRepository.moveToTrash(renterId)
+
+        // Удаление также фиксируется в календаре как неактивный день.
+        // Маркер оставляем живым, чтобы он не исчезал вместе с каскадно
+        // удалёнными контрактами и был доступен после восстановления.
+        val todayStart = java.util.Calendar.getInstance().apply {
+            set(java.util.Calendar.HOUR_OF_DAY, 0)
+            set(java.util.Calendar.MINUTE, 0)
+            set(java.util.Calendar.SECOND, 0)
+            set(java.util.Calendar.MILLISECOND, 0)
+        }.timeInMillis
+        val hasStopToday = contractRepository.getForRenterOnce(renterId).any { entry ->
+            entry.type == ContractHistoryEntry.TYPE_TERMINATED &&
+                entry.notes == "STOP_MARKER" &&
+                entry.weekStart?.let { markerMs ->
+                    val markerDay = java.util.Calendar.getInstance().apply { timeInMillis = markerMs }
+                    val deletionDay = java.util.Calendar.getInstance().apply { timeInMillis = todayStart }
+                    markerDay.get(java.util.Calendar.YEAR) == deletionDay.get(java.util.Calendar.YEAR) &&
+                        markerDay.get(java.util.Calendar.DAY_OF_YEAR) == deletionDay.get(java.util.Calendar.DAY_OF_YEAR)
+                } == true
+        }
+        if (!hasStopToday) {
+            contractRepository.insert(
+                ContractHistoryEntry(
+                    renterId = renter.id,
+                    timestamp = System.currentTimeMillis(),
+                    type = ContractHistoryEntry.TYPE_TERMINATED,
+                    amount = 0.0,
+                    notes = "STOP_MARKER",
+                    renterName = renter.name,
+                    renterPhone = renter.phoneNumber,
+                    scooterName = renter.scooterName,
+                    weekStart = todayStart,
+                    weekEnd = todayStart,
+                    weeklyPrice = 0.0,
+                    passportData = renter.passportData,
+                    address = renter.address,
+                    pinfl = renter.pinfl,
+                    isPaid = false
+                )
+            )
+        }
         return true
     }
 
