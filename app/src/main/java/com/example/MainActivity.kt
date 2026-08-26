@@ -619,6 +619,7 @@ fun MainScreen(
     // Реализация: see `if (showSelectedRentersDialog)` ниже + изменения в
     // onDismiss/onSave RenterFormDialog (проверяют showSelectedRentersDialog).
     var showSelectedRentersDialog by remember { mutableStateOf(false) }
+    var showRestoreRentersDialog by remember { mutableStateOf(false) }
     var scooterToEdit by remember { mutableStateOf<Scooter?>(null) }
     var contractToEdit by remember { mutableStateOf<com.example.data.ContractHistoryEntry?>(null) }
     var selectedRenters by remember { mutableStateOf(setOf<Int>()) }
@@ -1588,8 +1589,9 @@ fun MainScreen(
                                         // ── RESTORE (trash mode) ──
                                         when (currentTab) {
                                             0 -> {
-                                                selectedRenters.forEach { id -> viewModel.restoreRenterFromTrash(id) }
-                                                selectedRenters = emptySet()
+                                                // Для арендаторов сначала открываем
+                                                // окно сопоставления со свободными скутерами.
+                                                showRestoreRentersDialog = true
                                             }
                                             1 -> {
                                                 selectedScooters.forEach { id -> scooterViewModel.restoreScooterFromTrash(id) }
@@ -3185,6 +3187,25 @@ fun MainScreen(
         // будет показана ПОВЕРХ списка — это и нужно (визуально overlay).
         // AlertDialog Material3 сам управляет z-order: второй по композици
         // диалог рисуется поверх первого.
+        if (showRestoreRentersDialog) {
+            RestoreRentersDialog(
+                renters = trashedRenters.filter { it.id in selectedRenters },
+                scooters = liveScooters.filter { scooter ->
+                    liveRenters.none { renter ->
+                        renter.scooterId == scooter.id &&
+                            !renter.isReturned &&
+                            renter.id !in archivedRenters.map { it.id }
+                    }
+                },
+                onConfirm = { assignments ->
+                    viewModel.restoreRentersFromTrash(assignments)
+                    showRestoreRentersDialog = false
+                    selectedRenters = emptySet()
+                },
+                onDismiss = { showRestoreRentersDialog = false }
+            )
+        }
+
         if (showSelectedRentersDialog) {
             SelectedRentersListDialog(
                 // Берём всех арендаторов (live + archived + trashed), чтобы
@@ -4171,6 +4192,7 @@ fun RenterFormDialog(
     // При подтверждении формы родитель восстановит существующего арендатора,
     // а не создаст вторую запись с тем же именем.
     var selectedExistingRenterId by remember(initialRenter?.id) { mutableStateOf<Int?>(null) }
+    var showNewRenterNameField by remember(initialRenter?.id) { mutableStateOf(initialRenter != null) }
     var renterCandidateMenuExpanded by remember(initialRenter?.id) { mutableStateOf(false) }
     var phone by remember {
         mutableStateOf(initialRenter?.phoneNumber?.filter { it.isDigit() }?.takeLast(9) ?: "")
@@ -4455,32 +4477,66 @@ fun RenterFormDialog(
                     .sortedWith(compareBy<Renter> { it.isDeleted }.thenBy { it.name.lowercase() })
                     .toList()
 
+                // В новом режиме сначала показываем только выбор. Поле имени
+                // появляется ниже кнопки «Создать нового арендатора».
+                val nameFieldVisible = initialRenter != null || showNewRenterNameField
                 Box(modifier = Modifier.fillMaxWidth()) {
-                    OutlinedTextField(
-                        value = name,
-                        onValueChange = {
-                            name = it
-                            selectedExistingRenterId = null
-                            renterCandidateMenuExpanded = true
-                        },
-                        label = { Text("To'liq ism (ФИШ)") },
-                        modifier = Modifier.fillMaxWidth(),
-                        shape = RoundedCornerShape(8.dp),
-                        isError = isNameDuplicate,
-                    supportingText = {
-                        if (isNameDuplicate) {
-                            Text(
-                                "Bunday ism allaqachon mavjud!",
-                                color = StatusOverdue,
-                                style = MaterialTheme.typography.labelSmall
+                    if (nameFieldVisible) {
+                        OutlinedTextField(
+                            value = name,
+                            onValueChange = {
+                                name = it
+                                selectedExistingRenterId = null
+                                renterCandidateMenuExpanded = true
+                            },
+                            label = { Text("To'liq ism (ФИШ)") },
+                            modifier = Modifier.fillMaxWidth(),
+                            shape = RoundedCornerShape(8.dp),
+                            isError = isNameDuplicate,
+                            supportingText = {
+                                if (isNameDuplicate) {
+                                    Text(
+                                        "Bunday ism allaqachon mavjud!",
+                                        color = StatusOverdue,
+                                        style = MaterialTheme.typography.labelSmall
+                                    )
+                                }
+                            },
+                            colors = OutlinedTextFieldDefaults.colors(
+                                unfocusedBorderColor = if (isNameDuplicate) errorBorder else ClaudeDivider,
+                                focusedBorderColor = if (isNameDuplicate) dupFocused else ClaudeTextSecondary
                             )
-                        }
-                    },
-                        colors = OutlinedTextFieldDefaults.colors(
-                            unfocusedBorderColor = if (isNameDuplicate) errorBorder else ClaudeDivider,
-                            focusedBorderColor = if (isNameDuplicate) dupFocused else ClaudeTextSecondary
                         )
-                    )
+                    } else {
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clip(RoundedCornerShape(8.dp))
+                                .background(ClaudeAccentBg)
+                                .border(1.dp, ClaudeDivider, RoundedCornerShape(8.dp))
+                                .clickable { renterCandidateMenuExpanded = true }
+                                .padding(horizontal = 12.dp, vertical = 16.dp)
+                        ) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                Icon(Icons.Default.Person, contentDescription = null, tint = ClaudeAccent)
+                                Text(
+                                    if (selectedExistingRenterId != null) {
+                                        "Выбран: $name"
+                                    } else {
+                                        "Выбрать неактивного или удалённого арендатора"
+                                    },
+                                    modifier = Modifier.weight(1f),
+                                    color = ClaudeText,
+                                    style = MaterialTheme.typography.bodyMedium
+                                )
+                                Icon(Icons.Default.KeyboardArrowDown, contentDescription = null, tint = ClaudeTextSecondary)
+                            }
+                        }
+                    }
+
                     DropdownMenu(
                         expanded = renterCandidateMenuExpanded,
                         onDismissRequest = { renterCandidateMenuExpanded = false },
@@ -4491,7 +4547,7 @@ fun RenterFormDialog(
                                 text = {
                                     Text(
                                         if (name.isBlank()) "Неактивных и удалённых арендаторов нет"
-                                        else "Совпадений нет — будет создан новый арендатор",
+                                        else "Совпадений нет",
                                         color = ClaudeTextSecondary
                                     )
                                 },
@@ -4505,11 +4561,7 @@ fun RenterFormDialog(
                                         Column {
                                             Text(candidate.name, fontWeight = FontWeight.SemiBold)
                                             Text(
-                                                when {
-                                                    candidate.isDeleted -> "Удалённый арендатор"
-                                                    candidate.id in archivedRenterIds -> "Неактивный арендатор"
-                                                    else -> "Неактивный арендатор"
-                                                },
+                                                if (candidate.isDeleted) "Удалённый арендатор" else "Неактивный арендатор",
                                                 style = MaterialTheme.typography.labelSmall,
                                                 color = ClaudeTextSecondary
                                             )
@@ -4517,6 +4569,7 @@ fun RenterFormDialog(
                                     },
                                     onClick = {
                                         selectedExistingRenterId = candidate.id
+                                        showNewRenterNameField = true
                                         name = candidate.name
                                         phone = candidate.phoneNumber.filter { it.isDigit() }.takeLast(9)
                                         val candidateDebt = if (candidate.balance < 0) -candidate.balance else candidate.debtAmount
@@ -4534,6 +4587,22 @@ fun RenterFormDialog(
                                 )
                             }
                         }
+                        HorizontalDivider(color = ClaudeDivider)
+                        DropdownMenuItem(
+                            text = {
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Icon(Icons.Default.Add, contentDescription = null, tint = ClaudeAccent, modifier = Modifier.size(18.dp))
+                                    Spacer(Modifier.width(8.dp))
+                                    Text("Создать нового арендатора", color = ClaudeAccent, fontWeight = FontWeight.SemiBold)
+                                }
+                            },
+                            onClick = {
+                                selectedExistingRenterId = null
+                                name = ""
+                                showNewRenterNameField = true
+                                renterCandidateMenuExpanded = false
+                            }
+                        )
                     }
                 }
                 OutlinedTextField(
@@ -5437,6 +5506,219 @@ fun RenterFormDialog(
         dismissButton = {
             TextActionButton(
                 label = "Bekor",
+                icon = Icons.Default.Close,
+                onClick = onDismiss
+            )
+        }
+    )
+}
+
+/**
+ * Диалог восстановления удалённых арендаторов.
+ *
+ * Каждая строка разделена на две части: слева отображается арендатор,
+ * справа — назначенный ему свободный скутер. При выборе уже назначенного
+ * скутера записи меняются местами, поэтому пользователь может быстро менять
+ * положения арендаторов и скутеров без потери предыдущего сопоставления.
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun RestoreRentersDialog(
+    renters: List<Renter>,
+    scooters: List<Scooter>,
+    onConfirm: (Map<Int, Int?>) -> Unit,
+    onDismiss: () -> Unit
+) {
+    val assignments = remember(renters.map { it.id }, scooters.map { it.id }) {
+        mutableStateMapOf<Int, Int?>().apply {
+            renters.forEach { renter ->
+                put(renter.id, renter.scooterId?.takeIf { id -> scooters.any { it.id == id } })
+            }
+        }
+    }
+    val assignedScooterIds = assignments.values.filterNotNull().toSet()
+    val scrollState = rememberScrollState()
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = {
+            Column {
+                Text("Восстановление арендаторов", color = ClaudeText)
+                Text(
+                    "Слева — арендаторы, справа — свободные скутеры. " +
+                        "Выберите нужное сопоставление.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = ClaudeTextSecondary
+                )
+            }
+        },
+        containerColor = ClaudeCard,
+        titleContentColor = ClaudeText,
+        textContentColor = ClaudeText,
+        text = {
+            if (renters.isEmpty()) {
+                Text("Нет выбранных арендаторов для восстановления.", color = ClaudeTextSecondary)
+            } else {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .verticalScroll(scrollState),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Text(
+                            "Арендаторы (${renters.size})",
+                            modifier = Modifier.weight(1f),
+                            style = MaterialTheme.typography.labelMedium,
+                            color = ClaudeAccent,
+                            fontWeight = FontWeight.SemiBold
+                        )
+                        Text(
+                            "Скутеры (${scooters.size})",
+                            modifier = Modifier.weight(1f),
+                            style = MaterialTheme.typography.labelMedium,
+                            color = ClaudeAccent,
+                            fontWeight = FontWeight.SemiBold
+                        )
+                    }
+                    HorizontalDivider(color = ClaudeDivider)
+
+                    renters.forEach { renter ->
+                        var menuExpanded by remember(renter.id) { mutableStateOf(false) }
+                        val assignedScooter = assignments[renter.id]?.let { id ->
+                            scooters.firstOrNull { it.id == id }
+                        }
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Surface(
+                                shape = RoundedCornerShape(8.dp),
+                                color = ClaudeAccentBg,
+                                border = BorderStroke(1.dp, ClaudeDivider),
+                                modifier = Modifier.weight(1f)
+                            ) {
+                                Column(modifier = Modifier.padding(9.dp)) {
+                                    Text(
+                                        renter.name.ifBlank { "(Имя не указано)" },
+                                        style = MaterialTheme.typography.bodyMedium,
+                                        color = ClaudeText,
+                                        fontWeight = FontWeight.SemiBold,
+                                        maxLines = 2,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
+                                    Text(
+                                        if (renter.isDeleted) "Удалённый" else "Неактивный",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = ClaudeTextSecondary
+                                    )
+                                }
+                            }
+
+                            Box(modifier = Modifier.weight(1f)) {
+                                Box(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .clip(RoundedCornerShape(8.dp))
+                                        .background(
+                                            if (assignedScooter != null) StatusOk.copy(alpha = 0.18f)
+                                            else ClaudeAccentBg
+                                        )
+                                        .border(
+                                            1.dp,
+                                            if (assignedScooter != null) StatusOk else ClaudeDivider,
+                                            RoundedCornerShape(8.dp)
+                                        )
+                                        .clickable { menuExpanded = true }
+                                        .padding(horizontal = 9.dp, vertical = 12.dp)
+                                ) {
+                                    Row(
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(5.dp)
+                                    ) {
+                                        Icon(
+                                            Icons.Default.DirectionsBike,
+                                            contentDescription = null,
+                                            tint = if (assignedScooter != null) StatusOk else ClaudeTextSecondary,
+                                            modifier = Modifier.size(18.dp)
+                                        )
+                                        Text(
+                                            assignedScooter?.name ?: "Без скутера",
+                                            modifier = Modifier.weight(1f),
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = if (assignedScooter != null) ClaudeText else ClaudeTextSecondary,
+                                            maxLines = 2,
+                                            overflow = TextOverflow.Ellipsis
+                                        )
+                                        Icon(
+                                            Icons.Default.KeyboardArrowDown,
+                                            contentDescription = null,
+                                            tint = ClaudeTextSecondary,
+                                            modifier = Modifier.size(18.dp)
+                                        )
+                                    }
+                                }
+                                DropdownMenu(
+                                    expanded = menuExpanded,
+                                    onDismissRequest = { menuExpanded = false },
+                                    modifier = Modifier.fillMaxWidth()
+                                ) {
+                                    DropdownMenuItem(
+                                        text = { Text("Без скутера") },
+                                        onClick = {
+                                            assignments[renter.id] = null
+                                            menuExpanded = false
+                                        }
+                                    )
+                                    scooters.forEach { scooter ->
+                                        val assignedToOther = scooter.id in assignedScooterIds &&
+                                            assignments[renter.id] != scooter.id
+                                        DropdownMenuItem(
+                                            text = {
+                                                Text(
+                                                    scooter.name,
+                                                    color = if (assignedToOther) ClaudeTextSecondary else ClaudeText
+                                                )
+                                            },
+                                            enabled = true,
+                                            onClick = {
+                                                // Если скутер уже выбран другой строкой,
+                                                // меняем назначения местами.
+                                                val previousRenterId = assignments.entries
+                                                    .firstOrNull { entry ->
+                                                        entry.key != renter.id && entry.value == scooter.id
+                                                    }?.key
+                                                val previousAssignment = assignments[renter.id]
+                                                if (previousRenterId != null) {
+                                                    assignments[previousRenterId] = previousAssignment
+                                                }
+                                                assignments[renter.id] = scooter.id
+                                                menuExpanded = false
+                                            }
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            PrimaryButton(
+                label = "Восстановить",
+                icon = Icons.Default.Restore,
+                enabled = renters.isNotEmpty(),
+                onClick = { onConfirm(assignments.toMap()) }
+            )
+        },
+        dismissButton = {
+            TextActionButton(
+                label = "Отмена",
                 icon = Icons.Default.Close,
                 onClick = onDismiss
             )

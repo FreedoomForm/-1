@@ -2168,6 +2168,29 @@ class RenterViewModel(application: Application) : AndroidViewModel(application) 
         val scooter = renter.scooterId?.let { fetchScooterById(it) }
         val scooterName = scooter?.name ?: renter.scooterName ?: ""
 
+        // История контрактов хранит данные скутера отдельно от Renter.
+        // Синхронизируем их при восстановлении, чтобы старый скутер не
+        // возвращался в таблице и календаре после нового назначения.
+        if (scooter != null) {
+            entries.filter {
+                it.type == ContractHistoryEntry.TYPE_CREATED ||
+                    it.type == ContractHistoryEntry.TYPE_AUTO_RENEW ||
+                    it.type == ContractHistoryEntry.TYPE_TERMINATED ||
+                    it.type == ContractHistoryEntry.TYPE_RETURNED
+            }.forEach { entry ->
+                val synchronized = entry.copy(
+                    scooterName = scooterName,
+                    vinNumber = scooter.vinNumber,
+                    engineNumber = scooter.engineNumber,
+                    scooterSerialNumber = scooter.scooterSerialNumber,
+                    batteryId1 = scooter.batteryId1,
+                    batteryId2 = scooter.batteryId2,
+                    additionalInfo = scooter.additionalInfo
+                )
+                if (synchronized != entry) historyRepository.update(synchronized)
+            }
+        }
+
         fun sameDay(first: Long?, second: Long): Boolean {
             if (first == null) return false
             val a = java.util.Calendar.getInstance().apply { timeInMillis = first }
@@ -2277,6 +2300,32 @@ class RenterViewModel(application: Application) : AndroidViewModel(application) 
         )
         repository.update(updated)
         Log.d(TAG, "ensureActiveDayAndAutoContract: renter #$renterId active from $todayStart")
+    }
+
+    /**
+     * Восстанавливает несколько арендаторов из корзины с выбранными
+     * пользователем скутерами. Значение null означает «без скутера».
+     */
+    fun restoreRentersFromTrash(assignments: Map<Int, Int?>) {
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                assignments.forEach { (renterId, scooterId) ->
+                    trashService.restoreRenterFromTrash(renterId)
+                    val restored = repository.getById(renterId) ?: return@forEach
+                    val assignedScooter = scooterId?.let { fetchScooterById(it) }
+                    repository.update(
+                        restored.copy(
+                            scooterId = assignedScooter?.id,
+                            scooterName = assignedScooter?.name
+                        )
+                    )
+                    ensureActiveDayAndAutoContract(renterId)
+                }
+                try { com.example.widget.WidgetUpdater.updateAll(getApplication()) } catch (_: Exception) {}
+            } catch (e: Exception) {
+                Log.e(TAG, "restoreRentersFromTrash failed", e)
+            }
+        }
     }
 
     /** Восстановление из формы выбора неактивного/удалённого арендатора. */
@@ -2492,6 +2541,11 @@ class RenterViewModel(application: Application) : AndroidViewModel(application) 
         viewModelScope.launch {
             try {
                 trashService.moveRenterToTrash(id)
+                // В корзине скутер должен стать свободным: удаляем привязку
+                // только у арендатора, история контрактов сохраняется отдельно.
+                repository.getById(id)?.let { renter ->
+                    repository.update(renter.copy(scooterId = null, scooterName = null))
+                }
                 com.example.widget.WidgetUpdater.updateAll(getApplication())
             } catch (e: Exception) {
                 Log.e(TAG, "moveRenterToTrash failed for #$id", e)
