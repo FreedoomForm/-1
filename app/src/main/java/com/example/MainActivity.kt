@@ -4193,6 +4193,7 @@ fun RenterFormDialog(
     // а не создаст вторую запись с тем же именем.
     var selectedExistingRenterId by remember(initialRenter?.id) { mutableStateOf<Int?>(null) }
     var showNewRenterNameField by remember(initialRenter?.id) { mutableStateOf(initialRenter != null) }
+    var suppressRenterNameSuggestions by remember(initialRenter?.id) { mutableStateOf(false) }
     var renterCandidateMenuExpanded by remember(initialRenter?.id) { mutableStateOf(false) }
     var phone by remember {
         mutableStateOf(initialRenter?.phoneNumber?.filter { it.isDigit() }?.takeLast(9) ?: "")
@@ -4487,7 +4488,9 @@ fun RenterFormDialog(
                             onValueChange = {
                                 name = it
                                 selectedExistingRenterId = null
-                                renterCandidateMenuExpanded = true
+                                if (!suppressRenterNameSuggestions) {
+                                    renterCandidateMenuExpanded = true
+                                }
                             },
                             label = { Text("To'liq ism (ФИШ)") },
                             modifier = Modifier.fillMaxWidth(),
@@ -4514,7 +4517,10 @@ fun RenterFormDialog(
                                 .clip(RoundedCornerShape(8.dp))
                                 .background(ClaudeAccentBg)
                                 .border(1.dp, ClaudeDivider, RoundedCornerShape(8.dp))
-                                .clickable { renterCandidateMenuExpanded = true }
+                                .clickable {
+                                    suppressRenterNameSuggestions = false
+                                    renterCandidateMenuExpanded = true
+                                }
                                 .padding(horizontal = 12.dp, vertical = 16.dp)
                         ) {
                             Row(
@@ -4538,7 +4544,7 @@ fun RenterFormDialog(
                     }
 
                     DropdownMenu(
-                        expanded = renterCandidateMenuExpanded,
+                        expanded = renterCandidateMenuExpanded && !suppressRenterNameSuggestions,
                         onDismissRequest = { renterCandidateMenuExpanded = false },
                         modifier = Modifier.fillMaxWidth()
                     ) {
@@ -4570,6 +4576,7 @@ fun RenterFormDialog(
                                     onClick = {
                                         selectedExistingRenterId = candidate.id
                                         showNewRenterNameField = true
+                                        suppressRenterNameSuggestions = true
                                         name = candidate.name
                                         phone = candidate.phoneNumber.filter { it.isDigit() }.takeLast(9)
                                         val candidateDebt = if (candidate.balance < 0) -candidate.balance else candidate.debtAmount
@@ -4600,6 +4607,7 @@ fun RenterFormDialog(
                                 selectedExistingRenterId = null
                                 name = ""
                                 showNewRenterNameField = true
+                                suppressRenterNameSuggestions = true
                                 renterCandidateMenuExpanded = false
                             }
                         )
