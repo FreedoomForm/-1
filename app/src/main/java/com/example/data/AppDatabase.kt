@@ -15,9 +15,10 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         ContractHistoryEntry::class,
         Transaction::class,
         VirtualCard::class,
-        CardTransaction::class
+        CardTransaction::class,
+        ContractTemplate::class
     ],
-    version = 36,
+    version = 37,
     exportSchema = false
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -28,6 +29,7 @@ abstract class AppDatabase : RoomDatabase() {
     abstract fun transactionDao(): TransactionDao
     abstract fun virtualCardDao(): VirtualCardDao
     abstract fun cardTransactionDao(): CardTransactionDao
+    abstract fun contractTemplateDao(): ContractTemplateDao
 
     companion object {
         @Volatile
@@ -356,6 +358,132 @@ abstract class AppDatabase : RoomDatabase() {
             }
         }
 
+        /**
+         * Migration 36 → 37: добавляем таблицу `contract_templates` —
+         * версии шаблонов PDF-договора аренды скутера.
+         *
+         * Поля (см. [ContractTemplate]):
+         *   • id          INTEGER PK AUTOINCREMENT
+         *   • type        TEXT NOT NULL — 'UNLIMITED' (бесконечная) или 'LIMITED' (конечная)
+         *   • name        TEXT NOT NULL — пользовательское имя версии
+         *   • contentJson TEXT NOT NULL — JSON-сериализованный TemplateContent
+         *   • isActive    INTEGER NOT NULL DEFAULT 0 — флаг активной версии (1 = активная)
+         *   • createdAt   INTEGER NOT NULL — timestamp создания
+         *   • updatedAt   INTEGER           — timestamp последнего редактирования (nullable)
+         *   • isDeleted   INTEGER NOT NULL DEFAULT 0 — soft-delete flag (как в v36)
+         *   • deletedAt   INTEGER           — timestamp мягкого удаления (nullable)
+         *
+         * Сразу сидируем 2 «базовых» шаблона (по одному на каждый тип),
+         * isActive=1 — чтобы существующие кнопки PDF в карточке арендатора
+         * и контракта продолжили работать идентично (генератор читает
+         * активный шаблон из БД; дефолтный текст = текущий захардкоженный).
+         *
+         * БЕЗОПАСНОСТЬ ДАННЫХ: эта миграция НЕ модифицирует существующие таблицы.
+         * Renters, scooters, contracts, transactions, virtual_cards,
+         * card_transactions, notification_history остаются нетронутыми —
+         * мы только добавляем новую таблицу + 2 строки в ней. Нулевой риск
+         * потери пользовательских данных.
+         */
+        private val MIGRATION_36_37 = object : Migration(36, 37) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                // ── 1. Создаём новую таблицу contract_templates ──
+                db.execSQL("""
+                    CREATE TABLE IF NOT EXISTS `contract_templates` (
+                        `id`          INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
+                        `type`        TEXT NOT NULL,
+                        `name`        TEXT NOT NULL,
+                        `contentJson` TEXT NOT NULL,
+                        `isActive`    INTEGER NOT NULL DEFAULT 0,
+                        `createdAt`   INTEGER NOT NULL,
+                        `updatedAt`   INTEGER,
+                        `isDeleted`   INTEGER NOT NULL DEFAULT 0,
+                        `deletedAt`   INTEGER
+                    )
+                """.trimIndent())
+
+                // ── 2. Создаём индекс по type+isActive для быстрого поиска ──
+                db.execSQL(
+                    "CREATE INDEX IF NOT EXISTS `index_contract_templates_type_isActive` ON `contract_templates` (`type`, `isActive`)"
+                )
+
+                // ── 3. Seed: 2 «базовых» шаблона, по одному на каждый тип ──
+                //    contentJson экранируем одинарные кавычки удвоением.
+                val now = System.currentTimeMillis()
+
+                // LIMITED: TemplateContent с DEFAULT_CONTRACT_BODY_LIMITED.
+                // Полный JSON сериализован офлайн (kotlinx.serialization), чтобы
+                // не тащить сериализатор в миграцию. Структура JSON стабильная:
+                // 8 строковых полей + bodyText (multiline).
+                val limitedJson = buildSeedJson(
+                    bodyText = TemplateContent.DEFAULT_CONTRACT_BODY_LIMITED
+                )
+                val unlimitedJson = buildSeedJson(
+                    bodyText = TemplateContent.DEFAULT_CONTRACT_BODY_UNLIMITED
+                )
+
+                db.execSQL(
+                    """
+                        INSERT OR IGNORE INTO `contract_templates`
+                            (id, type, name, contentJson, isActive, createdAt, updatedAt, isDeleted, deletedAt)
+                        VALUES
+                            (1, 'LIMITED',   'Базовый шаблон',  '${escapeSql(limitedJson)}',   1, $now, NULL, 0, NULL),
+                            (2, 'UNLIMITED', 'Базовый шаблон',  '${escapeSql(unlimitedJson)}', 1, $now, NULL, 0, NULL)
+                    """.trimIndent()
+                )
+            }
+        }
+
+        /**
+         * Помощник для MIGRATION_36_37: строит JSON для seed-записи из тела
+         * договора + дефолтных реквизитов арендодателя.
+         *
+         * JSON формат = kotlinx-serialization вывод TemplateContent:
+         * `{"landlordName":"...","landlordAddress":"...",...,"bodyText":"..."}`
+         *
+         * Не используем kotlinx-serialization в самой миграции, т.к. миграция
+         * выполняется в SQLite без доступа к Kotlin-классам. Строим JSON
+         * вручную, экранируя специальные символы.
+         */
+        private fun buildSeedJson(bodyText: String): String {
+            // Строим JSON как StringBuilder. Экранируем `"`, `\`, `\n`, `\r`, `\t`.
+            fun esc(s: String): String = buildString(s.length + 10) {
+                for (c in s) {
+                    when (c) {
+                        '"' -> append("\\\"")
+                        '\\' -> append("\\\\")
+                        '\n' -> append("\\n")
+                        '\r' -> append("\\r")
+                        '\t' -> append("\\t")
+                        else -> if (c.code < 0x20) {
+                            append(String.format("\\u%04x", c.code))
+                        } else {
+                            append(c)
+                        }
+                    }
+                }
+            }
+            return buildString {
+                append('{')
+                append("\"landlordName\":\"").append(esc(TemplateContent.DEFAULT_LANDLORD_NAME)).append("\",")
+                append("\"landlordAddress\":\"").append(esc(TemplateContent.DEFAULT_LANDLORD_ADDRESS)).append("\",")
+                append("\"landlordBank\":\"").append(esc(TemplateContent.DEFAULT_LANDLORD_BANK)).append("\",")
+                append("\"landlordAccount\":\"").append(esc(TemplateContent.DEFAULT_LANDLORD_ACCOUNT)).append("\",")
+                append("\"landlordMfo\":\"").append(esc(TemplateContent.DEFAULT_LANDLORD_MFO)).append("\",")
+                append("\"landlordInn\":\"").append(esc(TemplateContent.DEFAULT_LANDLORD_INN)).append("\",")
+                append("\"landlordPhone\":\"").append(esc(TemplateContent.DEFAULT_LANDLORD_PHONE)).append("\",")
+                append("\"landlordDirector\":\"").append(esc(TemplateContent.DEFAULT_LANDLORD_DIRECTOR)).append("\",")
+                append("\"bodyText\":\"").append(esc(bodyText)).append("\"")
+                append('}')
+            }
+        }
+
+        /**
+         * Экранирует одинарные кавычки для SQL — нужно для INSERT'а JSON'а
+         * в колонку contentJson (т.к. вся строка оборачивается в одинарные
+         * кавычки в SQL). По образцу MIGRATION_11_12 (to''lovlari).
+         */
+        private fun escapeSql(s: String): String = s.replace("'", "''")
+
         fun getDatabase(context: Context): AppDatabase {
             return INSTANCE ?: synchronized(this) {
                 val instance = Room.databaseBuilder(
@@ -365,7 +493,8 @@ abstract class AppDatabase : RoomDatabase() {
                 )
                     .addMigrations(
                         MIGRATION_11_12, MIGRATION_12_13, MIGRATION_13_14, MIGRATION_14_15,
-                        MIGRATION_15_34, MIGRATION_33_34, MIGRATION_34_35, MIGRATION_35_36
+                        MIGRATION_15_34, MIGRATION_33_34, MIGRATION_34_35, MIGRATION_35_36,
+                        MIGRATION_36_37
                     )
                     // На случай если кто-то перескакивает через несколько версий
                     // (например, был на v16-v32, для которых нет явной миграции
@@ -390,6 +519,25 @@ abstract class AppDatabase : RoomDatabase() {
                                     (3, 'Tashqidan', 0.0, '#FF00838F', 'Tashqidan kirgan pul (bank, naqd va h.k.)', 1, strftime('%s','now') * 1000, 'EXTERNAL_IN'),
                                     (4, 'Tashqiga',  0.0, '#FFC62828', 'Tashqiga chiqarilgan pul (yechib olish, to''lovlar)', 1, strftime('%s','now') * 1000, 'EXTERNAL_OUT')
                             """.trimIndent())
+                            // ── Fresh install: seed базовых шаблонов договора ──
+                            //    По одному «Базовому шаблону» на каждый тип (LIMITED/UNLIMITED).
+                            //    isActive=1 — кнопки PDF работают сразу.
+                            val now = System.currentTimeMillis()
+                            val limitedJson = escapeSql(
+                                buildSeedJson(TemplateContent.DEFAULT_CONTRACT_BODY_LIMITED)
+                            )
+                            val unlimitedJson = escapeSql(
+                                buildSeedJson(TemplateContent.DEFAULT_CONTRACT_BODY_UNLIMITED)
+                            )
+                            db.execSQL(
+                                """
+                                    INSERT OR IGNORE INTO `contract_templates`
+                                        (id, type, name, contentJson, isActive, createdAt, updatedAt, isDeleted, deletedAt)
+                                    VALUES
+                                        (1, 'LIMITED',   'Базовый шаблон',  '$limitedJson',   1, $now, NULL, 0, NULL),
+                                        (2, 'UNLIMITED', 'Базовый шаблон',  '$unlimitedJson', 1, $now, NULL, 0, NULL)
+                                """.trimIndent()
+                            )
                         }
                     })
                     .build()

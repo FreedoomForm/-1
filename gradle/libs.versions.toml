@@ -28,6 +28,7 @@ cameraLifecycle = "1.5.0"
 cameraView = "1.5.0"
 cameraCore = "1.5.0"
 datastorePreferences = "1.1.7"
+kotlinxSerializationJson = "1.7.3"
 robolectric = "4.16.1"
 roborazzi = "1.59.0"
 secretsGradlePlugin = "2.0.1"
@@ -68,6 +69,7 @@ androidx-camera-lifecycle = { group = "androidx.camera", name = "camera-lifecycl
 androidx-camera-view = { group = "androidx.camera", name = "camera-view", version.ref = "cameraView" }
 androidx-camera-core = { group = "androidx.camera", name = "camera-core", version.ref = "cameraCore" }
 androidx-datastore-preferences = { group = "androidx.datastore", name = "datastore-preferences", version.ref = "datastorePreferences" }
+kotlinx-serialization-json = { group = "org.jetbrains.kotlinx", name = "kotlinx-serialization-json", version.ref = "kotlinxSerializationJson" }
 robolectric = { group = "org.robolectric", name = "robolectric", version.ref = "robolectric" }
 roborazzi = { group = "io.github.takahirom.roborazzi", name = "roborazzi", version.ref = "roborazzi" }
 roborazzi-compose = { group = "io.github.takahirom.roborazzi", name = "roborazzi-compose", version.ref = "roborazzi" }
@@ -76,6 +78,7 @@ roborazzi-junit-rule = { group = "io.github.takahirom.roborazzi", name = "robora
 [plugins]
 android-application = { id = "com.android.application", version.ref = "agp" }
 kotlin-compose = { id = "org.jetbrains.kotlin.plugin.compose", version.ref = "kotlin" }
+kotlin-serialization = { id = "org.jetbrains.kotlin.plugin.serialization", version.ref = "kotlin" }
 google-devtools-ksp = { id = "com.google.devtools.ksp", version.ref = "googleDevtoolsKsp" }
 roborazzi = { id = "io.github.takahirom.roborazzi", version.ref = "roborazzi" }
 secrets = { id = "com.google.android.libraries.mapsplatform.secrets-gradle-plugin", version.ref = "secretsGradlePlugin" }

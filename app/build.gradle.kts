@@ -1,6 +1,7 @@
 plugins {
   alias(libs.plugins.android.application)
   alias(libs.plugins.kotlin.compose)
+  alias(libs.plugins.kotlin.serialization)
   alias(libs.plugins.google.devtools.ksp)
   alias(libs.plugins.roborazzi)
   alias(libs.plugins.secrets)
@@ -116,6 +117,12 @@ dependencies {
   // отдельная зависимость не нужна.
   implementation(libs.kotlinx.coroutines.android)
   implementation(libs.kotlinx.coroutines.core)
+  // ── kotlinx-serialization — для JSON-сериализации шаблонов договора ────────
+  // Шаблон договора (TemplateContent: 8 реквизитов + текст) хранится в БД
+  // как JSON-строка в колонке contentJson таблицы contract_templates.
+  // kotlinx-serialization — стандарт де-факто для Kotlin-проектов, плагин
+  // уже применён в build.gradle.kts (alias(libs.plugins.kotlin.serialization)).
+  implementation(libs.kotlinx.serialization.json)
   // testImplementation(libs.androidx.compose.ui.test.junit4)
   testImplementation(libs.androidx.compose.ui.test.junit4)
   testImplementation(libs.androidx.core)

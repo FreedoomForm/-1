@@ -75,6 +75,7 @@ import androidx.compose.material.icons.filled.Sms
 import androidx.compose.material.icons.filled.Logout
 import androidx.compose.material.icons.filled.PowerOff
 import androidx.compose.material.icons.filled.Save
+import androidx.compose.material.icons.filled.Star
 import androidx.compose.material.icons.filled.OpenInNew
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Done
@@ -653,6 +654,17 @@ fun MainScreen(
     var cardDeleteTrigger by remember { mutableStateOf(0) }
     var selectedCardIds by remember { mutableStateOf(setOf<Int>()) }
 
+    // ── Триггеры для вкладки «Документооборот» (currentTab == 7, v37+) ────
+    // По образцу contractCreateTrigger / cardCreateTrigger выше.
+    // Универсальные кнопки «+ / ✎ / 🗑 / 🔍» в TopAppBar увеличивают
+    // значения, а DocumentManagementScreen реагирует через LaunchedEffect.
+    var docCreateTrigger by remember { mutableStateOf(0) }
+    var docEditTrigger by remember { mutableStateOf(0) }
+    var docDeleteTrigger by remember { mutableStateOf(0) }
+    var docSearchTrigger by remember { mutableStateOf(0) }
+    // ViewModel для «Документооборота» — создаётся лениво (один на сессию).
+    val docTemplateViewModel: com.example.ui.ContractTemplateViewModel = viewModel()
+
     // ── Trash mode (v36+) ────────────────────────────────────────────────
     // false = обычный режим (показываются активные объекты, кнопка «Удалить»
     //            зелёная, кнопка «+» создаёт, «✎» редактирует, «🗑» soft-delete).
@@ -797,6 +809,12 @@ fun MainScreen(
     val coroutineScope = rememberCoroutineScope()
 
     val scooters by scooterViewModel.scootersList.collectAsStateWithLifecycle()
+
+    // ── Reactive read для универсальных кнопок ✎/🗑 на вкладке 7 ──────────
+    // docTemplateViewModel.selectedTemplateId — выбранная пользователем версия
+    // шаблона. Используется для editEnabled/deleteEnabled на tab 7 (✎/🗑).
+    val docSelectedTemplateId by docTemplateViewModel.selectedTemplateId
+        .collectAsStateWithLifecycle()
 
     // Авто-проверка обновлений при запуске
     // Показываем уведомление ТОЛЬКО если есть реальное обновление
@@ -1428,6 +1446,92 @@ fun MainScreen(
                         //       – «Tasdiqlash» (Confirm) — включает авто-отправку.
                         //   • Долгое нажатие при ВКЛЮЧЁННОЙ авто-отправке:
                         //     также выключает её (симметрично с кратким нажатием).
+                        //
+                        // ── ВАЖНО (v37+): при currentTab == 7 (Документооборот) ──
+                        // SMS-кнопка ЗАМЕНЯЕТСЯ на кнопку ★ (звезда). Клик по ★ —
+                        // назначает выбранную версию шаблона активной. Долгий
+                        // клик по ★ — скачивает PDF выбранной версии с демо-данными
+                        // (выбранный клиент из БД).
+                        if (currentTab == 7) {
+                            // ── Кнопка ★ для вкладки «Документооборот» ─────────────
+                            val selectedTemplateId by docTemplateViewModel.selectedTemplateId.collectAsStateWithLifecycle()
+                            val activeTemplateId by docTemplateViewModel.activeTemplateId.collectAsStateWithLifecycle()
+                            val isSelectedActive = selectedTemplateId != null && selectedTemplateId == activeTemplateId
+                            Box(
+                                modifier = Modifier
+                                    .padding(end = 6.dp)
+                                    .size(56.dp)
+                                    .background(
+                                        if (isSelectedActive) ClaudeGold else ClaudeAccentBg,
+                                        RoundedCornerShape(8.dp)
+                                    )
+                                    .border(1.dp, ClaudeGold, RoundedCornerShape(8.dp))
+                                    .combinedClickable(
+                                        onClick = {
+                                            val id = selectedTemplateId
+                                            if (id != null) {
+                                                coroutineScope.launch {
+                                                    docTemplateViewModel.setActive(id)
+                                                    Toast.makeText(
+                                                        localContext,
+                                                        "Шаблон назначен активным",
+                                                        Toast.LENGTH_SHORT
+                                                    ).show()
+                                                }
+                                            } else {
+                                                Toast.makeText(
+                                                    localContext,
+                                                    "Сначала выберите версию",
+                                                    Toast.LENGTH_SHORT
+                                                ).show()
+                                            }
+                                        },
+                                        onLongClick = {
+                                            val id = selectedTemplateId
+                                            if (id != null) {
+                                                coroutineScope.launch {
+                                                    val uri = docTemplateViewModel.downloadSelectedWithDemoData()
+                                                    if (uri != null) {
+                                                        val shareIntent = android.content.Intent(android.content.Intent.ACTION_VIEW).apply {
+                                                            setDataAndType(uri, "application/pdf")
+                                                            addFlags(android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                                                        }
+                                                        localContext.startActivity(
+                                                            android.content.Intent.createChooser(shareIntent, "PDF-ni ko'rish")
+                                                        )
+                                                        Toast.makeText(
+                                                            localContext,
+                                                            "PDF saqlandi: Documents/ScooterContracts/",
+                                                            Toast.LENGTH_LONG
+                                                        ).show()
+                                                    } else {
+                                                        Toast.makeText(
+                                                            localContext,
+                                                            "PDF yaratib bo'lmadi — выберите версию и клиента",
+                                                            Toast.LENGTH_SHORT
+                                                        ).show()
+                                                    }
+                                                }
+                                            } else {
+                                                Toast.makeText(
+                                                    localContext,
+                                                    "Сначала выберите версию и клиента",
+                                                    Toast.LENGTH_SHORT
+                                                ).show()
+                                            }
+                                        }
+                                    ),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Icon(
+                                    Icons.Default.Star,
+                                    contentDescription = "Сделать активным / Скачать PDF",
+                                    tint = if (isSelectedActive) Color.White else ClaudeGold,
+                                    modifier = Modifier.size(28.dp)
+                                )
+                            }
+                        } else {
+                            // ── Стандартная SMS-кнопка (на всех вкладках кроме 7) ───
                         val smsAutoSend by settingsViewModel.smsAutoSendEnabled.collectAsStateWithLifecycle()
                         Box(
                             modifier = Modifier
@@ -1548,6 +1652,7 @@ fun MainScreen(
                                 modifier = Modifier.size(28.dp)
                             )
                         }
+                        } // end of else (SMS-кнопка)
 
                         // ── Универсальные кнопки верхнего бара ──────────────────────
                         // +  — добавление сущности для текущей вкладки (всегда активна)
@@ -1628,6 +1733,7 @@ fun MainScreen(
                                             2 -> contractCreateTrigger++
                                             3 -> transactionCreateTrigger++
                                             5 -> cardCreateTrigger++
+                                            7 -> docCreateTrigger++
                                         }
                                     }
                                 },
@@ -1677,6 +1783,7 @@ fun MainScreen(
                                 2 -> selectedContracts.size == 1
                                 3 -> selectedTxs.size == 1
                                 5 -> selectedCardIds.size == 1
+                                7 -> docSelectedTemplateId != null
                                 else -> false
                             }
                             // В archive mode кнопка красится в серый, но
@@ -1738,6 +1845,7 @@ fun MainScreen(
                                                 2 -> contractEditTrigger++
                                                 3 -> transactionEditTrigger++
                                                 5 -> cardEditTrigger++
+                                                7 -> docEditTrigger++
                                             }
                                         },
                                         onLongClick = {
@@ -1810,6 +1918,7 @@ fun MainScreen(
                                 2 -> selectedContracts.isNotEmpty()
                                 3 -> selectedTxs.isNotEmpty()
                                 5 -> selectedCardIds.isNotEmpty()
+                                7 -> docSelectedTemplateId != null
                                 else -> false
                             }
                             val deleteBgColor = when {
@@ -1882,6 +1991,7 @@ fun MainScreen(
                                                         selectedCardIds.forEach { id -> finansiViewModel.moveCardToTrash(id) }
                                                         selectedCardIds = emptySet()
                                                     }
+                                                    7 -> docDeleteTrigger++
                                                 }
                                             }
                                         },
@@ -1924,9 +2034,17 @@ fun MainScreen(
                         // Круглая, с иконкой-лупой. Тап скрывает ВСЕ универсальные
                         // кнопки и показывает квадратную поисковую панель на их месте.
                         // Не показывается на вкладке «Sozlamalar» (6) — там нет поиска.
+                        // На вкладке «Документооборот» (7) — открывает панель
+                        // поиска внутри DocumentManagementScreen (через docSearchTrigger).
                         if (currentTab != 6) {
                             IconButton(
-                                onClick = { isSearchMode = true },
+                                onClick = {
+                                    if (currentTab == 7) {
+                                        docSearchTrigger++
+                                    } else {
+                                        isSearchMode = true
+                                    }
+                                },
                                 modifier = Modifier
                                     .padding(end = 8.dp)
                                     .size(56.dp)
@@ -2118,6 +2236,17 @@ fun MainScreen(
                         accent = ClaudeTextSecondary,
                         icon = Icons.Outlined.Settings,
                         contentDescription = "Sozlamalar"
+                    )
+                    // ── 8-я вкладка «Документооборот» (v37+) ───────────────────
+                    // Управление версиями шаблонов PDF-договора двух типов
+                    // (бесконечная/конечная аренда). При переходе на вкладку
+                    // SMS-кнопка в TopAppBar заменяется на ★ (см. ниже).
+                    NavTabButton(
+                        isSelected = currentTab == 7,
+                        onClick = { currentTab = 7 },
+                        accent = ClaudeGold,
+                        icon = Icons.Default.PictureAsPdf,
+                        contentDescription = "Dokumentoborot"
                     )
                 }
             }
@@ -2882,11 +3011,25 @@ fun MainScreen(
                             Toast.makeText(localContext, msg, Toast.LENGTH_LONG).show()
                         }
                     },
-                    // Вкладка внутри MainView — НЕ рендерим собственный TopAppBar,
+                    // ── Вкладка внутри MainView — НЕ рендерим собственный TopAppBar,
                     // т.к. внешний Scaffold уже даёт «Skuter Ijarasi» + универсальные
                     // кнопки. Это убирает пустое пространство сверху (дублирующий
                     // TopAppBar «Sozlamalar») и снизу (contentWindowInsets).
                     showTopBar = false
+                )
+            } else if (currentTab == 7) {
+                // ── Вкладка «Документооборот» (v37+) ───────────────────────────
+                // Управление версиями шаблонов PDF-договора двух типов:
+                // UNLIMITED (бесконечная аренда) и LIMITED (неделя).
+                // TopAppBar содержит универсальные кнопки + / ✎ / 🗑 / 🔍
+                // + кнопку ★ (звезда) вместо SMS (см. ниже, раздел TopAppBar).
+                // Клик по ★ — сделать выбранную версию активной.
+                // Долгий клик по ★ — скачать PDF выбранной версии с демо-данными.
+                DocumentManagementScreen(
+                    createTrigger = docCreateTrigger,
+                    editTrigger = docEditTrigger,
+                    deleteTrigger = docDeleteTrigger,
+                    searchTrigger = docSearchTrigger
                 )
             }
         }

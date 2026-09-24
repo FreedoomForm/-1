@@ -2,7 +2,6 @@ package com.example.ui
 
 import android.content.Context
 import android.graphics.Color
-import android.graphics.Paint
 import android.graphics.Typeface
 import android.graphics.pdf.PdfDocument
 import android.net.Uri
@@ -12,10 +11,13 @@ import android.text.StaticLayout
 import android.text.TextPaint
 import android.util.Log
 import androidx.core.content.FileProvider
+import com.example.data.AppDatabase
 import com.example.data.ContractHistoryEntry
+import com.example.data.ContractTemplate
 import com.example.data.Renter
 import com.example.data.Scooter
 import com.example.data.SettingsRepository
+import com.example.data.TemplateContent
 import java.io.File
 import java.io.FileOutputStream
 import java.text.SimpleDateFormat
@@ -30,13 +32,22 @@ import java.util.Locale
  *   • Преамбула (Ижарага берувчи / Ижарага олувчи)
  *   • Раздел 1: Шартнома предмети (1.1, 1.2)
  *   • Раздел 2: Тўлов шартлари (2.1-2.5)
- *   • Раздел 3: Тарафларнинг ҳуқуқ ва мажбуриятлари (3.1-3.12)
+ *   • Раздел 3: Тарафларнинг ҳуқуқ ва мажбуриятлари (3.1-3.13)
  *   • Раздел 4: Жавобгарлик ва низолар (4.1-4.2)
  *   • Раздел 5: Бошқа шартлар (5.1-5.4)
  *   • Раздел 6: Реквизитлар ва имзолар
  *   • Топшириқ-қабул қилиш далолатномаси
  *
  * Формат: A4 (595 × 842 pt). Многостраничная вёрстка через StaticLayout.
+ *
+ * Начиная с v37 (DB migration 36→37), шаблон договора хранится в таблице
+ * `contract_templates`. Методы [generate] / [generateUnlimited] читают
+ * активную версию шаблона из БД и используют её содержимое
+ * (8 реквизитов арендодателя + тело договора с ${placeholders}).
+ *
+ * Новые методы [generateTo] / [generateUnlimitedTo] принимают
+ * [TemplateContent] явно — используются для превью на странице
+ * «Документооборот» и для скачивания PDF выбранной версии.
  */
 object PdfContractGenerator {
 
@@ -52,57 +63,62 @@ object PdfContractGenerator {
     // поэтому здесь он не нужен (раньше был "dd MMMM yyyy" → дублировался день).
     private val dateFmtUz = SimpleDateFormat("MMMM yyyy", Locale("ru"))
 
+    // ──────────────────────────────────────────────────────────────────────
+    // Публичные методы (внешний API)
+    // ──────────────────────────────────────────────────────────────────────
+
     /**
-     * Форматирует список ID аккумуляторов для PDF-договора.
+     * Генерирует PDF-договор КОНЕЧНОЙ аренды (на неделю) с активной версией
+     * шаблона из БД. Это обратная совместимая обёртка над [generateTo]:
+     * читает активный шаблон типа [ContractTemplate.TYPE_LIMITED] из БД,
+     * если его нет — использует дефолтный [TemplateContent].
      *
-     * Правила (чтобы не показывать дубликаты, когда оба аккумулятора
-     * имеют одинаковый ID или когда второй аккумулятор отсутствует):
-     *   • Если battId2 пустой → показываем только "ID: battId1"
-     *   • Если battId1 пустой → показываем только "ID: battId2"
-     *   • Если battId1 == battId2 → показываем только один "ID: battId1"
-     *     (это частый случай: у скутера 2 аккума с одним и тем же номером
-     *      или пользователь ввёл один и тот же номер дважды)
-     *   • Иначе → "ID: battId1, ID: battId2"
-     *   • Если оба пустые → "ID: ______" (заглушка для подписи)
-     *
-     * @param separator разделитель между двумя ID (", " для раздела 1.1,
-     *                  "  " для далолатномаси)
+     * Сохраняет PDF в публичную папку Documents/ScooterContracts/.
      */
-    private fun formatBatteryIds(
-        battId1: String,
-        battId2: String,
-        separator: String = ", "
-    ): String {
-        val shortFill: (String) -> String = { it.ifBlank { "________" } }
-        return when {
-            battId1.isBlank() && battId2.isBlank() -> "ID: ${shortFill("")}"
-            battId1.isBlank() -> "ID: ${shortFill(battId2)}"
-            battId2.isBlank() -> "ID: ${shortFill(battId1)}"
-            battId1 == battId2 -> "ID: ${shortFill(battId1)}"
-            else -> "ID: ${shortFill(battId1)}${separator}ID: ${shortFill(battId2)}"
-        }
-    }
-
-    // ── Реквизиты арендодателя (статичны, как в docx) ──────────────────────
-    private const val LANDLORD_NAME = "ЯТТ «АСИЛБЕКОВ ШЕРЗОД УЛУГБЕКОВИЧ»"
-    private const val LANDLORD_ADDRESS = "Тошкент Шахри, Юнусобод тумани, Сайилгох кучаси, 17-уй"
-    private const val LANDLORD_BANK = "Тошкент Ш., «КАПИТАЛБАНК» АТ БАНКИНИНГ БОШ ОФИСИ"
-    private const val LANDLORD_ACCOUNT = "20218 000 9 04982540 001"
-    private const val LANDLORD_MFO = "01088"
-    private const val LANDLORD_INN = "32607780220041"
-    private const val LANDLORD_PHONE = "+998 77 777 10 00"
-    private const val LANDLORD_DIRECTOR = "Асилбеков Шерзод Улугбекович"
-
     fun generate(
         context: Context,
         entry: ContractHistoryEntry,
         renter: Renter?,
         scooter: Scooter? = null
     ): Uri? {
+        val content = loadActiveTemplateContent(context, ContractTemplate.TYPE_LIMITED)
+        val file = defaultOutputFile(context, "rental_contract_${computeContractNumber(entry)}")
+        return generateTo(context, entry, renter, scooter, content, file)
+    }
+
+    /**
+     * Генерирует PDF-договор БЕСКОНЕЧНОЙ аренды с активной версией шаблона
+     * из БД. Сохраняет в Documents/ScooterContracts/.
+     */
+    fun generateUnlimited(
+        context: Context,
+        renter: Renter,
+        scooter: Scooter? = null
+    ): Uri? {
+        val content = loadActiveTemplateContent(context, ContractTemplate.TYPE_UNLIMITED)
+        val contractNumber = "SRC-UNLMT-${renter.id}-${SimpleDateFormat("yyyyMMdd", Locale.getDefault()).format(Date(System.currentTimeMillis()))}"
+        val file = defaultOutputFile(context, "rental_contract_unlimited_${contractNumber}")
+        return generateUnlimitedTo(context, renter, scooter, content, file)
+    }
+
+    /**
+     * Генерирует PDF-договор КОНЕЧНОЙ аренды с заданным [content] шаблона
+     * и сохраняет в [targetFile]. Используется для:
+     *   • превью на странице «Документооборот» (targetFile = cacheDir)
+     *   • скачивания PDF выбранной версии с демо-данными (targetFile = Documents/...)
+     */
+    fun generateTo(
+        context: Context,
+        entry: ContractHistoryEntry,
+        renter: Renter?,
+        scooter: Scooter?,
+        content: TemplateContent,
+        targetFile: File
+    ): Uri? {
         val doc = PdfDocument()
         try {
-            // ── Динамические данные из записи истории ────────────────────────
-            val contractNumber = "SRC-${entry.id.toString().padStart(6, '0')}"
+            // ── Динамические данные из записи истории ────────────────────
+            val contractNumber = computeContractNumber(entry)
             val contractDate = dateFmtUz.format(Date(entry.timestamp))
             val weekStart = entry.weekStart ?: renter?.rentStartDateTimestamp ?: System.currentTimeMillis()
             val weekEnd = entry.weekEnd
@@ -115,17 +131,12 @@ object PdfContractGenerator {
                 ?: renter?.let { 0.0 } ?: 0.0
             val dailyAmount = if (weeklyAmount > 0) weeklyAmount / 7.0 else 0.0
 
-            // ── Реквизиты арендатора для PDF (entry → renter fallback) ──────
+            // ── Реквизиты арендатора для PDF (entry → renter fallback) ──
             val tenantPassport = entry.passportData.ifBlank { renter?.passportData ?: "" }
             val tenantAddress = entry.address.ifBlank { renter?.address ?: "" }
             val tenantPinfl = entry.pinfl.ifBlank { renter?.pinfl ?: "" }
 
-            // ── Реквизиты скутера для PDF (entry → scooter fallback) ────────
-            // ВАЖНО: ранее данные скутера брались ТОЛЬКО из entry, и если они
-            // там были пусты (контракт создан до того, как поля скутера стали
-            // обязательными, или scooterId не разрешался) — PDF уходил с пустыми
-            // линиями. Теперь добавлен fallback на саму сущность Scooter, что
-            // гарантирует корректное отображение данных скутера в PDF всегда.
+            // ── Реквизиты скутера для PDF ──────────────────────────────────
             val scooterVin = entry.vinNumber.ifBlank { scooter?.vinNumber ?: "" }
             val scooterEngine = entry.engineNumber.ifBlank { scooter?.engineNumber ?: "" }
             val scooterSerial = entry.scooterSerialNumber.ifBlank { scooter?.scooterSerialNumber ?: "" }
@@ -133,239 +144,63 @@ object PdfContractGenerator {
             val battId2 = entry.batteryId2.ifBlank { scooter?.batteryId2 ?: "" }
             val extraInfo = entry.additionalInfo.ifBlank { scooter?.additionalInfo ?: "" }
 
-            // Заполнитель для пустых полей (чтобы линия для подписи оставалась)
-            fun fill(value: String): String = value.ifBlank { "______________________________" }
-            // shortFill для battery IDs больше не используется здесь —
-            // форматирование аккумуляторов вынесено в formatBatteryIds() (см. выше).
-
-            // ── Настройки PDF: размер шрифта (auto/manual) + цена аккума ───
+            // ── Настройки: размер шрифта + цена аккума ─────────────────────
             val settings = SettingsRepository(context)
             val contentWidth = (PAGE_WIDTH - 2 * MARGIN_X).toInt()
             val batteryDamageAmount = settings.batteryDamagePrice
             val batteryDamageText = formatAmountWithText(batteryDamageAmount)
 
-            // Лямбда строит параграфы для заданного базового размера шрифта.
-            // Используется и для auto-fit измерения, и для финального рендера.
-            fun buildParagraphsForSize(baseSize: Float): List<Paragraph> {
-                val paints = createPaints(baseSize)
-                val titlePaint = paints.titlePaint
-                val bodyPaint = paints.bodyPaint
-                val sectionPaint = paints.sectionPaint
-                val signaturePaint = paints.signaturePaint
-                return buildList {
-                // Заголовок
-                add(Paragraph("ЭЛЕКТР СКУТЕР ИЖАРАСИ ШАРТНОМАСИ № $contractNumber", titlePaint, alignment = Layout.Alignment.ALIGN_CENTER, spaceAfter = 8f))
-                add(Paragraph("«${dateFmt.format(Date(entry.timestamp)).take(2)}» $contractDate. Тошкент шаҳри", bodyPaint, spaceAfter = 8f))
+            // ── Плейсхолдеры ───────────────────────────────────────────────
+            val placeholders = buildPlaceholders(
+                content = content,
+                contractNumber = contractNumber,
+                contractDate = contractDate,
+                contractDay = dateFmt.format(Date(entry.timestamp)).take(2),
+                contractFullDate = dateFmt.format(Date(entry.timestamp)),
+                weekStart = dateFmt.format(Date(weekStart)),
+                weekEnd = dateFmt.format(Date(weekEnd)),
+                tenantName = tenantName,
+                tenantPhone = tenantPhone,
+                tenantPassport = tenantPassport,
+                tenantAddress = tenantAddress,
+                tenantPinfl = tenantPinfl,
+                scooterName = scooterName,
+                scooterVin = scooterVin,
+                scooterEngine = scooterEngine,
+                scooterSerial = scooterSerial,
+                battId1 = battId1,
+                battId2 = battId2,
+                extraInfo = extraInfo,
+                weeklyAmount = formatAmount(weeklyAmount),
+                dailyAmount = formatAmount(dailyAmount),
+                batteryDamageText = batteryDamageText
+            )
 
-                // Преамбула
-                add(Paragraph(
-                    "Кейинги ўринларда «Ижарага берувчи» деб аталадиган $LANDLORD_NAME номидан, бир томондан, кейинги ўринларда «Ижарага олувчи» деб аталадиган:",
-                    bodyPaint, spaceAfter = 8f
-                ))
-                add(Paragraph(
-                    "Манзил: ${fill(tenantAddress)} да яшовчи фуқаро ФИШ $tenantName",
-                    bodyPaint, spaceAfter = 4f
-                ))
-                add(Paragraph(
-                    "(Паспорт серия, рақам, олинган сана) ${fill(tenantPassport)}",
-                    bodyPaint, spaceAfter = 4f
-                ))
-                add(Paragraph(
-                    "Телефон: $tenantPhone",
-                    bodyPaint, spaceAfter = 8f
-                ))
-                add(Paragraph(
-                    "иккинчи томондан қуйидагилар тўғрисида ушбу шартномани туздилар:",
-                    bodyPaint, spaceAfter = 8f
-                ))
+            val effectiveBody = content.bodyText.ifBlank { TemplateContent.DEFAULT_CONTRACT_BODY_LIMITED }
+            val resolvedBody = applyPlaceholders(effectiveBody, placeholders)
 
-                // Раздел 1
-                add(Paragraph("1. Шартнома предмети", sectionPaint, spaceAfter = 6f))
-                add(Paragraph(
-                    "1.1. Шартномага мувофиқ «Ижарага берувчи» ўзига мулк ҳуқуқи асосида тегишли бўлган:",
-                    bodyPaint, spaceAfter = 4f
-                ))
-                add(Paragraph(
-                    "1) $scooterName моделдаги электрли скутерни;",
-                    bodyPaint, indent = 12f, spaceAfter = 4f
-                ))
-                add(Paragraph(
-                    "2) Аккумуляторлар (${formatBatteryIds(battId1, battId2)}) билан биргаликда «Ижарага олувчи»га топшириш, «Ижарага олувчи» эса вақтинча фойдаланиш учун уни ижарага олиш ва ижара ҳақини тўлаш мажбуриятини олади.",
-                    bodyPaint, indent = 12f, spaceAfter = 4f
-                ))
-                add(Paragraph(
-                    "Электр скутер ҳамда аккумулятор ҳақидаги батафсил маълумотлар ушбу шартноманинг ажралмас қисми бўлган топшириқ-қабул қилиш далолатномасида кўрсатилади.",
-                    bodyPaint, spaceAfter = 6f
-                ))
-                add(Paragraph(
-                    "1.2. «Ижарага олувчи» электрли скутердан Тошкент шаҳри ҳудудида етказиб бериш (курьер) хизмати кўрсатиш мақсадида фойдаланади.",
-                    bodyPaint, spaceAfter = 8f
-                ))
-
-                // Раздел 2
-                add(Paragraph("2. Тўлов шартлари", sectionPaint, spaceAfter = 6f))
-                add(Paragraph(
-                    "2.1. «Ижарага олувчи» «Ижарага берувчи»га олдиндан 0 (ноль сўм 00 тийин) миқдорида кафолат пули тўлайди. Ушбу кафолат пули шартнома муддати якунланганидан сўнг «Ижарага олувчи»га қайтарилади.",
-                    bodyPaint, spaceAfter = 4f
-                ))
-                add(Paragraph(
-                    "Агар шартнома амалда бўлган вақтда мототранспорт воситасига зарар етказилган тақдирда, мототранспорт воситасини таъмирлаш ишлари ушбу маблағ ҳисобидан қопланади. Агар таъмирлаш учун ушбу кафолат пули етарли бўлмаса, қолган қисми «Ижарага олувчи» томонидан қопланади.",
-                    bodyPaint, spaceAfter = 4f
-                ))
-                add(Paragraph(
-                    "2.2. Мототранспорт воситасининг қиймати қайта нархлаш коэффициентлари ва амортизация меъёрларини ҳисобга олган ҳолда 11 500 000 (ўн бир миллион беш юз минг сўм 00 тийин)ни ташкил этади.",
-                    bodyPaint, spaceAfter = 4f
-                ))
-                add(Paragraph(
-                    "2.3. Ижара ҳақи «Ижарага олувчи» томонидан кунига ${formatAmount(dailyAmount)} (ўз сўмларида)дан ҳисобланади.",
-                    bodyPaint, spaceAfter = 4f
-                ))
-                add(Paragraph(
-                    "2.4. Ижара тўловлари «Ижарага олувчи» томонидан 7 кун учун олдиндан ${formatAmount(weeklyAmount)} миқдорида тўлаб борилади.",
-                    bodyPaint, spaceAfter = 4f
-                ))
-                add(Paragraph(
-                    "2.5. Ушбу шартнома бўйича ижара муддати ${dateFmt.format(Date(weekStart))} санасидан ${dateFmt.format(Date(weekEnd))} санасига қадар белгиланади. Томонлар келишувига асосан ижара муддати узайтирилиши мумкин.",
-                    bodyPaint, spaceAfter = 8f
-                ))
-
-                // Раздел 3
-                add(Paragraph("3. Тарафларнинг ҳуқуқ ва мажбуриятлари", sectionPaint, spaceAfter = 6f))
-                val section3 = listOf(
-                    "3.1. «Ижарага берувчи» шартнома имзолангандан кейин электр скутерни ўша куннинг ўзида «Ижарага олувчи»га топширади.",
-                    "3.2. Электр скутерни жорий таъмирлаш ва профилактика кўригидан ўтказиш «Ижарага олувчи» томон ҳисобидан амалга оширилади.",
-                    "3.3. «Ижарага олувчи» электр скутерга қўшимча тақдим қилинган аккумуляторларни соз ҳолатда сақланиши учун жавобгар ҳисобланади.",
-                    "3.4. Йўл транспорт ҳодисаси содир бўлганида ёки бошқа ҳар қандай ҳолатда электр скутерга ёки аккумуляторга зарар етган ҳолатда «Ижарага олувчи» 3 кун муддат ичида ўз ҳисобидан таъмирлайди.",
-                    "3.5. Йўл транспорт ҳодисаси учинчи шахс айби билан содир этилиши натижасида электр скутерга ёки аккумуляторга етказилган зарарни қоплаш учун мулкдор сифатида «Ижарага берувчи» учинчи шахсдан етказилган зарарни ундириш юзасидан ваколатли идораларга даъво қилиш ҳуқуқига эга.",
-                    "3.6. «Ижарага берувчи» шартномада келишилган ижара ҳақи ёки етказилган зарар бўйича қарздорлик ўз вақтида тўланмаган тақдирда, қарздорликни қонунчиликда белгиланган тартибда ундириш ҳуқуқига эга.",
-                    "3.7. Форс-мажор ҳолатлари натижасида келиб чиқадиган зарарлар амалдаги қонунчиликка ва ушбу шартнома шартларига мувофиқ ҳал этилади.",
-                    "3.8. Электр скутер ушбу шартнома имзоланишидан сўнг топшириқ-қабул қилиш далолатномасида кўрсатилган ҳолатда «Ижарага олувчи»га топширилади ва айнан шу ҳолатда қайтарилиши лозим.",
-                    "3.9. «Ижарага олувчи» электр скутерни қайтариб топшириши ҳақида «Ижарага берувчи»ни камида 3 кун олдин хабардор қилиши лозим.",
-                    "3.10. Ижара муддати давомида «Ижарага олувчи» томонидан Йўл ҳаракати қоидаларини бузиш оқибатида юзага келган ҳар қандай жарималар «Ижарага олувчи» томонидан тўланади.",
-                    "3.11. Электр скутерни «Ижарага олувчи» томонидан бошқа учинчи шахсга фойдаланишга бериш қатъиян тақиқланади. Ушбу ҳолат аниқланган тақдирда «Ижарага берувчи» шартномани бир томонлама бекор қилиш ва электр скутерни қайтариб олиш ҳуқуқига эга.",
-                    "3.12. Электр скутер авария ҳолатида, техник носоз ёки фойдаланишга яроқсиз ҳолатда қайтарилган, шунингдек электр скутер ёки аккумуляторлар йўқотилган, ўғирланган ёки топширилмаган ҳолларда, етказилган зарар учун тўлиқ моддий жавобгарлик «Ижарага олувчи» зиммасига юклатилади.",
-                    // ── 3.13 — поломка аккумулятора: сумма из настроек ─────────
-                    "3.13. АККУМУЛЯТОРНИНГ БУЗИЛИШИ ТАҚДИРИДА: агар ижарага олинган аккумулятор(лар) бузилса, зарарга учраса ёки ишламас ҳолатга келиб қолса ва бу ҳолатда таъмирлаш имкони бўлмаса, «Ижарага олувчи» ҳар бир бузилган аккумулятор учун $batteryDamageText миқдорида тўлов амалга ошириши шарт. Ушбу сумма «Ижарага берувчи»нинг реал зарарини қоплаш учун белгиланган бўлиб, аккумуляторни қайтариб бериш ёки алмаштириш шарт эмас."
-                )
-                section3.forEach { add(Paragraph(it, bodyPaint, spaceAfter = 3f)) }
-
-                // Раздел 4
-                add(Paragraph("4. Тарафларнинг жавобгарлиги ва низоларни ҳал қилиш тартиби", sectionPaint, spaceAfter = 6f))
-                add(Paragraph(
-                    "4.1. Тарафлар ўз мажбуриятларини бажармаган ёки лозим даражада бажармаганликлари учун Ўзбекистон Республикасининг Фуқаролик кодекси ва бошқа қонун ҳужжатлари ҳамда мазкур шартномага мувофиқ жавобгар бўладилар.",
-                    bodyPaint, spaceAfter = 4f
-                ))
-                add(Paragraph(
-                    "4.2. Тарафлар ўртасида келиб чиқадиган низолар тарафларнинг ўзаро келишуви асосида ҳал этилади. Тарафлар келишувга эришмаган тақдирда, низо белгиланган тартибда судда ҳал этилади.",
-                    bodyPaint, spaceAfter = 8f
-                ))
-
-                // Раздел 5
-                add(Paragraph("5. Шартноманинг бошқа шартлари", sectionPaint, spaceAfter = 6f))
-                add(Paragraph(
-                    "5.1. Шартномага киритилаётган барча ўзгартириш ва қўшимчалар ёзма равишда тузилган ва иккала тараф томонидан имзоланган ҳолдагина ҳақиқий ҳисобланади.",
-                    bodyPaint, spaceAfter = 4f
-                ))
-                add(Paragraph(
-                    "5.2. Шартноманинг бошланиш муддати шартнома тузилган санадан бошлаб кучга киради ва шартноманинг якунланиш муддати томонлар ўртасида қўшимча келишув имзоланиб, бекор қилинишига қадар амал қилади.",
-                    bodyPaint, spaceAfter = 4f
-                ))
-                add(Paragraph(
-                    "5.3. Шартнома 2 нусхада тузилган бўлиб, иккаласи ҳам бир хил юридик кучга эга.",
-                    bodyPaint, spaceAfter = 4f
-                ))
-                add(Paragraph(
-                    "5.4. Мазкур шартномада назарда тутилмаган масалалар амалдаги қонун ҳужжатларига мувофиқ тартибга солинади.",
-                    bodyPaint, spaceAfter = 8f
-                ))
-
-                // Раздел 6 — Реквизиты
-                add(Paragraph("6. Тарафларнинг реквизитлари ва имзолари:", sectionPaint, spaceAfter = 6f))
-                add(Paragraph("«Ижарага берувчи»:", bodyPaint.applyBold(), spaceAfter = 4f))
-                add(Paragraph("Номи: $LANDLORD_NAME", bodyPaint, spaceAfter = 2f))
-                add(Paragraph("Манзил: $LANDLORD_ADDRESS", bodyPaint, spaceAfter = 2f))
-                add(Paragraph("Банк: $LANDLORD_BANK", bodyPaint, spaceAfter = 2f))
-                add(Paragraph("Р/С: $LANDLORD_ACCOUNT", bodyPaint, spaceAfter = 2f))
-                add(Paragraph("МФО: $LANDLORD_MFO", bodyPaint, spaceAfter = 2f))
-                add(Paragraph("ИНН: $LANDLORD_INN", bodyPaint, spaceAfter = 2f))
-                add(Paragraph("Телефон: $LANDLORD_PHONE", bodyPaint, spaceAfter = 2f))
-                add(Paragraph("Рахбар: $LANDLORD_DIRECTOR", bodyPaint, spaceAfter = 8f))
-
-                add(Paragraph("«Ижарага Олувчи»:", bodyPaint.applyBold(), spaceAfter = 4f))
-                add(Paragraph("ФИШ: $tenantName", bodyPaint, spaceAfter = 2f))
-                add(Paragraph("Паспорт маълумотлари: ${fill(tenantPassport)}", bodyPaint, spaceAfter = 2f))
-                add(Paragraph("Манзил: ${fill(tenantAddress)}", bodyPaint, spaceAfter = 2f))
-                add(Paragraph("ЖШШИР: ${fill(tenantPinfl)}", bodyPaint, spaceAfter = 2f))
-                add(Paragraph("Телефон: $tenantPhone", bodyPaint, spaceAfter = 8f))
-
-                add(Paragraph(
-                    "Ижарага берувчи имзоси: _______________________     Ижарага Олувчи имзоси: _______________________",
-                    signaturePaint, spaceAfter = 12f
-                ))
-
-                // ── Топшириқ-қабул қилиш далолатномаси ─────────────────────────
-                add(Paragraph(
-                    "Топшириқ-қабул қилиш Далолатномаси",
-                    sectionPaint, alignment = Layout.Alignment.ALIGN_CENTER, spaceAfter = 6f
-                ))
-                add(Paragraph(
-                    "«${dateFmt.format(Date(entry.timestamp)).take(2)}» $contractDate. Тошкент шаҳри",
-                    bodyPaint, alignment = Layout.Alignment.ALIGN_CENTER, spaceAfter = 6f
-                ))
-                add(Paragraph(
-                    "Ушбу далолатнома шу ҳақдаки $LANDLORD_NAME (кейинги ўринларда “Ижарага берувчи”), корхона рахбари $LANDLORD_DIRECTOR ҳамда фуқаро $tenantName (кейинги ўринларда “Ижарага олувчи”) ўртасида «${dateFmt.format(Date(entry.timestamp))}» санасида имзоланган № $contractNumber сонли Электр скутер ижара шартномасига асосан қуйидаги Электр скутер аккумуляторлар билан биргаликда Ижарага олувчига топширилди:",
-                    bodyPaint, spaceAfter = 8f
-                ))
-                add(Paragraph("Модель: $scooterName", bodyPaint, spaceAfter = 2f))
-                add(Paragraph("VIN №: ${fill(scooterVin)}", bodyPaint, spaceAfter = 2f))
-                add(Paragraph("Двигатель рақами: ${fill(scooterEngine)}", bodyPaint, spaceAfter = 2f))
-                add(Paragraph("ID рақами: ${fill(scooterSerial)}", bodyPaint, spaceAfter = 2f))
-                add(Paragraph("Аккумулятор ID рақамлари: ${formatBatteryIds(battId1, battId2, separator = "  ")}", bodyPaint, spaceAfter = 2f))
-                add(Paragraph("Қўшимча маълумот: ${fill(extraInfo)}", bodyPaint, spaceAfter = 8f))
-                add(Paragraph(
-                    "Ижарага берувчи юқорида кўрсатилган мототранспорт воситасини кўздан кечирганда қуйидаги ҳолатлар аниқланди:",
-                    bodyPaint, spaceAfter = 4f
-                ))
-                add(Paragraph("Рама ва корпус: соз ҳолатда; Мотор: соз ҳолатда; Бошқа қисмлар: соз ҳолатда.", bodyPaint, spaceAfter = 6f))
-                add(Paragraph(
-                    "Топширди: _______________________     Қабул қилди: _______________________",
-                    signaturePaint, spaceAfter = 12f
-                ))
-                add(Paragraph(
-                    "$LANDLORD_NAME          $tenantName",
-                    signaturePaint, alignment = Layout.Alignment.ALIGN_CENTER
-                ))
-            }
-            }
-
-            // ── Подбор размера шрифта (auto: уменьшаем пока не влезет в 1 стр) ─
+            // ── Подбор размера шрифта (auto: уменьшаем пока не влезет) ──
             val baseFontSize = pickBaseFontSize(
                 autoFit = settings.pdfFontSizeAuto,
                 initialSize = SettingsRepository.DEFAULT_PDF_FONT_SIZE,
                 manualSize = settings.pdfFontSize,
-                buildParagraphs = ::buildParagraphsForSize,
+                buildParagraphs = { size ->
+                    val paints = createPaints(size)
+                    parseTemplateToParagraphs(resolvedBody, paints)
+                },
                 contentWidth = contentWidth
             )
-            val paragraphs = buildParagraphsForSize(baseFontSize)
+            val paints = createPaints(baseFontSize)
+            val paragraphs = parseTemplateToParagraphs(resolvedBody, paints)
 
-            // ── Рендер с пагинацией (если даже с minSize не влезло — будет >1 стр)
             renderParagraphs(doc, paragraphs, contentWidth)
+            writePdfToFile(doc, targetFile)
 
-            // ── Сохранение в файл ──────────────────────────────────────────
-            val dir = File(
-                Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOCUMENTS),
-                "ScooterContracts"
-            )
-            if (!dir.exists()) dir.mkdirs()
-
-            val file = File(dir, "rental_contract_${contractNumber}_${SimpleDateFormat("yyyyMMdd_HHmmss", Locale.getDefault()).format(Date())}.pdf")
-            FileOutputStream(file).use { fos -> doc.writeTo(fos) }
-
-            Log.i(TAG, "PDF saved: ${file.absolutePath}")
+            Log.i(TAG, "PDF saved: ${targetFile.absolutePath}")
             return FileProvider.getUriForFile(
                 context,
                 "${context.packageName}.fileprovider",
-                file
+                targetFile
             )
         } catch (e: Exception) {
             Log.e(TAG, "Failed to generate PDF", e)
@@ -375,35 +210,17 @@ object PdfContractGenerator {
         }
     }
 
-    private fun formatAmount(amount: Double): String {
-        val longVal = amount.toLong()
-        // Format with spaces: 420 000
-        return "%,d".format(longVal).replace(",", " ")
-    }
-
     /**
-     * Генерирует PDF-договор аренды электроскутера с НЕОГРАНИЧЕННЫМ сроком
-     * действия.
-     *
-     * Отличия от [generate]:
-     *   • № договора = «SRC-UNLMT-<renterId>-<timestamp>»
-     *   • В разделе 2.5 прямо указано, что договор действует на неограниченный
-     *     срок до момента, когда арендатор примет решение его расторгнуть
-     *     (формальный юридический язык).
-     *   • Дата начала = renter.rentStartDateTimestamp, дата окончания = «—»
-     *     (не указана, т.к. договор бессрочный).
-     *   • В разделе 5.2 дополнительно подтверждается бессрочный характер
-     *     договора и право арендатора расторгнуть его в любой момент с
-     *     предварительным уведомлением за 3 дня.
-     *
-     * @param context  контекст приложения
-     * @param renter   арендатор (источник данных)
-     * @param scooter  скутер (опционально, для fallback'а полей)
+     * Генерирует PDF-договор БЕСКОНЕЧНОЙ аренды с заданным [content] шаблона
+     * и сохраняет в [targetFile]. Используется для превью и скачивания
+     * на странице «Документооборот».
      */
-    fun generateUnlimited(
+    fun generateUnlimitedTo(
         context: Context,
         renter: Renter,
-        scooter: Scooter? = null
+        scooter: Scooter?,
+        content: TemplateContent,
+        targetFile: File
     ): Uri? {
         val doc = PdfDocument()
         try {
@@ -424,7 +241,7 @@ object PdfContractGenerator {
             val tenantAddress = renter.address
             val tenantPinfl = renter.pinfl
 
-            // Реквизиты скутера (renter не хранит → берём из scooter, если передан)
+            // Реквизиты скутера
             val scooterVin = scooter?.vinNumber ?: ""
             val scooterEngine = scooter?.engineNumber ?: ""
             val scooterSerial = scooter?.scooterSerialNumber ?: ""
@@ -432,239 +249,62 @@ object PdfContractGenerator {
             val battId2 = scooter?.batteryId2 ?: ""
             val extraInfo = scooter?.additionalInfo ?: ""
 
-            fun fill(value: String): String = value.ifBlank { "______________________________" }
-            fun shortFill(value: String): String = value.ifBlank { "________" }
-
-            // ── Настройки PDF: размер шрифта (auto/manual) + цена аккума ───
+            // Настройки
             val settings = SettingsRepository(context)
             val contentWidth = (PAGE_WIDTH - 2 * MARGIN_X).toInt()
             val batteryDamageAmount = settings.batteryDamagePrice
             val batteryDamageText = formatAmountWithText(batteryDamageAmount)
 
-            fun buildParagraphsForSize(baseSize: Float): List<Paragraph> {
-                val paints = createPaints(baseSize)
-                val titlePaint = paints.titlePaint
-                val bodyPaint = paints.bodyPaint
-                val sectionPaint = paints.sectionPaint
-                val signaturePaint = paints.signaturePaint
-                return buildList {
-                add(Paragraph(
-                    "ЭЛЕКТР СКУТЕР ИЖАРАСИ ШАРТНОМАСИ № $contractNumber",
-                    titlePaint, alignment = Layout.Alignment.ALIGN_CENTER, spaceAfter = 8f
-                ))
-                add(Paragraph(
-                    "«${dateFmt.format(Date(now)).take(2)}» $contractDate. Тошкент шаҳри",
-                    bodyPaint, spaceAfter = 8f
-                ))
+            // Плейсхолдеры
+            val placeholders = buildPlaceholders(
+                content = content,
+                contractNumber = contractNumber,
+                contractDate = contractDate,
+                contractDay = dateFmt.format(Date(now)).take(2),
+                contractFullDate = dateFmt.format(Date(now)),
+                weekStart = dateFmt.format(Date(weekStart)),
+                weekEnd = "—",
+                tenantName = tenantName,
+                tenantPhone = tenantPhone,
+                tenantPassport = tenantPassport,
+                tenantAddress = tenantAddress,
+                tenantPinfl = tenantPinfl,
+                scooterName = scooterName,
+                scooterVin = scooterVin,
+                scooterEngine = scooterEngine,
+                scooterSerial = scooterSerial,
+                battId1 = battId1,
+                battId2 = battId2,
+                extraInfo = extraInfo,
+                weeklyAmount = formatAmount(weeklyAmount),
+                dailyAmount = formatAmount(dailyAmount),
+                batteryDamageText = batteryDamageText
+            )
 
-                // Преамбула
-                add(Paragraph(
-                    "Кейинги ўринларда «Ижарага берувчи» деб аталадиган $LANDLORD_NAME номидан, бир томондан, кейинги ўринларда «Ижарага олувчи» деб аталадиган:",
-                    bodyPaint, spaceAfter = 8f
-                ))
-                add(Paragraph(
-                    "Манзил: ${fill(tenantAddress)} да яшовчи фуқаро ФИШ $tenantName",
-                    bodyPaint, spaceAfter = 4f
-                ))
-                add(Paragraph(
-                    "(Паспорт серия, рақам, олинган сана) ${fill(tenantPassport)}",
-                    bodyPaint, spaceAfter = 4f
-                ))
-                add(Paragraph("Телефон: $tenantPhone", bodyPaint, spaceAfter = 8f))
-                add(Paragraph(
-                    "иккинчи томондан қуйидагилар тўғрисида ушбу шартномани туздилар:",
-                    bodyPaint, spaceAfter = 8f
-                ))
+            val effectiveBody = content.bodyText.ifBlank { TemplateContent.DEFAULT_CONTRACT_BODY_UNLIMITED }
+            val resolvedBody = applyPlaceholders(effectiveBody, placeholders)
 
-                // Раздел 1
-                add(Paragraph("1. Шартнома предмети", sectionPaint, spaceAfter = 6f))
-                add(Paragraph(
-                    "1.1. Шартномага мувофиқ «Ижарага берувчи» ўзига мулк ҳуқуқи асосида тегишли бўлган:",
-                    bodyPaint, spaceAfter = 4f
-                ))
-                add(Paragraph(
-                    "1) $scooterName моделдаги электрли скутерни;",
-                    bodyPaint, indent = 12f, spaceAfter = 4f
-                ))
-                add(Paragraph(
-                    "2) Аккумуляторлар (${formatBatteryIds(battId1, battId2)}) билан биргаликда «Ижарага олувчи»га топшириш, «Ижарага олувчи» эса вақтинча фойдаланиш учун уни ижарага олиш ва ижара ҳақини тўлаш мажбуриятини олади.",
-                    bodyPaint, indent = 12f, spaceAfter = 4f
-                ))
-                add(Paragraph(
-                    "Электр скутер ҳамда аккумулятор ҳақидаги батафсил маълумотлар ушбу шартноманинг ажралмас қисми бўлган топшириқ-қабул қилиш далолатномасида кўрсатилади.",
-                    bodyPaint, spaceAfter = 6f
-                ))
-                add(Paragraph(
-                    "1.2. «Ижарага олувчи» электрли скутердан Тошкент шаҳри ҳудудида етказиб бериш (курьер) хизмати кўрсатиш мақсадида фойдаланади.",
-                    bodyPaint, spaceAfter = 8f
-                ))
-
-                // Раздел 2 — с НЕОГРАНИЧЕННЫМ сроком
-                add(Paragraph("2. Тўлов шартлари", sectionPaint, spaceAfter = 6f))
-                add(Paragraph(
-                    "2.1. «Ижарага олувчи» «Ижарага берувчи»га олдиндан 0 (ноль сўм 00 тийин) миқдорида кафолат пули тўлайди. Ушбу кафолат пули шартнома муддати якунланганидан сўнг «Ижарага олувчи»га қайтарилади.",
-                    bodyPaint, spaceAfter = 4f
-                ))
-                add(Paragraph(
-                    "Агар шартнома амалда бўлган вақтда мототранспорт воситасига зарар етказилган тақдирда, мототранспорт воситасини таъмирлаш ишлари ушбу маблағ ҳисобидан қопланади. Агар таъмирлаш учун ушбу кафолат пули етарли бўлмаса, қолган қисми «Ижарага олувчи» томонидан қопланади.",
-                    bodyPaint, spaceAfter = 4f
-                ))
-                add(Paragraph(
-                    "2.2. Мототранспорт воситасининг қиймати қайта нархлаш коэффициентлари ва амортизация меъёрларини ҳисобга олган ҳолда 11 500 000 (ўн бир миллион беш юз минг сўм 00 тийин)ни ташкил этади.",
-                    bodyPaint, spaceAfter = 4f
-                ))
-                add(Paragraph(
-                    "2.3. Ижара ҳақи «Ижарага олувчи» томонидан кунига ${formatAmount(dailyAmount)} (ўз сўмларида)дан ҳисобланади.",
-                    bodyPaint, spaceAfter = 4f
-                ))
-                add(Paragraph(
-                    "2.4. Ижара тўловлари «Ижарага олувчи» томонидан 7 кун учун олдиндан ${formatAmount(weeklyAmount)} миқдорида тўлаб борилади.",
-                    bodyPaint, spaceAfter = 4f
-                ))
-                // ── КЛЮЧЕВОЕ ОТЛИЧИЕ: бессрочный договор ─────────────────────
-                add(Paragraph(
-                    "2.5. Ушбу шартнома бўйича ижара муддати ${dateFmt.format(Date(weekStart))} санасидан бошлаб чексиз муддатга, яъни «Ижарага олувчи» шартномани расман тугатиш тўғрисида ёзма равишда билдиргунга қадар, шу вақтгача амал қилади. Шартнома «Ижарага олувчи» томонидан исталган вақтда, олдиндан камида 3 (уч) кун муддатда хабардор қилиниши шартли равишда, бекор қилиниши мумкин. Ҳар ҳафталик ижара тўловлари шартнома амал қилиш давомида тўлаб борилаверади, то «Ижарага олувчи» шартномани тугатиш тўғрисидаги ёзма аризани тақдим этгунча.",
-                    bodyPaint, spaceAfter = 8f
-                ))
-
-                // Раздел 3
-                add(Paragraph("3. Тарафларнинг ҳуқуқ ва мажбуриятлари", sectionPaint, spaceAfter = 6f))
-                val section3 = listOf(
-                    "3.1. «Ижарага берувчи» шартнома имзолангандан кейин электр скутерни ўша куннинг ўзида «Ижарага олувчи»га топширади.",
-                    "3.2. Электр скутерни жорий таъмирлаш ва профилактика кўригидан ўтказиш «Ижарага олувчи» томон ҳисобидан амалга оширилади.",
-                    "3.3. «Ижарага олувчи» электр скутерга қўшимча тақдим қилинган аккумуляторларни соз ҳолатда сақланиши учун жавобгар ҳисобланади.",
-                    "3.4. Йўл транспорт ҳодисаси содир бўлганида ёки бошқа ҳар қандай ҳолатда электр скутерга ёки аккумуляторга зарар етган ҳолатда «Ижарага олувчи» 3 кун муддат ичида ўз ҳисобидан таъмирлайди.",
-                    "3.5. Йўл транспорт ҳодисаси учинчи шахс айби билан содир этилиши натижасида электр скутерга ёки аккумуляторга етказилган зарарни қоплаш учун мулкдор сифатида «Ижарага берувчи» учинчи шахсдан етказилган зарарни ундириш юзасидан ваколатли идораларга даъво қилиш ҳуқуқига эга.",
-                    "3.6. «Ижарага берувчи» шартномада келишилган ижара ҳақи ёки етказилган зарар бўйича қарздорлик ўз вақтида тўланмаган тақдирда, қарздорликни қонунчиликда белгиланган тартибда ундириш ҳуқуқига эга.",
-                    "3.7. Форс-мажор ҳолатлари натижасида келиб чиқадиган зарарлар амалдаги қонунчиликка ва ушбу шартнома шартларига мувофиқ ҳал этилади.",
-                    "3.8. Электр скутер ушбу шартнома имзоланишидан сўнг топшириқ-қабул қилиш далолатномасида кўрсатилган ҳолатда «Ижарага олувчи»га топширилади ва айнан шу ҳолатда қайтарилиши лозим.",
-                    "3.9. «Ижарага олувчи» электр скутерни қайтариб топшириши ҳақида «Ижарага берувчи»ни камида 3 кун олдин хабардор қилиши лозим.",
-                    "3.10. Ижара муддати давомида «Ижарага олувчи» томонидан Йўл ҳаракати қоидаларини бузиш оқибатида юзага келган ҳар қандай жарималар «Ижарага олувчи» томонидан тўланади.",
-                    "3.11. Электр скутерни «Ижарага олувчи» томонидан бошқа учинчи шахсга фойдаланишга бериш қатъиян тақиқланади. Ушбу ҳолат аниқланган тақдирда «Ижарага берувчи» шартномани бир томонлама бекор қилиш ва электр скутерни қайтариб олиш ҳуқуқига эга.",
-                    "3.12. Электр скутер авария ҳолатида, техник носоз ёки фойдаланишга яроқсиз ҳолатда қайтарилган, шунингдек электр скутер ёки аккумуляторлар йўқотилган, ўғирланган ёки топширилмаган ҳолларда, етказилган зарар учун тўлиқ моддий жавобгарлик «Ижарага олувчи» зиммасига юклатилади.",
-                    // ── 3.13 — поломка аккумулятора: сумма из настроек ─────────
-                    "3.13. АККУМУЛЯТОРНИНГ БУЗИЛИШИ ТАҚДИРИДА: агар ижарага олинган аккумулятор(лар) бузилса, зарарга учраса ёки ишламас ҳолатга келиб қолса ва бу ҳолатда таъмирлаш имкони бўлмаса, «Ижарага олувчи» ҳар бир бузилган аккумулятор учун $batteryDamageText миқдорида тўлов амалга ошириши шарт. Ушбу сумма «Ижарага берувчи»нинг реал зарарини қоплаш учун белгиланган бўлиб, аккумуляторни қайтариб бериш ёки алмаштириш шарт эмас."
-                )
-                section3.forEach { add(Paragraph(it, bodyPaint, spaceAfter = 3f)) }
-
-                // Раздел 4
-                add(Paragraph("4. Тарафларнинг жавобгарлиги ва низоларни ҳал қилиш тартиби", sectionPaint, spaceAfter = 6f))
-                add(Paragraph(
-                    "4.1. Тарафлар ўз мажбуриятларини бажармаган ёки лозим даражада бажармаганликлари учун Ўзбекистон Республикасининг Фуқаролик кодекси ва бошқа қонун ҳужжатлари ҳамда мазкур шартномага мувофиқ жавобгар бўладилар.",
-                    bodyPaint, spaceAfter = 4f
-                ))
-                add(Paragraph(
-                    "4.2. Тарафлар ўртасида келиб чиқадиган низолар тарафларнинг ўзаро келишуви асосида ҳал этилади. Тарафлар келишувга эришмаган тақдирда, низо белгиланган тартибда судда ҳал этилади.",
-                    bodyPaint, spaceAfter = 8f
-                ))
-
-                // Раздел 5 — с бессрочным характером
-                add(Paragraph("5. Шартноманинг бошқа шартлари", sectionPaint, spaceAfter = 6f))
-                add(Paragraph(
-                    "5.1. Шартномага киритилаётган барча ўзгартириш ва қўшимчалар ёзма равишда тузилган ва иккала тараф томонидан имзоланган ҳолдагина ҳақиқий ҳисобланади.",
-                    bodyPaint, spaceAfter = 4f
-                ))
-                // ── КЛЮЧЕВОЕ ОТЛИЧИЕ: подтверждение бессрочности ─────────────
-                add(Paragraph(
-                    "5.2. Ушбу шартнома ${dateFmt.format(Date(weekStart))} санасида тузилган санадан бошлаб кучга киради ва чексиз муддатга, яъни «Ижарага олувчи» шартномани тугатиш тўғрисида ёзма равишда ариза бергунга қадар амал қилади. «Ижарага олувчи» шартномани исталган вақтда бир томонлама тугатиш ҳуқуқига эга, бу ҳақда камида 3 (уч) кун олдин «Ижарага берувчи»ни хабардор қилиши шарт. Шартнома тугатилганда электр скутер ва аккумуляторлар «Ижарага берувчи»га қайтарилади, қолган ҳафталик тўловлар ўзаро ҳисоб-китоб қилинади.",
-                    bodyPaint, spaceAfter = 4f
-                ))
-                add(Paragraph(
-                    "5.3. Шартнома 2 нусхада тузилган бўлиб, иккаласи ҳам бир хил юридик кучга эга.",
-                    bodyPaint, spaceAfter = 4f
-                ))
-                add(Paragraph(
-                    "5.4. Мазкур шартномада назарда тутилмаган масалалар амалдаги қонун ҳужжатларига мувофиқ тартибга солинади.",
-                    bodyPaint, spaceAfter = 8f
-                ))
-
-                // Раздел 6 — Реквизиты
-                add(Paragraph("6. Тарафларнинг реквизитлари ва имзолари:", sectionPaint, spaceAfter = 6f))
-                add(Paragraph("«Ижарага берувчи»:", bodyPaint.applyBold(), spaceAfter = 4f))
-                add(Paragraph("Номи: $LANDLORD_NAME", bodyPaint, spaceAfter = 2f))
-                add(Paragraph("Манзил: $LANDLORD_ADDRESS", bodyPaint, spaceAfter = 2f))
-                add(Paragraph("Банк: $LANDLORD_BANK", bodyPaint, spaceAfter = 2f))
-                add(Paragraph("Р/С: $LANDLORD_ACCOUNT", bodyPaint, spaceAfter = 2f))
-                add(Paragraph("МФО: $LANDLORD_MFO", bodyPaint, spaceAfter = 2f))
-                add(Paragraph("ИНН: $LANDLORD_INN", bodyPaint, spaceAfter = 2f))
-                add(Paragraph("Телефон: $LANDLORD_PHONE", bodyPaint, spaceAfter = 2f))
-                add(Paragraph("Рахбар: $LANDLORD_DIRECTOR", bodyPaint, spaceAfter = 8f))
-
-                add(Paragraph("«Ижарага Олувчи»:", bodyPaint.applyBold(), spaceAfter = 4f))
-                add(Paragraph("ФИШ: $tenantName", bodyPaint, spaceAfter = 2f))
-                add(Paragraph("Паспорт маълумотлари: ${fill(tenantPassport)}", bodyPaint, spaceAfter = 2f))
-                add(Paragraph("Манзил: ${fill(tenantAddress)}", bodyPaint, spaceAfter = 2f))
-                add(Paragraph("ЖШШИР: ${fill(tenantPinfl)}", bodyPaint, spaceAfter = 2f))
-                add(Paragraph("Телефон: $tenantPhone", bodyPaint, spaceAfter = 8f))
-
-                add(Paragraph(
-                    "Ижарага берувчи имзоси: _______________________     Ижарага Олувчи имзоси: _______________________",
-                    signaturePaint, spaceAfter = 12f
-                ))
-
-                // Топшириқ-қабул қилиш далолатномаси
-                add(Paragraph(
-                    "Топшириқ-қабул қилиш Далолатномаси",
-                    sectionPaint, alignment = Layout.Alignment.ALIGN_CENTER, spaceAfter = 6f
-                ))
-                add(Paragraph(
-                    "«${dateFmt.format(Date(now)).take(2)}» $contractDate. Тошкент шаҳри",
-                    bodyPaint, alignment = Layout.Alignment.ALIGN_CENTER, spaceAfter = 6f
-                ))
-                add(Paragraph(
-                    "Ушбу далолатнома шу ҳақдаки $LANDLORD_NAME (кейинги ўринларда “Ижарага берувчи”), корхона рахбари $LANDLORD_DIRECTOR ҳамда фуқаро $tenantName (кейинги ўринларда “Ижарага олувчи”) ўртасида «${dateFmt.format(Date(now))}» санасида имзоланган № $contractNumber сонли Электр скутер ижара шартномасига асосан қуйидаги Электр скутер аккумуляторлар билан биргаликда Ижарага олувчига топширилди:",
-                    bodyPaint, spaceAfter = 8f
-                ))
-                add(Paragraph("Модель: $scooterName", bodyPaint, spaceAfter = 2f))
-                add(Paragraph("VIN №: ${fill(scooterVin)}", bodyPaint, spaceAfter = 2f))
-                add(Paragraph("Двигатель рақами: ${fill(scooterEngine)}", bodyPaint, spaceAfter = 2f))
-                add(Paragraph("ID рақами: ${fill(scooterSerial)}", bodyPaint, spaceAfter = 2f))
-                add(Paragraph("Аккумулятор ID рақамлари: ${formatBatteryIds(battId1, battId2, separator = "  ")}", bodyPaint, spaceAfter = 2f))
-                add(Paragraph("Қўшимча маълумот: ${fill(extraInfo)}", bodyPaint, spaceAfter = 8f))
-                add(Paragraph(
-                    "Ижарага берувчи юқорида кўрсатилган мототранспорт воситасини кўздан кечирганда қуйидаги ҳолатлар аниқланди:",
-                    bodyPaint, spaceAfter = 4f
-                ))
-                add(Paragraph("Рама ва корпус: соз ҳолатда; Мотор: соз ҳолатда; Бошқа қисмлар: соз ҳолатда.", bodyPaint, spaceAfter = 6f))
-                add(Paragraph(
-                    "Топширди: _______________________     Қабул қилди: _______________________",
-                    signaturePaint, spaceAfter = 12f
-                ))
-                add(Paragraph(
-                    "$LANDLORD_NAME          $tenantName",
-                    signaturePaint, alignment = Layout.Alignment.ALIGN_CENTER
-                ))
-            }
-            }
-
-            // ── Подбор размера шрифта (auto: уменьшаем пока не влезет в 1 стр) ─
             val baseFontSize = pickBaseFontSize(
                 autoFit = settings.pdfFontSizeAuto,
                 initialSize = SettingsRepository.DEFAULT_PDF_FONT_SIZE,
                 manualSize = settings.pdfFontSize,
-                buildParagraphs = ::buildParagraphsForSize,
+                buildParagraphs = { size ->
+                    val paints = createPaints(size)
+                    parseTemplateToParagraphs(resolvedBody, paints)
+                },
                 contentWidth = contentWidth
             )
-            val paragraphs = buildParagraphsForSize(baseFontSize)
+            val paints = createPaints(baseFontSize)
+            val paragraphs = parseTemplateToParagraphs(resolvedBody, paints)
 
-            // ── Рендер с пагинацией (если даже с minSize не влезло — будет >1 стр)
             renderParagraphs(doc, paragraphs, contentWidth)
+            writePdfToFile(doc, targetFile)
 
-            // ── Сохранение ────────────────────────────────────────────────
-            val dir = File(
-                Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOCUMENTS),
-                "ScooterContracts"
-            )
-            if (!dir.exists()) dir.mkdirs()
-
-            val file = File(dir, "rental_contract_unlimited_${contractNumber}_${SimpleDateFormat("yyyyMMdd_HHmmss", Locale.getDefault()).format(Date())}.pdf")
-            FileOutputStream(file).use { fos -> doc.writeTo(fos) }
-
-            Log.i(TAG, "Unlimited PDF saved: ${file.absolutePath}")
+            Log.i(TAG, "Unlimited PDF saved: ${targetFile.absolutePath}")
             return FileProvider.getUriForFile(
                 context,
                 "${context.packageName}.fileprovider",
-                file
+                targetFile
             )
         } catch (e: Exception) {
             Log.e(TAG, "Failed to generate unlimited PDF", e)
@@ -673,6 +313,309 @@ object PdfContractGenerator {
             doc.close()
         }
     }
+
+    // ──────────────────────────────────────────────────────────────────────
+    // Помощники для шаблонов
+    // ──────────────────────────────────────────────────────────────────────
+
+    /**
+     * Загружает активную версию шаблона из БД. Если БД недоступна или
+     * нет активной версии — возвращает дефолтный [TemplateContent].
+     *
+     * Использует [runBlocking] т.к. публичные методы [generate] / [generateUnlimited]
+     * синхронные (обратная совместимость с ContractHistoryViewModel).
+     * DAO-запрос кэширован Room'ом, отрабатывает за <5 ms.
+     */
+    private fun loadActiveTemplateContent(context: Context, type: String): TemplateContent {
+        return try {
+            kotlinx.coroutines.runBlocking {
+                val db = AppDatabase.getDatabase(context)
+                val active = db.contractTemplateDao().getActiveForType(type)
+                if (active != null) {
+                    try {
+                        kotlinx.serialization.json.Json {
+                            ignoreUnknownKeys = true
+                            encodeDefaults = true
+                        }.decodeFromString<TemplateContent>(active.contentJson)
+                    } catch (e: Exception) {
+                        Log.e(TAG, "Failed to parse template JSON, fallback to default", e)
+                        TemplateContent()
+                    }
+                } else {
+                    TemplateContent()
+                }
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to load active template, fallback to default", e)
+            TemplateContent()
+        }
+    }
+
+    /** Вычисляет номер договора в формате SRC-000014. */
+    private fun computeContractNumber(entry: ContractHistoryEntry): String =
+        "SRC-${entry.id.toString().padStart(6, '0')}"
+
+    /**
+     * Строит карту плейсхолдеров для замены в теле шаблона.
+     *
+     * Ключи — имена вида "tenantName", "landlordName" и т.д.
+     * В шаблоне используются как ${tenantName}.
+     */
+    @Suppress("LongParameterList")
+    private fun buildPlaceholders(
+        content: TemplateContent,
+        contractNumber: String,
+        contractDate: String,
+        contractDay: String,
+        contractFullDate: String,
+        weekStart: String,
+        weekEnd: String,
+        tenantName: String,
+        tenantPhone: String,
+        tenantPassport: String,
+        tenantAddress: String,
+        tenantPinfl: String,
+        scooterName: String,
+        scooterVin: String,
+        scooterEngine: String,
+        scooterSerial: String,
+        battId1: String,
+        battId2: String,
+        extraInfo: String,
+        weeklyAmount: String,
+        dailyAmount: String,
+        batteryDamageText: String
+    ): Map<String, String> {
+        // Заполнитель для пустых полей (чтобы линия для подписи оставалась)
+        val fill: (String) -> String = { it.ifBlank { "______________________________" } }
+
+        return mapOf(
+            // Реквизиты арендодателя (из content)
+            "landlordName" to content.landlordName,
+            "landlordAddress" to content.landlordAddress,
+            "landlordBank" to content.landlordBank,
+            "landlordAccount" to content.landlordAccount,
+            "landlordMfo" to content.landlordMfo,
+            "landlordInn" to content.landlordInn,
+            "landlordPhone" to content.landlordPhone,
+            "landlordDirector" to content.landlordDirector,
+
+            // Договор
+            "contractNumber" to contractNumber,
+            "contractDate" to contractDate,
+            "contractDay" to contractDay,
+            "contractFullDate" to contractFullDate,
+            "weekStart" to weekStart,
+            "weekEnd" to weekEnd,
+
+            // Реквизиты арендатора
+            "tenantName" to tenantName,
+            "tenantPhone" to tenantPhone,
+            "tenantPassport" to tenantPassport,
+            "tenantAddress" to tenantAddress,
+            "tenantPinfl" to tenantPinfl,
+
+            // Реквизиты скутера
+            "scooterName" to scooterName,
+            "scooterVin" to scooterVin,
+            "scooterEngine" to scooterEngine,
+            "scooterSerial" to scooterSerial,
+            "extraInfo" to extraInfo,
+
+            // Аккумуляторы (отформатированные)
+            "batteryIdsList" to formatBatteryIds(battId1, battId2, ", "),
+            "batteryIdsActa" to formatBatteryIds(battId1, battId2, "  "),
+
+            // Суммы
+            "weeklyAmount" to weeklyAmount,
+            "dailyAmount" to dailyAmount,
+            "batteryDamageText" to batteryDamageText,
+
+            // Заполненные варианты (для линий подписи)
+            "tenantPassportFilled" to fill(tenantPassport),
+            "tenantAddressFilled" to fill(tenantAddress),
+            "tenantPinflFilled" to fill(tenantPinfl),
+            "scooterVinFilled" to fill(scooterVin),
+            "scooterEngineFilled" to fill(scooterEngine),
+            "scooterSerialFilled" to fill(scooterSerial),
+            "extraInfoFilled" to fill(extraInfo)
+        )
+    }
+
+    /**
+     * Заменяет все ${placeholders} в [body] на значения из [placeholders].
+     *
+     * Использует регулярное выражение для поиска `\$\{name\}` и заменяет на
+     * значение из карты. Если плейсхолдер не найден в карте — оставляет
+     * как есть (не падает).
+     */
+    private fun applyPlaceholders(body: String, placeholders: Map<String, String>): String {
+        val regex = Regex("""\$\{(\w+)\}""")
+        return regex.replace(body) { match ->
+            placeholders[match.groupValues[1]] ?: match.value
+        }
+    }
+
+    /**
+     * Парсит [bodyText] в список [Paragraph] для рендера в PDF.
+     *
+     * Line-based синтаксис (см. документацию [TemplateContent]):
+     *   • `## ` prefix    — заголовок (titlePaint, +3pt, BOLD, center, 8f spaceAfter)
+     *   • `### ` prefix   — заголовок раздела (sectionPaint, +1pt, BOLD, 6f spaceAfter)
+     *   • `> ` prefix     — подпись (signaturePaint, 12f spaceAfter)
+     *   • `* ` prefix     — bold body (bodyPaint.applyBold(), 4f spaceAfter)
+     *   • `  ` (2 пробела) — body с отступом 12pt (для пунктов 1) 2))
+     *   • пустая строка   — игнорируется, но даёт extra spaceAfter предыдущему
+     *   • прочие строки   — body paint, indent=0, spaceAfter=4f
+     */
+    private fun parseTemplateToParagraphs(bodyText: String, paints: PdfPaints): List<Paragraph> {
+        val result = mutableListOf<Paragraph>()
+        val lines = bodyText.split("\n")
+        var lastSpaceAfter = 0f
+
+        for ((index, rawLine) in lines.withIndex()) {
+            val line = rawLine
+
+            when {
+                line.isBlank() -> {
+                    // Пустая строка — даём extra spaceAfter предыдущему параграфу.
+                    if (result.isNotEmpty()) {
+                        val prev = result.removeAt(result.lastIndex)
+                        result.add(prev.copy(spaceAfter = (prev.spaceAfter + 4f).coerceAtMost(12f)))
+                    }
+                    lastSpaceAfter = 0f
+                }
+                line.startsWith("## ") -> {
+                    result.add(Paragraph(
+                        text = line.removePrefix("## "),
+                        paint = paints.titlePaint,
+                        alignment = Layout.Alignment.ALIGN_CENTER,
+                        spaceAfter = 8f
+                    ))
+                    lastSpaceAfter = 8f
+                }
+                line.startsWith("### ") -> {
+                    result.add(Paragraph(
+                        text = line.removePrefix("### "),
+                        paint = paints.sectionPaint,
+                        spaceAfter = 6f
+                    ))
+                    lastSpaceAfter = 6f
+                }
+                line.startsWith("> ") -> {
+                    result.add(Paragraph(
+                        text = line.removePrefix("> "),
+                        paint = paints.signaturePaint,
+                        spaceAfter = 12f
+                    ))
+                    lastSpaceAfter = 12f
+                }
+                line.startsWith("* ") -> {
+                    result.add(Paragraph(
+                        text = line.removePrefix("* "),
+                        paint = paints.bodyPaint.applyBold(),
+                        spaceAfter = 4f
+                    ))
+                    lastSpaceAfter = 4f
+                }
+                line.startsWith("  ") -> {
+                    // Отступ 12pt (для пунктов "1) ..." "2) ...")
+                    result.add(Paragraph(
+                        text = line.trimStart(),
+                        paint = paints.bodyPaint,
+                        indent = 12f,
+                        spaceAfter = 4f
+                    ))
+                    lastSpaceAfter = 4f
+                }
+                else -> {
+                    result.add(Paragraph(
+                        text = line,
+                        paint = paints.bodyPaint,
+                        spaceAfter = 4f
+                    ))
+                    lastSpaceAfter = 4f
+                }
+            }
+        }
+        return result
+    }
+
+    // ──────────────────────────────────────────────────────────────────────
+    // Форматирование
+    // ──────────────────────────────────────────────────────────────────────
+
+    /**
+     * Форматирует список ID аккумуляторов для PDF-договора.
+     *
+     * Правила (чтобы не показывать дубликаты, когда оба аккумулятора
+     * имеют одинаковый ID или когда второй аккумулятор отсутствует):
+     *   • Если battId2 пустой → показываем только "ID: battId1"
+     *   • Если battId1 пустой → показываем только "ID: battId2"
+     *   • Если battId1 == battId2 → показываем только один "ID: battId1"
+     *   • Иначе → "ID: battId1, ID: battId2" (или с другим сепаратором)
+     *   • Если оба пустые → "ID: ______" (заглушка для подписи)
+     *
+     * @param separator разделитель между двумя ID (", " для раздела 1.1,
+     *                  "  " для далолатномаси)
+     */
+    private fun formatBatteryIds(
+        battId1: String,
+        battId2: String,
+        separator: String = ", "
+    ): String {
+        val shortFill: (String) -> String = { it.ifBlank { "________" } }
+        return when {
+            battId1.isBlank() && battId2.isBlank() -> "ID: ${shortFill("")}"
+            battId1.isBlank() -> "ID: ${shortFill(battId2)}"
+            battId2.isBlank() -> "ID: ${shortFill(battId1)}"
+            battId1 == battId2 -> "ID: ${shortFill(battId1)}"
+            else -> "ID: ${shortFill(battId1)}${separator}ID: ${shortFill(battId2)}"
+        }
+    }
+
+    private fun formatAmount(amount: Double): String {
+        val longVal = amount.toLong()
+        // Format with spaces: 420 000
+        return "%,d".format(longVal).replace(",", " ")
+    }
+
+    /**
+     * Форматирует сумму прописью на узбекском для PDF-договора.
+     *
+     * Упрощённая версия: возвращает сумму цифрами с разделением разрядов
+     * пробелом + "сўм" + копейки "00 тийин". Используется в секции
+     * о поломке аккумулятора (3.13).
+     */
+    private fun formatAmountWithText(amount: Double): String {
+        val longVal = amount.toLong()
+        return "${"%,d".format(longVal).replace(",", " ")} сўм 00 тийин"
+    }
+
+    // ──────────────────────────────────────────────────────────────────────
+    // I/O helpers
+    // ──────────────────────────────────────────────────────────────────────
+
+    /** Создаёт File в публичной папке Documents/ScooterContracts/. */
+    private fun defaultOutputFile(context: Context, baseName: String): File {
+        val dir = File(
+            Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOCUMENTS),
+            "ScooterContracts"
+        )
+        if (!dir.exists()) dir.mkdirs()
+        val ts = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.getDefault()).format(Date())
+        return File(dir, "${baseName}_$ts.pdf")
+    }
+
+    /** Записывает PdfDocument в файл. */
+    private fun writePdfToFile(doc: PdfDocument, file: File) {
+        file.parentFile?.mkdirs()
+        FileOutputStream(file).use { fos -> doc.writeTo(fos) }
+    }
+
+    // ──────────────────────────────────────────────────────────────────────
+    // Rendering infrastructure (без изменений по сравнению с v36)
+    // ──────────────────────────────────────────────────────────────────────
 
     private data class Paragraph(
         val text: String,
@@ -685,11 +628,6 @@ object PdfContractGenerator {
     private fun TextPaint.applyBold(): TextPaint = TextPaint(this).apply {
         typeface = Typeface.create(Typeface.DEFAULT, Typeface.BOLD)
     }
-
-    // ── Auto-fit helpers ──────────────────────────────────────────────────
-    // Позволяют динамически подбирать размер шрифта так, чтобы весь документ
-    // поместился на одну страницу A4. Без этого при добавлении новой секции
-    // о поломке аккумулятора PDF мог переходить на вторую страницу.
 
     /**
      * Контейнер для четырёх paints, параметризованных базовым размером.
@@ -833,17 +771,5 @@ object PdfContractGenerator {
             y += paraHeight
         }
         doc.finishPage(page)
-    }
-
-    /**
-     * Форматирует сумму прописью на узбекском для PDF-договора.
-     *
-     * Упрощённая версия: возвращает сумму цифрами с разделением разрядов
-     * пробелом + "сўм" + копейки "00 тийин". Используется в новой секции
-     * о поломке аккумулятора.
-     */
-    private fun formatAmountWithText(amount: Double): String {
-        val longVal = amount.toLong()
-        return "${"%,d".format(longVal).replace(",", " ")} сўм 00 тийин"
     }
 }
