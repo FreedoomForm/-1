@@ -128,6 +128,36 @@ jobs:
       - name: Assemble debug APK
         run: ./gradlew clean assembleDebug --no-daemon --stacktrace
 
+      # ── Запуск инструментed тестов на эмуляторе ─────────────────────────
+      # Это КРИТИЧНО: assembleDebug только компилирует код, не запускает его.
+      # Runtime-баги (миграции БД, ViewModel constructor failures, missing
+      # serializers и т.п.) НЕ ловятся компилятором — нужны реальные тесты.
+      #
+      # После бага «при вхождении в приложения он отбрасывает меня назад»
+      # (commit f20ae7f → 0719bf9) стало ясно, что нужен smoke-тест, который
+      # запускает MainActivity и проверяет, что приложение не падает.
+      #
+      # Используем reactivecircus/android-emulator-rocket — готовый action,
+      # который поднимает эмулятор за ~30 секунд (boot + script).
+      - name: Run instrumented smoke tests on emulator
+        uses: reactivecircus/android-emulator-rocket@v2
+        with:
+          api-level: 30
+          arch: x86_64
+          profile: pixel_5
+          script: |
+            ./gradlew connectedDebugAndroidTest --no-daemon --stacktrace
+
+      - name: Upload instrumented test results on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: instrumented-test-results
+          path: |
+            app/build/reports/androidTest/connected/
+            app/build/outputs/androidTest-results/connected/
+          if-no-files-found: ignore
+
       - name: Locate built APK
         id: locate_apk
         run: |

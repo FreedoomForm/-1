@@ -391,16 +391,25 @@ abstract class AppDatabase : RoomDatabase() {
                 // таблицы (renters, scooters, contract_history, transactions,
                 // virtual_cards, card_transactions, notification_history).
                 // Только добавляет новую таблицу для шаблонов договоров.
+                //
+                // ВАЖНО: SQL-схема должна СТРОГО совпадать со схемой, которую
+                // Room генерирует из @Entity. В частности, у нас НЕТ @ColumnInfo
+                // с defaultValue в entity, поэтому в SQL НЕ должно быть DEFAULT
+                // предложений — иначе Room упадёт на schema validation с ошибкой
+                // "Migration didn't properly handle: ContractTemplate".
+                //
+                // Сравнение с существующими миграциями: MIGRATION_11_12 для
+                // virtual_cards создаёт таблицу БЕЗ DEFAULT, и это работает.
                 db.execSQL("""
                     CREATE TABLE IF NOT EXISTS `contract_templates` (
                         `id`          INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
                         `type`        TEXT NOT NULL,
                         `name`        TEXT NOT NULL,
                         `contentJson` TEXT NOT NULL,
-                        `isActive`    INTEGER NOT NULL DEFAULT 0,
+                        `isActive`    INTEGER NOT NULL,
                         `createdAt`   INTEGER NOT NULL,
                         `updatedAt`   INTEGER,
-                        `isDeleted`   INTEGER NOT NULL DEFAULT 0,
+                        `isDeleted`   INTEGER NOT NULL,
                         `deletedAt`   INTEGER
                     )
                 """.trimIndent())

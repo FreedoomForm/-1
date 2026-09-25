@@ -17,6 +17,13 @@ class ExampleInstrumentedTest {
   fun useAppContext() {
     // Context of the app under test.
     val appContext = InstrumentationRegistry.getInstrumentation().targetContext
-    assertEquals("com.example", appContext.packageName)
+    // ВАЖНО: packageName возвращает applicationId из build.gradle.kts
+    // (а не namespace). У нас namespace = "com.example", но applicationId =
+    // "com.aistudio.scooterrent.xyzab". Поэтому packageName должен быть
+    // именно applicationId.
+    assertEquals(
+      "com.aistudio.scooterrent.xyzab",
+      appContext.packageName
+    )
   }
 }
