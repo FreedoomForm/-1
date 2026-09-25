@@ -43,7 +43,7 @@ import java.util.Locale
  * Начиная с v37 (DB migration 36→37), шаблон договора хранится в таблице
  * `contract_templates`. Методы [generate] / [generateUnlimited] читают
  * активную версию шаблона из БД и используют её содержимое
- * (8 реквизитов арендодателя + тело договора с ${placeholders}).
+ * (8 реквизитов арендодателя + тело договора с {{placeholders}}).
  *
  * Новые методы [generateTo] / [generateUnlimitedTo] принимают
  * [TemplateContent] явно — используются для превью на странице
@@ -359,7 +359,7 @@ object PdfContractGenerator {
      * Строит карту плейсхолдеров для замены в теле шаблона.
      *
      * Ключи — имена вида "tenantName", "landlordName" и т.д.
-     * В шаблоне используются как ${tenantName}.
+     * В шаблоне используются как {{tenantName}}.
      */
     @Suppress("LongParameterList")
     private fun buildPlaceholders(
@@ -443,14 +443,14 @@ object PdfContractGenerator {
     }
 
     /**
-     * Заменяет все ${placeholders} в [body] на значения из [placeholders].
+     * Заменяет все {{placeholders}} в [body] на значения из [placeholders].
      *
      * Использует регулярное выражение для поиска `\$\{name\}` и заменяет на
      * значение из карты. Если плейсхолдер не найден в карте — оставляет
      * как есть (не падает).
      */
     private fun applyPlaceholders(body: String, placeholders: Map<String, String>): String {
-        val regex = Regex("""\$\{(\w+)\}""")
+        val regex = Regex("""\{\{(\w+)\}\}""")
         return regex.replace(body) { match ->
             placeholders[match.groupValues[1]] ?: match.value
         }

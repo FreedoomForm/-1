@@ -16,14 +16,22 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.weight
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.Clear
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.HelpOutline
+import androidx.compose.material.icons.filled.KeyboardArrowDown
+import androidx.compose.material.icons.filled.KeyboardArrowUp
+import androidx.compose.material.icons.filled.Save
+import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Star
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Card
@@ -38,8 +46,6 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Tab
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
-import androidx.compose.material3.TextField
-import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -55,8 +61,6 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.input.KeyboardType
-import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -364,7 +368,7 @@ fun DocumentManagementScreen(
             confirmButton = {
                 DangerButton(
                     label = "Удалить",
-                    icon = androidx.compose.material.icons.Icons.Default.Delete,
+                    icon = Icons.Default.Delete,
                     onClick = {
                         viewModel.deleteTemplate(templateId) { showDeleteConfirm = false }
                     }
@@ -373,7 +377,7 @@ fun DocumentManagementScreen(
             dismissButton = {
                 TextActionButton(
                     label = "Отмена",
-                    icon = androidx.compose.material.icons.Icons.Default.Close,
+                    icon = Icons.Default.Close,
                     onClick = { showDeleteConfirm = false }
                 )
             }
@@ -395,14 +399,14 @@ fun DocumentManagementScreen(
             confirmButton = {
                 PrimaryButton(
                     label = "OK",
-                    icon = androidx.compose.material.icons.Icons.Default.Search,
+                    icon = Icons.Default.Search,
                     onClick = { showSearchPanel = false }
                 )
             },
             dismissButton = {
                 TextActionButton(
                     label = "Сбросить",
-                    icon = androidx.compose.material.icons.Icons.Default.Clear,
+                    icon = Icons.Default.Clear,
                     onClick = {
                         viewModel.setSearchQuery("")
                         showSearchPanel = false
@@ -415,6 +419,7 @@ fun DocumentManagementScreen(
 
 // ── Подкомпоненты ─────────────────────────────────────────────────────────
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun TypeSelector(selectedType: String, onSelect: (String) -> Unit) {
     val tabs = listOf(
@@ -520,8 +525,8 @@ private fun RenterSelector(
                     modifier = Modifier.weight(1f)
                 )
                 Icon(
-                    if (expanded.value) androidx.compose.material.icons.Icons.Default.KeyboardArrowUp
-                    else androidx.compose.material.icons.Icons.Default.KeyboardArrowDown,
+                    if (expanded.value) Icons.Default.KeyboardArrowUp
+                    else Icons.Default.KeyboardArrowDown,
                     contentDescription = "Раскрыть",
                     tint = ClaudeTextSecondary
                 )
@@ -549,7 +554,7 @@ private fun RenterSelector(
                         ) {
                             if (renter.id == selectedId) {
                                 Icon(
-                                    androidx.compose.material.icons.Icons.Default.Check,
+                                    Icons.Default.Check,
                                     contentDescription = null,
                                     tint = ClaudeAccent,
                                     modifier = Modifier.size(20.dp)
@@ -659,7 +664,7 @@ private fun TemplateEditorDialog(
                         style = MaterialTheme.typography.titleSmall, color = ClaudeText)
                     TextActionButton(
                         label = if (showPlaceholdersHelp) "Скрыть" else "Плейсхолдеры",
-                        icon = androidx.compose.material.icons.Icons.Default.HelpOutline,
+                        icon = Icons.Default.HelpOutline,
                         onClick = { showPlaceholdersHelp = !showPlaceholdersHelp }
                     )
                 }
@@ -735,8 +740,8 @@ private fun TemplateEditorDialog(
         confirmButton = {
             PrimaryButton(
                 label = if (isCreate) "Создать" else "Сохранить",
-                icon = if (isCreate) androidx.compose.material.icons.Icons.Default.Add
-                else androidx.compose.material.icons.Icons.Default.Save,
+                icon = if (isCreate) Icons.Default.Add
+                else Icons.Default.Save,
                 enabled = name.isNotBlank(),
                 onClick = {
                     val content = TemplateContent(
@@ -757,7 +762,7 @@ private fun TemplateEditorDialog(
         dismissButton = {
             TextActionButton(
                 label = "Отмена",
-                icon = androidx.compose.material.icons.Icons.Default.Close,
+                icon = Icons.Default.Close,
                 onClick = onDismiss
             )
         }
