@@ -13,7 +13,7 @@ android {
 
   defaultConfig {
     applicationId = "com.aistudio.scooterrent.xyzab"
-    minSdk = 24
+    minSdk = 26  // Apache POI 5.x требует API 26+. В 2026 году Android 7.x < 5% устройств.
     targetSdk = 36
     versionCode = 1024
     versionName = "1.2.187-local"
