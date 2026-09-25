@@ -663,16 +663,11 @@ fun MainScreen(
     var docDeleteTrigger by remember { mutableStateOf(0) }
     var docSearchTrigger by remember { mutableStateOf(0) }
     // ViewModel для «Документооборота» — создаётся лениво (один на сессию).
-    // ВАЖНО: ContractTemplateViewModel обёрнут внутри в try/catch (см.
-    // VM constructor), так что конструктор VM не должен бросать даже при
-    // сбое БД. Но если что-то всё-таки упадёт — обёртка try/catch здесь
-    // защищает MainScreen composition от полного краша.
-    val docTemplateViewModel: com.example.ui.ContractTemplateViewModel? = try {
+    // ContractTemplateViewModel обёрнут внутри в try/catch (см. VM init),
+    // так что конструктор не должен бросать даже при сбое БД — VM переходит
+    // в degraded mode с пустыми StateFlow'ами.
+    val docTemplateViewModel: com.example.ui.ContractTemplateViewModel =
         viewModel<com.example.ui.ContractTemplateViewModel>()
-    } catch (e: Exception) {
-        android.util.Log.e("MainScreen", "Failed to create ContractTemplateViewModel (degraded mode)", e)
-        null
-    }
 
     // ── Trash mode (v36+) ────────────────────────────────────────────────
     // false = обычный режим (показываются активные объекты, кнопка «Удалить»
@@ -822,9 +817,7 @@ fun MainScreen(
     // ── Reactive read для универсальных кнопок ✎/🗑 на вкладке 7 ──────────
     // docTemplateViewModel.selectedTemplateId — выбранная пользователем версия
     // шаблона. Используется для editEnabled/deleteEnabled на tab 7 (✎/🗑).
-    // Safe-call: если VM не создалась (degraded mode), берём null.
-    val docSelectedTemplateId by (docTemplateViewModel?.selectedTemplateId
-        ?: kotlinx.coroutines.flow.MutableStateFlow<Int?>(null))
+    val docSelectedTemplateId by docTemplateViewModel.selectedTemplateId
         .collectAsStateWithLifecycle()
 
     // Авто-проверка обновлений при запуске
@@ -1463,14 +1456,12 @@ fun MainScreen(
                         // назначает выбранную версию шаблона активной. Долгий
                         // клик по ★ — скачивает PDF выбранной версии с демо-данными
                         // (выбранный клиент из БД).
-                        if (currentTab == 7 && docTemplateViewModel != null) {
+                        if (currentTab == 7) {
                             // ── Кнопка ★ для вкладки «Документооборот» ─────────────
-                            // Если VM не создалась (degraded mode) — звезда не показывается,
-                            // SMS-кнопка тоже скрывается. Это компромисс: пользователь не сможет
-                            // управлять шаблонами, но приложение продолжит работать.
-                            val vm = docTemplateViewModel
-                            val selectedTemplateId by vm.selectedTemplateId.collectAsStateWithLifecycle()
-                            val activeTemplateId by vm.activeTemplateId.collectAsStateWithLifecycle()
+                            // Если VM в degraded mode (БД упала) — звезда всё равно
+                            // показывается, но действия будут no-op.
+                            val selectedTemplateId by docTemplateViewModel.selectedTemplateId.collectAsStateWithLifecycle()
+                            val activeTemplateId by docTemplateViewModel.activeTemplateId.collectAsStateWithLifecycle()
                             val isSelectedActive = selectedTemplateId != null && selectedTemplateId == activeTemplateId
                             Box(
                                 modifier = Modifier
@@ -1486,7 +1477,7 @@ fun MainScreen(
                                             val id = selectedTemplateId
                                             if (id != null) {
                                                 coroutineScope.launch {
-                                                    vm.setActive(id)
+                                                    docTemplateViewModel.setActive(id)
                                                     Toast.makeText(
                                                         localContext,
                                                         "Шаблон назначен активным",
@@ -1505,7 +1496,7 @@ fun MainScreen(
                                             val id = selectedTemplateId
                                             if (id != null) {
                                                 coroutineScope.launch {
-                                                    val uri = vm.downloadSelectedWithDemoData()
+                                                    val uri = docTemplateViewModel.downloadSelectedWithDemoData()
                                                     if (uri != null) {
                                                         val shareIntent = android.content.Intent(android.content.Intent.ACTION_VIEW).apply {
                                                             setDataAndType(uri, "application/pdf")
@@ -3041,39 +3032,15 @@ fun MainScreen(
                 // Клик по ★ — сделать выбранную версию активной.
                 // Долгий клик по ★ — скачать PDF выбранной версии с демо-данными.
                 //
-                // Если VM не создалась (degraded mode, например при сбое БД),
-                // показываем сообщение об ошибке вместо экрана.
-                if (docTemplateViewModel != null) {
-                    DocumentManagementScreen(
-                        docTemplateViewModel = docTemplateViewModel,
-                        createTrigger = docCreateTrigger,
-                        editTrigger = docEditTrigger,
-                        deleteTrigger = docDeleteTrigger,
-                        searchTrigger = docSearchTrigger
-                    )
-                } else {
-                    Column(
-                        modifier = Modifier
-                            .fillMaxSize()
-                            .padding(32.dp),
-                        horizontalAlignment = Alignment.CenterHorizontally,
-                        verticalArrangement = Arrangement.Center
-                    ) {
-                        Text(
-                            "Не удалось открыть «Документооборот».",
-                            style = MaterialTheme.typography.titleMedium,
-                            color = ClaudeText,
-                            textAlign = androidx.compose.ui.text.style.TextAlign.Center
-                        )
-                        Spacer(modifier = Modifier.height(16.dp))
-                        Text(
-                            "База данных недоступна. Перезапустите приложение. Если проблема сохранится, обратитесь к разработчику.",
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = ClaudeTextSecondary,
-                            textAlign = androidx.compose.ui.text.style.TextAlign.Center
-                        )
-                    }
-                }
+                // Если VM в degraded mode (БД упала), DocumentManagementScreen
+                // показывает сообщение об ошибке вместо данных.
+                DocumentManagementScreen(
+                    docTemplateViewModel = docTemplateViewModel,
+                    createTrigger = docCreateTrigger,
+                    editTrigger = docEditTrigger,
+                    deleteTrigger = docDeleteTrigger,
+                    searchTrigger = docSearchTrigger
+                )
             }
         }
 
