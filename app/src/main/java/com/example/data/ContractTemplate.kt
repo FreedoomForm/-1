@@ -1,6 +1,7 @@
 package com.example.data
 
 import androidx.room.Entity
+import androidx.room.Index
 import androidx.room.PrimaryKey
 import kotlinx.serialization.Serializable
 
@@ -24,7 +25,18 @@ import kotlinx.serialization.Serializable
  * @see ContractTemplateDao
  * @see ContractTemplateRepository
  */
-@Entity(tableName = "contract_templates")
+@Entity(
+    tableName = "contract_templates",
+    // Room's schema validation requires the entity to declare all indices that
+    // exist in the actual DB. MIGRATION_36_37 creates index
+    // `index_contract_templates_type_isActive` for fast lookup of active
+    // templates by type — without this declaration, Room throws
+    // IllegalStateException "Migration didn't properly handle" on launch
+    // (expected indices={}, found the index).
+    indices = [
+        Index(value = ["type", "isActive"], name = "index_contract_templates_type_isActive")
+    ]
+)
 data class ContractTemplate(
     @PrimaryKey(autoGenerate = true) val id: Int = 0,
     /** Тип договора: [TYPE_UNLIMITED] или [TYPE_LIMITED]. */

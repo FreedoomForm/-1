@@ -133,6 +133,12 @@ dependencies {
   testImplementation(libs.roborazzi)
   testImplementation(libs.roborazzi.compose)
   testImplementation(libs.roborazzi.junit.rule)
+  // ── Room testing — для MigrationTestHelper (тесты миграций БД) ──────────
+  // MigrationTestHelper позволяет создать БД на старой версии (напр. v36),
+  // запустить миграцию и проверить, что итоговая схема совпадает с entity.
+  // Без этого тесты использовали только fresh install и НЕ ловили баги
+  // миграций (как было с DEFAULT clauses и необъявленным @Index).
+  testImplementation("androidx.room:room-testing:2.7.0")
   androidTestImplementation(platform(libs.androidx.compose.bom))
   androidTestImplementation(libs.androidx.compose.ui.test.junit4)
   androidTestImplementation(libs.androidx.espresso.core)
