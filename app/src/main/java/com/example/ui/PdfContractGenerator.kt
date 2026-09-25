@@ -18,6 +18,7 @@ import com.example.data.Renter
 import com.example.data.Scooter
 import com.example.data.SettingsRepository
 import com.example.data.TemplateContent
+import kotlinx.serialization.decodeFromString
 import java.io.File
 import java.io.FileOutputStream
 import java.text.SimpleDateFormat

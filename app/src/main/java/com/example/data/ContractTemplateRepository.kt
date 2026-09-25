@@ -3,6 +3,7 @@ package com.example.data
 import androidx.room.RoomDatabase
 import androidx.room.withTransaction
 import kotlinx.coroutines.flow.Flow
+import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 
 /**

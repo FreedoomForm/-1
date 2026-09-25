@@ -25,7 +25,6 @@ import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
-import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
@@ -102,9 +101,11 @@ class ContractTemplateViewModel(application: Application) : AndroidViewModel(app
     /**
      * Активная версия для выбранного типа — для индикации ★ в TopAppBar.
      * Возвращает id активного шаблона (или null, если активной нет).
+     *
+     * StateFlow уже автоматически дедуплицирует одинаковые значения (см.
+     * StateFlow Operator Fusion), поэтому distinctUntilChanged здесь не нужен.
      */
     val activeTemplateId: StateFlow<Int?> = _selectedType
-        .distinctUntilChanged()
         .flatMapLatest { type -> repo.activeForType(type) }
         .map { it?.id }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), null)
