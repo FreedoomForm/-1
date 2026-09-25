@@ -49,6 +49,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -138,8 +139,8 @@ fun PdfEditorScreen(
             // редактирования — пользователь тапает на существующий текст.
             // generatePreviewWithoutDemoData сохраняет PDF во cacheDir с именем
             // preview_nodemo_<timestamp>.pdf — ищем последний.
-            val latestPdf = cacheDir.listFiles { f ->
-                f.name.startsWith("preview_nodemo_") && f.name.endsWith(".pdf")
+            val latestPdf = cacheDir.listFiles { file: File ->
+                file.name.startsWith("preview_nodemo_") && file.name.endsWith(".pdf")
             }?.maxByOrNull { it.lastModified() }
             if (latestPdf != null) {
                 textBlocks = PdfTextExtractor.extractTextBlocks(latestPdf)
