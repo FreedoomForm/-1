@@ -105,12 +105,14 @@ import java.util.Locale
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun DocumentManagementScreen(
-    viewModel: ContractTemplateViewModel = viewModel(),
+    docTemplateViewModel: ContractTemplateViewModel,
     createTrigger: Int = 0,
     editTrigger: Int = 0,
     deleteTrigger: Int = 0,
     searchTrigger: Int = 0
 ) {
+    // Локальный alias для удобства внутри функций
+    val viewModel = docTemplateViewModel
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
 

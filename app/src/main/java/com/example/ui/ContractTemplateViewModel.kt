@@ -60,9 +60,22 @@ class ContractTemplateViewModel(application: Application) : AndroidViewModel(app
         private const val TAG = "ContractTemplateVM"
     }
 
-    private val db = AppDatabase.getDatabase(application)
-    private val repo = ContractTemplateRepository(db.contractTemplateDao(), db)
-    private val renterRepo = RenterRepository(db.renterDao())
+    // ── Отказоустойчивая инициализация ────────────────────────────────────
+    // Если AppDatabase.getDatabase падает (например, миграция БД не удалась),
+    // VM всё равно создаётся — StateFlow'ы возвращают пустые значения, UI
+    // остаётся рабочим, пользователь видит сообщение об ошибке вместо краша.
+    // Критично: WITHOUT this try/catch, VM constructor throws → MainScreen
+    // composition fails → app crashes on launch.
+    private val db: AppDatabase? = try {
+        AppDatabase.getDatabase(application)
+    } catch (e: Exception) {
+        android.util.Log.e(TAG, "AppDatabase.getDatabase failed — VM operating in degraded mode", e)
+        null
+    }
+    private val repo: ContractTemplateRepository? = db?.let {
+        ContractTemplateRepository(it.contractTemplateDao(), it)
+    }
+    private val renterRepo: RenterRepository? = db?.let { RenterRepository(it.renterDao()) }
     private val settings = SettingsRepository(application)
 
     // ── UI State: выбор пользователя ───────────────────────────────────────
@@ -86,16 +99,21 @@ class ContractTemplateViewModel(application: Application) : AndroidViewModel(app
      * combine(_selectedType, _searchQuery) → Flow<Pair<String, String>>
      * flatMapLatest → при изменении типа или фильтра пересоздаёт Flow
      * из репозитория (старый отменяется).
+     *
+     * Если репозиторий недоступен (БД упала) — возвращает пустой Flow,
+     * UI показывает сообщение «нет версий».
      */
     val templates: StateFlow<List<ContractTemplate>> =
         combine(_selectedType, _searchQuery) { type, query -> type to query }
             .flatMapLatest { (type, query) ->
-                if (query.isBlank()) repo.forType(type) else repo.search(type, query)
+                val r = repo
+                if (r == null) kotlinx.coroutines.flow.flowOf(emptyList())
+                else if (query.isBlank()) r.forType(type) else r.search(type, query)
             }
             .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
     /** Все активные арендаторы (не в корзине) — для селектора клиентов. */
-    val renters: StateFlow<List<Renter>> = renterRepo.liveRenters
+    val renters: StateFlow<List<Renter>> = (renterRepo?.liveRenters ?: kotlinx.coroutines.flow.flowOf(emptyList()))
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
     /**
@@ -106,7 +124,7 @@ class ContractTemplateViewModel(application: Application) : AndroidViewModel(app
      * StateFlow Operator Fusion), поэтому distinctUntilChanged здесь не нужен.
      */
     val activeTemplateId: StateFlow<Int?> = _selectedType
-        .flatMapLatest { type -> repo.activeForType(type) }
+        .flatMapLatest { type -> repo?.activeForType(type) ?: kotlinx.coroutines.flow.flowOf(null) }
         .map { it?.id }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), null)
 
@@ -142,44 +160,61 @@ class ContractTemplateViewModel(application: Application) : AndroidViewModel(app
     }
 
     // ── Actions: CRUD ───────────────────────────────────────────────────────
+    // Все методы обёрнуты в проверку repo != null, чтобы VM не крашилась
+    // даже в degraded mode (когда БД недоступна).
     fun createTemplate(name: String, content: TemplateContent, onDone: (Long) -> Unit = {}) =
         viewModelScope.launch {
-            val id = repo.create(_selectedType.value, name, content)
+            val r = repo ?: run {
+                onDone(-1)
+                return@launch
+            }
+            val id = try { r.create(_selectedType.value, name, content) } catch (e: Exception) { -1L }
             onDone(id)
         }
 
     fun updateTemplate(id: Int, name: String, content: TemplateContent, onDone: () -> Unit = {}) =
         viewModelScope.launch {
-            repo.update(id, name, content)
+            val r = repo ?: run { onDone(); return@launch }
+            try { r.update(id, name, content) } catch (e: Exception) {}
             onDone()
             if (id == _selectedTemplateId.value) regeneratePreview()
         }
 
     fun deleteTemplate(id: Int, onDone: () -> Unit = {}) = viewModelScope.launch {
-        val wasActive = repo.getById(id)?.isActive == true
-        val type = _selectedType.value
-        repo.delete(id)
-        if (wasActive) {
-            // Если удалили активную версию — назначить активной самую свежую
-            // оставшуюся не удалённую.
-            val remaining = db.contractTemplateDao().getForTypeOnce(type)
-                .filterNot { it.isDeleted }
-                .sortedByDescending { it.updatedAt ?: it.createdAt }
-            remaining.firstOrNull()?.let { repo.setActive(type, it.id) }
+        val r = repo ?: run { onDone(); return@launch }
+        val db = db ?: run { onDone(); return@launch }
+        try {
+            val wasActive = r.getById(id)?.isActive == true
+            val type = _selectedType.value
+            r.delete(id)
+            if (wasActive) {
+                // Если удалили активную версию — назначить активной самую свежую
+                // оставшуюся не удалённую.
+                val remaining = db.contractTemplateDao().getForTypeOnce(type)
+                    .filterNot { it.isDeleted }
+                    .sortedByDescending { it.updatedAt ?: it.createdAt }
+                remaining.firstOrNull()?.let { r.setActive(type, it.id) }
+            }
+        } catch (e: Exception) {
+            android.util.Log.e(TAG, "deleteTemplate failed", e)
         }
         if (_selectedTemplateId.value == id) _selectedTemplateId.value = null
         onDone()
     }
 
     fun setActive(id: Int) = viewModelScope.launch {
-        repo.setActive(_selectedType.value, id)
+        val r = repo ?: return@launch
+        try { r.setActive(_selectedType.value, id) } catch (e: Exception) {
+            android.util.Log.e(TAG, "setActive failed", e)
+        }
     }
 
     suspend fun getById(id: Int): ContractTemplate? = withContext(Dispatchers.IO) {
-        repo.getById(id)
+        repo?.getById(id)
     }
 
-    fun parseContent(contentJson: String): TemplateContent = repo.parseContent(contentJson)
+    fun parseContent(contentJson: String): TemplateContent =
+        repo?.parseContent(contentJson) ?: TemplateContent()
 
     // ── Actions: превью PDF ────────────────────────────────────────────────
     /**
@@ -193,18 +228,27 @@ class ContractTemplateViewModel(application: Application) : AndroidViewModel(app
     fun regeneratePreview() = viewModelScope.launch {
         _isPreviewLoading.value = true
         _previewError.value = null
+        val r = repo
+        val rp = renterRepo
+        val database = db
+        if (r == null || rp == null || database == null) {
+            _previewError.value = "База данных недоступна"
+            _previewBitmaps.value = emptyList()
+            _isPreviewLoading.value = false
+            return@launch
+        }
         try {
             withContext(Dispatchers.IO) {
                 val type = _selectedType.value
-                val template = _selectedTemplateId.value?.let { repo.getById(it) }
-                    ?: repo.getActiveForType(type)
+                val template = _selectedTemplateId.value?.let { r.getById(it) }
+                    ?: r.getActiveForType(type)
                     ?: run {
                         _previewError.value = "Нет активного шаблона"
                         _previewBitmaps.value = emptyList()
                         return@withContext
                     }
                 // Если body пустой — fallback на дефолт
-                val content = repo.parseContent(template.contentJson).let {
+                val content = r.parseContent(template.contentJson).let {
                     if (it.bodyText.isBlank()) {
                         it.copy(
                             bodyText = if (type == ContractTemplate.TYPE_UNLIMITED)
@@ -215,14 +259,14 @@ class ContractTemplateViewModel(application: Application) : AndroidViewModel(app
                     } else it
                 }
 
-                val renter = _selectedRenterId.value?.let { renterRepo.getById(it) }
+                val renter = _selectedRenterId.value?.let { rp.getById(it) }
                     ?: renters.value.firstOrNull()
                     ?: run {
                         _previewError.value = "Добавьте хотя бы одного клиента для превью"
                         _previewBitmaps.value = emptyList()
                         return@withContext
                     }
-                val scooter = renter.scooterId?.let { db.scooterDao().getScooterById(it) }
+                val scooter = renter.scooterId?.let { database.scooterDao().getScooterById(it) }
 
                 // 1. Сгенерировать PDF во cacheDir
                 val previewFile = File(
@@ -270,11 +314,15 @@ class ContractTemplateViewModel(application: Application) : AndroidViewModel(app
      */
     suspend fun downloadSelectedWithDemoData(): Uri? = withContext(Dispatchers.IO) {
         try {
+            val r = repo ?: return@withContext null
+            val rp = renterRepo ?: return@withContext null
+            val database = db ?: return@withContext null
+
             val type = _selectedType.value
-            val template = _selectedTemplateId.value?.let { repo.getById(it) }
-                ?: repo.getActiveForType(type)
+            val template = _selectedTemplateId.value?.let { r.getById(it) }
+                ?: r.getActiveForType(type)
                 ?: return@withContext null
-            val content = repo.parseContent(template.contentJson).let {
+            val content = r.parseContent(template.contentJson).let {
                 if (it.bodyText.isBlank()) {
                     it.copy(
                         bodyText = if (type == ContractTemplate.TYPE_UNLIMITED)
@@ -285,10 +333,10 @@ class ContractTemplateViewModel(application: Application) : AndroidViewModel(app
                 } else it
             }
 
-            val renter = _selectedRenterId.value?.let { renterRepo.getById(it) }
+            val renter = _selectedRenterId.value?.let { rp.getById(it) }
                 ?: renters.value.firstOrNull()
                 ?: return@withContext null
-            val scooter = renter.scooterId?.let { db.scooterDao().getScooterById(it) }
+            val scooter = renter.scooterId?.let { database.scooterDao().getScooterById(it) }
 
             // Сохранить в Documents/ScooterContracts/
             val dir = File(

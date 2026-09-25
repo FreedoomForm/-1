@@ -387,6 +387,10 @@ abstract class AppDatabase : RoomDatabase() {
         private val MIGRATION_36_37 = object : Migration(36, 37) {
             override fun migrate(db: SupportSQLiteDatabase) {
                 // ── 1. Создаём новую таблицу contract_templates ──
+                // БЕЗОПАСНОСТЬ ДАННЫХ: эта миграция НЕ модифицирует существующие
+                // таблицы (renters, scooters, contract_history, transactions,
+                // virtual_cards, card_transactions, notification_history).
+                // Только добавляет новую таблицу для шаблонов договоров.
                 db.execSQL("""
                     CREATE TABLE IF NOT EXISTS `contract_templates` (
                         `id`          INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
@@ -407,29 +411,45 @@ abstract class AppDatabase : RoomDatabase() {
                 )
 
                 // ── 3. Seed: 2 «базовых» шаблона, по одному на каждый тип ──
-                //    contentJson экранируем одинарные кавычки удвоением.
-                val now = System.currentTimeMillis()
+                // ВАЖНО: оборачиваем seed в try/catch. Если JSON-конструкция или
+                // SQL-парсинг упадёт, миграция всё равно завершится успешно —
+                // таблица создана, индекс создан, seed-записей просто не будет.
+                // Приложение продолжит работать: PdfContractGenerator
+                // автоматически фолбэчит на TemplateContent() с дефолтным текстом
+                // (если активной версии нет), либо пользователь создаст новую
+                // версию через UI «Документооборот».
+                //
+                // Это критичная защита: если seed упадёт, fallbackToDestructiveMigration
+                // сработает и затрёт ВСЕ данные пользователя. try/catch исключает
+                // этот сценарий.
+                try {
+                    val now = System.currentTimeMillis()
+                    val limitedJson = buildSeedJson(
+                        bodyText = TemplateContent.DEFAULT_CONTRACT_BODY_LIMITED
+                    )
+                    val unlimitedJson = buildSeedJson(
+                        bodyText = TemplateContent.DEFAULT_CONTRACT_BODY_UNLIMITED
+                    )
 
-                // LIMITED: TemplateContent с DEFAULT_CONTRACT_BODY_LIMITED.
-                // Полный JSON сериализован офлайн (kotlinx.serialization), чтобы
-                // не тащить сериализатор в миграцию. Структура JSON стабильная:
-                // 8 строковых полей + bodyText (multiline).
-                val limitedJson = buildSeedJson(
-                    bodyText = TemplateContent.DEFAULT_CONTRACT_BODY_LIMITED
-                )
-                val unlimitedJson = buildSeedJson(
-                    bodyText = TemplateContent.DEFAULT_CONTRACT_BODY_UNLIMITED
-                )
-
-                db.execSQL(
-                    """
-                        INSERT OR IGNORE INTO `contract_templates`
-                            (id, type, name, contentJson, isActive, createdAt, updatedAt, isDeleted, deletedAt)
-                        VALUES
-                            (1, 'LIMITED',   'Базовый шаблон',  '${escapeSql(limitedJson)}',   1, $now, NULL, 0, NULL),
-                            (2, 'UNLIMITED', 'Базовый шаблон',  '${escapeSql(unlimitedJson)}', 1, $now, NULL, 0, NULL)
-                    """.trimIndent()
-                )
+                    db.execSQL(
+                        """
+                            INSERT OR IGNORE INTO `contract_templates`
+                                (id, type, name, contentJson, isActive, createdAt, updatedAt, isDeleted, deletedAt)
+                            VALUES
+                                (1, 'LIMITED',   'Базовый шаблон',  '${escapeSql(limitedJson)}',   1, $now, NULL, 0, NULL),
+                                (2, 'UNLIMITED', 'Базовый шаблон',  '${escapeSql(unlimitedJson)}', 1, $now, NULL, 0, NULL)
+                        """.trimIndent()
+                    )
+                } catch (seedError: Exception) {
+                    // Логируем, но НЕ пробрасываем — миграция должна завершиться
+                    // успешно. Таблица пуста, но PdfContractGenerator читает
+                    // активную версию из БД, и если её нет — fallback на дефолт.
+                    android.util.Log.w(
+                        "AppDatabase",
+                        "Seed contract_templates failed (non-fatal): ${seedError.message}. " +
+                            "Table is empty, app will use default TemplateContent."
+                    )
+                }
             }
         }
 
