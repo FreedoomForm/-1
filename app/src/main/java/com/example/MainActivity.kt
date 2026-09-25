@@ -273,17 +273,6 @@ class MainActivity : ComponentActivity() {
             com.example.widget.WidgetUpdater.updateAll(applicationContext)
         } catch (_: Exception) {}
 
-        // ── Инициализация PdfBox-Android для визуального PDF редактора ────
-        // PdfBox-Android требует инициализации перед использованием
-        // (загружает шрифты и ресурсы). Делаем это в onCreate чтобы
-        // быть готовыми к открытию PdfEditorScreen в любой момент.
-        try {
-            com.tom_roush.pdfbox.android.PDFBoxResourceLoader.init(applicationContext)
-            android.util.Log.i("MainActivity", "PdfBox-Android initialized")
-        } catch (e: Exception) {
-            android.util.Log.e("MainActivity", "PdfBox-Android init failed (non-fatal)", e)
-        }
-
         setContent {
             MyApplicationTheme {
                 val permissionLauncher = rememberLauncherForActivityResult(

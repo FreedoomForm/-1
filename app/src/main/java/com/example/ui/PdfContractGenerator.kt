@@ -20,10 +20,6 @@ import com.example.data.SettingsRepository
 import com.example.data.TemplateAnnotation
 import com.example.data.TemplateContent
 import kotlinx.serialization.decodeFromString
-import com.tom_roush.pdfbox.pdmodel.PDDocument
-import com.tom_roush.pdfbox.pdmodel.PDPage
-import com.tom_roush.pdfbox.pdmodel.PDPageContentStream
-import com.tom_roush.pdfbox.pdmodel.font.PDType1Font
 import java.io.File
 import java.io.FileOutputStream
 import java.text.SimpleDateFormat
@@ -204,15 +200,8 @@ object PdfContractGenerator {
             val paints = createPaints(baseFontSize)
             val paragraphs = parseTemplateToParagraphs(resolvedBody, paints)
 
-            renderParagraphs(doc, paragraphs, contentWidth)
+            renderParagraphs(doc, paragraphs, contentWidth, annotations, placeholders)
             writePdfToFile(doc, targetFile)
-
-            // ── Применяем аннотации пользователя (через PdfBox-Android) ────
-            // Аннотации могут содержать {{placeholders}} — заменяются на
-            // реальные значения из placeholder map выше.
-            if (annotations.isNotEmpty()) {
-                applyAnnotationsToPdf(targetFile, annotations, placeholders)
-            }
 
             Log.i(TAG, "PDF saved: ${targetFile.absolutePath}")
             return FileProvider.getUriForFile(
@@ -316,15 +305,8 @@ object PdfContractGenerator {
             val paints = createPaints(baseFontSize)
             val paragraphs = parseTemplateToParagraphs(resolvedBody, paints)
 
-            renderParagraphs(doc, paragraphs, contentWidth)
+            renderParagraphs(doc, paragraphs, contentWidth, annotations, placeholders)
             writePdfToFile(doc, targetFile)
-
-            // ── Применяем аннотации пользователя (через PdfBox-Android) ────
-            // Аннотации могут содержать {{placeholders}} — заменяются на
-            // реальные значения из placeholder map выше.
-            if (annotations.isNotEmpty()) {
-                applyAnnotationsToPdf(targetFile, annotations, placeholders)
-            }
 
             Log.i(TAG, "Unlimited PDF saved: ${targetFile.absolutePath}")
             return FileProvider.getUriForFile(
@@ -345,79 +327,42 @@ object PdfContractGenerator {
     // ──────────────────────────────────────────────────────────────────────
 
     /**
-     * Применяет аннотации пользователя к PDF файлу через PdfBox-Android.
+     * Рендерит аннотации пользователя на странице PDF через [Canvas.drawText].
      *
-     * Используется в [generateTo] / [generateUnlimitedTo] после генерации
-     * базового PDF. Аннотации добавляются как overlay-текст на страницы.
-     * Координаты нормализованы (0..1) — конвертируются в pt по размеру страницы.
+     * Используется в [renderParagraphs] (inline) для каждой страницы:
+     * после того как все параграфы отрисованы на странице, мы рисуем поверх
+     * них текстовые аннотации пользователя.
      *
-     * Текст аннотаций может содержать {{placeholders}} — они заменяются на
-     * реальные значения через [applyPlaceholders] перед рендером в PDF.
+     * Координаты нормализованы (0..1) относительно ширины/высоты страницы.
+     * Y инвертируется (Canvas top-down vs PDF bottom-up convention у пользователя
+     * в редакторе — но Canvas тоже top-down, так что y * pageHeight).
      *
-     * Если PdfBox-Android не инициализирован или файл не существует —
-     * silently пропускает (базовый PDF остаётся без аннотаций).
+     * Текст аннотаций может содержать {{placeholders}} — заменяются через
+     * [applyPlaceholders] перед рендером.
      *
-     * @param pdfFile Сгенерированный базовый PDF файл
-     * @param annotations Список аннотаций (с {{placeholders}} в text)
-     * @param placeholders Карта плейсхолдеров для замены
+     * @param canvas Canvas текущей страницы (получается из PdfDocument.Page.canvas)
+     * @param pageNumber Номер текущей страницы (0-based)
+     * @param annotations Все аннотации (фильтруем по pageNumber)
+     * @param placeholders Карта плейсхолдеров для замены в тексте аннотаций
      */
-    private fun applyAnnotationsToPdf(
-        pdfFile: File,
+    private fun renderAnnotationsOnPage(
+        canvas: android.graphics.Canvas,
+        pageNumber: Int,
         annotations: List<TemplateAnnotation>,
         placeholders: Map<String, String>
     ) {
-        if (annotations.isEmpty() || !pdfFile.exists()) return
-        try {
-            // Ленивая инициализация PdfBox-Android (требует context, но мы
-            // работаем с File напрямую, не нужен context)
-            val document = PDDocument.load(pdfFile)
-            try {
-                // ВАЖНО: PdfBox-Android 1.8 API — getDocumentCatalog().getAllPages()
-                // возвращает List<PDPage>. В 2.0 был бы document.pages напрямую.
-                val pages = document.documentCatalog.allPages  // List<PDPage>
-                val pageCount = pages.size
-                for (ann in annotations) {
-                    val pageIndex = ann.pageNumber.coerceIn(0, pageCount - 1)
-                    val page: PDPage = pages[pageIndex]
-                    val pageWidth = page.mediaBox?.width?.toFloat() ?: 595f
-                    val pageHeight = page.mediaBox?.height?.toFloat() ?: 842f
-                    // Конвертируем нормализованные координаты в pt (origin = bottom-left в PDF)
-                    val xPt = ann.x * pageWidth
-                    val yPt = (1f - ann.y) * pageHeight  // Y инвертирована (PDF bottom-up)
-                    // Заменяем {{placeholders}} в тексте аннотации
-                    val resolvedText = applyPlaceholders(ann.text, placeholders)
-                    // Рисуем текст на странице.
-                    // ВАЖНО: PdfBox-Android 1.8.x API: конструктор принимает
-                    // (document, page, appendMode: Boolean, compress: Boolean).
-                    // В 2.0 API используется AppendMode enum, но 1.8 — boolean.
-                    val contentStream = PDPageContentStream(
-                        document, page,
-                        true /* appendMode = true (добавляем, не перезаписываем) */,
-                        true /* compress = true */
-                    )
-                    try {
-                        val font = PDType1Font.HELVETICA
-                        val fontSize = ann.fontSize
-                        contentStream.beginText()
-                        contentStream.setFont(font, fontSize)
-                        // Цвет (parse #RRGGBB)
-                        val color = parseColor(ann.colorHex)
-                        contentStream.setNonStrokingColor(color)
-                        contentStream.newLineAtOffset(xPt, yPt)
-                        contentStream.showText(resolvedText)
-                        contentStream.endText()
-                    } finally {
-                        contentStream.close()
-                    }
-                }
-                document.save(pdfFile)  // перезаписываем файл с аннотациями
-                Log.i(TAG, "Applied ${annotations.size} annotations to PDF: ${pdfFile.absolutePath}")
-            } finally {
-                document.close()
-            }
-        } catch (e: Exception) {
-            // Не падаем — аннотации опциональны, базовый PDF остаётся
-            Log.e(TAG, "Failed to apply annotations to PDF (non-fatal)", e)
+        val pageAnnotations = annotations.filter { it.pageNumber == pageNumber }
+        if (pageAnnotations.isEmpty()) return
+        val paint = Paint().apply {
+            isAntiAlias = true
+        }
+        for (ann in pageAnnotations) {
+            val resolvedText = applyPlaceholders(ann.text, placeholders)
+            val x = ann.x * PAGE_WIDTH
+            val y = ann.y * PAGE_HEIGHT  // Canvas top-down, как в редакторе
+            paint.color = parseColor(ann.colorHex)
+            paint.textSize = ann.fontSize
+            canvas.drawText(resolvedText, x, y, paint)
         }
     }
 
@@ -868,11 +813,18 @@ object PdfContractGenerator {
      * Рендерит список параграфов в PdfDocument с пагинацией (на случай если
      * документ всё же не уместился на одну страницу — например при manual
      * режиме с большим размером шрифта).
+     *
+     * После рендера параграфов на каждой странице, также рендерит текстовые
+     * аннотации пользователя (через [renderAnnotationsOnPage]) — поверх
+     * параграфов. Аннотации могут содержать {{placeholders}} — заменяются
+     * на реальные значения через [applyPlaceholders].
      */
     private fun renderParagraphs(
         doc: PdfDocument,
         paragraphs: List<Paragraph>,
-        contentWidth: Int
+        contentWidth: Int,
+        annotations: List<TemplateAnnotation> = emptyList(),
+        placeholders: Map<String, String> = emptyMap()
     ) {
         var pageNumber = 1
         var page = doc.startPage(PdfDocument.PageInfo.Builder(PAGE_WIDTH, PAGE_HEIGHT, pageNumber).create())
@@ -890,6 +842,8 @@ object PdfContractGenerator {
             val paraHeight = layout.height + para.spaceAfter
 
             if (y + paraHeight > PAGE_HEIGHT - MARGIN_BOTTOM) {
+                // Перед завершением страницы — рендерим аннотации для неё
+                renderAnnotationsOnPage(canvas, pageNumber - 1, annotations, placeholders)
                 doc.finishPage(page)
                 pageNumber++
                 page = doc.startPage(PdfDocument.PageInfo.Builder(PAGE_WIDTH, PAGE_HEIGHT, pageNumber).create())
@@ -903,6 +857,8 @@ object PdfContractGenerator {
             canvas.restore()
             y += paraHeight
         }
+        // Рендерим аннотации для последней страницы
+        renderAnnotationsOnPage(canvas, pageNumber - 1, annotations, placeholders)
         doc.finishPage(page)
     }
 }

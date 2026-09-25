@@ -138,7 +138,9 @@ dependencies {
   // ВАЖНО: координата — com.github.TomRoush (JitPack), НЕ com.tom-roush
   // (старая координата на Maven Central, доступна только версия 1.8.10.1).
   // Новые 2.x версии публикуются ТОЛЬКО на JitPack.
-  implementation("com.tom-routh:pdfbox-android:1.8.10.1")
+  // Убрано: PdfBox-Android недоступен (ни на Maven Central, ни на JitPack).
+  // Рендеринг аннотаций реализован через android.graphics.Canvas (Android SDK),
+  // см. PdfContractGenerator.renderAnnotationsOnPage().
   // testImplementation(libs.androidx.compose.ui.test.junit4)
   testImplementation(libs.androidx.compose.ui.test.junit4)
   testImplementation(libs.androidx.core)
