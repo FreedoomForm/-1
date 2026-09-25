@@ -138,7 +138,7 @@ dependencies {
   // ВАЖНО: координата — com.github.TomRoush (JitPack), НЕ com.tom-roush
   // (старая координата на Maven Central, доступна только версия 1.8.10.1).
   // Новые 2.x версии публикуются ТОЛЬКО на JitPack.
-  implementation("com.github.TomRoush:pdfbox-android:2.0.27.0")
+  implementation("com.tom-routh:pdfbox-android:1.8.10.1")
   // testImplementation(libs.androidx.compose.ui.test.junit4)
   testImplementation(libs.androidx.compose.ui.test.junit4)
   testImplementation(libs.androidx.core)

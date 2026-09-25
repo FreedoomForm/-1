@@ -372,9 +372,13 @@ object PdfContractGenerator {
             // работаем с File напрямую, не нужен context)
             val document = PDDocument.load(pdfFile)
             try {
+                // ВАЖНО: PdfBox-Android 1.8 API — getDocumentCatalog().getAllPages()
+                // возвращает List<PDPage>. В 2.0 был бы document.pages напрямую.
+                val pages = document.documentCatalog.allPages  // List<PDPage>
+                val pageCount = pages.size
                 for (ann in annotations) {
-                    val pageIndex = ann.pageNumber.coerceIn(0, document.pages.count() - 1)
-                    val page: PDPage = document.getPage(pageIndex)
+                    val pageIndex = ann.pageNumber.coerceIn(0, pageCount - 1)
+                    val page: PDPage = pages[pageIndex]
                     val pageWidth = page.mediaBox?.width?.toFloat() ?: 595f
                     val pageHeight = page.mediaBox?.height?.toFloat() ?: 842f
                     // Конвертируем нормализованные координаты в pt (origin = bottom-left в PDF)
@@ -382,10 +386,14 @@ object PdfContractGenerator {
                     val yPt = (1f - ann.y) * pageHeight  // Y инвертирована (PDF bottom-up)
                     // Заменяем {{placeholders}} в тексте аннотации
                     val resolvedText = applyPlaceholders(ann.text, placeholders)
-                    // Рисуем текст на странице
+                    // Рисуем текст на странице.
+                    // ВАЖНО: PdfBox-Android 1.8.x API: конструктор принимает
+                    // (document, page, appendMode: Boolean, compress: Boolean).
+                    // В 2.0 API используется AppendMode enum, но 1.8 — boolean.
                     val contentStream = PDPageContentStream(
                         document, page,
-                        PDPageContentStream.AppendMode.APPEND, true, true
+                        true /* appendMode = true (добавляем, не перезаписываем) */,
+                        true /* compress = true */
                     )
                     try {
                         val font = PDType1Font.HELVETICA

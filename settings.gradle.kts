@@ -19,11 +19,12 @@ dependencyResolutionManagement {
   repositories {
     google()
     mavenCentral()
-    // ── JitPack — для PdfBox-Android (com.github.TomRoush:pdfbox-android) ──
-    // PdfBox-Android 2.x публикуется только на JitPack, на Maven Central
-    // доступна только старая версия 1.8.10.1. Нам нужен 2.0.27.0 (новее API,
-    // работает с Android 9+). Без этого репозитория сборка падает с
-    // 'Could not find com.tom-routh:pdfbox-android:2.0.27.0'.
+    // ── JitPack — для PdfBox-Android 2.x (если понадобится в будущем) ──────
+    // PdfBox-Android 2.x публикуется только на JitPack под координатой
+    // com.github.TomRoush:pdfbox-android. Сейчас мы используем версию
+    // 1.8.10.1 с Maven Central (более стабильная, не зависит от
+    // доступности JitPack). Оставляем репозиторий на случай если
+    // понадобится обновиться до 2.x.
     maven { url = uri("https://jitpack.io") }
   }
 }
