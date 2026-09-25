@@ -6994,6 +6994,55 @@ fun SettingsScreen(
                                                 }
                                             }
                                             else -> {
+                                                // ── Кнопка «Обновить список» — всегда видна ──────
+                                                // Позволяет пользователю вручную обновить список
+                                                // релизов (очищает кэш и делает свежий запрос к
+                                                // GitHub API). Решает проблему «не вижу новые версии»
+                                                // — если кэш устарел (rate limit / нет сети), кнопка
+                                                // даёт шанс пере-получить список.
+                                                Row(
+                                                    modifier = Modifier
+                                                        .fillMaxWidth()
+                                                        .padding(bottom = 8.dp),
+                                                    horizontalArrangement = Arrangement.End,
+                                                    verticalAlignment = Alignment.CenterVertically
+                                                ) {
+                                                    OutlinedButton(
+                                                        onClick = onRetryReleases,
+                                                        enabled = !isLoadingReleases,
+                                                        shape = RoundedCornerShape(8.dp),
+                                                        contentPadding = androidx.compose.foundation.layout.PaddingValues(
+                                                            horizontal = 12.dp,
+                                                            vertical = 4.dp
+                                                        ),
+                                                        colors = androidx.compose.material3.ButtonDefaults.outlinedButtonColors(
+                                                            contentColor = Color(0xFF000000)
+                                                        ),
+                                                        border = androidx.compose.foundation.BorderStroke(
+                                                            1.dp,
+                                                            Color(0xFF000000)
+                                                        )
+                                                    ) {
+                                                        if (isLoadingReleases) {
+                                                            CircularProgressIndicator(
+                                                                modifier = Modifier.size(14.dp),
+                                                                strokeWidth = 2.dp,
+                                                                color = Color(0xFF000000)
+                                                            )
+                                                        } else {
+                                                            Icon(
+                                                                imageVector = Icons.Default.Refresh,
+                                                                contentDescription = null,
+                                                                modifier = Modifier.size(14.dp)
+                                                            )
+                                                        }
+                                                        Spacer(modifier = Modifier.width(4.dp))
+                                                        Text(
+                                                            if (isLoadingReleases) "Yangilanmoqda..." else "Yangilash",
+                                                            style = MaterialTheme.typography.bodySmall
+                                                        )
+                                                    }
+                                                }
                                                 allReleases.forEach { release ->
                                                     val isSelected =
                                                         selectedRelease?.versionCode == release.versionCode
