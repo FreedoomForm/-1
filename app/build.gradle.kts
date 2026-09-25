@@ -138,9 +138,14 @@ dependencies {
   // ВАЖНО: координата — com.github.TomRoush (JitPack), НЕ com.tom-roush
   // (старая координата на Maven Central, доступна только версия 1.8.10.1).
   // Новые 2.x версии публикуются ТОЛЬКО на JitPack.
-  // Убрано: PdfBox-Android недоступен (ни на Maven Central, ни на JitPack).
-  // Рендеринг аннотаций реализован через android.graphics.Canvas (Android SDK),
-  // см. PdfContractGenerator.renderAnnotationsOnPage().
+  // ── PdfBox-Android 2.0.7.0 (JitPack) — единственная доступная версия ──
+  // Pdf_Tools (github.com/Karna14314/Pdf_Tools) использует com.tom-routh:2.0.27.0
+  // но эта версия НЕ доступна ни на Maven Central, ни на JitPack (404).
+  // JitPack maven-metadata показывает только версии 1.8.9.1, 1.8.10.0, 2.0.7.0.
+  // Используем com.github.TomRoush:pdfbox-android:2.0.7.0 — РАБОЧАЯ версия
+  // (HTTP 200). API 2.0.x: PDPageContentStream AppendMode enum, setNonStrokingColor(r,g,b).
+  // См. Pdf_Tools/app/src/main/java/.../PdfAnnotator.kt:526 — рабочий пример 2.0 API.
+  implementation("com.github.TomRoush:pdfbox-android:2.0.7.0")
   // testImplementation(libs.androidx.compose.ui.test.junit4)
   testImplementation(libs.androidx.compose.ui.test.junit4)
   testImplementation(libs.androidx.core)

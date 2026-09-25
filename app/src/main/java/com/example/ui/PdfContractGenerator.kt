@@ -20,6 +20,10 @@ import com.example.data.Scooter
 import com.example.data.SettingsRepository
 import com.example.data.TemplateAnnotation
 import com.example.data.TemplateContent
+import com.tom_roush.pdfbox.pdmodel.PDDocument
+import com.tom_roush.pdfbox.pdmodel.PDPage
+import com.tom_roush.pdfbox.pdmodel.PDPageContentStream
+import com.tom_roush.pdfbox.pdmodel.font.PDType1Font
 import kotlinx.serialization.decodeFromString
 import java.io.File
 import java.io.FileOutputStream
@@ -201,8 +205,16 @@ object PdfContractGenerator {
             val paints = createPaints(baseFontSize)
             val paragraphs = parseTemplateToParagraphs(resolvedBody, paints)
 
-            renderParagraphs(doc, paragraphs, contentWidth, annotations, placeholders)
+            renderParagraphs(doc, paragraphs, contentWidth)
             writePdfToFile(doc, targetFile)
+
+            // ── Применяем аннотации пользователя через PdfBox-Android 2.0 ──
+            // Аннотации добавляются как overlay-текст поверх базового PDF.
+            // Текст аннотаций может содержать {{placeholders}} — заменяются
+            // на реальные значения из placeholder map выше.
+            if (annotations.isNotEmpty()) {
+                applyAnnotationsToPdf(targetFile, annotations, placeholders)
+            }
 
             Log.i(TAG, "PDF saved: ${targetFile.absolutePath}")
             return FileProvider.getUriForFile(
@@ -306,8 +318,13 @@ object PdfContractGenerator {
             val paints = createPaints(baseFontSize)
             val paragraphs = parseTemplateToParagraphs(resolvedBody, paints)
 
-            renderParagraphs(doc, paragraphs, contentWidth, annotations, placeholders)
+            renderParagraphs(doc, paragraphs, contentWidth)
             writePdfToFile(doc, targetFile)
+
+            // ── Применяем аннотации пользователя через PdfBox-Android 2.0 ──
+            if (annotations.isNotEmpty()) {
+                applyAnnotationsToPdf(targetFile, annotations, placeholders)
+            }
 
             Log.i(TAG, "Unlimited PDF saved: ${targetFile.absolutePath}")
             return FileProvider.getUriForFile(
@@ -328,42 +345,76 @@ object PdfContractGenerator {
     // ──────────────────────────────────────────────────────────────────────
 
     /**
-     * Рендерит аннотации пользователя на странице PDF через [Canvas.drawText].
+     * Применяет аннотации пользователя к PDF файлу через PdfBox-Android 2.0 API.
      *
-     * Используется в [renderParagraphs] (inline) для каждой страницы:
-     * после того как все параграфы отрисованы на странице, мы рисуем поверх
-     * них текстовые аннотации пользователя.
+     * По образцу Pdf_Tools/PdfAnnotator.kt:526 (addTextBox):
+     *   - PDPageContentStream(document, page, AppendMode.APPEND, true, true)
+     *   - setNonStrokingColor(r, g, b) — отдельные RGB компоненты
+     *   - setFont(PDType1Font.HELVETICA, size)
+     *   - beginText() → newLineAtOffset(x, y) → showText(text) → endText()
      *
-     * Координаты нормализованы (0..1) относительно ширины/высоты страницы.
-     * Y инвертируется (Canvas top-down vs PDF bottom-up convention у пользователя
-     * в редакторе — но Canvas тоже top-down, так что y * pageHeight).
+     * Координаты нормализованы (0..1) относительно ширины/высоты страницы,
+     * конвертируются в pt (PDF origin = bottom-left, поэтому Y инвертируем).
      *
      * Текст аннотаций может содержать {{placeholders}} — заменяются через
-     * [applyPlaceholders] перед рендером.
+     * [applyPlaceholders] перед рендером в PDF.
      *
-     * @param canvas Canvas текущей страницы (получается из PdfDocument.Page.canvas)
-     * @param pageNumber Номер текущей страницы (0-based)
-     * @param annotations Все аннотации (фильтруем по pageNumber)
-     * @param placeholders Карта плейсхолдеров для замены в тексте аннотаций
+     * Если PdfBox не инициализирован или файл не существует — silently
+     * пропускает (базовый PDF остаётся без аннотаций).
      */
-    private fun renderAnnotationsOnPage(
-        canvas: android.graphics.Canvas,
-        pageNumber: Int,
+    private fun applyAnnotationsToPdf(
+        pdfFile: File,
         annotations: List<TemplateAnnotation>,
         placeholders: Map<String, String>
     ) {
-        val pageAnnotations = annotations.filter { it.pageNumber == pageNumber }
-        if (pageAnnotations.isEmpty()) return
-        val paint = Paint().apply {
-            isAntiAlias = true
-        }
-        for (ann in pageAnnotations) {
-            val resolvedText = applyPlaceholders(ann.text, placeholders)
-            val x = ann.x * PAGE_WIDTH
-            val y = ann.y * PAGE_HEIGHT  // Canvas top-down, как в редакторе
-            paint.color = parseColor(ann.colorHex)
-            paint.textSize = ann.fontSize
-            canvas.drawText(resolvedText, x, y, paint)
+        if (annotations.isEmpty() || !pdfFile.exists()) return
+        try {
+            val document = PDDocument.load(pdfFile)
+            try {
+                val pages = document.pages  // 2.0 API: document.pages напрямую
+                val pageCount = pages.count
+                for (ann in annotations) {
+                    val pageIndex = ann.pageNumber.coerceIn(0, pageCount - 1)
+                    val page: PDPage = document.getPage(pageIndex)
+                    val pageWidth = page.mediaBox?.width?.toFloat() ?: 595f
+                    val pageHeight = page.mediaBox?.height?.toFloat() ?: 842f
+                    // Конвертируем нормализованные координаты (0..1) в pt
+                    // PDF origin = bottom-left, но в редакторе y=0 сверху → инвертируем
+                    val xPt = ann.x * pageWidth
+                    val yPt = (1f - ann.y) * pageHeight
+                    // Заменяем {{placeholders}} в тексте аннотации
+                    val resolvedText = applyPlaceholders(ann.text, placeholders)
+                    // Рисуем текст (2.0 API, как в Pdf_Tools/PdfAnnotator.kt:526)
+                    val contentStream = PDPageContentStream(
+                        document, page,
+                        PDPageContentStream.AppendMode.APPEND, true, true
+                    )
+                    try {
+                        val font = PDType1Font.HELVETICA
+                        val fontSize = ann.fontSize
+                        // 2.0 API: setNonStrokingColor(r, g, b) — 3 отдельных int
+                        val color = parseColor(ann.colorHex)
+                        val r = Color.red(color)
+                        val g = Color.green(color)
+                        val b = Color.blue(color)
+                        contentStream.setNonStrokingColor(r, g, b)
+                        contentStream.beginText()
+                        contentStream.setFont(font, fontSize)
+                        contentStream.newLineAtOffset(xPt, yPt)
+                        contentStream.showText(resolvedText)
+                        contentStream.endText()
+                    } finally {
+                        contentStream.close()
+                    }
+                }
+                document.save(pdfFile)  // перезаписываем файл с аннотациями
+                Log.i(TAG, "Applied ${annotations.size} annotations to PDF: ${pdfFile.absolutePath}")
+            } finally {
+                document.close()
+            }
+        } catch (e: Exception) {
+            // Не падаем — аннотации опциональны, базовый PDF остаётся
+            Log.e(TAG, "Failed to apply annotations to PDF (non-fatal)", e)
         }
     }
 
