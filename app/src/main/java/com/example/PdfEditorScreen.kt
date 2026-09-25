@@ -109,6 +109,10 @@ fun PdfEditorScreen(
 
     var showSaveToast by remember { mutableStateOf<String?>(null) }
 
+    // Получаем cacheDir из context (для поиска сгенерированного PDF)
+    val context = LocalContext.current
+    val cacheDir = context.cacheDir
+
     // Загрузить template, annotations, и сгенерировать preview
     LaunchedEffect(templateId) {
         isLoading = true
@@ -132,15 +136,11 @@ fun PdfEditorScreen(
             previewBitmaps = bitmaps
             // Извлекаем текстовые блоки из сгенерированного PDF для Word-like
             // редактирования — пользователь тапает на существующий текст.
-            val pdfFile = File(
-                viewModel.getApplication<Application>().cacheDir,
-                "preview_nodemo_latest.pdf"
-            )
             // generatePreviewWithoutDemoData сохраняет PDF во cacheDir с именем
-            // preview_nodemo_<timestamp>.pdf — нам нужен последний.
-            val cacheDir = viewModel.getApplication<Application>().cacheDir
-            val latestPdf = cacheDir.listFiles { f -> f.name.startsWith("preview_nodemo_") }
-                ?.maxByOrNull { it.lastModified() }
+            // preview_nodemo_<timestamp>.pdf — ищем последний.
+            val latestPdf = cacheDir.listFiles { f ->
+                f.name.startsWith("preview_nodemo_") && f.name.endsWith(".pdf")
+            }?.maxByOrNull { it.lastModified() }
             if (latestPdf != null) {
                 textBlocks = PdfTextExtractor.extractTextBlocks(latestPdf)
             }
