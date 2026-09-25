@@ -137,10 +137,10 @@ jobs:
       # (commit f20ae7f → 0719bf9) стало ясно, что нужен smoke-тест, который
       # запускает MainActivity и проверяет, что приложение не падает.
       #
-      # Используем reactivecircus/android-emulator-rocket — готовый action,
-      # который поднимает эмулятор за ~30 секунд (boot + script).
+      # Используем reactivecircus/android-emulator-runner — стандартный action
+      # для запуска инструментed тестов на эмуляторе в GitHub Actions.
       - name: Run instrumented smoke tests on emulator
-        uses: reactivecircus/android-emulator-rocket@v2
+        uses: reactivecircus/android-emulator-runner@v2
         with:
           api-level: 30
           arch: x86_64
