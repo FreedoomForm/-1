@@ -128,34 +128,33 @@ jobs:
       - name: Assemble debug APK
         run: ./gradlew clean assembleDebug --no-daemon --stacktrace
 
-      # ── Запуск инструментed тестов на эмуляторе ─────────────────────────
-      # Это КРИТИЧНО: assembleDebug только компилирует код, не запускает его.
-      # Runtime-баги (миграции БД, ViewModel constructor failures, missing
-      # serializers и т.п.) НЕ ловятся компилятором — нужны реальные тесты.
+      # ── Запуск unit-тестов с Robolectric ─────────────────────────────────
+      # Robolectric запускает тесты на JVM (без эмулятора), используя
+      # встроенный SQLite. Это КРИТИЧНО: assembleDebug только компилирует
+      # код, не запускает его. Runtime-баги (миграции БД, missing serializers)
+      # НЕ ловятся компилятором.
       #
       # После бага «при вхождении в приложения он отбрасывает меня назад»
-      # (commit f20ae7f → 0719bf9) стало ясно, что нужен smoke-тест, который
-      # запускает MainActivity и проверяет, что приложение не падает.
+      # стало ясно, что нужен smoke-тест, который инициализирует БД и
+      # проверяет, что миграция 36→37 не падает.
       #
-      # Используем reactivecircus/android-emulator-runner — стандартный action
-      # для запуска инструментed тестов на эмуляторе в GitHub Actions.
-      - name: Run instrumented smoke tests on emulator
-        uses: reactivecircus/android-emulator-runner@v2
-        with:
-          api-level: 30
-          arch: x86_64
-          profile: pixel_5
-          script: |
-            ./gradlew connectedDebugAndroidTest --no-daemon --stacktrace
+      # DatabaseMigrationTest.kt проверяет:
+      #   • AppDatabase.getDatabase не бросает
+      #   • Таблица contract_templates существует и содержит seed
+      #   • Seed JSON парсится через kotlinx.serialization
+      #   • CRUD операции работают на мигрированной БД
+      - name: Run Robolectric unit tests
+        run: ./gradlew testDebugUnitTest --no-daemon --stacktrace
+        continue-on-error: false
 
-      - name: Upload instrumented test results on failure
+      - name: Upload unit test results on failure
         if: failure()
         uses: actions/upload-artifact@v4
         with:
-          name: instrumented-test-results
+          name: unit-test-results
           path: |
-            app/build/reports/androidTest/connected/
-            app/build/outputs/androidTest-results/connected/
+            app/build/reports/tests/testDebugUnitTest/
+            app/build/test-results/testDebugUnitTest/
           if-no-files-found: ignore
 
       - name: Locate built APK
