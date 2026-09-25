@@ -36,6 +36,7 @@ import androidx.compose.material.icons.filled.Star
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
@@ -150,6 +151,31 @@ fun DocumentManagementScreen(
     // Список типов в фиксированном порядке: UNLIMITED сначала, LIMITED потом
     val types = listOf(ContractTemplate.TYPE_UNLIMITED, ContractTemplate.TYPE_LIMITED)
 
+    // ── Плоский список рендер-айтемов ────────────────────────────────────
+    // Compose не разрешает item { } ВНУТРИ items { } блока (вложенные лямбды
+    // ломают implicit receiver — Kotlin бросает "cannot be called in this
+    // context with an implicit receiver"). Поэтому строим плоский список
+    // и рендерим одним items() вызовом.
+    //
+    // Каждый RenderItem — это либо заголовок типа (template = null),
+    // либо конкретная версия (template != null).
+    data class RenderItem(
+        val type: String,
+        val isHeader: Boolean,
+        val template: ContractTemplate? = null
+    )
+
+    val renderItems = buildList {
+        types.forEach { type ->
+            add(RenderItem(type = type, isHeader = true))
+            if (type in expandedTypes) {
+                (templatesByType[type] ?: emptyList()).forEach { template ->
+                    add(RenderItem(type = type, isHeader = false, template = template))
+                }
+            }
+        }
+    }
+
     LazyColumn(
         modifier = Modifier
             .fillMaxSize()
@@ -157,7 +183,7 @@ fun DocumentManagementScreen(
         verticalArrangement = Arrangement.spacedBy(6.dp)
     ) {
         if (searchQuery.isNotBlank()) {
-            item {
+            item("search_indicator") {
                 Surface(
                     color = ClaudeAccentBg,
                     shape = RoundedCornerShape(8.dp),
@@ -173,59 +199,64 @@ fun DocumentManagementScreen(
             }
         }
 
-        items(types, key = { it }) { type ->
-            val typeTemplates = templatesByType[type] ?: emptyList()
-            val activeTemplate = typeTemplates.firstOrNull { it.isActive }
-            val typeName = when (type) {
-                ContractTemplate.TYPE_UNLIMITED -> "Бесконечная аренда"
-                else -> "Конечная аренда (неделя)"
+        items(
+            items = renderItems,
+            key = { item ->
+                if (item.isHeader) "header_${item.type}"
+                else "version_${item.template?.id}"
             }
-            val isExpanded = type in expandedTypes
+        ) { renderItem ->
+            if (renderItem.isHeader) {
+                val type = renderItem.type
+                val typeTemplates = templatesByType[type] ?: emptyList()
+                val activeTemplate = typeTemplates.firstOrNull { it.isActive }
+                val typeName = when (type) {
+                    ContractTemplate.TYPE_UNLIMITED -> "Бесконечная аренда"
+                    else -> "Конечная аренда (неделя)"
+                }
+                val isExpanded = type in expandedTypes
 
-            TemplateRow(
-                typeName = typeName,
-                activeVersionName = activeTemplate?.name ?: "(нет активной)",
-                isActiveSet = activeTemplate != null,
-                isExpanded = isExpanded,
-                onToggleExpand = {
-                    expandedTypes = if (isExpanded) {
-                        expandedTypes - type
-                    } else {
-                        expandedTypes + type
-                    }
-                },
-                onClick = { onOpenVersionsTable(type) }
-            )
-
-            // Раскрытый список версий (как в RenterTable строки 3894-3968)
-            if (isExpanded) {
-                if (typeTemplates.isEmpty()) {
-                    item {
-                        Surface(
-                            color = ClaudeCard,
-                            shape = RoundedCornerShape(8.dp),
-                            border = androidx.compose.foundation.BorderStroke(1.dp, ClaudeDivider),
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(start = 56.dp, top = 2.dp, bottom = 4.dp)
-                        ) {
-                            Text(
-                                "Версий нет. Нажмите «+» в верхнем баре.",
-                                modifier = Modifier.padding(12.dp),
-                                color = ClaudeTextSecondary,
-                                style = MaterialTheme.typography.bodySmall
-                            )
+                TemplateRow(
+                    typeName = typeName,
+                    activeVersionName = activeTemplate?.name ?: "(нет активной)",
+                    isActiveSet = activeTemplate != null,
+                    isExpanded = isExpanded,
+                    onToggleExpand = {
+                        expandedTypes = if (isExpanded) {
+                            expandedTypes - type
+                        } else {
+                            expandedTypes + type
                         }
-                    }
-                } else {
-                    items(typeTemplates, key = { "${type}_${it.id}" }) { template ->
-                        VersionRow(
-                            template = template,
-                            isSelected = template.id == selectedTemplateId,
-                            onClick = { onOpenPdfPreview(template.id) },
-                            onSelect = { viewModel.selectTemplate(template.id) }
+                    },
+                    onClick = { onOpenVersionsTable(type) }
+                )
+            } else {
+                val template = renderItem.template ?: return@items
+                val typeTemplates = templatesByType[renderItem.type] ?: emptyList()
+                // Проверяем, что список не пустой — если пусто, показываем placeholder
+                if (typeTemplates.isEmpty()) {
+                    Surface(
+                        color = ClaudeCard,
+                        shape = RoundedCornerShape(8.dp),
+                        border = androidx.compose.foundation.BorderStroke(1.dp, ClaudeDivider),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(start = 56.dp, top = 2.dp, bottom = 4.dp)
+                    ) {
+                        Text(
+                            "Версий нет. Нажмите «+» в верхнем баре.",
+                            modifier = Modifier.padding(12.dp),
+                            color = ClaudeTextSecondary,
+                            style = MaterialTheme.typography.bodySmall
                         )
                     }
+                } else {
+                    VersionRow(
+                        template = template,
+                        isSelected = template.id == selectedTemplateId,
+                        onClick = { onOpenPdfPreview(template.id) },
+                        onSelect = { viewModel.selectTemplate(template.id) }
+                    )
                 }
             }
         }
