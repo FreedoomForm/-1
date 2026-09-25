@@ -134,7 +134,11 @@ dependencies {
   // коммерчески дружелюбная. Активно поддерживается (TomRoush/pdfbox-android).
   // Полноценного open-source WYSIWYG редактора PDF на Android НЕ существует —
   // это лучший вариант для программного API + визуальная обвязка на Compose.
-  implementation("com.tom-routh:pdfbox-android:2.0.27.0")
+  //
+  // ВАЖНО: координата — com.github.TomRoush (JitPack), НЕ com.tom-roush
+  // (старая координата на Maven Central, доступна только версия 1.8.10.1).
+  // Новые 2.x версии публикуются ТОЛЬКО на JitPack.
+  implementation("com.github.TomRoush:pdfbox-android:2.0.27.0")
   // testImplementation(libs.androidx.compose.ui.test.junit4)
   testImplementation(libs.androidx.compose.ui.test.junit4)
   testImplementation(libs.androidx.core)
