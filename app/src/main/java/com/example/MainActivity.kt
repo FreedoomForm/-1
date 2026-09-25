@@ -471,7 +471,7 @@ private fun formatContractAmount(amount: Long): String {
  */
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
-private fun NavTabButton(
+private fun RowScope.NavTabButton(
     isSelected: Boolean,
     onClick: () -> Unit,
     accent: Color,
@@ -482,9 +482,18 @@ private fun NavTabButton(
     val borderAlpha = if (isSelected) 1.0f else 0.45f
     val iconAlpha = if (isSelected) 1.0f else 0.75f
     val interactionSource = remember { MutableInteractionSource() }
+    // ── Width adaptive: weight(1f) instead of fixed 56dp ──────────────────
+    // Раньше было .size(56.dp) — фиксированный размер 56dp на каждую кнопку.
+    // С 8 кнопками это 8 × 56 = 448dp + padding, что НЕ помещается на
+    // типичном 360dp экране — последняя кнопка обрезалась.
+    //
+    // Теперь: .weight(1f).height(56.dp) — кнопки делят доступную ширину
+    // поровну. На 360dp экране с 8 кнопками каждая получает ~43dp — это
+    // меньше чем 56dp, но 28dp иконка + padding помещаются.
     Box(
         modifier = Modifier
-            .size(56.dp)
+            .weight(1f)
+            .height(56.dp)
             .clip(RoundedCornerShape(8.dp))
             .background(accent.copy(alpha = bgAlpha), RoundedCornerShape(8.dp))
             .border(1.dp, accent.copy(alpha = borderAlpha), RoundedCornerShape(8.dp))
