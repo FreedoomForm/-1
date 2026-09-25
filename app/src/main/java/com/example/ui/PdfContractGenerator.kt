@@ -866,17 +866,13 @@ object PdfContractGenerator {
      * документ всё же не уместился на одну страницу — например при manual
      * режиме с большим размером шрифта).
      *
-     * После рендера параграфов на каждой странице, также рендерит текстовые
-     * аннотации пользователя (через [renderAnnotationsOnPage]) — поверх
-     * параграфов. Аннотации могут содержать {{placeholders}} — заменяются
-     * на реальные значения через [applyPlaceholders].
+     * Аннотации пользователя применяются ОТДЕЛЬНО после генерации базового
+     * PDF через [applyAnnotationsToPdf] (использует PdfBox-Android 2.0 API).
      */
     private fun renderParagraphs(
         doc: PdfDocument,
         paragraphs: List<Paragraph>,
-        contentWidth: Int,
-        annotations: List<TemplateAnnotation> = emptyList(),
-        placeholders: Map<String, String> = emptyMap()
+        contentWidth: Int
     ) {
         var pageNumber = 1
         var page = doc.startPage(PdfDocument.PageInfo.Builder(PAGE_WIDTH, PAGE_HEIGHT, pageNumber).create())
@@ -894,8 +890,6 @@ object PdfContractGenerator {
             val paraHeight = layout.height + para.spaceAfter
 
             if (y + paraHeight > PAGE_HEIGHT - MARGIN_BOTTOM) {
-                // Перед завершением страницы — рендерим аннотации для неё
-                renderAnnotationsOnPage(canvas, pageNumber - 1, annotations, placeholders)
                 doc.finishPage(page)
                 pageNumber++
                 page = doc.startPage(PdfDocument.PageInfo.Builder(PAGE_WIDTH, PAGE_HEIGHT, pageNumber).create())
@@ -909,8 +903,6 @@ object PdfContractGenerator {
             canvas.restore()
             y += paraHeight
         }
-        // Рендерим аннотации для последней страницы
-        renderAnnotationsOnPage(canvas, pageNumber - 1, annotations, placeholders)
         doc.finishPage(page)
     }
 }
