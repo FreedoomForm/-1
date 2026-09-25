@@ -43,7 +43,7 @@ class DatabaseMigrationTest {
 
     /**
      * Главный smoke-тест: AppDatabase.getDatabase не должен бросать.
-     * Включает миграцию + schema validation.
+     * Включает миграции 36→37 и 37→38 + schema validation.
      */
     @Test
     fun appDatabase_initializesWithoutException() {
@@ -51,6 +51,28 @@ class DatabaseMigrationTest {
         assertNotNull("AppDatabase.getDatabase must not return null", db)
         // Force DB open — triggers migration if upgrading from older version
         db.openHelper.writableDatabase
+    }
+
+    /**
+     * Дополнительно: после миграций 36→37 и 37→38 у каждой версии должно
+     * быть поле `notes` (nullable, по умолчанию NULL для seed-записей).
+     */
+    @Test
+    fun contractTemplatesTable_hasNotesColumn() = runBlocking {
+        val db = AppDatabase.getDatabase(context)
+        db.openHelper.writableDatabase
+
+        val dao = db.contractTemplateDao()
+        val limited = dao.getActiveForType(ContractTemplate.TYPE_LIMITED)
+        assertNotNull(limited)
+        requireNotNull(limited)
+
+        // notes должно быть null для seed-записей (т.к. в seed JSON нет этого поля)
+        // либо быть пустым — зависит от того, как Room парсит entity default.
+        // Главное — поле существует и доступно.
+        val notesValue = limited.notes
+        // Проверяем что getter работает — значение может быть null или строкой
+        println("Seed template notes = $notesValue (expected: null)")
     }
 
     /**

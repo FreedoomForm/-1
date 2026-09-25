@@ -162,20 +162,20 @@ class ContractTemplateViewModel(application: Application) : AndroidViewModel(app
     // ── Actions: CRUD ───────────────────────────────────────────────────────
     // Все методы обёрнуты в проверку repo != null, чтобы VM не крашилась
     // даже в degraded mode (когда БД недоступна).
-    fun createTemplate(name: String, content: TemplateContent, onDone: (Long) -> Unit = {}) =
+    fun createTemplate(name: String, content: TemplateContent, notes: String? = null, onDone: (Long) -> Unit = {}) =
         viewModelScope.launch {
             val r = repo ?: run {
                 onDone(-1)
                 return@launch
             }
-            val id = try { r.create(_selectedType.value, name, content) } catch (e: Exception) { -1L }
+            val id = try { r.create(_selectedType.value, name, content, notes) } catch (e: Exception) { -1L }
             onDone(id)
         }
 
-    fun updateTemplate(id: Int, name: String, content: TemplateContent, onDone: () -> Unit = {}) =
+    fun updateTemplate(id: Int, name: String, content: TemplateContent, notes: String? = null, onDone: () -> Unit = {}) =
         viewModelScope.launch {
             val r = repo ?: run { onDone(); return@launch }
-            try { r.update(id, name, content) } catch (e: Exception) {}
+            try { r.update(id, name, content, notes) } catch (e: Exception) {}
             onDone()
             if (id == _selectedTemplateId.value) regeneratePreview()
         }
@@ -218,7 +218,95 @@ class ContractTemplateViewModel(application: Application) : AndroidViewModel(app
 
     // ── Actions: превью PDF ────────────────────────────────────────────────
     /**
-     * Регенерирует превью PDF. Запускает в Dispatchers.IO рендер выбранной
+     * Регенерирует превью PDF БЕЗ демо-данных — плейсхолдеры вида
+     * «(имя арендатора)», «(VIN скутера)» и т.д. используются вместо
+     * реальных данных арендатора/арендодателя/скутера.
+     *
+     * Используется в новом PdfPreviewScreen — пользователь видит структуру
+     * шаблона, но без конфиденциальных данных.
+     *
+     * @param templateId ID версии шаблона для превью
+     */
+    suspend fun generatePreviewWithoutDemoData(templateId: Int): List<Bitmap> = withContext(Dispatchers.IO) {
+        val r = repo ?: return@withContext emptyList()
+        val template = r.getById(templateId) ?: return@withContext emptyList()
+        val type = template.type
+        val content = r.parseContent(template.contentJson).let {
+            if (it.bodyText.isBlank()) {
+                it.copy(
+                    bodyText = if (type == ContractTemplate.TYPE_UNLIMITED)
+                        TemplateContent.DEFAULT_CONTRACT_BODY_UNLIMITED
+                    else
+                        TemplateContent.DEFAULT_CONTRACT_BODY_LIMITED
+                )
+            } else it
+        }
+
+        // Создаём фейковые данные — все поля заполнены placeholder labels
+        // вида «(имя арендатора)», чтобы пользователь видел структуру.
+        val fakeRenter = Renter(
+            id = 0,
+            name = "(имя арендатора)",
+            phoneNumber = "(телефон арендатора)",
+            passportData = "(паспорт арендатора)",
+            address = "(адрес арендатора)",
+            pinfl = "(ПИНФЛ арендатора)",
+            scooterId = null,
+            scooterName = "(модель скутера)",
+            rentStartDateTimestamp = System.currentTimeMillis(),
+            rentDurationDays = 7
+        )
+        val fakeScooter = Scooter(
+            id = 0,
+            name = "(модель скутера)",
+            documentedNumber = "(номер документа)",
+            vinNumber = "(VIN скутера)",
+            engineNumber = "(номер двигателя)",
+            scooterSerialNumber = "(серийный номер)",
+            batteryId1 = "(ID аккум. 1)",
+            batteryId2 = "(ID аккум. 2)",
+            additionalInfo = "(доп. информация)"
+        )
+
+        // Переопределяем landlord данные на placeholder labels тоже,
+        // чтобы пользователь видел структуру, а не реальные реквизиты.
+        val placeholderContent = content.copy(
+            landlordName = "(название ЯТТ/ИП)",
+            landlordAddress = "(адрес арендодателя)",
+            landlordBank = "(банк арендодателя)",
+            landlordAccount = "(расчётный счёт)",
+            landlordMfo = "(МФО)",
+            landlordInn = "(ИНН)",
+            landlordPhone = "(телефон арендодателя)",
+            landlordDirector = "(ФИО директора)"
+        )
+
+        val previewFile = File(
+            getApplication<Application>().cacheDir,
+            "preview_nodemo_${System.currentTimeMillis()}.pdf"
+        )
+        val uri = when (type) {
+            ContractTemplate.TYPE_UNLIMITED -> {
+                PdfContractGenerator.generateUnlimitedTo(
+                    getApplication(), fakeRenter, fakeScooter, placeholderContent, previewFile
+                )
+            }
+            else -> {
+                val entry = makePreviewEntry(fakeRenter, fakeScooter)
+                PdfContractGenerator.generateTo(
+                    getApplication(), entry, fakeRenter, fakeScooter, placeholderContent, previewFile
+                )
+            }
+        }
+        if (uri == null) {
+            return@withContext emptyList()
+        }
+        renderPdfToBitmaps(previewFile)
+    }
+
+    /**
+     * Регенерирует превью PDF с демо-данными (для старого UI).
+     * Запускает в Dispatchers.IO рендер выбранной
      * версии шаблона + выбранного клиента (или первого из renters, если
      * никто не выбран) → кэширует Bitmap'ы в [_previewBitmaps].
      *

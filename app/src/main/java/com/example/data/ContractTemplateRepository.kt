@@ -39,7 +39,7 @@ class ContractTemplateRepository(
     suspend fun getActiveForType(type: String): ContractTemplate? = dao.getActiveForType(type)
 
     // ── CRUD ────────────────────────────────────────────────────────────────
-    suspend fun create(type: String, name: String, content: TemplateContent): Long {
+    suspend fun create(type: String, name: String, content: TemplateContent, notes: String? = null): Long {
         val json = json.encodeToString(content)
         // Новая версия создаётся неактивной — пользователь явно назначит её
         // активной через setActive() (или кнопкой ★ в TopAppBar).
@@ -49,18 +49,20 @@ class ContractTemplateRepository(
             contentJson = json,
             isActive = false,
             createdAt = System.currentTimeMillis(),
-            updatedAt = null
+            updatedAt = null,
+            notes = notes
         )
         return dao.insert(template)
     }
 
-    suspend fun update(id: Int, name: String, content: TemplateContent) {
+    suspend fun update(id: Int, name: String, content: TemplateContent, notes: String? = null) {
         val existing = dao.getById(id) ?: return
         dao.update(
             existing.copy(
                 name = name,
                 contentJson = json.encodeToString(content),
-                updatedAt = System.currentTimeMillis()
+                updatedAt = System.currentTimeMillis(),
+                notes = notes
             )
         )
     }

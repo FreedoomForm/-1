@@ -7,15 +7,14 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
@@ -29,6 +28,7 @@ import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.HelpOutline
 import androidx.compose.material.icons.filled.KeyboardArrowDown
+import androidx.compose.material.icons.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material.icons.filled.Save
 import androidx.compose.material.icons.filled.Search
@@ -36,38 +36,32 @@ import androidx.compose.material.icons.filled.Star
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
-import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.PrimaryTabRow
 import androidx.compose.material3.Surface
-import androidx.compose.material3.Tab
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import androidx.lifecycle.viewmodel.compose.viewModel
 import com.example.data.ContractTemplate
 import com.example.data.TemplateContent
 import com.example.ui.ContractTemplateViewModel
+import com.example.ui.components.DangerButton
+import com.example.ui.components.PrimaryButton
+import com.example.ui.components.TextActionButton
 import com.example.ui.theme.ClaudeAccent
 import com.example.ui.theme.ClaudeAccentBg
 import com.example.ui.theme.ClaudeCard
@@ -75,59 +69,46 @@ import com.example.ui.theme.ClaudeDivider
 import com.example.ui.theme.ClaudeGold
 import com.example.ui.theme.ClaudeText
 import com.example.ui.theme.ClaudeTextSecondary
-import com.example.ui.components.PrimaryButton
-import com.example.ui.components.SecondaryButton
-import com.example.ui.components.DangerButton
-import com.example.ui.components.TextActionButton
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 
 /**
- * Экран «Документооборот» — управление версиями шаблонов PDF-договора.
+ * Экран «Документооборот» — список шаблонов с раскрытием на версии.
  *
- * Принимает [createTrigger], [editTrigger], [deleteTrigger], [searchTrigger]
- * от MainActivity TopAppBar (по образцу ContractListScreen). Реагирует на
- * увеличение значения триггера (LaunchedEffect).
+ * Архитектура (по образцу RenterTable в MainActivity.kt:3404):
+ *   • 2 верхнеуровневые строки — по одной на каждый TYPE (LIMITED, UNLIMITED)
+ *   • Каждая строка: треугольник ▶ + имя шаблона + имя активной версии (с ★)
+ *   • Клик по треугольнику → раскрытие списка версий под строкой (без анимации,
+ *     простой if (isExpanded) { ... })
+ *   • Клик по строке шаблона → переход на VersionsTableScreen (по образцу
+ *     NavigationState.RenterHistory → RenterContractHistoryScreen)
  *
- * Содержит 4 секции в одном LazyColumn:
- *   1. TypeSelector — выбор типа документа (бесконечная / конечная аренда).
- *   2. Список версий выбранного типа — карты с золотой рамкой для активной.
- *   3. RenterSelector — выбор клиента для демо-данных.
- *   4. Превью PDF — список Bitmap'ов страниц через PdfRenderer.
- *
- * Диалоги (открываются по триггерам):
- *   • CreateTemplateDialog — имя + 8 реквизитов + bodyText.
- *   • EditTemplateDialog — то же для существующей версии.
- *   • DeleteConfirmDialog — подтверждение мягкого удаления.
- *   • SearchPanel — ввод строки поиска.
+ * Universal-кнопки TopAppBar (+/✎/🗑/🔍/★) продолжают работать через
+ * [createTrigger], [editTrigger], [deleteTrigger], [searchTrigger].
  */
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun DocumentManagementScreen(
     docTemplateViewModel: ContractTemplateViewModel,
     createTrigger: Int = 0,
     editTrigger: Int = 0,
     deleteTrigger: Int = 0,
-    searchTrigger: Int = 0
+    searchTrigger: Int = 0,
+    onOpenVersionsTable: (String) -> Unit = {},  // type → navigation
+    onOpenPdfPreview: (Int) -> Unit = {}          // templateId → navigation
 ) {
-    // Локальный alias для удобства внутри функций
     val viewModel = docTemplateViewModel
-    val context = LocalContext.current
-    val scope = rememberCoroutineScope()
-
-    val selectedType by viewModel.selectedType.collectAsStateWithLifecycle()
-    val templates by viewModel.templates.collectAsStateWithLifecycle()
-    val selectedTemplateId by viewModel.selectedTemplateId.collectAsStateWithLifecycle()
-    val renters by viewModel.renters.collectAsStateWithLifecycle()
-    val selectedRenterId by viewModel.selectedRenterId.collectAsStateWithLifecycle()
+    val allTemplates by viewModel.templates.collectAsStateWithLifecycle()
     val activeTemplateId by viewModel.activeTemplateId.collectAsStateWithLifecycle()
+    val selectedTemplateId by viewModel.selectedTemplateId.collectAsStateWithLifecycle()
     val searchQuery by viewModel.searchQuery.collectAsStateWithLifecycle()
-    val previewBitmaps by viewModel.previewBitmaps.collectAsStateWithLifecycle()
-    val isPreviewLoading by viewModel.isPreviewLoading.collectAsStateWithLifecycle()
-    val previewError by viewModel.previewError.collectAsStateWithLifecycle()
 
-    // ── Реакция на триггеры из TopAppBar (по образцу ContractListScreen.kt:131-181)
+    // ── State для раскрытия шаблонов (Set<String> type) ─────────────────
+    // По образцу expandedRenterIds в MainActivity.kt:3521 — можно раскрыть
+    // несколько шаблонов одновременно.
+    var expandedTypes by remember { mutableStateOf<Set<String>>(emptySet()) }
+
+    // ── Триггеры CRUD из TopAppBar (по образцу ContractListScreen.kt:131-181)
     var lastCreate by remember { mutableStateOf(createTrigger) }
     var lastEdit by remember { mutableStateOf(editTrigger) }
     var lastDelete by remember { mutableStateOf(deleteTrigger) }
@@ -163,179 +144,108 @@ fun DocumentManagementScreen(
         }
     }
 
-    // ── Регенерация превью при изменении выбора
-    LaunchedEffect(selectedTemplateId, selectedRenterId, selectedType) {
-        viewModel.regeneratePreview()
-    }
+    // Группируем шаблоны по type (LIMITED, UNLIMITED)
+    val templatesByType = allTemplates.groupBy { it.type }
+
+    // Список типов в фиксированном порядке: UNLIMITED сначала, LIMITED потом
+    val types = listOf(ContractTemplate.TYPE_UNLIMITED, ContractTemplate.TYPE_LIMITED)
 
     LazyColumn(
         modifier = Modifier
             .fillMaxSize()
-            .padding(16.dp),
-        verticalArrangement = Arrangement.spacedBy(12.dp)
+            .padding(8.dp),
+        verticalArrangement = Arrangement.spacedBy(6.dp)
     ) {
-        // 1. TypeSelector — выбор типа
-        item { TypeSelector(selectedType = selectedType, onSelect = viewModel::selectType) }
-
-        // 2. Заголовок списка версий
-        item {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Text(
-                    text = "Версии шаблонов (${templates.size})",
-                    style = MaterialTheme.typography.titleMedium,
-                    color = ClaudeText
-                )
-                if (searchQuery.isNotBlank()) {
+        if (searchQuery.isNotBlank()) {
+            item {
+                Surface(
+                    color = ClaudeAccentBg,
+                    shape = RoundedCornerShape(8.dp),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
                     Text(
-                        text = "Фильтр: \"$searchQuery\"",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = ClaudeTextSecondary
+                        "Фильтр: \"$searchQuery\"",
+                        modifier = Modifier.padding(8.dp),
+                        color = ClaudeTextSecondary,
+                        style = MaterialTheme.typography.bodySmall
                     )
                 }
             }
         }
 
-        // 2.1 Список версий (карточки)
-        if (templates.isEmpty()) {
-            item {
-                Card(
-                    modifier = Modifier.fillMaxWidth(),
-                    colors = CardDefaults.cardColors(containerColor = ClaudeCard)
-                ) {
-                    Column(modifier = Modifier.padding(16.dp)) {
-                        Text(
-                            "Нет созданных версий",
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = ClaudeTextSecondary
-                        )
-                        Spacer(modifier = Modifier.height(4.dp))
-                        Text(
-                            "Нажмите «+» в верхнем баре, чтобы создать первую версию",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = ClaudeTextSecondary
+        items(types, key = { it }) { type ->
+            val typeTemplates = templatesByType[type] ?: emptyList()
+            val activeTemplate = typeTemplates.firstOrNull { it.isActive }
+            val typeName = when (type) {
+                ContractTemplate.TYPE_UNLIMITED -> "Бесконечная аренда"
+                else -> "Конечная аренда (неделя)"
+            }
+            val isExpanded = type in expandedTypes
+
+            TemplateRow(
+                typeName = typeName,
+                activeVersionName = activeTemplate?.name ?: "(нет активной)",
+                isActiveSet = activeTemplate != null,
+                isExpanded = isExpanded,
+                onToggleExpand = {
+                    expandedTypes = if (isExpanded) {
+                        expandedTypes - type
+                    } else {
+                        expandedTypes + type
+                    }
+                },
+                onClick = { onOpenVersionsTable(type) }
+            )
+
+            // Раскрытый список версий (как в RenterTable строки 3894-3968)
+            if (isExpanded) {
+                if (typeTemplates.isEmpty()) {
+                    item {
+                        Surface(
+                            color = ClaudeCard,
+                            shape = RoundedCornerShape(8.dp),
+                            border = androidx.compose.foundation.BorderStroke(1.dp, ClaudeDivider),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(start = 56.dp, top = 2.dp, bottom = 4.dp)
+                        ) {
+                            Text(
+                                "Версий нет. Нажмите «+» в верхнем баре.",
+                                modifier = Modifier.padding(12.dp),
+                                color = ClaudeTextSecondary,
+                                style = MaterialTheme.typography.bodySmall
+                            )
+                        }
+                    }
+                } else {
+                    items(typeTemplates, key = { "${type}_${it.id}" }) { template ->
+                        VersionRow(
+                            template = template,
+                            isSelected = template.id == selectedTemplateId,
+                            onClick = { onOpenPdfPreview(template.id) },
+                            onSelect = { viewModel.selectTemplate(template.id) }
                         )
                     }
-                }
-            }
-        } else {
-            items(templates, key = { it.id }) { template ->
-                VersionCard(
-                    template = template,
-                    isSelected = template.id == selectedTemplateId,
-                    onClick = { viewModel.selectTemplate(template.id) }
-                )
-            }
-        }
-
-        // 3. RenterSelector — выбор клиента
-        item {
-            Text(
-                "Демо-клиент для превью",
-                style = MaterialTheme.typography.titleMedium,
-                color = ClaudeText
-            )
-            RenterSelector(
-                renters = renters,
-                selectedId = selectedRenterId,
-                onSelect = viewModel::selectRenter
-            )
-        }
-
-        // 4. Превью PDF
-        item {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Text(
-                    "Превью PDF",
-                    style = MaterialTheme.typography.titleMedium,
-                    color = ClaudeText
-                )
-                Text(
-                    if (previewBitmaps.isNotEmpty()) "${previewBitmaps.size} стр." else "",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = ClaudeTextSecondary
-                )
-            }
-        }
-
-        if (isPreviewLoading) {
-            item {
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(32.dp),
-                    contentAlignment = Alignment.Center
-                ) {
-                    CircularProgressIndicator(color = ClaudeAccent)
-                }
-            }
-        } else if (previewError != null) {
-            item {
-                Card(
-                    colors = CardDefaults.cardColors(containerColor = ClaudeCard),
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    Text(
-                        text = previewError!!,
-                        modifier = Modifier.padding(16.dp),
-                        color = ClaudeTextSecondary
-                    )
-                }
-            }
-        } else if (previewBitmaps.isEmpty()) {
-            item {
-                Card(
-                    colors = CardDefaults.cardColors(containerColor = ClaudeCard),
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    Text(
-                        "Выберите версию и клиента для превью",
-                        modifier = Modifier.padding(16.dp),
-                        color = ClaudeTextSecondary
-                    )
-                }
-            }
-        } else {
-            items(previewBitmaps.size) { i ->
-                val bitmap = previewBitmaps[i]
-                Surface(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .aspectRatio(595f / 842f),
-                    shape = RoundedCornerShape(4.dp),
-                    border = androidx.compose.foundation.BorderStroke(1.dp, ClaudeDivider)
-                ) {
-                    Image(
-                        bitmap = bitmap.asImageBitmap(),
-                        contentDescription = "Страница ${i + 1}",
-                        modifier = Modifier.fillMaxSize()
-                    )
                 }
             }
         }
     }
 
-    // ── Диалоги ────────────────────────────────────────────────────────────
+    // ── Диалоги (как раньше) ────────────────────────────────────────────────
     if (showCreateDialog) {
         TemplateEditorDialog(
             title = "Новая версия шаблона",
             initialName = "",
+            initialNotes = "",
             initialContent = TemplateContent.DEFAULT_FOR_UNLIMITED.let {
-                if (selectedType == ContractTemplate.TYPE_LIMITED)
+                if (viewModel.selectedType.value == ContractTemplate.TYPE_LIMITED)
                     TemplateContent.DEFAULT_FOR_LIMITED
                 else it
             },
             isCreate = true,
             onDismiss = { showCreateDialog = false },
-            onSave = { name, content ->
-                viewModel.createTemplate(name, content)
+            onSave = { name, content, notes ->
+                viewModel.createTemplate(name, content, notes)
                 showCreateDialog = false
             }
         )
@@ -351,11 +261,12 @@ fun DocumentManagementScreen(
             TemplateEditorDialog(
                 title = "Редактирование: ${template.name}",
                 initialName = template.name,
+                initialNotes = template.notes ?: "",
                 initialContent = initialContent,
                 isCreate = false,
                 onDismiss = { showEditDialog = false },
-                onSave = { name, content ->
-                    viewModel.updateTemplate(templateId, name, content)
+                onSave = { name, content, notes ->
+                    viewModel.updateTemplate(templateId, name, content, notes)
                     showEditDialog = false
                 }
             )
@@ -421,48 +332,111 @@ fun DocumentManagementScreen(
 
 // ── Подкомпоненты ─────────────────────────────────────────────────────────
 
-@OptIn(ExperimentalMaterial3Api::class)
+/**
+ * Строка верхнеуровневого шаблона (одна на тип договора).
+ * По образцу RenterTable строки 3582-3666: треугольник + основная строка.
+ */
 @Composable
-private fun TypeSelector(selectedType: String, onSelect: (String) -> Unit) {
-    val tabs = listOf(
-        ContractTemplate.TYPE_UNLIMITED to "Бесконечная аренда",
-        ContractTemplate.TYPE_LIMITED to "Конечная аренда (неделя)"
-    )
-    val selectedIndex = tabs.indexOfFirst { it.first == selectedType }.coerceAtLeast(0)
-    PrimaryTabRow(selectedTabIndex = selectedIndex) {
-        tabs.forEachIndexed { i, (type, label) ->
-            Tab(
-                selected = i == selectedIndex,
-                onClick = { onSelect(type) },
-                text = { Text(label) }
-            )
+private fun TemplateRow(
+    typeName: String,
+    activeVersionName: String,
+    isActiveSet: Boolean,
+    isExpanded: Boolean,
+    onToggleExpand: () -> Unit,
+    onClick: () -> Unit
+) {
+    Surface(
+        shape = RoundedCornerShape(8.dp),
+        color = ClaudeCard,
+        border = androidx.compose.foundation.BorderStroke(1.dp, ClaudeDivider),
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 8.dp, vertical = 8.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            // ── Треугольник раскрытия (по образцу MainActivity.kt:3603-3637) ──
+            val arrowRotation = if (isExpanded) 90f else 0f
+            val arrowTint = if (isExpanded) ClaudeAccent else ClaudeTextSecondary
+            Box(
+                modifier = Modifier
+                    .width(40.dp)
+                    .height(40.dp)
+                    .clickable { onToggleExpand() },
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(
+                    imageVector = Icons.Default.KeyboardArrowRight,
+                    contentDescription = if (isExpanded) "Свернуть" else "Версии",
+                    tint = arrowTint,
+                    modifier = Modifier
+                        .size(24.dp)
+                        .rotate(arrowRotation)
+                )
+            }
+            // ── Основная строка ──
+            Row(
+                modifier = Modifier
+                    .weight(1f)
+                    .clickable { onClick() }
+                    .padding(horizontal = 8.dp, vertical = 4.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = typeName,
+                        style = MaterialTheme.typography.titleMedium,
+                        color = ClaudeText,
+                        fontWeight = FontWeight.SemiBold
+                    )
+                    Text(
+                        text = "Активная версия: $activeVersionName",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = ClaudeTextSecondary
+                    )
+                }
+                if (isActiveSet) {
+                    Icon(
+                        Icons.Default.Star,
+                        contentDescription = "Есть активная версия",
+                        tint = ClaudeGold,
+                        modifier = Modifier.size(20.dp)
+                    )
+                }
+            }
         }
     }
 }
 
+/**
+ * Строка версии шаблона (раскрывается под строкой типа).
+ * По образцу contract row в RenterTable строки 3973-4118.
+ */
 @Composable
-private fun VersionCard(
+private fun VersionRow(
     template: ContractTemplate,
     isSelected: Boolean,
-    onClick: () -> Unit
+    onClick: () -> Unit,    // открыть превью PDF
+    onSelect: () -> Unit     // выбрать для редактирования/удаления
 ) {
-    Card(
+    Surface(
+        shape = RoundedCornerShape(8.dp),
+        color = if (isSelected) ClaudeAccentBg else ClaudeCard,
+        border = androidx.compose.foundation.BorderStroke(
+            width = if (template.isActive) 2.dp else 1.dp,
+            color = if (template.isActive) ClaudeGold else ClaudeDivider
+        ),
         modifier = Modifier
             .fillMaxWidth()
-            .clickable(onClick = onClick)
-            .border(
-                width = if (template.isActive) 2.dp else 1.dp,
-                color = if (template.isActive) ClaudeGold else ClaudeDivider,
-                shape = RoundedCornerShape(8.dp)
-            ),
-        colors = CardDefaults.cardColors(
-            containerColor = if (isSelected) ClaudeAccentBg else ClaudeCard
-        )
+            .padding(start = 56.dp, top = 2.dp, bottom = 2.dp, end = 8.dp)
     ) {
         Row(
             modifier = Modifier
-                .padding(12.dp)
-                .fillMaxWidth(),
+                .fillMaxWidth()
+                .clickable { onClick() }
+                .padding(horizontal = 12.dp, vertical = 10.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
             if (template.isActive) {
@@ -470,9 +444,9 @@ private fun VersionCard(
                     Icons.Default.Star,
                     contentDescription = "Активная",
                     tint = ClaudeGold,
-                    modifier = Modifier.size(24.dp)
+                    modifier = Modifier.size(20.dp)
                 )
-                Spacer(modifier = Modifier.size(8.dp))
+                Spacer(modifier = Modifier.width(8.dp))
             }
             Column(modifier = Modifier.weight(1f)) {
                 Text(
@@ -486,93 +460,13 @@ private fun VersionCard(
                     style = MaterialTheme.typography.bodySmall,
                     color = ClaudeTextSecondary
                 )
-                template.updatedAt?.let { upd ->
+                template.notes?.takeIf { it.isNotBlank() }?.let { notes ->
                     Text(
-                        text = "Изменён: ${SimpleDateFormat("dd.MM.yyyy HH:mm", Locale.getDefault()).format(Date(upd))}",
+                        text = "Примечание: $notes",
                         style = MaterialTheme.typography.bodySmall,
-                        color = ClaudeTextSecondary
-                    )
-                }
-            }
-        }
-    }
-}
-
-@Composable
-private fun RenterSelector(
-    renters: List<com.example.data.Renter>,
-    selectedId: Int?,
-    onSelect: (Int?) -> Unit
-) {
-    val expanded = remember { mutableStateOf(false) }
-    val selectedRenter = renters.firstOrNull { it.id == selectedId }
-
-    Card(
-        modifier = Modifier.fillMaxWidth(),
-        colors = CardDefaults.cardColors(containerColor = ClaudeCard)
-    ) {
-        Column(modifier = Modifier.padding(8.dp)) {
-            // Заголовок-кнопка
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .clickable { expanded.value = !expanded.value }
-                    .padding(8.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Text(
-                    text = selectedRenter?.name ?: "Выберите клиента",
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = if (selectedRenter != null) ClaudeText else ClaudeTextSecondary,
-                    modifier = Modifier.weight(1f)
-                )
-                Icon(
-                    if (expanded.value) Icons.Default.KeyboardArrowUp
-                    else Icons.Default.KeyboardArrowDown,
-                    contentDescription = "Раскрыть",
-                    tint = ClaudeTextSecondary
-                )
-            }
-            // Список клиентов
-            if (expanded.value) {
-                if (renters.isEmpty()) {
-                    Text(
-                        "Нет активных арендаторов. Добавьте хотя бы одного на вкладке «Ijarachilar».",
-                        modifier = Modifier.padding(8.dp),
                         color = ClaudeTextSecondary,
-                        style = MaterialTheme.typography.bodySmall
+                        maxLines = 2
                     )
-                } else {
-                    renters.forEach { renter ->
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .clickable {
-                                    onSelect(if (selectedId == renter.id) null else renter.id)
-                                    expanded.value = false
-                                }
-                                .padding(8.dp),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            if (renter.id == selectedId) {
-                                Icon(
-                                    Icons.Default.Check,
-                                    contentDescription = null,
-                                    tint = ClaudeAccent,
-                                    modifier = Modifier.size(20.dp)
-                                )
-                                Spacer(modifier = Modifier.size(8.dp))
-                            }
-                            Column(modifier = Modifier.weight(1f)) {
-                                Text(renter.name, color = ClaudeText, style = MaterialTheme.typography.bodyMedium)
-                                Text(
-                                    renter.phoneNumber.ifBlank { "—" },
-                                    color = ClaudeTextSecondary,
-                                    style = MaterialTheme.typography.bodySmall
-                                )
-                            }
-                        }
-                    }
                 }
             }
         }
@@ -581,19 +475,20 @@ private fun RenterSelector(
 
 /**
  * Универсальный диалог создания/редактирования версии шаблона.
- * Содержит: имя версии + 8 полей реквизитов арендодателя + большой
- * редактор текста договора (с моноширинным шрифтом).
+ * Теперь с дополнительным полем «Примечание» (notes).
  */
 @Composable
 private fun TemplateEditorDialog(
     title: String,
     initialName: String,
+    initialNotes: String,
     initialContent: TemplateContent,
     isCreate: Boolean,
     onDismiss: () -> Unit,
-    onSave: (String, TemplateContent) -> Unit
+    onSave: (String, TemplateContent, String?) -> Unit
 ) {
     var name by remember { mutableStateOf(initialName) }
+    var notes by remember { mutableStateOf(initialNotes) }
     var landlordName by remember { mutableStateOf(initialContent.landlordName) }
     var landlordAddress by remember { mutableStateOf(initialContent.landlordAddress) }
     var landlordBank by remember { mutableStateOf(initialContent.landlordBank) }
@@ -609,9 +504,7 @@ private fun TemplateEditorDialog(
 
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = {
-            Text(title, style = MaterialTheme.typography.titleLarge, color = ClaudeText)
-        },
+        title = { Text(title, style = MaterialTheme.typography.titleLarge, color = ClaudeText) },
         text = {
             Column(
                 modifier = Modifier
@@ -626,12 +519,14 @@ private fun TemplateEditorDialog(
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth()
                 )
-                Spacer(modifier = Modifier.height(8.dp))
-                Text(
-                    "Реквизиты арендодателя",
-                    style = MaterialTheme.typography.titleSmall,
-                    color = ClaudeText
+                OutlinedTextField(
+                    value = notes,
+                    onValueChange = { notes = it },
+                    label = { Text("Примечание (что изменено, зачем)") },
+                    modifier = Modifier.fillMaxWidth().height(80.dp)
                 )
+                Spacer(modifier = Modifier.height(8.dp))
+                Text("Реквизиты арендодателя", style = MaterialTheme.typography.titleSmall, color = ClaudeText)
                 OutlinedTextField(value = landlordName, onValueChange = { landlordName = it },
                     label = { Text("Название ЯТТ/ИП/ООО") }, singleLine = true,
                     modifier = Modifier.fillMaxWidth())
@@ -662,8 +557,7 @@ private fun TemplateEditorDialog(
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Text("Текст договора",
-                        style = MaterialTheme.typography.titleSmall, color = ClaudeText)
+                    Text("Текст договора", style = MaterialTheme.typography.titleSmall, color = ClaudeText)
                     TextActionButton(
                         label = if (showPlaceholdersHelp) "Скрыть" else "Плейсхолдеры",
                         icon = Icons.Default.HelpOutline,
@@ -691,34 +585,34 @@ private fun TemplateEditorDialog(
                             Text("Плейсхолдеры (заменяются на реальные данные):",
                                 color = ClaudeText, style = MaterialTheme.typography.bodySmall,
                                 fontWeight = FontWeight.SemiBold)
-                            Text("\${contractNumber}, \${contractDate}, \${contractDay}, \${contractFullDate}",
+                            Text("{{contractNumber}}, {{contractDate}}, {{contractDay}}, {{contractFullDate}}",
                                 color = ClaudeTextSecondary, style = MaterialTheme.typography.bodySmall,
                                 fontFamily = FontFamily.Monospace)
-                            Text("\${weekStart}, \${weekEnd}",
+                            Text("{{weekStart}}, {{weekEnd}}",
                                 color = ClaudeTextSecondary, style = MaterialTheme.typography.bodySmall,
                                 fontFamily = FontFamily.Monospace)
-                            Text("\${tenantName}, \${tenantPhone}, \${tenantPassport}, \${tenantAddress}, \${tenantPinfl}",
+                            Text("{{tenantName}}, {{tenantPhone}}, {{tenantPassport}}, {{tenantAddress}}, {{tenantPinfl}}",
                                 color = ClaudeTextSecondary, style = MaterialTheme.typography.bodySmall,
                                 fontFamily = FontFamily.Monospace)
-                            Text("\${tenantPassportFilled}, \${tenantAddressFilled}, \${tenantPinflFilled}",
+                            Text("{{tenantPassportFilled}}, {{tenantAddressFilled}}, {{tenantPinflFilled}}",
                                 color = ClaudeTextSecondary, style = MaterialTheme.typography.bodySmall,
                                 fontFamily = FontFamily.Monospace)
-                            Text("\${scooterName}, \${scooterVin}, \${scooterEngine}, \${scooterSerial}, \${extraInfo}",
+                            Text("{{scooterName}}, {{scooterVin}}, {{scooterEngine}}, {{scooterSerial}}, {{extraInfo}}",
                                 color = ClaudeTextSecondary, style = MaterialTheme.typography.bodySmall,
                                 fontFamily = FontFamily.Monospace)
-                            Text("\${scooterVinFilled}, \${scooterEngineFilled}, \${scooterSerialFilled}, \${extraInfoFilled}",
+                            Text("{{scooterVinFilled}}, {{scooterEngineFilled}}, {{scooterSerialFilled}}, {{extraInfoFilled}}",
                                 color = ClaudeTextSecondary, style = MaterialTheme.typography.bodySmall,
                                 fontFamily = FontFamily.Monospace)
-                            Text("\${batteryIdsList}, \${batteryIdsActa}, \${batteryDamageText}",
+                            Text("{{batteryIdsList}}, {{batteryIdsActa}}, {{batteryDamageText}}",
                                 color = ClaudeTextSecondary, style = MaterialTheme.typography.bodySmall,
                                 fontFamily = FontFamily.Monospace)
-                            Text("\${weeklyAmount}, \${dailyAmount}",
+                            Text("{{weeklyAmount}}, {{dailyAmount}}",
                                 color = ClaudeTextSecondary, style = MaterialTheme.typography.bodySmall,
                                 fontFamily = FontFamily.Monospace)
-                            Text("\${landlordName}, \${landlordAddress}, \${landlordBank}, \${landlordAccount}",
+                            Text("{{landlordName}}, {{landlordAddress}}, {{landlordBank}}, {{landlordAccount}}",
                                 color = ClaudeTextSecondary, style = MaterialTheme.typography.bodySmall,
                                 fontFamily = FontFamily.Monospace)
-                            Text("\${landlordMfo}, \${landlordInn}, \${landlordPhone}, \${landlordDirector}",
+                            Text("{{landlordMfo}}, {{landlordInn}}, {{landlordPhone}}, {{landlordDirector}}",
                                 color = ClaudeTextSecondary, style = MaterialTheme.typography.bodySmall,
                                 fontFamily = FontFamily.Monospace)
                         }
@@ -731,7 +625,7 @@ private fun TemplateEditorDialog(
                     modifier = Modifier
                         .fillMaxWidth()
                         .height(360.dp),
-                    textStyle = TextStyle(
+                    textStyle = androidx.compose.ui.text.TextStyle(
                         fontFamily = FontFamily.Monospace,
                         fontSize = 11.sp,
                         lineHeight = 14.sp
@@ -742,8 +636,7 @@ private fun TemplateEditorDialog(
         confirmButton = {
             PrimaryButton(
                 label = if (isCreate) "Создать" else "Сохранить",
-                icon = if (isCreate) Icons.Default.Add
-                else Icons.Default.Save,
+                icon = if (isCreate) Icons.Default.Add else Icons.Default.Save,
                 enabled = name.isNotBlank(),
                 onClick = {
                     val content = TemplateContent(
@@ -757,7 +650,7 @@ private fun TemplateEditorDialog(
                         landlordDirector = landlordDirector,
                         bodyText = bodyText
                     )
-                    onSave(name, content)
+                    onSave(name, content, notes.takeIf { it.isNotBlank() })
                 }
             )
         },

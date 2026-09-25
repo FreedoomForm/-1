@@ -51,7 +51,13 @@ data class ContractTemplate(
     val updatedAt: Long? = null,
     // Soft-delete (по образцу всех сущностей v36+)
     val isDeleted: Boolean = false,
-    val deletedAt: Long? = null
+    val deletedAt: Long? = null,
+    /**
+     * Краткое примечание пользователя к версии (что изменено, зачем, и т.д.).
+     * Добавлено в v38 (миграция 37→38). Nullable — у старых версий нет
+     * примечания, отображается как пустое.
+     */
+    val notes: String? = null
 ) {
     companion object {
         /** Бесконечная аренда → [com.example.ui.PdfContractGenerator.generateUnlimited]. */

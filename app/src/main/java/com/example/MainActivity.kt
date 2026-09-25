@@ -373,6 +373,10 @@ sealed class NavigationState {
     data object Settings : NavigationState()
     /** Экран сканера документов с Mistral OCR — доступен с любой вкладки. */
     data object Scanner : NavigationState()
+    /** Экран таблицы версий для выбранного типа документа (LIMITED/UNLIMITED). */
+    data class VersionsTable(val type: String) : NavigationState()
+    /** Экран превью PDF версии шаблона (без демо-данных, плейсхолдеры). */
+    data class PdfPreview(val templateId: Int) : NavigationState()
 }
 
 /**
@@ -1386,6 +1390,30 @@ fun MainScreen(
             ScannerScreen(
                 onBack = { navState = NavigationState.MainView },
                 isTrashMode = isTrashMode
+            )
+            return
+        }
+        is NavigationState.VersionsTable -> {
+            // ── Экран «Таблица версий» для выбранного типа документа ────────
+            // Открывается по клику на строку шаблона в DocumentManagementScreen.
+            // Показывает список всех версий (LIMITED или UNLIMITED) с именем
+            // и примечанием. Клик по версии → NavigationState.PdfPreview.
+            VersionsTableScreen(
+                type = st.type,
+                onBack = { navState = NavigationState.MainView },
+                onOpenPdfPreview = { id -> navState = NavigationState.PdfPreview(id) }
+            )
+            return
+        }
+        is NavigationState.PdfPreview -> {
+            // ── Экран «Превью PDF» для выбранной версии шаблона ─────────────
+            // Превью БЕЗ демо-данных — используются placeholder labels
+            // вида «(имя арендатора)» и т.д. Пользователь видит структуру
+            // шаблона, но не конфиденциальные данные.
+            PdfPreviewScreen(
+                templateId = st.templateId,
+                onBack = { navState = NavigationState.MainView },
+                onEditTemplate = { /* Phase 2: открыть визуальный PDF editor */ }
             )
             return
         }
@@ -3036,19 +3064,19 @@ fun MainScreen(
                 // ── Вкладка «Документооборот» (v37+) ───────────────────────────
                 // Управление версиями шаблонов PDF-договора двух типов:
                 // UNLIMITED (бесконечная аренда) и LIMITED (неделя).
-                // TopAppBar содержит универсальные кнопки + / ✎ / 🗑 / 🔍
-                // + кнопку ★ (звезда) вместо SMS (см. ниже, раздел TopAppBar).
-                // Клик по ★ — сделать выбранную версию активной.
-                // Долгий клик по ★ — скачать PDF выбранной версии с демо-данными.
-                //
-                // Если VM в degraded mode (БД упала), DocumentManagementScreen
-                // показывает сообщение об ошибке вместо данных.
+                // По образцу RenterTable: каждая строка-шаблон раскрывается
+                // треугольником ▶ на список версий. Клик по строке шаблона →
+                // переход на VersionsTableScreen (полная таблица версий).
+                // Клик по версии → переход на PdfPreviewScreen (превью БЕЗ
+                // демо-данных, с placeholder labels в скобках).
                 DocumentManagementScreen(
                     docTemplateViewModel = docTemplateViewModel,
                     createTrigger = docCreateTrigger,
                     editTrigger = docEditTrigger,
                     deleteTrigger = docDeleteTrigger,
-                    searchTrigger = docSearchTrigger
+                    searchTrigger = docSearchTrigger,
+                    onOpenVersionsTable = { type -> navState = NavigationState.VersionsTable(type) },
+                    onOpenPdfPreview = { templateId -> navState = NavigationState.PdfPreview(templateId) }
                 )
             }
         }
