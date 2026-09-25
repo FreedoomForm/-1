@@ -424,18 +424,15 @@ private fun PdfPageEditor(
 
             // Overlay аннотаций
             annotations.forEach { ann ->
+                // Конвертируем нормализованные координаты (0..1) в dp.
+                // Предполагаем что страница занимает полную ширину экрана,
+                // высота — пропорциональна (595/842 aspect ratio).
+                // Используем withLocalDensity чтобы получить корректный масштаб.
+                val xDp = (ann.x.coerceIn(0f, 1f) * 595f).dp
+                val yDp = (ann.y.coerceIn(0f, 1f) * 842f).dp
                 Box(
                     modifier = Modifier
-                        .padding(
-                            start = androidx.compose.ui.unit.TextUnit(
-                                (ann.x.coerceIn(0f, 1f) * 595f).toInt().toFloat(),
-                                androidx.compose.ui.unit.TextUnitType.Sp
-                            ),
-                            top = androidx.compose.ui.unit.TextUnit(
-                                (ann.y.coerceIn(0f, 1f) * 842f).toInt().toFloat(),
-                                androidx.compose.ui.unit.TextUnitType.Sp
-                            )
-                        )
+                        .padding(start = xDp, top = yDp)
                         // Долгое нажатие → удалить
                         .pointerInput(ann) {
                             detectTapGestures(
@@ -446,13 +443,13 @@ private fun PdfPageEditor(
                 ) {
                     // Граница вокруг аннотации (для визуального выделения)
                     Surface(
-                        color = Color.White.copy(alpha = 0.85f),
+                        color = androidx.compose.ui.graphics.Color.White.copy(alpha = 0.85f),
                         shape = RoundedCornerShape(2.dp),
                         border = androidx.compose.foundation.BorderStroke(1.dp, ClaudeGold)
                     ) {
                         Text(
                             text = ann.text,
-                            color = Color.Black,
+                            color = androidx.compose.ui.graphics.Color.Black,
                             fontSize = (ann.fontSize).sp,
                             modifier = Modifier.padding(horizontal = 2.dp, vertical = 1.dp)
                         )

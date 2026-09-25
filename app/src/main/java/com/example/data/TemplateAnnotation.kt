@@ -1,6 +1,7 @@
 package com.example.data
 
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.encodeToString
 
 /**
  * Одна текстовая аннотация пользователя на странице PDF.
