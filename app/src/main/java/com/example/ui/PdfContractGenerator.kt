@@ -392,6 +392,17 @@ object PdfContractGenerator {
                     try {
                         val font = PDType1Font.HELVETICA
                         val fontSize = ann.fontSize
+                        // Если isReplacement — рисуем белую заливку поверх старого текста
+                        // (это и есть "Word-like" редактирование PDF — approach используется
+                        // коммерческими редакторами типа PDFTron/Foxit).
+                        if (ann.isReplacement && ann.width > 0f && ann.height > 0f) {
+                            val rectWidth = ann.width * pageWidth
+                            val rectHeight = ann.height * pageHeight
+                            // Белая заливка покрывает старый текст
+                            contentStream.setNonStrokingColor(255, 255, 255)
+                            contentStream.addRect(xPt, yPt, rectWidth, rectHeight)
+                            contentStream.fill()
+                        }
                         // 2.0 API: setNonStrokingColor(r, g, b) — 3 отдельных int
                         val color = parseColor(ann.colorHex)
                         val r = Color.red(color)

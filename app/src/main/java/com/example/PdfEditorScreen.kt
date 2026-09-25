@@ -58,6 +58,8 @@ import com.example.data.ContractTemplate
 import com.example.data.TemplateAnnotation
 import com.example.ui.ContractTemplateViewModel
 import com.example.ui.PdfContractGenerator
+import com.example.ui.PdfTextBlock
+import com.example.ui.PdfTextExtractor
 import com.example.ui.theme.ClaudeAccent
 import com.example.ui.theme.ClaudeCard
 import com.example.ui.theme.ClaudeDivider
@@ -93,6 +95,7 @@ fun PdfEditorScreen(
 ) {
     var template by remember { mutableStateOf<ContractTemplate?>(null) }
     var annotations by remember { mutableStateOf<List<TemplateAnnotation>>(emptyList()) }
+    var textBlocks by remember { mutableStateOf<List<PdfTextBlock>>(emptyList()) }
     var previewBitmaps by remember { mutableStateOf<List<Bitmap>>(emptyList()) }
     var isLoading by remember { mutableStateOf(true) }
     var error by remember { mutableStateOf<String?>(null) }
@@ -100,6 +103,7 @@ fun PdfEditorScreen(
 
     // Диалог ввода текста для новой аннотации
     var pendingPosition by remember { mutableStateOf<Pair<Float, Float>?>(null) }
+    var pendingTextBlock by remember { mutableStateOf<PdfTextBlock?>(null) }
     var editingAnnotation by remember { mutableStateOf<TemplateAnnotation?>(null) }
     var annotationText by remember { mutableStateOf("") }
 
@@ -126,6 +130,20 @@ fun PdfEditorScreen(
                 return@LaunchedEffect
             }
             previewBitmaps = bitmaps
+            // Извлекаем текстовые блоки из сгенерированного PDF для Word-like
+            // редактирования — пользователь тапает на существующий текст.
+            val pdfFile = File(
+                viewModel.getApplication<Application>().cacheDir,
+                "preview_nodemo_latest.pdf"
+            )
+            // generatePreviewWithoutDemoData сохраняет PDF во cacheDir с именем
+            // preview_nodemo_<timestamp>.pdf — нам нужен последний.
+            val cacheDir = viewModel.getApplication<Application>().cacheDir
+            val latestPdf = cacheDir.listFiles { f -> f.name.startsWith("preview_nodemo_") }
+                ?.maxByOrNull { it.lastModified() }
+            if (latestPdf != null) {
+                textBlocks = PdfTextExtractor.extractTextBlocks(latestPdf)
+            }
             currentPage = 0
         } catch (e: Exception) {
             error = "Ошибка: ${e.message ?: "неизвестная"}"
@@ -218,6 +236,7 @@ fun PdfEditorScreen(
                         pageNumber = currentPage,
                         pageCount = previewBitmaps.size,
                         annotations = annotations.filter { it.pageNumber == currentPage },
+                        textBlocks = textBlocks.filter { it.pageNumber == currentPage },
                         onPageChange = { currentPage = it },
                         onAddAnnotation = { x, y ->
                             pendingPosition = x to y
@@ -226,6 +245,18 @@ fun PdfEditorScreen(
                         },
                         onAnnotationLongClick = { ann ->
                             annotations = annotations.filter { it != ann }
+                        },
+                        onTextBlockClick = { block ->
+                            // Пользователь тапнул на существующий текст →
+                            // открывается диалог редактирования. При сохранении
+                            // создаётся annotation с isReplacement=true —
+                            // белая заливка + новый текст (Word-like подход).
+                            editingAnnotation = null
+                            pendingPosition = null
+                            annotationText = block.text
+                            // Сохраняем блок во временный state для создания
+                            // replacement annotation в диалоге сохранения
+                            pendingTextBlock = block
                         }
                     )
                 }
@@ -234,17 +265,23 @@ fun PdfEditorScreen(
     }
 
     // Диалог ввода текста для новой/существующей аннотации
-    if (pendingPosition != null || editingAnnotation != null) {
+    if (pendingPosition != null || editingAnnotation != null || pendingTextBlock != null) {
         val isEditing = editingAnnotation != null
+        val isReplacement = pendingTextBlock != null
         AlertDialog(
             onDismissRequest = {
                 pendingPosition = null
                 editingAnnotation = null
+                pendingTextBlock = null
                 annotationText = ""
             },
             title = {
                 Text(
-                    if (isEditing) "Изменить аннотацию" else "Новая аннотация",
+                    when {
+                        isEditing -> "Изменить аннотацию"
+                        isReplacement -> "Редактирование текста"
+                        else -> "Новая аннотация"
+                    },
                     style = MaterialTheme.typography.titleMedium,
                     color = ClaudeText
                 )
@@ -254,14 +291,20 @@ fun PdfEditorScreen(
                     OutlinedTextField(
                         value = annotationText,
                         onValueChange = { annotationText = it },
-                        label = { Text("Текст аннотации") },
+                        label = { Text("Текст") },
                         placeholder = { Text("Например: Арендатор: {{tenantName}}") },
                         modifier = Modifier.fillMaxWidth().height(80.dp)
                     )
                     Spacer(modifier = Modifier.height(8.dp))
                     Text(
-                        "Поддерживаются {{placeholders}}: {{tenantName}}, {{tenantPhone}}, " +
-                            "{{landlordName}}, {{scooterName}}, {{weeklyAmount}} и др.",
+                        if (isReplacement) {
+                            "Редактирование существующего текста. При сохранении " +
+                                "старый текст будет закрыт белой заливкой, новый текст " +
+                                "нарисован сверху. Поддерживаются {{placeholders}}."
+                        } else {
+                            "Поддерживаются {{placeholders}}: {{tenantName}}, {{tenantPhone}}, " +
+                                "{{landlordName}}, {{scooterName}}, {{weeklyAmount}} и др."
+                        },
                         style = MaterialTheme.typography.bodySmall,
                         color = ClaudeTextSecondary
                     )
@@ -276,8 +319,22 @@ fun PdfEditorScreen(
                                 if (it == editingAnnotation) it.copy(text = annotationText)
                                 else it
                             }
+                        } else if (isReplacement && pendingTextBlock != null) {
+                            // Word-like: создаём replacement annotation
+                            // (белая заливка поверх старого текста + новый текст)
+                            val block = pendingTextBlock!!
+                            annotations = annotations + TemplateAnnotation(
+                                pageNumber = currentPage,
+                                x = block.normX,
+                                y = block.normY,
+                                width = block.normWidth,
+                                height = block.normHeight,
+                                text = annotationText,
+                                fontSize = block.fontSize,
+                                isReplacement = true
+                            )
                         } else if (pendingPosition != null) {
-                            // Добавляем новую
+                            // Добавляем новую (overlay)
                             val (x, y) = pendingPosition!!
                             annotations = annotations + TemplateAnnotation(
                                 pageNumber = currentPage,
@@ -289,6 +346,7 @@ fun PdfEditorScreen(
                     }
                     pendingPosition = null
                     editingAnnotation = null
+                    pendingTextBlock = null
                     annotationText = ""
                 }) {
                     Text("OK", color = ClaudeAccent)
@@ -298,6 +356,7 @@ fun PdfEditorScreen(
                 androidx.compose.material3.TextButton(onClick = {
                     pendingPosition = null
                     editingAnnotation = null
+                    pendingTextBlock = null
                     annotationText = ""
                 }) {
                     Text("Отмена", color = ClaudeTextSecondary)
@@ -343,9 +402,11 @@ private fun PdfPageEditor(
     pageNumber: Int,
     pageCount: Int,
     annotations: List<TemplateAnnotation>,
+    textBlocks: List<PdfTextBlock>,
     onPageChange: (Int) -> Unit,
     onAddAnnotation: (Float, Float) -> Unit,
-    onAnnotationLongClick: (TemplateAnnotation) -> Unit
+    onAnnotationLongClick: (TemplateAnnotation) -> Unit,
+    onTextBlockClick: (PdfTextBlock) -> Unit
 ) {
     Column(
         modifier = Modifier.fillMaxSize().padding(8.dp),
@@ -391,15 +452,17 @@ private fun PdfPageEditor(
             modifier = Modifier.fillMaxWidth()
         ) {
             Text(
-                "Тап по странице — добавить аннотацию. Долгое нажатие на аннотацию — удалить. " +
-                    "В тексте можно использовать {{placeholders}}.",
+                "Тап по существующему тексту (outlined) → редактирование (Word-like). " +
+                    "Тап по пустому месту → добавить новую аннотацию. " +
+                    "Долгое нажатие на аннотацию → удалить. " +
+                    "Поддержка {{placeholders}}.",
                 modifier = Modifier.padding(8.dp),
                 color = ClaudeTextSecondary,
                 style = MaterialTheme.typography.bodySmall
             )
         }
 
-        // ── Страница PDF с overlay аннотаций ──
+        // ── Страница PDF с overlay текстовых блоков и аннотаций ──
         Box(
             modifier = Modifier
                 .fillMaxWidth()
@@ -410,7 +473,18 @@ private fun PdfPageEditor(
                             // Конвертируем tap position → нормализованные координаты (0..1)
                             val normX = offset.x / size.width
                             val normY = offset.y / size.height
-                            onAddAnnotation(normX, normY)
+                            // Проверяем, попал ли тап в один из textBlocks
+                            val hit = textBlocks.firstOrNull { block ->
+                                normX >= block.normX &&
+                                    normX <= block.normX + block.normWidth &&
+                                    normY >= block.normY &&
+                                    normY <= block.normY + block.normHeight
+                            }
+                            if (hit != null) {
+                                onTextBlockClick(hit)
+                            } else {
+                                onAddAnnotation(normX, normY)
+                            }
                         }
                     )
                 }
@@ -422,37 +496,69 @@ private fun PdfPageEditor(
                 modifier = Modifier.fillMaxSize()
             )
 
-            // Overlay аннотаций
-            annotations.forEach { ann ->
-                // Конвертируем нормализованные координаты (0..1) в dp.
-                // Предполагаем что страница занимает полную ширину экрана,
-                // высота — пропорциональна (595/842 aspect ratio).
-                // Используем withLocalDensity чтобы получить корректный масштаб.
-                val xDp = (ann.x.coerceIn(0f, 1f) * 595f).dp
-                val yDp = (ann.y.coerceIn(0f, 1f) * 842f).dp
+            // ── Overlay текстовых блоков (outlined — для tap-to-edit) ──
+            // Показываем outline вокруг каждого блока извлечённого текста,
+            // чтобы пользователь видел, куда тапать для редактирования.
+            textBlocks.forEach { block ->
+                val xDp = (block.normX * 595f).dp
+                val yDp = (block.normY * 842f).dp
+                val wDp = (block.normWidth * 595f).dp
+                val hDp = (block.normHeight * 842f).dp
                 Box(
                     modifier = Modifier
                         .padding(start = xDp, top = yDp)
-                        // Долгое нажатие → удалить
+                        .size(width = wDp, height = hDp)
+                        .border(
+                            1.dp,
+                            ClaudeAccent.copy(alpha = 0.4f),
+                            RoundedCornerShape(1.dp)
+                        )
+                )
+            }
+
+            // ── Overlay аннотаций пользователя (overlay + replacement) ──
+            annotations.forEach { ann ->
+                val xDp = (ann.x.coerceIn(0f, 1f) * 595f).dp
+                val yDp = (ann.y.coerceIn(0f, 1f) * 842f).dp
+                val wDp = if (ann.isReplacement && ann.width > 0f) (ann.width * 595f).dp else 0.dp
+                val hDp = if (ann.isReplacement && ann.height > 0f) (ann.height * 842f).dp else 0.dp
+                Box(
+                    modifier = Modifier
+                        .padding(start = xDp, top = yDp)
                         .pointerInput(ann) {
                             detectTapGestures(
                                 onLongPress = { onAnnotationLongClick(ann) },
-                                onTap = { /* одиночный тап игнорируем — не хотим добавлять новую поверх */ }
+                                onTap = { /* одиночный тап игнорируем */ }
                             )
                         }
                 ) {
-                    // Граница вокруг аннотации (для визуального выделения)
-                    Surface(
-                        color = androidx.compose.ui.graphics.Color.White.copy(alpha = 0.85f),
-                        shape = RoundedCornerShape(2.dp),
-                        border = androidx.compose.foundation.BorderStroke(1.dp, ClaudeGold)
-                    ) {
-                        Text(
-                            text = ann.text,
-                            color = androidx.compose.ui.graphics.Color.Black,
-                            fontSize = (ann.fontSize).sp,
-                            modifier = Modifier.padding(horizontal = 2.dp, vertical = 1.dp)
-                        )
+                    if (ann.isReplacement) {
+                        // Replacement: показываем белую заливку + новый текст
+                        Surface(
+                            color = androidx.compose.ui.graphics.Color.White,
+                            modifier = Modifier.size(width = wDp, height = hDp)
+                        ) {
+                            Text(
+                                text = ann.text,
+                                color = androidx.compose.ui.graphics.Color.Black,
+                                fontSize = (ann.fontSize).sp,
+                                modifier = Modifier.padding(horizontal = 2.dp, vertical = 1.dp)
+                            )
+                        }
+                    } else {
+                        // Overlay: просто текст с фоном
+                        Surface(
+                            color = androidx.compose.ui.graphics.Color.White.copy(alpha = 0.85f),
+                            shape = RoundedCornerShape(2.dp),
+                            border = androidx.compose.foundation.BorderStroke(1.dp, ClaudeGold)
+                        ) {
+                            Text(
+                                text = ann.text,
+                                color = androidx.compose.ui.graphics.Color.Black,
+                                fontSize = (ann.fontSize).sp,
+                                modifier = Modifier.padding(horizontal = 2.dp, vertical = 1.dp)
+                            )
+                        }
                     }
                 }
             }
@@ -461,7 +567,7 @@ private fun PdfPageEditor(
         // ── Список аннотаций на этой странице ──
         if (annotations.isNotEmpty()) {
             Text(
-                "Аннотации на странице (${annotations.size}):",
+                "Аннотации (${annotations.size}):",
                 color = ClaudeText,
                 style = MaterialTheme.typography.titleSmall,
                 modifier = Modifier.padding(top = 4.dp)
@@ -476,7 +582,7 @@ private fun PdfPageEditor(
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         Text(
-                            text = "(${ann.x.toInt()},${ann.y.toInt()}): ${ann.text}",
+                            text = if (ann.isReplacement) "[замена] ${ann.text}" else ann.text,
                             modifier = Modifier.weight(1f),
                             color = ClaudeText,
                             style = MaterialTheme.typography.bodySmall,
