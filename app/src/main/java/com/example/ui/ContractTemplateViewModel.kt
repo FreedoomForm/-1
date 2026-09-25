@@ -235,6 +235,22 @@ class ContractTemplateViewModel(application: Application) : AndroidViewModel(app
     fun parseContent(contentJson: String): TemplateContent =
         repo?.parseContent(contentJson) ?: TemplateContent()
 
+    /**
+     * Сохраняет bodyText для шаблона (без изменения других полей).
+     * Используется в DocxEditorScreen — WebView редактор вызывает
+     * этот метод при auto-save (каждые ~1 сек).
+     */
+    fun saveBodyText(templateId: Int, bodyText: String) = viewModelScope.launch {
+        val r = repo ?: return@launch
+        try {
+            val existing = r.getById(templateId) ?: return@launch
+            val content = r.parseContent(existing.contentJson).copy(bodyText = bodyText)
+            r.update(templateId, existing.name, content, existing.notes)
+        } catch (e: Exception) {
+            android.util.Log.e(TAG, "saveBodyText failed", e)
+        }
+    }
+
     // ── Аннотации PDF ────────────────────────────────────────────────────
     /**
      * Возвращает список аннотаций пользователя для шаблона.

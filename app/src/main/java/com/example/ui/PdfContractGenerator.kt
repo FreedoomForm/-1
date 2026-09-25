@@ -447,7 +447,7 @@ object PdfContractGenerator {
      * синхронные (обратная совместимость с ContractHistoryViewModel).
      * DAO-запрос кэширован Room'ом, отрабатывает за <5 ms.
      */
-    private fun loadActiveTemplateContent(context: Context, type: String): TemplateContent {
+    fun loadActiveTemplateContent(context: Context, type: String): TemplateContent {
         return try {
             kotlinx.coroutines.runBlocking {
                 val db = AppDatabase.getDatabase(context)
@@ -473,8 +473,73 @@ object PdfContractGenerator {
     }
 
     /** Вычисляет номер договора в формате SRC-000014. */
-    private fun computeContractNumber(entry: ContractHistoryEntry): String =
+    fun computeContractNumber(entry: ContractHistoryEntry): String =
         "SRC-${entry.id.toString().padStart(6, '0')}"
+
+    /**
+     * Удобный метод для DocxContractGenerator — вычисляет все derived значения
+     * из entry/renter/scooter и возвращает resolved bodyText с заменёнными
+     * {{placeholders}}. Позволяет не дублировать логику между PDF и DOCX.
+     */
+    fun resolveBodyText(
+        context: Context,
+        entry: ContractHistoryEntry,
+        renter: Renter?,
+        scooter: Scooter?,
+        content: TemplateContent
+    ): String {
+        val contractNumber = computeContractNumber(entry)
+        val contractDate = dateFmtUz.format(Date(entry.timestamp))
+        val contractDay = dateFmt.format(Date(entry.timestamp)).take(2)
+        val contractFullDate = dateFmt.format(Date(entry.timestamp))
+        val weekStart = entry.weekStart ?: renter?.rentStartDateTimestamp ?: System.currentTimeMillis()
+        val weekEnd = entry.weekEnd
+            ?: renter?.let { it.rentStartDateTimestamp + it.rentDurationDays * 24L * 60 * 60 * 1000 }
+            ?: (weekStart + 7L * 24 * 60 * 60 * 1000)
+        val tenantName = entry.renterName.ifBlank { renter?.name ?: "" }
+        val tenantPhone = entry.renterPhone.ifBlank { renter?.phoneNumber ?: "" }
+        val scooterName = entry.scooterName ?: renter?.scooterName ?: scooter?.name ?: ""
+        val weeklyAmount = entry.weeklyPrice.takeIf { it > 0 } ?: renter?.let { 0.0 } ?: 0.0
+        val dailyAmount = if (weeklyAmount > 0) weeklyAmount / 7.0 else 0.0
+        val tenantPassport = entry.passportData.ifBlank { renter?.passportData ?: "" }
+        val tenantAddress = entry.address.ifBlank { renter?.address ?: "" }
+        val tenantPinfl = entry.pinfl.ifBlank { renter?.pinfl ?: "" }
+        val scooterVin = entry.vinNumber.ifBlank { scooter?.vinNumber ?: "" }
+        val scooterEngine = entry.engineNumber.ifBlank { scooter?.engineNumber ?: "" }
+        val scooterSerial = entry.scooterSerialNumber.ifBlank { scooter?.scooterSerialNumber ?: "" }
+        val battId1 = entry.batteryId1.ifBlank { scooter?.batteryId1 ?: "" }
+        val battId2 = entry.batteryId2.ifBlank { scooter?.batteryId2 ?: "" }
+        val extraInfo = entry.additionalInfo.ifBlank { scooter?.additionalInfo ?: "" }
+        val settings = SettingsRepository(context)
+        val batteryDamageText = formatAmountWithText(settings.batteryDamagePrice)
+
+        val placeholders = buildPlaceholders(
+            content = content,
+            contractNumber = contractNumber,
+            contractDate = contractDate,
+            contractDay = contractDay,
+            contractFullDate = contractFullDate,
+            weekStart = dateFmt.format(Date(weekStart)),
+            weekEnd = dateFmt.format(Date(weekEnd)),
+            tenantName = tenantName,
+            tenantPhone = tenantPhone,
+            tenantPassport = tenantPassport,
+            tenantAddress = tenantAddress,
+            tenantPinfl = tenantPinfl,
+            scooterName = scooterName,
+            scooterVin = scooterVin,
+            scooterEngine = scooterEngine,
+            scooterSerial = scooterSerial,
+            extraInfo = extraInfo,
+            battId1 = battId1,
+            battId2 = battId2,
+            weeklyAmount = formatAmount(weeklyAmount),
+            dailyAmount = formatAmount(dailyAmount),
+            batteryDamageText = batteryDamageText
+        )
+        val effectiveBody = content.bodyText.ifBlank { TemplateContent.DEFAULT_CONTRACT_BODY_LIMITED }
+        return applyPlaceholders(effectiveBody, placeholders)
+    }
 
     /**
      * Загружает аннотации пользователя из активной версии шаблона в БД.
@@ -503,7 +568,7 @@ object PdfContractGenerator {
      * В шаблоне используются как {{tenantName}}.
      */
     @Suppress("LongParameterList")
-    private fun buildPlaceholders(
+    fun buildPlaceholders(
         content: TemplateContent,
         contractNumber: String,
         contractDate: String,
@@ -590,7 +655,7 @@ object PdfContractGenerator {
      * значение из карты. Если плейсхолдер не найден в карте — оставляет
      * как есть (не падает).
      */
-    private fun applyPlaceholders(body: String, placeholders: Map<String, String>): String {
+    fun applyPlaceholders(body: String, placeholders: Map<String, String>): String {
         val regex = Regex("""\{\{(\w+)\}\}""")
         return regex.replace(body) { match ->
             placeholders[match.groupValues[1]] ?: match.value

@@ -146,6 +146,13 @@ dependencies {
   // (HTTP 200). API 2.0.x: PDPageContentStream AppendMode enum, setNonStrokingColor(r,g,b).
   // См. Pdf_Tools/app/src/main/java/.../PdfAnnotator.kt:526 — рабочий пример 2.0 API.
   implementation("com.github.TomRoush:pdfbox-android:2.0.7.0")
+  // ── Apache POI — для генерации DOCX файлов ──────────────────────────────
+  // Используется в DocxContractGenerator для создания .docx из bodyText
+  // с {{placeholders}}. Apache POI 5.2.5 — основная open-source библиотека
+  // для работы с OOXML (DOCX, XLSX, PPTX) на Java/Android.
+  // Уже есть stax-api + aalto-xml (для FastExcel), Apache POI совместим.
+  implementation("org.apache.poi:poi:5.2.5")
+  implementation("org.apache.poi:poi-ooxml:5.2.5")
   // testImplementation(libs.androidx.compose.ui.test.junit4)
   testImplementation(libs.androidx.compose.ui.test.junit4)
   testImplementation(libs.androidx.core)

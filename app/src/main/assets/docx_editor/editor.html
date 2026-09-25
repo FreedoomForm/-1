@@ -1,0 +1,180 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=5.0">
+    <script src="file:///android_asset/docx_editor/jszip.min.js"></script>
+    <script src="file:///android_asset/docx_editor/docx-preview.min.js"></script>
+    <style>
+        @font-face { font-family: 'Calibri'; src: url('file:///android_asset/docx_editor/fonts/Carlito-Regular.ttf'); font-weight: 400; }
+        @font-face { font-family: 'Calibri'; src: url('file:///android_asset/docx_editor/fonts/Carlito-Bold.ttf'); font-weight: 700; }
+        @font-face { font-family: 'Times New Roman'; src: url('file:///android_asset/docx_editor/fonts/Tinos-Regular.ttf'); font-weight: 400; }
+        @font-face { font-family: 'Times New Roman'; src: url('file:///android_asset/docx_editor/fonts/Tinos-Bold.ttf'); font-weight: 700; }
+
+        * { box-sizing: border-box; }
+        html, body {
+            margin: 0; padding: 0;
+            font-family: 'Times New Roman', serif;
+            background: #e8eaed;
+            -webkit-text-size-adjust: 100%;
+        }
+
+        /* Toolbar */
+        #toolbar {
+            position: sticky; top: 0; z-index: 100;
+            background: #fff; border-bottom: 1px solid #ccc;
+            padding: 4px 8px; display: flex; flex-wrap: wrap; gap: 4px;
+        }
+        #toolbar button {
+            border: 1px solid #ccc; border-radius: 4px;
+            padding: 6px 10px; font-size: 14px; cursor: pointer;
+            background: #fff; color: #333;
+        }
+        #toolbar button:hover { background: #e8e8e8; }
+        #toolbar button.active { background: #c14e24; color: #fff; }
+
+        /* Editable document area */
+        #editor {
+            max-width: 595px; margin: 16px auto;
+            background: #fff; padding: 40px;
+            min-height: 842px;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.15);
+            outline: none;
+            font-size: 12pt; line-height: 1.5;
+            color: #000;
+        }
+        #editor:focus { box-shadow: 0 2px 12px rgba(0,0,0,0.25); }
+        #editor p { margin: 0 0 8px 0; }
+        #editor h1 { font-size: 16pt; font-weight: bold; text-align: center; margin: 0 0 8px; }
+        #editor h2 { font-size: 13pt; font-weight: bold; margin: 8px 0 4px; }
+
+        /* Placeholder color */
+        .placeholder { color: #c14e24; font-weight: bold; }
+
+        /* Status bar */
+        #status {
+            position: fixed; bottom: 0; left: 0; right: 0;
+            background: #333; color: #fff; font-size: 12px;
+            padding: 4px 8px; display: none;
+        }
+    </style>
+</head>
+<body>
+
+<!-- Toolbar with formatting buttons -->
+<div id="toolbar">
+    <button onclick="document.execCommand('bold')" title="Bold (Ctrl+B)"><b>B</b></button>
+    <button onclick="document.execCommand('italic')" title="Italic (Ctrl+I)"><i>I</i></button>
+    <button onclick="document.execCommand('underline')" title="Underline (Ctrl+U)"><u>U</u></button>
+    <span style="width:1px;background:#ccc;margin:0 4px;"></span>
+    <button onclick="document.execCommand('justifyLeft')" title="Align Left">≡</button>
+    <button onclick="document.execCommand('justifyCenter')" title="Align Center">≣</button>
+    <button onclick="document.execCommand('justifyRight')" title="Align Right">≡</button>
+    <span style="width:1px;background:#ccc;margin:0 4px;"></span>
+    <button onclick="insertPlaceholder()" title="Insert {{placeholder}}">{ }</button>
+    <span style="width:1px;background:#ccc;margin:0 4px;"></span>
+    <button onclick="saveHtml()" title="Save">💾</button>
+</div>
+
+<!-- Editable document -->
+<div id="editor" contenteditable="true" spellcheck="false">
+    <!-- Content will be injected by Android -->
+</div>
+
+<div id="status"></div>
+
+<script>
+    // ── Content injection from Android ──────────────────────────────
+    // Android calls: webView.loadUrl("javascript:setContent('...')")
+    function setContent(html) {
+        document.getElementById('editor').innerHTML = html;
+    }
+
+    // ── Get current HTML (for saving) ───────────────────────────────
+    function getHtml() {
+        return document.getElementById('editor').innerHTML;
+    }
+
+    // ── Save — Android intercepts and saves to DB ───────────────────
+    function saveHtml() {
+        var html = getHtml();
+        // Call Android method via JavascriptInterface
+        Android.onSaveHtml(html);
+    }
+
+    // ── Insert {{placeholder}} at cursor position ────────────────────
+    function insertPlaceholder() {
+        var placeholder = prompt('Введите имя переменной (например tenantName):', 'tenantName');
+        if (placeholder) {
+            placeholder = placeholder.replace(/[{}]/g, '');
+            document.execCommand('insertText', false, '{{' + placeholder + '}}');
+        }
+    }
+
+    // ── Highlight {{placeholders}} in editor ────────────────────────
+    function highlightPlaceholders() {
+        var editor = document.getElementById('editor');
+        var html = editor.innerHTML;
+        // Wrap {{...}} in <span class="placeholder">
+        html = html.replace(/\{\{(\w+)\}\}/g, '<span class="placeholder">{{$1}}</span>');
+        // Only update if changed (avoid cursor jump)
+        if (editor.innerHTML !== html) {
+            // Save cursor position
+            var sel = window.getSelection();
+            var range = sel.rangeCount ? sel.getRangeAt(0) : null;
+            editor.innerHTML = html;
+            // Restore cursor (approximate)
+            if (range) {
+                sel.removeAllRanges();
+                sel.addRange(range);
+            }
+        }
+    }
+
+    // ── Render DOCX file (for preview mode) ──────────────────────────
+    function renderDocx(arrayBuffer) {
+        var container = document.getElementById('editor');
+        container.contentEditable = false;
+        docx.renderAsync(arrayBuffer, container).then(function() {
+            document.getElementById('status').textContent = 'DOCX rendered';
+            document.getElementById('status').style.display = 'block';
+        }).catch(function(err) {
+            document.getElementById('status').textContent = 'Error: ' + err.message;
+            document.getElementById('status').style.display = 'block';
+        });
+    }
+
+    // ── Generate DOCX from HTML (using html-docx-js approach) ────────
+    // Creates a basic DOCX from HTML content
+    function generateDocx() {
+        var html = getHtml();
+        // Create a minimal DOCX structure
+        // This uses the approach of creating a Word-compatible HTML
+        // wrapped in XML namespaces, which Word opens as DOCX
+        var docxHtml = '<!DOCTYPE html>' +
+            '<html xmlns:o="urn:schemas-microsoft-com:office:office" ' +
+            'xmlns:w="urn:schemas-microsoft-com:office:word" ' +
+            'xmlns="http://www.w3.org/TR/REC-html40">' +
+            '<head><meta charset="utf-8"><title>Договор</title>' +
+            '<!--[if gte mso 9]><xml><w:WordDocument><w:View>Print</w:View>' +
+            '<w:Zoom>100</w:Zoom><w:DoNotOptimizeForBrowser/></w:WordDocument></xml><![endif]-->' +
+            '<style>@page { size: A4; margin: 2cm; } body { font-family: "Times New Roman"; font-size: 12pt; }</style>' +
+            '</head><body>' + html + '</body></html>';
+        return docxHtml;
+    }
+
+    // ── Auto-save on content change (debounced) ─────────────────────
+    var saveTimeout = null;
+    document.getElementById('editor').addEventListener('input', function() {
+        if (saveTimeout) clearTimeout(saveTimeout);
+        saveTimeout = setTimeout(function() {
+            // Notify Android that content changed
+            if (typeof Android !== 'undefined' && Android.onContentChanged) {
+                Android.onContentChanged(getHtml());
+            }
+        }, 1000);
+    });
+</script>
+
+</body>
+</html>

@@ -391,6 +391,8 @@ sealed class NavigationState {
     data class PdfPreview(val templateId: Int) : NavigationState()
     /** Экран визуального PDF-редактора (PdfBox-Android, аннотации с {{placeholders}}). */
     data class PdfEditor(val templateId: Int) : NavigationState()
+    /** Экран WYSIWYG DOCX редактора (WebView + contentEditable). */
+    data class DocxEditor(val templateId: Int) : NavigationState()
 }
 
 /**
@@ -1427,17 +1429,26 @@ fun MainScreen(
             PdfPreviewScreen(
                 templateId = st.templateId,
                 onBack = { navState = NavigationState.MainView },
-                onEditTemplate = { navState = NavigationState.PdfEditor(st.templateId) }
+                onEditTemplate = { navState = NavigationState.DocxEditor(st.templateId) }
             )
             return
         }
         is NavigationState.PdfEditor -> {
             // ── Экран «Визуальный PDF редактор» (PdfBox-Android) ─────────────
-            // Пользователь видит страницу PDF, тапает в любом месте —
-            // открывается диалог ввода текста. Текст может содержать
-            // {{placeholders}} для подстановки реальных данных при
-            // генерации финального PDF.
             PdfEditorScreen(
+                templateId = st.templateId,
+                onBack = { navState = NavigationState.MainView }
+            )
+            return
+        }
+        is NavigationState.DocxEditor -> {
+            // ── Экран «WYSIWYG DOCX редактор» (WebView + contentEditable) ────
+            // Полноценный Word-like редактор через WebView:
+            //   • contentEditable div — пользователь редактирует текст напрямую
+            //   • Toolbar: Bold, Italic, Underline, выравнивание, {{placeholder}}
+            //   • Auto-save (debounce 1s) → обновляет bodyText в БД
+            //   • При генерации контракта — DocxContractGenerator создаёт .docx
+            DocxEditorScreen(
                 templateId = st.templateId,
                 onBack = { navState = NavigationState.MainView }
             )
