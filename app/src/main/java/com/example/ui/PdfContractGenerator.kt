@@ -17,8 +17,13 @@ import com.example.data.ContractTemplate
 import com.example.data.Renter
 import com.example.data.Scooter
 import com.example.data.SettingsRepository
+import com.example.data.TemplateAnnotation
 import com.example.data.TemplateContent
 import kotlinx.serialization.decodeFromString
+import com.tom_roush.pdfbox.pdmodel.PDDocument
+import com.tom_roush.pdfbox.pdmodel.PDPage
+import com.tom_roush.pdfbox.pdmodel.PDPageContentStream
+import com.tom_roush.pdfbox.pdmodel.font.PDType1Font
 import java.io.File
 import java.io.FileOutputStream
 import java.text.SimpleDateFormat
@@ -84,7 +89,9 @@ object PdfContractGenerator {
     ): Uri? {
         val content = loadActiveTemplateContent(context, ContractTemplate.TYPE_LIMITED)
         val file = defaultOutputFile(context, "rental_contract_${computeContractNumber(entry)}")
-        return generateTo(context, entry, renter, scooter, content, file)
+        // Загружаем аннотации из активной версии шаблона
+        val annotations = loadActiveAnnotations(context, ContractTemplate.TYPE_LIMITED)
+        return generateTo(context, entry, renter, scooter, content, file, annotations)
     }
 
     /**
@@ -99,7 +106,9 @@ object PdfContractGenerator {
         val content = loadActiveTemplateContent(context, ContractTemplate.TYPE_UNLIMITED)
         val contractNumber = "SRC-UNLMT-${renter.id}-${SimpleDateFormat("yyyyMMdd", Locale.getDefault()).format(Date(System.currentTimeMillis()))}"
         val file = defaultOutputFile(context, "rental_contract_unlimited_${contractNumber}")
-        return generateUnlimitedTo(context, renter, scooter, content, file)
+        // Загружаем аннотации из активной версии шаблона
+        val annotations = loadActiveAnnotations(context, ContractTemplate.TYPE_UNLIMITED)
+        return generateUnlimitedTo(context, renter, scooter, content, file, annotations)
     }
 
     /**
@@ -114,7 +123,8 @@ object PdfContractGenerator {
         renter: Renter?,
         scooter: Scooter?,
         content: TemplateContent,
-        targetFile: File
+        targetFile: File,
+        annotations: List<TemplateAnnotation> = emptyList()
     ): Uri? {
         val doc = PdfDocument()
         try {
@@ -197,6 +207,13 @@ object PdfContractGenerator {
             renderParagraphs(doc, paragraphs, contentWidth)
             writePdfToFile(doc, targetFile)
 
+            // ── Применяем аннотации пользователя (через PdfBox-Android) ────
+            // Аннотации могут содержать {{placeholders}} — заменяются на
+            // реальные значения из placeholder map выше.
+            if (annotations.isNotEmpty()) {
+                applyAnnotationsToPdf(targetFile, annotations, placeholders)
+            }
+
             Log.i(TAG, "PDF saved: ${targetFile.absolutePath}")
             return FileProvider.getUriForFile(
                 context,
@@ -221,7 +238,8 @@ object PdfContractGenerator {
         renter: Renter,
         scooter: Scooter?,
         content: TemplateContent,
-        targetFile: File
+        targetFile: File,
+        annotations: List<TemplateAnnotation> = emptyList()
     ): Uri? {
         val doc = PdfDocument()
         try {
@@ -301,6 +319,13 @@ object PdfContractGenerator {
             renderParagraphs(doc, paragraphs, contentWidth)
             writePdfToFile(doc, targetFile)
 
+            // ── Применяем аннотации пользователя (через PdfBox-Android) ────
+            // Аннотации могут содержать {{placeholders}} — заменяются на
+            // реальные значения из placeholder map выше.
+            if (annotations.isNotEmpty()) {
+                applyAnnotationsToPdf(targetFile, annotations, placeholders)
+            }
+
             Log.i(TAG, "Unlimited PDF saved: ${targetFile.absolutePath}")
             return FileProvider.getUriForFile(
                 context,
@@ -318,6 +343,85 @@ object PdfContractGenerator {
     // ──────────────────────────────────────────────────────────────────────
     // Помощники для шаблонов
     // ──────────────────────────────────────────────────────────────────────
+
+    /**
+     * Применяет аннотации пользователя к PDF файлу через PdfBox-Android.
+     *
+     * Используется в [generateTo] / [generateUnlimitedTo] после генерации
+     * базового PDF. Аннотации добавляются как overlay-текст на страницы.
+     * Координаты нормализованы (0..1) — конвертируются в pt по размеру страницы.
+     *
+     * Текст аннотаций может содержать {{placeholders}} — они заменяются на
+     * реальные значения через [applyPlaceholders] перед рендером в PDF.
+     *
+     * Если PdfBox-Android не инициализирован или файл не существует —
+     * silently пропускает (базовый PDF остаётся без аннотаций).
+     *
+     * @param pdfFile Сгенерированный базовый PDF файл
+     * @param annotations Список аннотаций (с {{placeholders}} в text)
+     * @param placeholders Карта плейсхолдеров для замены
+     */
+    private fun applyAnnotationsToPdf(
+        pdfFile: File,
+        annotations: List<TemplateAnnotation>,
+        placeholders: Map<String, String>
+    ) {
+        if (annotations.isEmpty() || !pdfFile.exists()) return
+        try {
+            // Ленивая инициализация PdfBox-Android (требует context, но мы
+            // работаем с File напрямую, не нужен context)
+            val document = PDDocument.load(pdfFile)
+            try {
+                for (ann in annotations) {
+                    val pageIndex = ann.pageNumber.coerceIn(0, document.pages.count() - 1)
+                    val page: PDPage = document.getPage(pageIndex)
+                    val pageWidth = page.mediaBox?.width?.toFloat() ?: 595f
+                    val pageHeight = page.mediaBox?.height?.toFloat() ?: 842f
+                    // Конвертируем нормализованные координаты в pt (origin = bottom-left в PDF)
+                    val xPt = ann.x * pageWidth
+                    val yPt = (1f - ann.y) * pageHeight  // Y инвертирована (PDF bottom-up)
+                    // Заменяем {{placeholders}} в тексте аннотации
+                    val resolvedText = applyPlaceholders(ann.text, placeholders)
+                    // Рисуем текст на странице
+                    val contentStream = PDPageContentStream(
+                        document, page,
+                        PDPageContentStream.AppendMode.APPEND, true, true
+                    )
+                    try {
+                        val font = PDType1Font.HELVETICA
+                        val fontSize = ann.fontSize
+                        contentStream.beginText()
+                        contentStream.setFont(font, fontSize)
+                        // Цвет (parse #RRGGBB)
+                        val color = parseColor(ann.colorHex)
+                        contentStream.setNonStrokingColor(color)
+                        contentStream.newLineAtOffset(xPt, yPt)
+                        contentStream.showText(resolvedText)
+                        contentStream.endText()
+                    } finally {
+                        contentStream.close()
+                    }
+                }
+                document.save(pdfFile)  // перезаписываем файл с аннотациями
+                Log.i(TAG, "Applied ${annotations.size} annotations to PDF: ${pdfFile.absolutePath}")
+            } finally {
+                document.close()
+            }
+        } catch (e: Exception) {
+            // Не падаем — аннотации опциональны, базовый PDF остаётся
+            Log.e(TAG, "Failed to apply annotations to PDF (non-fatal)", e)
+        }
+    }
+
+    /** Парсит #RRGGBB hex строку в Android Color Int. */
+    private fun parseColor(hex: String): Int {
+        return try {
+            val cleaned = hex.removePrefix("#")
+            Color.parseColor("#$cleaned")
+        } catch (e: Exception) {
+            Color.BLACK
+        }
+    }
 
     /**
      * Загружает активную версию шаблона из БД. Если БД недоступна или
@@ -355,6 +459,26 @@ object PdfContractGenerator {
     /** Вычисляет номер договора в формате SRC-000014. */
     private fun computeContractNumber(entry: ContractHistoryEntry): String =
         "SRC-${entry.id.toString().padStart(6, '0')}"
+
+    /**
+     * Загружает аннотации пользователя из активной версии шаблона в БД.
+     * Используется при генерации финального PDF для контракта — аннотации
+     * применяются как overlay-текст поверх базового PDF.
+     *
+     * Если БД недоступна или нет активной версии — возвращает пустой список.
+     */
+    private fun loadActiveAnnotations(context: Context, type: String): List<TemplateAnnotation> {
+        return try {
+            kotlinx.coroutines.runBlocking {
+                val db = AppDatabase.getDatabase(context)
+                val active = db.contractTemplateDao().getActiveForType(type) ?: return@runBlocking emptyList()
+                TemplateAnnotation.parseList(active.annotationsJson)
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to load active annotations, fallback to empty list", e)
+            emptyList()
+        }
+    }
 
     /**
      * Строит карту плейсхолдеров для замены в теле шаблона.

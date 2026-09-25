@@ -67,6 +67,30 @@ class ContractTemplateRepository(
         )
     }
 
+    /**
+     * Обновляет только список аннотаций для шаблона (без изменения текста).
+     * Используется в [com.example.ui.PdfEditorScreen] при сохранении
+     * аннотаций пользователя на PDF странице.
+     */
+    suspend fun updateAnnotations(id: Int, annotations: List<TemplateAnnotation>) {
+        val existing = dao.getById(id) ?: return
+        dao.update(
+            existing.copy(
+                annotationsJson = TemplateAnnotation.serializeList(annotations),
+                updatedAt = System.currentTimeMillis()
+            )
+        )
+    }
+
+    /**
+     * Возвращает список аннотаций для шаблона. Пустой список, если аннотаций
+     * нет или JSON невалиден.
+     */
+    suspend fun getAnnotations(id: Int): List<TemplateAnnotation> {
+        val existing = dao.getById(id) ?: return emptyList()
+        return TemplateAnnotation.parseList(existing.annotationsJson)
+    }
+
     suspend fun delete(id: Int) = dao.moveToTrash(id)
     suspend fun restore(id: Int) = dao.restoreFromTrash(id)
     suspend fun permanentlyDelete(id: Int) = dao.permanentlyDelete(id)
@@ -107,4 +131,53 @@ class ContractTemplateRepository(
      * Сериализует [TemplateContent] в JSON-строку для хранения в БД.
      */
     fun serializeContent(content: TemplateContent): String = json.encodeToString(content)
+
+    /**
+     * Безопасный seed: если в таблице нет записей для какого-либо типа,
+     * вставляем «Базовый шаблон» с дефолтным содержимым и isActive=true.
+     *
+     * Вызывается из ContractTemplateViewModel.init — гарантирует, что
+     * пользователь ВСЕГДА видит хотя бы один шаблон в «Документообороте»,
+     * даже если миграция 36→37 не засеяла таблицу (например, из-за
+     * try/catch вокруг seed SQL — если JSON-конструкция упала, таблица
+     * осталась пустой, но приложение запустилось).
+     *
+     * Idempotent: если записи уже есть, ничего не делает.
+     */
+    suspend fun ensureSeedIfEmpty() = db.withTransaction {
+        val existingLimited = dao.getActiveForType(ContractTemplate.TYPE_LIMITED)
+        val existingUnlimited = dao.getActiveForType(ContractTemplate.TYPE_UNLIMITED)
+        val now = System.currentTimeMillis()
+        if (existingLimited == null) {
+            // Проверим, есть ли хоть какие-то записи LIMITED — если нет, добавим seed
+            val anyLimited = dao.getForTypeOnce(ContractTemplate.TYPE_LIMITED)
+            if (anyLimited.isEmpty()) {
+                dao.insert(
+                    ContractTemplate(
+                        type = ContractTemplate.TYPE_LIMITED,
+                        name = "Базовый шаблон",
+                        contentJson = json.encodeToString(TemplateContent.DEFAULT_FOR_LIMITED),
+                        isActive = true,
+                        createdAt = now,
+                        updatedAt = null
+                    )
+                )
+            }
+        }
+        if (existingUnlimited == null) {
+            val anyUnlimited = dao.getForTypeOnce(ContractTemplate.TYPE_UNLIMITED)
+            if (anyUnlimited.isEmpty()) {
+                dao.insert(
+                    ContractTemplate(
+                        type = ContractTemplate.TYPE_UNLIMITED,
+                        name = "Базовый шаблон",
+                        contentJson = json.encodeToString(TemplateContent.DEFAULT_FOR_UNLIMITED),
+                        isActive = true,
+                        createdAt = now,
+                        updatedAt = null
+                    )
+                )
+            }
+        }
+    }
 }

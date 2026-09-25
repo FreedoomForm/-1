@@ -123,6 +123,18 @@ dependencies {
   // kotlinx-serialization — стандарт де-факто для Kotlin-проектов, плагин
   // уже применён в build.gradle.kts (alias(libs.plugins.kotlin.serialization)).
   implementation(libs.kotlinx.serialization.json)
+  // ── PdfBox-Android — open-source PDF редактор (Apache 2.0) ────────────────
+  // Используется в PdfEditorScreen для:
+  //   • Добавления текстовых аннотаций на страницы PDF
+  //   • Сохранения аннотаций в PDF файл
+  //   • Поддержки {{placeholders}} в тексте аннотаций (заменяются на реальные
+  //     данные при генерации финального PDF для контракта)
+  //
+  // PdfBox-Android — порт Apache PDFBox на Android. Лицензия Apache 2.0,
+  // коммерчески дружелюбная. Активно поддерживается (TomRoush/pdfbox-android).
+  // Полноценного open-source WYSIWYG редактора PDF на Android НЕ существует —
+  // это лучший вариант для программного API + визуальная обвязка на Compose.
+  implementation("com.tom-routh:pdfbox-android:2.0.27.0")
   // testImplementation(libs.androidx.compose.ui.test.junit4)
   testImplementation(libs.androidx.compose.ui.test.junit4)
   testImplementation(libs.androidx.core)

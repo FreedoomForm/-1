@@ -57,7 +57,22 @@ data class ContractTemplate(
      * Добавлено в v38 (миграция 37→38). Nullable — у старых версий нет
      * примечания, отображается как пустое.
      */
-    val notes: String? = null
+    val notes: String? = null,
+    /**
+     * JSON-сериализованный список аннотаций пользователя на PDF странице.
+     * Каждая аннотация: { pageNumber, x, y, text, fontSize, colorHex }.
+     *
+     * Аннотации могут содержать {{placeholders}} (например, {{tenantName}}) —
+     * они заменяются на реальные данные при генерации финального PDF
+     * для конкретного контракта.
+     *
+     * Добавлено в v39 (миграция 38→39). Nullable — у версий без аннотаций
+     * значение NULL, парсится как пустой список.
+     *
+     * @see com.example.ui.PdfEditorScreen
+     * @see com.example.data.TemplateAnnotation
+     */
+    val annotationsJson: String? = null
 ) {
     companion object {
         /** Бесконечная аренда → [com.example.ui.PdfContractGenerator.generateUnlimited]. */

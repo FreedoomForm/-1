@@ -273,6 +273,17 @@ class MainActivity : ComponentActivity() {
             com.example.widget.WidgetUpdater.updateAll(applicationContext)
         } catch (_: Exception) {}
 
+        // ── Инициализация PdfBox-Android для визуального PDF редактора ────
+        // PdfBox-Android требует инициализации перед использованием
+        // (загружает шрифты и ресурсы). Делаем это в onCreate чтобы
+        // быть готовыми к открытию PdfEditorScreen в любой момент.
+        try {
+            com.tom_roush.pdfbox.android.PDFBoxResourceLoader.init(applicationContext)
+            android.util.Log.i("MainActivity", "PdfBox-Android initialized")
+        } catch (e: Exception) {
+            android.util.Log.e("MainActivity", "PdfBox-Android init failed (non-fatal)", e)
+        }
+
         setContent {
             MyApplicationTheme {
                 val permissionLauncher = rememberLauncherForActivityResult(
@@ -377,6 +388,8 @@ sealed class NavigationState {
     data class VersionsTable(val type: String) : NavigationState()
     /** Экран превью PDF версии шаблона (без демо-данных, плейсхолдеры). */
     data class PdfPreview(val templateId: Int) : NavigationState()
+    /** Экран визуального PDF-редактора (PdfBox-Android, аннотации с {{placeholders}}). */
+    data class PdfEditor(val templateId: Int) : NavigationState()
 }
 
 /**
@@ -1413,7 +1426,19 @@ fun MainScreen(
             PdfPreviewScreen(
                 templateId = st.templateId,
                 onBack = { navState = NavigationState.MainView },
-                onEditTemplate = { /* Phase 2: открыть визуальный PDF editor */ }
+                onEditTemplate = { navState = NavigationState.PdfEditor(st.templateId) }
+            )
+            return
+        }
+        is NavigationState.PdfEditor -> {
+            // ── Экран «Визуальный PDF редактор» (PdfBox-Android) ─────────────
+            // Пользователь видит страницу PDF, тапает в любом месте —
+            // открывается диалог ввода текста. Текст может содержать
+            // {{placeholders}} для подстановки реальных данных при
+            // генерации финального PDF.
+            PdfEditorScreen(
+                templateId = st.templateId,
+                onBack = { navState = NavigationState.MainView }
             )
             return
         }

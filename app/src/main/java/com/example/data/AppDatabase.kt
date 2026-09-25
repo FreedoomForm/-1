@@ -18,7 +18,7 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         CardTransaction::class,
         ContractTemplate::class
     ],
-    version = 38,
+    version = 39,
     exportSchema = false
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -533,6 +533,27 @@ abstract class AppDatabase : RoomDatabase() {
             }
         }
 
+        /**
+         * Migration 38 → 39: добавляем колонку `annotationsJson` (TEXT, nullable)
+         * в таблицу contract_templates.
+         *
+         * Колонка хранит JSON-сериализованный список аннотаций пользователя
+         * на PDF странице (см. [TemplateAnnotation]). Аннотации могут
+         * содержать {{placeholders}} для подстановки реальных данных при
+         * генерации финального PDF.
+         *
+         * БЕЗОПАСНОСТЬ ДАННЫХ: ALTER TABLE ADD COLUMN с nullable-колонкой —
+         * стандартная безопасная операция SQLite. Существующие строки получают
+         * NULL в новой колонке. Никакие данные не теряются.
+         */
+        private val MIGRATION_38_39 = object : Migration(38, 39) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    "ALTER TABLE `contract_templates` ADD COLUMN `annotationsJson` TEXT"
+                )
+            }
+        }
+
         fun getDatabase(context: Context): AppDatabase {
             return INSTANCE ?: synchronized(this) {
                 val instance = Room.databaseBuilder(
@@ -543,7 +564,7 @@ abstract class AppDatabase : RoomDatabase() {
                     .addMigrations(
                         MIGRATION_11_12, MIGRATION_12_13, MIGRATION_13_14, MIGRATION_14_15,
                         MIGRATION_15_34, MIGRATION_33_34, MIGRATION_34_35, MIGRATION_35_36,
-                        MIGRATION_36_37, MIGRATION_37_38
+                        MIGRATION_36_37, MIGRATION_37_38, MIGRATION_38_39
                     )
                     // На случай если кто-то перескакивает через несколько версий
                     // (например, был на v16-v32, для которых нет явной миграции

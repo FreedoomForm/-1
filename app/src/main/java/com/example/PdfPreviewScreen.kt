@@ -121,12 +121,13 @@ fun PdfPreviewScreen(
                     }
                 },
                 actions = {
-                    // Phase 2: кнопка «Редактировать» откроет визуальный PDF editor
-                    IconButton(onClick = onEditTemplate, enabled = false) {
+                    // Кнопка «Редактировать» открывает визуальный PDF editor
+                    // (PdfBox-Android) с поддержкой {{placeholders}} в аннотациях.
+                    IconButton(onClick = onEditTemplate) {
                         Icon(
                             Icons.Default.Edit,
-                            contentDescription = "Редактировать PDF (скоро)",
-                            tint = ClaudeTextSecondary.copy(alpha = 0.5f)
+                            contentDescription = "Редактировать PDF",
+                            tint = ClaudeAccent
                         )
                     }
                 }

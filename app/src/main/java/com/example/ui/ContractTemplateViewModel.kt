@@ -78,6 +78,25 @@ class ContractTemplateViewModel(application: Application) : AndroidViewModel(app
     private val renterRepo: RenterRepository? = db?.let { RenterRepository(it.renterDao()) }
     private val settings = SettingsRepository(application)
 
+    init {
+        // ── Запускаем seed check при создании VM ──────────────────────────
+        // Если по какой-то причине таблица contract_templates пуста (например,
+        // миграция 36→37 не засеяла её из-за try/catch вокруг seed SQL),
+        // то вставляем дефолтные «Базовые шаблоны» прямо здесь — пользователь
+        // всегда видит хотя бы один шаблон в «Документообороте».
+        //
+        // Это безопасно: ensureSeedIfEmpty — idempotent, использует транзакцию.
+        repo?.let { r ->
+            viewModelScope.launch {
+                try {
+                    r.ensureSeedIfEmpty()
+                } catch (e: Exception) {
+                    android.util.Log.e(TAG, "ensureSeedIfEmpty failed (non-fatal)", e)
+                }
+            }
+        }
+    }
+
     // ── UI State: выбор пользователя ───────────────────────────────────────
     private val _selectedType = MutableStateFlow(ContractTemplate.TYPE_UNLIMITED)
     val selectedType: StateFlow<String> = _selectedType.asStateFlow()
@@ -215,6 +234,31 @@ class ContractTemplateViewModel(application: Application) : AndroidViewModel(app
 
     fun parseContent(contentJson: String): TemplateContent =
         repo?.parseContent(contentJson) ?: TemplateContent()
+
+    // ── Аннотации PDF ────────────────────────────────────────────────────
+    /**
+     * Возвращает список аннотаций пользователя для шаблона.
+     * Аннотации создаются в PdfEditorScreen — тап по странице + ввод текста.
+     * Текст может содержать {{placeholders}} для подстановки реальных данных.
+     */
+    suspend fun getAnnotations(templateId: Int): List<com.example.data.TemplateAnnotation> =
+        withContext(Dispatchers.IO) {
+            repo?.getAnnotations(templateId) ?: emptyList()
+        }
+
+    /**
+     * Сохраняет список аннотаций для шаблона.
+     * Вызывается при выходе из PdfEditorScreen (auto-save).
+     */
+    fun saveAnnotations(templateId: Int, annotations: List<com.example.data.TemplateAnnotation>) =
+        viewModelScope.launch {
+            val r = repo ?: return@launch
+            try {
+                r.updateAnnotations(templateId, annotations)
+            } catch (e: Exception) {
+                android.util.Log.e(TAG, "saveAnnotations failed", e)
+            }
+        }
 
     // ── Actions: превью PDF ────────────────────────────────────────────────
     /**
