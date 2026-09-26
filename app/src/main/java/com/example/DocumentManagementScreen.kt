@@ -3,7 +3,9 @@ package com.example
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -120,9 +122,18 @@ fun DocumentManagementScreen(
     var showDeleteConfirm by remember { mutableStateOf(false) }
     var showSearchPanel by remember { mutableStateOf(false) }
 
+    // ── Выбор шаблона (type) для создания новой версии ───────────────
+    // Пользователь долго нажимает на строку шаблона → выбирает его.
+    // После этого «+» в TopAppBar создаёт новую версию для ВЫБРАННОГО типа.
+    var selectedTypeForCreate by remember { mutableStateOf<String?>(null) }
+
     LaunchedEffect(createTrigger) {
         if (createTrigger > lastCreate) {
-            showCreateDialog = true
+            // «+» работает только если выбран шаблон (долгий тап)
+            if (selectedTypeForCreate != null) {
+                viewModel.selectType(selectedTypeForCreate!!)
+                showCreateDialog = true
+            }
             lastCreate = createTrigger
         }
     }
@@ -221,6 +232,7 @@ fun DocumentManagementScreen(
                     activeVersionName = activeTemplate?.name ?: "(нет активной)",
                     isActiveSet = activeTemplate != null,
                     isExpanded = isExpanded,
+                    isSelected = selectedTypeForCreate == type,
                     onToggleExpand = {
                         expandedTypes = if (isExpanded) {
                             expandedTypes - type
@@ -228,7 +240,17 @@ fun DocumentManagementScreen(
                             expandedTypes + type
                         }
                     },
-                    onClick = { onOpenVersionsTable(type) }
+                    onClick = {
+                        // Клик по шаблону → сразу PdfPreview активной версии
+                        val active = activeTemplate ?: typeTemplates.firstOrNull()
+                        if (active != null) {
+                            onOpenPdfPreview(active.id)
+                        }
+                    },
+                    onLongClick = {
+                        // Долгий тап → выбираем шаблон для создания новой версии
+                        selectedTypeForCreate = if (selectedTypeForCreate == type) null else type
+                    }
                 )
             } else {
                 val template = renderItem.template ?: return@items
@@ -255,7 +277,10 @@ fun DocumentManagementScreen(
                         template = template,
                         isSelected = template.id == selectedTemplateId,
                         onClick = { onOpenPdfPreview(template.id) },
-                        onSelect = { viewModel.selectTemplate(template.id) }
+                        onLongClick = {
+                            // Долгий тап → выбираем версию для ✎/🗑
+                            viewModel.selectTemplate(template.id)
+                        }
                     )
                 }
             }
@@ -367,19 +392,25 @@ fun DocumentManagementScreen(
  * Строка верхнеуровневого шаблона (одна на тип договора).
  * По образцу RenterTable строки 3582-3666: треугольник + основная строка.
  */
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun TemplateRow(
     typeName: String,
     activeVersionName: String,
     isActiveSet: Boolean,
     isExpanded: Boolean,
+    isSelected: Boolean,
     onToggleExpand: () -> Unit,
-    onClick: () -> Unit
+    onClick: () -> Unit,
+    onLongClick: () -> Unit
 ) {
     Surface(
         shape = RoundedCornerShape(8.dp),
-        color = ClaudeCard,
-        border = androidx.compose.foundation.BorderStroke(1.dp, ClaudeDivider),
+        color = if (isSelected) ClaudeAccentBg else ClaudeCard,
+        border = androidx.compose.foundation.BorderStroke(
+            width = if (isSelected) 2.dp else 1.dp,
+            color = if (isSelected) ClaudeAccent else ClaudeDivider
+        ),
         modifier = Modifier.fillMaxWidth()
     ) {
         Row(
@@ -407,11 +438,14 @@ private fun TemplateRow(
                         .rotate(arrowRotation)
                 )
             }
-            // ── Основная строка ──
+            // ── Основная строка (клик = открыть превью, долгий тап = выбрать) ──
             Row(
                 modifier = Modifier
                     .weight(1f)
-                    .clickable { onClick() }
+                    .combinedClickable(
+                        onClick = onClick,
+                        onLongClick = onLongClick
+                    )
                     .padding(horizontal = 8.dp, vertical = 4.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
@@ -436,6 +470,14 @@ private fun TemplateRow(
                         modifier = Modifier.size(20.dp)
                     )
                 }
+                if (isSelected) {
+                    Icon(
+                        Icons.Default.Check,
+                        contentDescription = "Выбран",
+                        tint = ClaudeAccent,
+                        modifier = Modifier.size(20.dp)
+                    )
+                }
             }
         }
     }
@@ -445,12 +487,13 @@ private fun TemplateRow(
  * Строка версии шаблона (раскрывается под строкой типа).
  * По образцу contract row в RenterTable строки 3973-4118.
  */
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun VersionRow(
     template: ContractTemplate,
     isSelected: Boolean,
-    onClick: () -> Unit,    // открыть превью PDF
-    onSelect: () -> Unit     // выбрать для редактирования/удаления
+    onClick: () -> Unit,      // открыть превью PDF
+    onLongClick: () -> Unit   // выбрать для ✎/🗑 (долгий тап)
 ) {
     Surface(
         shape = RoundedCornerShape(8.dp),
@@ -466,7 +509,10 @@ private fun VersionRow(
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .clickable { onClick() }
+                .combinedClickable(
+                    onClick = onClick,
+                    onLongClick = onLongClick
+                )
                 .padding(horizontal = 12.dp, vertical = 10.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
