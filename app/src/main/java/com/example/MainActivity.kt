@@ -285,6 +285,12 @@ class MainActivity : ComponentActivity() {
             android.util.Log.e("MainActivity", "PdfBox-Android init failed (non-fatal)", e)
         }
 
+        // ── Очистка кэша обновлений при смене версии приложения ──────────
+        // Если пользователь обновил APK — старый кэш релизов (с версиями
+        // до текущей) автоматически стирается. Это решает проблему
+        // «не вижу новые версии» — при каждом обновлении APK кэш сбрасывается.
+        com.example.data.remote.UpdateChecker.clearCacheIfAppVersionChanged(applicationContext)
+
         setContent {
             MyApplicationTheme {
                 val permissionLauncher = rememberLauncherForActivityResult(

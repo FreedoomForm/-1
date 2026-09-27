@@ -810,11 +810,50 @@ class UpdateChecker(
         private const val PREFS_NAME = "scooter_rent_update_cache"
         private const val KEY_CACHE_RELEASES = "releases_json"
         private const val KEY_CACHE_SAVED_AT = "releases_saved_at_ms"
+        private const val KEY_CACHED_APP_VERSION = "cached_app_version_code"
 
-        /** Свежий кэш: 1 час. В пределах этого окна возвращаем кэш без сети. */
-        private const val CACHE_TTL_MS = 60L * 60 * 1000
+        /** Свежий кэш: 5 минут. После этого — всегда сетевой запрос. */
+        private const val CACHE_TTL_MS = 5L * 60 * 1000
 
-        /** Устаревший кэш: 24 часа. Используется как fallback при сетевой ошибке. */
-        private const val STALE_CACHE_TTL_MS = 24L * 60 * 60 * 1000
+        /** Устаревший кэш: 1 час. Fallback при сетевой ошибке. */
+        private const val STALE_CACHE_TTL_MS = 60L * 60 * 1000
+
+        /**
+         * Очищает кэш если версия приложения изменилась.
+         * Вызывается из onCreate — если пользователь обновил APK,
+         * старый кэш (с релизами до текущей версии) автоматически стирается.
+         */
+        fun clearCacheIfAppVersionChanged(context: Context) {
+            try {
+                val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+                val currentVersionCode = getCurrentVersionCode(context)
+                val cachedVersionCode = prefs.getInt(KEY_CACHED_APP_VERSION, -1)
+                if (cachedVersionCode != -1 && cachedVersionCode != currentVersionCode) {
+                    // Версия изменилась — очищаем кэш
+                    android.util.Log.i(TAG, "App version changed ($cachedVersionCode → $currentVersionCode), clearing releases cache")
+                    prefs.edit {
+                        remove(KEY_CACHE_RELEASES)
+                        remove(KEY_CACHE_SAVED_AT)
+                    }
+                }
+                // Сохраняем текущую версию
+                prefs.edit { putInt(KEY_CACHED_APP_VERSION, currentVersionCode) }
+            } catch (e: Exception) {
+                android.util.Log.w(TAG, "Failed to check app version for cache invalidation", e)
+            }
+        }
+
+        private fun getCurrentVersionCode(context: Context): Int {
+            return try {
+                val pm = context.packageManager
+                val pi = pm.getPackageInfo(context.packageName, 0)
+                if (android.os.Build.VERSION.SDK_INT >= 28) {
+                    pi.longVersionCode.toInt()
+                } else {
+                    @Suppress("DEPRECATION")
+                    pi.versionCode
+                }
+            } catch (e: Exception) { 0 }
+        }
     }
 }
