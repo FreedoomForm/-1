@@ -13,7 +13,7 @@ android {
 
   defaultConfig {
     applicationId = "com.aistudio.scooterrent.xyzab"
-    minSdk = 26  // Apache POI 5.x требует API 26+. В 2026 году Android 7.x < 5% устройств.
+    minSdk = 24  // Вернули с 26 → поддерживает Android 7.0+. Apache POI убран.
     targetSdk = 36
     versionCode = 1024
     versionName = "1.2.187-local"
@@ -146,13 +146,10 @@ dependencies {
   // (HTTP 200). API 2.0.x: PDPageContentStream AppendMode enum, setNonStrokingColor(r,g,b).
   // См. Pdf_Tools/app/src/main/java/.../PdfAnnotator.kt:526 — рабочий пример 2.0 API.
   implementation("com.github.TomRoush:pdfbox-android:2.0.7.0")
-  // ── Apache POI — для генерации DOCX файлов ──────────────────────────────
-  // Используется в DocxContractGenerator для создания .docx из bodyText
-  // с {{placeholders}}. Apache POI 5.2.5 — основная open-source библиотека
-  // для работы с OOXML (DOCX, XLSX, PPTX) на Java/Android.
-  // Уже есть stax-api + aalto-xml (для FastExcel), Apache POI совместим.
-  implementation("org.apache.poi:poi:5.2.5")
-  implementation("org.apache.poi:poi-ooxml:5.2.5")
+  // ── DOCX генерация через ZIP+XML (без Apache POI) ───────────────────────
+  // Apache POI 5.x требует minSdk 26 → убран. DOCX создаётся нативно
+  // через java.util.zip.ZipOutputStream + XML — см. DocxContractGenerator.
+  // Это работает на minSdk 24 (Android 7.0+) и экономит ~9MB в APK.
   // testImplementation(libs.androidx.compose.ui.test.junit4)
   testImplementation(libs.androidx.compose.ui.test.junit4)
   testImplementation(libs.androidx.core)
