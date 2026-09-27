@@ -60,6 +60,7 @@ fun DocxEditorScreen(
 ) {
     var templateName by remember { mutableStateOf("Загрузка…") }
     var htmlContent by remember { mutableStateOf("") }
+    var pageLoaded by remember { mutableStateOf(false) }
     var webView by remember { mutableStateOf<WebView?>(null) }
 
     // Загрузить template bodyText и конвертировать в HTML для редактора
@@ -125,13 +126,19 @@ fun DocxEditorScreen(
         ) {
             AndroidView(
                 factory = { ctx ->
-                    createEditorWebView(ctx, templateId, viewModel) { html ->
+                    createEditorWebView(ctx, templateId, viewModel,
+                        onPageLoaded = { pageLoaded = true }
+                    ) { html ->
                         htmlContent = html
                     }.also { webView = it }
                 },
                 update = { wv ->
-                    // Inject HTML content when loaded
-                    if (htmlContent.isNotEmpty()) {
+                    // Inject HTML content ONLY when BOTH content is ready
+                    // AND the WebView page (editor.html) is fully loaded.
+                    // Without pageLoaded check, setContent() is called before
+                    // editor.html finishes loading → JavaScript function doesn't
+                    // exist yet → content is NOT injected → white page.
+                    if (htmlContent.isNotEmpty() && pageLoaded) {
                         val escaped = htmlContent
                             .replace("\\", "\\\\")
                             .replace("'", "\\'")
@@ -148,12 +155,14 @@ fun DocxEditorScreen(
 
 /**
  * Создаёт WebView с contentEditable редактором.
+ * @param onPageLoaded вызывается когда editor.html полностью загружен
  */
 @SuppressLint("SetJavaScriptEnabled")
 private fun createEditorWebView(
     context: Context,
     templateId: Int,
     viewModel: ContractTemplateViewModel,
+    onPageLoaded: () -> Unit = {},
     onContentChanged: (String) -> Unit
 ): WebView {
     return WebView(context).apply {
@@ -169,7 +178,13 @@ private fun createEditorWebView(
             "Android"
         )
 
-        webViewClient = WebViewClient()
+        webViewClient = object : WebViewClient() {
+            override fun onPageFinished(view: WebView?, url: String?) {
+                super.onPageFinished(view, url)
+                // editor.html полностью загружен — можно вызывать setContent()
+                onPageLoaded()
+            }
+        }
         loadUrl("file:///android_asset/docx_editor/editor.html")
     }
 }
