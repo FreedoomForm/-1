@@ -15,8 +15,8 @@ android {
     applicationId = "com.aistudio.scooterrent.xyzab"
     minSdk = 24  // Вернули с 26 → поддерживает Android 7.0+. Apache POI убран.
     targetSdk = 36
-    versionCode = 1024
-    versionName = "1.2.187-local"
+    versionCode = 1025
+    versionName = "1.2.188-local"
 
     testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
   }

@@ -18,7 +18,7 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         CardTransaction::class,
         ContractTemplate::class
     ],
-    version = 39,
+    version = 40,
     exportSchema = false
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -534,6 +534,60 @@ abstract class AppDatabase : RoomDatabase() {
         }
 
         /**
+         * Migration 39 → 40: новая редакция постоянного (UNLIMITED) договора.
+         *
+         * Вставляет НОВУЮ версию UNLIMITED-шаблона с текстом из
+         * [TemplateContent.DEFAULT_CONTRACT_BODY_UNLIMITED] (редакция
+         * «электровелосипед», v1.2.188) и делает её активной. Прежние
+         * UNLIMITED-версии НЕ удаляются — они деактивируются (isActive=0) и
+         * остаются в истории «Документооборота»: пользователь может вернуть
+         * любую из них звёздочкой.
+         *
+         * Почему новая версия, а не UPDATE существующей: шаблоны версионируются
+         * по дизайну фичи «Документооборот» (v37+) — замена текста по смыслу
+         * и есть создание новой версии. Это также сохраняет примечания и
+         * аннотации старых версий нетронутыми.
+         *
+         * БЕЗОПАСНОСТЬ ДАННЫХ: миграция только ДОБАВЛЯЕТ одну строку в
+         * contract_templates и переключает флаг isActive. Схема не меняется,
+         * другие таблицы не затрагиваются. Seed обёрнут в try/catch — при
+         * ошибке миграция всё равно завершится успешно (PdfContractGenerator
+         * отфоллбэчит на дефолтный TemplateContent).
+         */
+        private val MIGRATION_39_40 = object : Migration(39, 40) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                try {
+                    val now = System.currentTimeMillis()
+                    val unlimitedJson = buildSeedJson(
+                        bodyText = TemplateContent.DEFAULT_CONTRACT_BODY_UNLIMITED
+                    )
+                    db.execSQL(
+                        """
+                        INSERT INTO `contract_templates`
+                            (type, name, contentJson, isActive, createdAt, updatedAt, isDeleted, deletedAt, notes, annotationsJson)
+                        VALUES
+                            ('UNLIMITED', 'Электровелосипед — новая редакция', '${escapeSql(unlimitedJson)}', 1, $now, NULL, 0, NULL, 'Новая редакция постоянного договора (v1.2.188)', NULL)
+                        """.trimIndent()
+                    )
+                    // Деактивируем все прочие UNLIMITED-версии (кроме только что
+                    // вставленной — last_insert_rowid() возвращает её id).
+                    db.execSQL(
+                        "UPDATE `contract_templates` SET isActive = 0 " +
+                            "WHERE type = 'UNLIMITED' AND id != last_insert_rowid()"
+                    )
+                } catch (e: Exception) {
+                    // Логируем, но НЕ пробрасываем — миграция должна завершиться
+                    // успешно. Активная UNLIMITED-версия останется прежней.
+                    android.util.Log.w(
+                        "AppDatabase",
+                        "MIGRATION_39_40 seed failed (non-fatal): ${e.message}. " +
+                            "UNLIMITED template stays on the previous version."
+                    )
+                }
+            }
+        }
+
+        /**
          * Migration 38 → 39: добавляем колонку `annotationsJson` (TEXT, nullable)
          * в таблицу contract_templates.
          *
@@ -564,7 +618,7 @@ abstract class AppDatabase : RoomDatabase() {
                     .addMigrations(
                         MIGRATION_11_12, MIGRATION_12_13, MIGRATION_13_14, MIGRATION_14_15,
                         MIGRATION_15_34, MIGRATION_33_34, MIGRATION_34_35, MIGRATION_35_36,
-                        MIGRATION_36_37, MIGRATION_37_38, MIGRATION_38_39
+                        MIGRATION_36_37, MIGRATION_37_38, MIGRATION_38_39, MIGRATION_39_40
                     )
                     // На случай если кто-то перескакивает через несколько версий
                     // (например, был на v16-v32, для которых нет явной миграции
